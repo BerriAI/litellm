@@ -1,4 +1,4 @@
-use litellm_config::{Config, Error, Flag, NumberOrString};
+use litellm_config::{Config, Error, Spelled, TracingStoreSettings};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
@@ -75,6 +75,9 @@ fn config_debug_redacts_api_keys() {
 #[case::malformed_yaml("model_list: [")]
 #[case::missing_params("model_list: [{model_name: assistant}]")]
 #[case::missing_model("model_list: [{model_name: assistant, litellm_params: {api_key: key}}]")]
+#[case::provider_param_of_the_wrong_type(
+    "model_list: [{model_name: assistant, litellm_params: {model: test, aws_region_name: [eu-central-1]}}]"
+)]
 fn rejects_malformed_and_incomplete_config(#[case] yaml: &str) {
     assert!(matches!(Config::from_yaml(yaml), Err(Error::Parse(_))));
 }
@@ -113,6 +116,52 @@ fn missing_general_settings_has_no_master_key() {
     assert!(config.general_settings.master_key.is_none());
 }
 
+#[test]
+fn tracing_settings_are_typed_and_redact_the_url() {
+    let config = Config::from_yaml(
+        "general_settings:\n  tracing:\n    store:\n      type: clickhouse\n      url: https://writer:password@example.com\n      database: analytics\n      retention_days: 7\n",
+    )
+    .unwrap();
+    let tracing = config.general_settings.tracing.as_ref().unwrap();
+    let Some(TracingStoreSettings::ClickHouse(store)) = tracing.store.as_ref() else {
+        panic!("expected ClickHouse tracing store")
+    };
+    assert_eq!(
+        store.url.as_ref().unwrap().expose(),
+        "https://writer:password@example.com"
+    );
+    assert_eq!(store.database.as_deref(), Some("analytics"));
+    assert_eq!(store.retention_days, Some(Spelled::Value(7.0)));
+    assert!(!format!("{config:?}").contains("password"));
+}
+
+#[test]
+fn tracing_settings_accept_environment_references() {
+    let config = Config::from_yaml(
+        "general_settings:\n  tracing:\n    store:\n      type: clickhouse\n      url: os.environ/CLICKHOUSE_URL\n      retention_days: os.environ/RETENTION_DAYS\n",
+    )
+    .unwrap();
+    let Some(TracingStoreSettings::ClickHouse(store)) =
+        config.general_settings.tracing.unwrap().store
+    else {
+        panic!("expected ClickHouse tracing store")
+    };
+    assert_eq!(
+        store.retention_days,
+        Some(Spelled::Text("os.environ/RETENTION_DAYS".to_owned()))
+    );
+}
+
+#[test]
+fn tracing_settings_reject_string_store() {
+    assert!(Config::from_yaml("general_settings:\n  tracing:\n    store: clickhouse\n").is_err());
+}
+
+#[test]
+fn tracing_settings_reject_removed_reader_configuration() {
+    assert!(Config::from_yaml("general_settings:\n  tracing:\n    store:\n      type: clickhouse\n      reader_url: http://localhost:8123\n").is_err());
+}
+
 #[rstest]
 fn empty_config_matches_python_defaults() {
     let config = Config::from_yaml("{}").unwrap();
@@ -142,6 +191,9 @@ model_list:
       rpm: 5
       drop_params: "true"
       vertex_project: test-project
+      vertex_credentials:
+        type: service_account
+      future_param: 1
     model_info:
       mode: chat
     access_groups: [internal]
@@ -166,25 +218,26 @@ future_section:
     let model = &config.model_list[0];
     assert_eq!(
         model.litellm_params.timeout,
-        Some(NumberOrString::String(
-            "os.environ/REQUEST_TIMEOUT".to_string()
-        ))
+        Some(Spelled::Text("os.environ/REQUEST_TIMEOUT".to_string()))
     );
     assert_eq!(
         model.litellm_params.tpm,
-        Some(NumberOrString::String("os.environ/TPM_LIMIT".to_string()))
+        Some(Spelled::Text("os.environ/TPM_LIMIT".to_string()))
     );
-    assert_eq!(model.litellm_params.rpm, Some(NumberOrString::Number(5.0)));
+    assert_eq!(model.litellm_params.rpm, Some(Spelled::Value(5.0)));
     assert_eq!(
         model.litellm_params.drop_params,
-        Some(Flag::String("true".to_string()))
+        Some(Spelled::Text("true".to_string()))
     );
-    assert!(
-        model
-            .litellm_params
-            .additional_fields
-            .contains_key("vertex_project")
+    assert_eq!(
+        model.litellm_params.vertex.vertex_project.as_deref(),
+        Some("test-project")
     );
+    assert_eq!(
+        model.litellm_params.vertex.vertex_credentials.as_deref(),
+        Some(r#"{"type":"service_account"}"#)
+    );
+    assert!(model.litellm_params.extra.contains_key("future_param"));
     assert!(model.additional_fields.contains_key("access_groups"));
     assert_eq!(config.router_settings.allowed_fails, Some(2));
     assert!(
@@ -233,6 +286,9 @@ finetune_settings:
   - custom_llm_provider: openai
 mcp_tools:
   - name: lookup
+mcp_servers:
+  docs:
+    url: https://example.test/mcp
 vector_store_registry:
   - vector_store_name: docs
 worker_registry:
@@ -262,6 +318,7 @@ include:
     assert_eq!(config.files_settings.len(), 1);
     assert_eq!(config.finetune_settings.len(), 1);
     assert_eq!(config.mcp_tools.len(), 1);
+    assert_eq!(config.mcp_servers.len(), 1);
     assert_eq!(config.vector_store_registry.len(), 1);
     assert_eq!(config.worker_registry.len(), 1);
     assert_eq!(config.agents.len(), 1);
@@ -293,7 +350,9 @@ fn accepts_python_callback_shorthand(#[case] setting: &str, #[case] expected_len
 
 #[rstest]
 #[case::api_key("api_key", "provider-secret")]
-#[case::provider_extension("aws_secret_access_key", "aws-secret")]
+#[case::aws_secret("aws_secret_access_key", "aws-secret")]
+#[case::vertex_credentials("vertex_credentials", "vertex-secret")]
+#[case::provider_extension("azure_ad_token", "azure-secret")]
 #[case::general_extension("custom_auth_secret", "auth-secret")]
 #[case::router_extension("redis_password", "redis-secret")]
 #[case::litellm_extension("callback_token", "callback-secret")]
@@ -305,6 +364,12 @@ fn debug_output_does_not_expose_config_values(#[case] field: &str, #[case] secre
         ),
         "aws_secret_access_key" => format!(
             "model_list: [{{model_name: assistant, litellm_params: {{model: test, aws_secret_access_key: {secret}}}}}]"
+        ),
+        "vertex_credentials" => format!(
+            "model_list: [{{model_name: assistant, litellm_params: {{model: test, vertex_credentials: {secret}}}}}]"
+        ),
+        "azure_ad_token" => format!(
+            "model_list: [{{model_name: assistant, litellm_params: {{model: test, azure_ad_token: {secret}}}}}]"
         ),
         "custom_auth_secret" => format!("general_settings: {{{field}: {secret}}}"),
         "redis_password" => format!("router_settings: {{{field}: {secret}}}"),
@@ -340,4 +405,32 @@ fn resolves_nested_includes_once_in_breadth_first_order() {
         "third"
     );
     assert!(config.include.is_empty());
+}
+
+#[rstest]
+fn mcp_config_redacts_nested_credentials_and_preserves_policy_for_validation() {
+    let config = Config::from_yaml("mcp_servers:\n  docs:\n    url: https://example.test/private-secret/mcp\n    authentication_token: upstream-secret\n    static_headers: {x-token: header-secret}\n    env: {TOKEN: env-secret}\n    args: [argument-secret]\n    client_secret: oauth-secret\n    allowed_tools: [search]\n").unwrap();
+    let server = &config.mcp_servers["docs"];
+    assert_eq!(server.allowed_tools.as_deref().unwrap(), ["search"]);
+    assert!(server.unsupported.contains_key("client_secret"));
+    let debug = format!("{config:?}");
+    for secret in [
+        "private-secret",
+        "upstream-secret",
+        "header-secret",
+        "env-secret",
+        "oauth-secret",
+        "argument-secret",
+    ] {
+        assert!(!debug.contains(secret));
+    }
+}
+
+#[rstest]
+#[case::transport("transport: invalid")]
+#[case::auth("auth_type: invalid")]
+#[case::concurrency("max_concurrent_requests: -1")]
+#[case::headers("static_headers: {x-token: [not, a, string]}")]
+fn rejects_invalid_typed_mcp_settings(#[case] setting: &str) {
+    assert!(Config::from_yaml(&format!("mcp_servers:\n  docs:\n    {setting}\n")).is_err());
 }

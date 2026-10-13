@@ -4,6 +4,7 @@
 //! maps a public model name to its deployment and runs the core route.
 
 mod audio_transcription;
+mod caching;
 mod chat_completions;
 mod error;
 pub mod messages;
@@ -14,40 +15,51 @@ mod responses;
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
-use litellm_core::{
-    audio_transcription::AudioTranscriptionRoute, chat_completions::ChatCompletionsRoute,
-    messages::MessagesRoute, ocr::OcrRoute, resources::CoreResources, responses::ResponsesRoute,
-};
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
+use litellm_inference::resources::CoreResources;
+use litellm_inference_chat::ChatCompletionsRoute;
+use litellm_inference_messages::MessagesRoute;
+use litellm_inference_ocr::OcrRoute;
+use litellm_inference_responses::ResponsesRoute;
+use litellm_inference_transcription::AudioTranscriptionRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
-pub use litellm_router::{Deployment, Router as ModelList};
+pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
     pub ocr: OcrRoute,
     pub responses: ResponsesRoute,
-    pub models: ModelList,
+    pub models: ModelRouter,
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
     pub http: HttpClientConfig,
 }
 
 impl Gateway {
+    pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
+        Self {
+            cache: Some(cache),
+            ..self
+        }
+    }
+
     pub fn new(
         resources: CoreResources,
         http: HttpClientConfig,
         secrets: Arc<dyn SecretSource>,
-        models: ModelList,
+        models: ModelRouter,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
         let auth = resources.auth.clone();
         Ok(Self {
+            cache: None,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),

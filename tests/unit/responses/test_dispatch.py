@@ -15,10 +15,10 @@ from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
     NATIVE_RESPONSES,
-    LiteLLMResponsesRequest,
     NativeAresponses,
     NativeResponses,
 )
@@ -68,9 +68,7 @@ def test_python_route_forwards_original_call_shape() -> None:
         return response
 
     def native(
-        request: LiteLLMResponsesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> ResponsesAPIResponse:
         pytest.fail("Python-only dispatch must not call native")
 
@@ -80,7 +78,7 @@ def test_python_route_forwards_original_call_shape() -> None:
             kwargs,
             python=python,
             binding=responses_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=PYTHON_RULES,
         )
         is response
@@ -109,9 +107,7 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
         return response
 
     async def native(
-        request: LiteLLMResponsesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> ResponsesAPIResponse:
         pytest.fail("Python-only dispatch must not call native")
 
@@ -120,7 +116,7 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
         kwargs,
         python=python,
         binding=aresponses_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=PYTHON_RULES,
     )
     assert result is response
@@ -144,17 +140,17 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         "custom_llm_provider": "anthropic",
         "litellm_metadata": metadata,
     }
-    captured: Final[list[tuple[LiteLLMResponsesRequest, tuple[object, ...], Mapping[str, object]]]] = []
+    captured: Final[list[tuple[NativeCall, tuple[object, ...], Mapping[str, object]]]] = []
     response: Final = _response("anthropic/claude-sonnet-4-5")
 
     def python(*call_args: object, **call_kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: rejected fallback
         pytest.fail("Required Rust dispatch must not call Python")
 
     def native(
-        request: LiteLLMResponsesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> ResponsesAPIResponse:
+        args: Final = request.args
+        kwargs: Final = request.kwargs
         captured.append((request, args, kwargs))
         return response
 
@@ -163,24 +159,20 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         kwargs,
         python=python,
         binding=responses_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
 
     request, call_args, call_kwargs = captured[0]
     assert result is response
-    assert request.model == "anthropic/claude-sonnet-4-5"
-    assert request.input is INPUT
-    assert request.stream is True
-    assert request.api_key == "sk-test"
-    assert request.api_base == "https://example.invalid"
-    assert request.custom_llm_provider == "anthropic"
-    assert request.extra_headers is extra_headers
-    assert request.kwargs == {
-        "api_key": "sk-test",
-        "base_url": "https://example.invalid",
-        "litellm_metadata": metadata,
-    }
+    assert request.resolved["model"] == "anthropic/claude-sonnet-4-5"
+    assert request.resolved["input"] is INPUT
+    assert request.resolved["stream"] is True
+    assert request.resolved["api_key"] == "sk-test"
+    assert request.resolved["base_url"] == "https://example.invalid"
+    assert request.resolved["custom_llm_provider"] == "anthropic"
+    assert request.resolved["extra_headers"] is extra_headers
+    assert request.kwargs == kwargs
     assert request.kwargs["litellm_metadata"] is metadata
     assert call_args == args
     assert call_args[0] is INPUT
@@ -200,9 +192,7 @@ def test_internal_async_marker_bypasses_native() -> None:
         return response
 
     def native(
-        request: LiteLLMResponsesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> ResponsesAPIResponse:
         pytest.fail("aresponses' inner responses call must stay on Python")
 
@@ -212,7 +202,7 @@ def test_internal_async_marker_bypasses_native() -> None:
             kwargs,
             python=python,
             binding=responses_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
         is response
@@ -236,9 +226,7 @@ def test_binding_errors_delegate_unchanged_to_python(args: tuple[object, ...], k
         return response
 
     def native(
-        request: LiteLLMResponsesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> ResponsesAPIResponse:
         pytest.fail("Binding failures must be delegated to Python")
 
@@ -248,7 +236,7 @@ def test_binding_errors_delegate_unchanged_to_python(args: tuple[object, ...], k
             kwargs,
             python=python,
             binding=responses_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
         is response
@@ -257,13 +245,11 @@ def test_binding_errors_delegate_unchanged_to_python(args: tuple[object, ...], k
 
 
 def test_public_responses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[LiteLLMResponsesRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = _response()
 
     def native(
-        request: LiteLLMResponsesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> ResponsesAPIResponse:
         captured.append(request)
         return expected
@@ -276,18 +262,16 @@ def test_public_responses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
     finally:
         NATIVE_RESPONSES.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["gpt-4o"]
+    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
 
 
 @pytest.mark.asyncio
 async def test_public_aresponses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[LiteLLMResponsesRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = _response()
 
     async def native(
-        request: LiteLLMResponsesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> ResponsesAPIResponse:
         captured.append(request)
         return expected
@@ -300,7 +284,7 @@ async def test_public_aresponses_routes_through_dispatch(monkeypatch: pytest.Mon
     finally:
         NATIVE_ARESPONSES.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["gpt-4o"]
+    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
 
 
 def test_responses_with_retries_uses_the_dispatch_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -317,3 +301,12 @@ def test_responses_with_retries_uses_the_dispatch_entrypoint(monkeypatch: pytest
     assert result is expected
     assert calls[0]["num_retries"] == 0
     assert calls[0]["max_retries"] == 0
+
+
+def test_positional_parameters_remain_available_to_native_projection() -> None:
+    include: Final = ["reasoning.encrypted_content"]
+    request: Final = _DISPATCH.request((INPUT, "openai/test-model", include, "Be brief", 16), {})
+    assert request is not None
+    assert request.resolved["include"] is include
+    assert request.resolved["instructions"] == "Be brief"
+    assert request.resolved["max_output_tokens"] == 16

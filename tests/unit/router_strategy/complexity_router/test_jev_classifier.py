@@ -8,6 +8,7 @@ from unittest.mock import create_autospec
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -30,14 +31,15 @@ from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
 
 class _UsageRecorder(CustomLogger):
-    def __init__(self) -> None:
+    def __init__(self, model_key: str = "typesafe/jev-accounting") -> None:
         super().__init__()
+        self.model_key = model_key
         self.calls: tuple[Mapping[str, object], ...] = ()
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        if str(kwargs.get("model", "")).removeprefix("typesafe/") != "jev-accounting":
+        if str(kwargs.get("model", "")) != self.model_key:
             return
         self.calls = (*self.calls, kwargs)
 
@@ -167,8 +169,9 @@ async def test_jev_invalid_usage_never_reaches_spend_callbacks(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("answer", ["SIMPLE", "UNAVAILABLE", "malformed"])
 @pytest.mark.parametrize("private", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
 async def test_jev_accounts_once_with_parent_identity_even_when_the_verdict_fails(
-    monkeypatch: pytest.MonkeyPatch, answer: str, private: bool
+    monkeypatch: pytest.MonkeyPatch, answer: str, private: bool, legacy: bool
 ) -> None:
     recorder: Final = _UsageRecorder()
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
@@ -196,7 +199,15 @@ async def test_jev_accounts_once_with_parent_identity_even_when_the_verdict_fail
     router: Final = ComplexityRouter(
         "jev-router",
         litellm.Router(model_list=[]),
-        {"classifier_type": "jev", "jev_classifier_config": {}, "tiers": {"SIMPLE": "cheap"}},
+        {
+            "classifier_type": "jev" if legacy else "oss_classifier",
+            "jev_classifier_config" if legacy else "opensource_classifier_config": {
+                "provider": "typesafe" if legacy else "jev",
+            },
+            "tiers": {"SIMPLE": "cheap"},
+            "session_affinity": False,
+            "deployment_affinity": False,
+        },
         jev_client=provider,
         derive_savings_baseline=False,
     )
@@ -209,8 +220,9 @@ async def test_jev_accounts_once_with_parent_identity_even_when_the_verdict_fail
         "user_api_key_budget_reservation": {"reservation_id": "parent-reservation"},
         "user_api_key_auth": {"budget_reservation": {"reservation_id": "parent-reservation"}},
     }
-    outcome: Final = await router.aclassify(
-        "private current ask",
+    result: Final = await router.async_pre_routing_hook(
+        model="jev-router",
+        messages=[{"role": "user", "content": "private current ask"}],
         request_kwargs={
             "metadata": metadata,
             "litellm_session_id": "session-a",
@@ -221,7 +233,15 @@ async def test_jev_accounts_once_with_parent_identity_even_when_the_verdict_fail
     await GLOBAL_LOGGING_WORKER.flush()
     await handler.client.aclose()
 
-    assert (outcome.cause == "jev_classifier") is (answer == "SIMPLE")
+    assert result is not None and result.model == "cheap"
+    assert result.routing_decision is not None
+    decision: Final = result.routing_decision
+    assert (decision["cause"] == "jev_classifier") is (answer == "SIMPLE")
+    if answer == "SIMPLE":
+        assert decision["classifier_model"] == "typesafe/jev-accounting"
+        assert decision["classifier_cost"] == pytest.approx(0.007)
+        assert "jev-classifier:SIMPLE" in decision["signals"]
+        assert "jev-confidence=1.000000" in decision["signals"]
     assert len(recorder.calls) == 1
     event: Final = recorder.calls[0]
     assert event["response_cost"] == pytest.approx(0.007)
@@ -416,8 +436,245 @@ def _answer(choice: str = "SIMPLE") -> JevChoiceAnswer:
 
 
 def test_jev_config_requires_classifier_config() -> None:
-    with pytest.raises(ValueError, match="jev_classifier_config is required"):
+    with pytest.raises(ValueError, match="opensource_classifier_config is required"):
         ComplexityRouterConfig.model_validate({"classifier_type": "jev"})
+
+
+@pytest.mark.parametrize(
+    ("classifier_type", "config_key"),
+    [
+        ("oss_classifier", "opensource_classifier_config"),
+        ("jev", "jev_classifier_config"),
+        ("oss_classifier", "jev_classifier_config"),
+        ("jev", "opensource_classifier_config"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("provider", "model", "canonical_provider"),
+    [
+        (None, "jev-latest", "jev"),
+        ("typesafe", "jev-latest", "jev"),
+        ("jev", "jev-latest", "jev"),
+        ("laya", "english", "laya"),
+        ("bespoke", "nimble-latest", "bespoke"),
+        ("databricks", "databricks-openjev-qwen35-4b", "databricks"),
+        ("databricks", "ai_decide", "databricks"),
+    ],
+)
+def test_classifier_aliases_load_and_serialize_one_canonical_config(
+    classifier_type: str, config_key: str, provider: str | None, model: str, canonical_provider: str
+) -> None:
+    incoming: Final = {
+        "classifier_type": classifier_type,
+        config_key: {"model": model, "api_key": None, **({"provider": provider} if provider is not None else {})},
+    }
+    original: Final = deepcopy(incoming)
+    config: Final = ComplexityRouterConfig.model_validate(incoming)
+    assert config.classifier_type == "oss_classifier"
+    assert config.opensource_classifier_config is not None
+    assert config.opensource_classifier_config.provider == canonical_provider
+    assert config.opensource_classifier_config.model == model
+    assert config.opensource_classifier_config.api_key is None
+    assert "api_key" in config.opensource_classifier_config.model_fields_set
+    assert "api_base" not in config.opensource_classifier_config.model_fields_set
+    assert "jev_classifier_config" not in config.model_dump()
+    assert config.jev_classifier_config is config.opensource_classifier_config
+    assert incoming == original
+
+
+@pytest.mark.parametrize("provider", ["laya", "bespoke"])
+@pytest.mark.parametrize("model", [None, " "])
+def test_oss_requires_its_own_checkpoint(provider: str, model: str | None) -> None:
+    with pytest.raises(ValueError, match=f"{provider} model must be"):
+        JevClassifierConfig.model_validate({"provider": provider, **({"model": model} if model is not None else {})})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider,model", [("laya", "english"), ("bespoke", "nimble-latest")])
+@pytest.mark.parametrize("custom_base", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, custom_base: bool, legacy: bool, provider: str, model: str
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
+    monkeypatch.setenv(f"{provider.upper()}_API_BASE", f"https://{provider}.test")
+    monkeypatch.setenv(f"{provider.upper()}_API_KEY", "oss-env-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(litellm.model_cost, f"{provider}/{model}", {"input_cost_per_token": 0.01})
+    recorder: Final = _UsageRecorder(f"{provider}/{model}")
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    router: Final = ComplexityRouter(
+        f"{provider}-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "jev" if legacy else "oss_classifier",
+            "jev_classifier_config" if legacy else "opensource_classifier_config": {
+                "provider": provider,
+                "model": model,
+                **({"api_base": f"https://{provider}.test"} if custom_base else {}),
+            },
+            "tiers": {"SIMPLE": "cheap"},
+        },
+        derive_savings_baseline=False,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(f"https://{provider}.test/v1/systemone").respond(
+            200,
+            json={
+                "model": "laya-rl-agent" if provider == "laya" else model,
+                **({"routing": {"model": model}} if provider == "laya" else {}),
+                "answers": {"tier": _answer().model_dump()},
+                "usage": {"input_tokens": 31, "output_tokens": 0},
+            },
+        )
+        outcome: Final = await router.aclassify("choose a tier")
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == (provider, model)
+    assert outcome.classifier_cost == pytest.approx(0.31)
+    sent: Final = route.calls.last.request
+    assert sent.headers.get("authorization") == (None if custom_base else "Bearer oss-env-key")
+    assert json.loads(sent.content)["model"] == model
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
+
+
+@pytest.mark.parametrize("model", ["ai_decide", "my-openjev", "databricks-openjev-qwen35-4b"])
+def test_databricks_accepts_ai_decide_or_a_bare_serving_endpoint_name(model: str) -> None:
+    assert JevClassifierConfig.model_validate({"provider": "databricks", "model": model}).model == model
+
+
+def test_databricks_requires_a_model_that_cannot_rewrite_the_url() -> None:
+    with pytest.raises(ValueError, match="model is required for provider 'databricks'"):
+        JevClassifierConfig.model_validate({"provider": "databricks"})
+    with pytest.raises(ValueError, match="bare serving endpoint name"):
+        JevClassifierConfig.model_validate({"provider": "databricks", "model": "serving-endpoints/my-openjev"})
+    with pytest.raises(ValueError, match="bare serving endpoint name"):
+        JevClassifierConfig.model_validate({"provider": "databricks", "model": ".."})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_key", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_databricks_routes_through_the_serving_endpoint_and_accounts_the_endpoint_model(
+    monkeypatch: pytest.MonkeyPatch, configured_key: bool, legacy: bool
+) -> None:
+    endpoint: Final = "databricks-openjev-qwen35-4b"
+    monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.test/serving-endpoints")
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "dapi-env-token")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(litellm.model_cost, f"databricks/{endpoint}", {"input_cost_per_token": 0.01})
+    recorder: Final = _UsageRecorder(f"databricks/{endpoint}")
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    router: Final = ComplexityRouter(
+        "databricks-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "jev" if legacy else "oss_classifier",
+            "jev_classifier_config" if legacy else "opensource_classifier_config": {
+                "provider": "databricks",
+                "model": endpoint,
+                **(
+                    {"api_key": "dapi-configured", "api_base": "https://workspace.test/serving-endpoints"}
+                    if configured_key
+                    else {}
+                ),
+            },
+            "tiers": {"SIMPLE": "cheap"},
+        },
+        derive_savings_baseline=False,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(f"https://workspace.test/serving-endpoints/{endpoint}/invocations").respond(
+            200,
+            json={
+                "model": "/mosaicml/local_model",
+                "answers": {"tier": _answer().model_dump()},
+                "usage": {"input_tokens": 31, "output_tokens": 0},
+            },
+        )
+        outcome: Final = await router.aclassify("choose a tier")
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == ("databricks", endpoint)
+    assert outcome.classifier_cost == pytest.approx(0.31)
+    sent: Final = route.calls.last.request
+    assert sent.headers.get("authorization") == (
+        "Bearer dapi-configured" if configured_key else "Bearer dapi-env-token"
+    )
+    assert json.loads(sent.content)["model"] == endpoint
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_key", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("api_base", ["https://workspace.test", "https://workspace.test/serving-endpoints/"])
+async def test_databricks_routes_through_ai_decide_without_a_model_field_and_accounts_ai_decide(
+    monkeypatch: pytest.MonkeyPatch, configured_key: bool, legacy: bool, api_base: str
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
+    monkeypatch.setenv("DATABRICKS_API_BASE", api_base)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "dapi-env-token")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _UsageRecorder("databricks/ai_decide")
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    router: Final = ComplexityRouter(
+        "databricks-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "jev" if legacy else "oss_classifier",
+            "jev_classifier_config" if legacy else "opensource_classifier_config": {
+                "provider": "databricks",
+                "model": "ai_decide",
+                **({"api_key": "dapi-configured", "api_base": api_base} if configured_key else {}),
+            },
+            "tiers": {"SIMPLE": "cheap"},
+        },
+        derive_savings_baseline=False,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("https://workspace.test/api/2.0/ai-functions/ai-decide").respond(
+            200,
+            json={"response": {"answers": {"tier": _answer().model_dump()}}, "metadata": {"version": "1.0"}},
+        )
+        outcome: Final = await router.aclassify("choose a tier")
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == ("databricks", "ai_decide")
+    assert outcome.jev_verdict.label == "SIMPLE"
+    assert outcome.classifier_cost is None
+    sent: Final = route.calls.last.request
+    assert sent.headers.get("authorization") == ("Bearer dapi-configured" if configured_key else "Bearer dapi-env-token")
+    assert set(json.loads(sent.content)) == {"state", "questions"}
+    assert len(recorder.calls) == 1
+
+
+def test_databricks_without_a_base_or_key_fails_at_client_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="DATABRICKS_API_BASE"):
+        ComplexityRouter(
+            "databricks-route",
+            litellm.Router(model_list=[]),
+            {
+                "classifier_type": "oss_classifier",
+                "opensource_classifier_config": {"provider": "databricks", "model": "ai_decide"},
+                "tiers": {"SIMPLE": "cheap"},
+            },
+            derive_savings_baseline=False,
+        )
 
 
 def test_jev_config_is_rejected_for_other_classifier_types() -> None:
@@ -437,7 +694,7 @@ def test_jev_instructions_reject_blank_values() -> None:
 @pytest.mark.parametrize(
     ("missing_key", "rejection"),
     [
-        ({}, r"api_base requires jev_classifier_config\.api_key"),
+        ({}, r"api_base requires opensource_classifier_config\.api_key"),
         ({"api_key": ""}, r"api_key must be non-empty"),
         ({"api_key": "   "}, r"api_key must be non-empty"),
     ],
@@ -455,6 +712,17 @@ def test_jev_api_base_without_its_own_key_is_rejected_so_the_environment_key_sta
     paired: Final = JevClassifierConfig(api_base="https://eu.typesafe.invalid", api_key="sk-own")
     assert (paired.api_base, paired.api_key) == ("https://eu.typesafe.invalid", "sk-own")
     assert JevClassifierConfig(api_key="sk-own").api_base is None
+
+
+def test_databricks_api_base_without_its_own_key_is_rejected_so_the_workspace_token_stays_home() -> None:
+    with pytest.raises(ValueError, match="DATABRICKS_API_KEY or DATABRICKS_TOKEN is only sent to DATABRICKS_API_BASE"):
+        JevClassifierConfig.model_validate(
+            {"provider": "databricks", "model": "ai_decide", "api_base": "https://collector.invalid"}
+        )
+    paired: Final = JevClassifierConfig.model_validate(
+        {"provider": "databricks", "model": "ai_decide", "api_base": "https://workspace.invalid", "api_key": "dapi-own"}
+    )
+    assert (paired.api_base, paired.api_key) == ("https://workspace.invalid", "dapi-own")
 
 
 @pytest.mark.parametrize(
@@ -550,3 +818,143 @@ async def test_http_jev_classifier_client_posts_to_system_one() -> None:
     assert captured["content_type"] == "application/json"
     assert captured["body"] == request.model_dump(mode="json")
     assert response.model == "jev-1.13.0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [200, 503])
+@pytest.mark.parametrize("provider,model", [("typesafe", "jev-latest"), ("databricks", "my-endpoint")])
+async def test_deployed_decision_classifier_uses_registered_connection(
+    status_code: int, provider: str, model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(litellm.model_cost, f"{provider}/{model}", {"input_cost_per_token": 0.01})
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decision-deployment",
+                "litellm_params": {
+                    "model": f"{provider}/{model}",
+                    "api_key": "deployment-key",
+                    "api_base": "https://decision.test/serving-endpoints"
+                    if provider == "databricks"
+                    else "https://decision.test",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    classifier: Final = ComplexityRouter(
+        "deployed-classifier",
+        router,
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"deployment_name": "decision-deployment"},
+            "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+        },
+        derive_savings_baseline=False,
+    )
+    with respx.mock(assert_all_called=True) as requests:
+        route: Final = requests.post(
+            "https://decision.test/serving-endpoints/my-endpoint/invocations"
+            if provider == "databricks"
+            else "https://decision.test/v1/systemone"
+        ).mock(
+            return_value=httpx.Response(
+                status_code,
+                json={
+                    "model": model,
+                    "answers": {"tier": _answer().model_dump()},
+                    "usage": {"input_tokens": 31, "output_tokens": 0},
+                },
+            )
+        )
+        outcome: Final = await classifier.aclassify("What is two plus two?")
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer deployment-key"
+    assert json.loads(route.calls[0].request.content)["model"] == model
+    assert (outcome.cause == "jev_classifier") is (status_code == 200)
+    if status_code == 200:
+        assert outcome.jev_verdict is not None
+        assert outcome.jev_verdict.label == _answer().choice
+
+        assert outcome.jev_verdict.provider == provider
+        assert outcome.classifier_cost == pytest.approx(0.31)
+
+
+@pytest.mark.parametrize("deployment_name", ["", "   "])
+def test_deployed_decision_classifier_rejects_blank_deployment_name(deployment_name: str) -> None:
+    with pytest.raises(ValueError, match="deployment_name"):
+        JevClassifierConfig.model_validate({"deployment_name": deployment_name})
+
+
+@pytest.mark.parametrize("connection", [{"api_key": "secret"}, {"api_base": "https://override.test"}])
+def test_deployed_decision_classifier_rejects_connection_overrides(connection: Mapping[str, str]) -> None:
+    with pytest.raises(ValueError, match="deployment connection"):
+        JevClassifierConfig.model_validate({"deployment_name": "deployed", **connection})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["timeout", "cancelled", "invalid"])
+async def test_deployed_decision_classifier_preserves_failure_handling(
+    failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decision-deployment",
+                "litellm_params": {
+                    "model": "typesafe/jev-latest",
+                    "api_key": "test",
+                    "api_base": "https://decision.test",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    classifier: Final = ComplexityRouter(
+        "decision-router",
+        router,
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"deployment_name": "decision-deployment"},
+            "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+        },
+        derive_savings_baseline=False,
+    )
+    cancellation_reached: Final = asyncio.Event()
+    with respx.mock(assert_all_called=failure != "cancelled") as upstream:
+        route: Final = upstream.post("https://decision.test/v1/systemone")
+        if failure == "timeout":
+            route.mock(side_effect=httpx.ReadTimeout("classifier timeout"))
+        elif failure == "cancelled":
+
+            async def cancel_request(request: httpx.Request) -> httpx.Response:
+                cancellation_reached.set()
+                raise asyncio.CancelledError()
+
+            route.mock(side_effect=cancel_request)
+        else:
+            route.respond(json={"answers": {"tier": _answer("not-a-tier").model_dump()}})
+        if failure == "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await classifier.aclassify("short question")
+            assert cancellation_reached.is_set()
+            return
+        outcome: Final = await classifier.aclassify("short question")
+        assert outcome.cause != "jev_classifier"
+        assert outcome.jev_verdict is None
+
+
+def test_switching_to_deployed_classifier_does_not_copy_legacy_credentials() -> None:
+    from litellm.router_strategy.complexity_router.config import resolve_complexity_router_config_write
+
+    write: Final = resolve_complexity_router_config_write(
+        {"classifier_type": "oss_classifier", "opensource_classifier_config": {"deployment_name": "registered"}},
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"api_key": "legacy-secret", "api_base": "https://legacy.test"},
+        },
+    )
+    assert write.effective is not None
+    assert write.effective["opensource_classifier_config"] == {"deployment_name": "registered"}

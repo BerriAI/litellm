@@ -378,6 +378,7 @@ class QualifireGuardrail(CustomGuardrail):
                 url=url,
                 headers=headers,
                 json=payload,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result: Final = response.json()

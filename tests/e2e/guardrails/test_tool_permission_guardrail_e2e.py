@@ -25,6 +25,7 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, UnknownApiError
+from e2e_metadata import Capability, Domain, Mode, Provider, Subject, meta
 from guardrails_client import (
     GuardrailsClient,
     ToolPermissionParamsBody,
@@ -101,6 +102,15 @@ def _tool_call_names(response: ChatResponse) -> tuple[str, ...]:
 
 class TestToolPermissionPreCall:
     @pytest.mark.covers("guardrail.tool_permission.pre_call.blocks", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_pre_call_blocks_tool_outside_the_allow_list(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -135,6 +145,15 @@ class TestToolPermissionPreCall:
                 pytest.fail(f"tool_permission let a tool outside the allow-list through; got {result}")
 
     @pytest.mark.covers("guardrail.tool_permission.pre_call.allows", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_pre_call_allows_permitted_tool(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:

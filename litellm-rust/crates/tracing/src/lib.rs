@@ -8,15 +8,15 @@ use std::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value};
 use tracing::{
-    Dispatch, Event, Subscriber,
+    Dispatch,
     field::{Field, Visit},
-    subscriber::Interest,
 };
-use tracing_subscriber::{Layer, Registry, layer::Context, prelude::*};
 
+mod layer;
 mod processing;
 mod redaction;
 
+pub use layer::sink_layer;
 pub use processing::{DiagnosticInput, DiagnosticOutput, Policy, Processor};
 pub use redaction::{REDACTED, SecretRedactor};
 pub use tracing::{Level, Metadata, debug, error, info, trace, warn};
@@ -66,7 +66,13 @@ pub struct Logger {
 impl Logger {
     pub fn new(sink: impl Sink) -> Self {
         Self {
-            dispatch: Dispatch::new(Registry::default().with(Output(sink))),
+            dispatch: layer::dispatch(sink),
+        }
+    }
+
+    pub fn current() -> Self {
+        Self {
+            dispatch: tracing::dispatcher::get_default(Clone::clone),
         }
     }
 
@@ -108,37 +114,9 @@ impl Drop for Emitting {
     }
 }
 
-struct Output<S>(S);
-
-impl<S: Sink, R: Subscriber> Layer<R> for Output<S> {
-    fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
-        Interest::sometimes()
-    }
-
-    fn enabled(&self, metadata: &Metadata<'_>, _: Context<'_, R>) -> bool {
-        let Some(_guard) = Emitting::enter() else {
-            return false;
-        };
-        self.0.enabled(metadata)
-    }
-
-    fn on_event(&self, event: &Event<'_>, _: Context<'_, R>) {
-        let Some(_guard) = Emitting::enter() else {
-            return;
-        };
-        let mut record = Record {
-            metadata: event.metadata(),
-            message: String::new(),
-            fields: Map::new(),
-        };
-        event.record(&mut record);
-        self.0.emit(&record);
-    }
-}
-
 impl Record {
     fn field(&mut self, field: &Field, value: Value) {
-        if field.name() == "message" {
+        if field.name() == "message" && self.metadata.is_event() {
             self.message = match value {
                 Value::String(message) => message,
                 value => value.to_string(),

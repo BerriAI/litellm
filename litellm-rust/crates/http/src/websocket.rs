@@ -44,6 +44,7 @@ fn tls_config() -> Result<Arc<ClientConfig>, Box<tokio_tungstenite::tungstenite:
     Ok(Arc::clone(TLS_CONFIG.get_or_init(|| built)))
 }
 
+#[tracing::instrument(name = "litellm.websocket.handshake", level = "debug", skip_all)]
 pub async fn connect_upstream<R>(
     request: R,
 ) -> Result<(UpstreamWebSocket, Response), Box<tokio_tungstenite::tungstenite::Error>>

@@ -16,6 +16,7 @@ use wiremock::{
 #[rstest]
 #[case::anthropic("anthropic/test-model", "/v1/messages", true)]
 #[case::azure("azure_ai/test-model", "/anthropic/v1/messages", false)]
+#[case::deepseek("deepseek/test-model", "/anthropic/v1/messages", false)]
 #[tokio::test]
 async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     #[case] model: &str,
@@ -171,4 +172,72 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
     assert_eq!(body["type"], error["type"]);
     assert_eq!(body["error"], error["error"]);
     assert_eq!(body["request_id"], "host-http-request");
+}
+
+#[rstest]
+#[case::messages("/v1/messages")]
+#[case::chat("/v1/chat/completions")]
+#[case::model_path("/engines/path-model/chat/completions")]
+#[case::ocr("/ocr")]
+#[case::transcription("/audio/transcriptions")]
+#[tokio::test]
+async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
+    let upstream = MockServer::start().await;
+    let app = support::app_with_permissions(
+        "anthropic/test-model",
+        &upstream.uri(),
+        litellm_gateway_auth::Permissions::None,
+    );
+    let response = support::post(app, path, json!({"model": "public/model"})).await;
+    assert_eq!(response.status(), 403);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[case::completion(false)]
+#[case::streaming(true)]
+#[tokio::test]
+async fn openrouter_receives_native_messages_headers_and_its_deployment_bearer(
+    #[case] streaming: bool,
+) {
+    let upstream = MockServer::start().await;
+    let message = json!({"id": "msg_test", "type": "message", "role": "assistant", "model": "anthropic/test-model", "content": [{"type": "text", "text": "hello"}], "stop_reason": "end_turn", "stop_sequence": null, "usage": {"input_tokens": 1, "output_tokens": 1, "cost": 0.001, "cost_details": "unexpected"}, "openrouter_metadata": {"provider": "test-provider"}});
+    let sse = "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"cost\":0.001}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let template = if streaming {
+        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+    } else {
+        ResponseTemplate::new(200).set_body_json(message.clone())
+    };
+    Mock::given(method("POST"))
+        .and(path("/api/v1/messages"))
+        .and(header("authorization", "Bearer test-key"))
+        .and(header("anthropic-beta", "test-feature"))
+        .and(header("anthropic-version", "test-version"))
+        .and(header("x-openrouter-metadata", "enabled"))
+        .and(body_json(json!({"model": "anthropic/test-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "stream": streaming, "provider": {"order": ["test-provider"]}})))
+        .respond_with(template).expect(1).mount(&upstream).await;
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header("anthropic-beta", "test-feature")
+        .header("anthropic-version", "test-version")
+        .header("x-openrouter-metadata", "enabled")
+        .header("x-api-key", "proxy-key")
+        .header("authorization", "Bearer proxy-key")
+        .body(Body::from(json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "stream": streaming, "provider": {"order": ["test-provider"]}}).to_string())).unwrap();
+    let response = support::app(
+        "openrouter/anthropic/test-model",
+        &format!("{}/api/v1", upstream.uri()),
+    )
+    .oneshot(request)
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 200);
+    if streaming {
+        assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), sse);
+    } else {
+        assert_eq!(support::json(response).await, message);
+    }
+    let requests = upstream.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].headers.contains_key("x-api-key"));
 }

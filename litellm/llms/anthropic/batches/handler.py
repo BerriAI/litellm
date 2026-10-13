@@ -42,6 +42,7 @@ class AnthropicBatchesHandler:
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
     ) -> LiteLLMBatch:
         """
         Async: Retrieve a batch from Anthropic.
@@ -60,9 +61,7 @@ class AnthropicBatchesHandler:
         # Resolve API credentials
         api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
         api_key = api_key or self.anthropic_model_info.get_api_key()
-
-        if not api_key:
-            raise ValueError("Missing Anthropic API Key")
+        resolved_litellm_params: Final = litellm_params if litellm_params is not None else {}
 
         # Create a minimal logging object if not provided
         if logging_obj is None:
@@ -85,16 +84,18 @@ class AnthropicBatchesHandler:
             api_base=api_base,
             batch_id=batch_id,
             optional_params={},
-            litellm_params={},
+            litellm_params=resolved_litellm_params,
         )
 
-        # Validate environment and get headers
-        headers: Final = self.provider_config.validate_environment(
+        # Validate environment and get headers. Offloaded to a worker thread: a WIF token
+        # exchange here would otherwise block the event loop.
+        headers: Final = await asyncio.to_thread(
+            self.provider_config.validate_environment,
             headers={},
             model="",
             messages=[],
             optional_params={},
-            litellm_params={},
+            litellm_params=resolved_litellm_params,
             api_key=api_key,
             api_base=api_base,
         )
@@ -130,6 +131,7 @@ class AnthropicBatchesHandler:
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         logging_obj: LiteLLMLoggingObj | None = None,
+        litellm_params: dict | None = None,  # mutable-ok: handed straight to validate_environment
     ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         """
         Retrieve a batch from Anthropic.
@@ -154,6 +156,7 @@ class AnthropicBatchesHandler:
                 timeout=timeout,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
+                litellm_params=litellm_params,
             )
         else:
             return asyncio.run(
@@ -164,5 +167,6 @@ class AnthropicBatchesHandler:
                     timeout=timeout,
                     max_retries=max_retries,
                     logging_obj=logging_obj,
+                    litellm_params=litellm_params,
                 )
             )

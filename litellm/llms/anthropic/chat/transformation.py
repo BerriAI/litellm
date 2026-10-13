@@ -3,7 +3,7 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -296,6 +296,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
+    _workload_identity_eligible: ClassVar[bool] = True
+
     max_tokens: int | None = None
     stop_sequences: list | None = None
     temperature: int | None = None
@@ -314,7 +316,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         metadata: dict | None = None,
         system: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -414,6 +416,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return f"effort='xhigh' is not supported by this model. Got model: {model}"
         return None
 
+    @classmethod
+    def validate_effort_for_model(
+        cls,
+        model: str,
+        effort: str | None,
+        custom_llm_provider: str,
+    ) -> str | None:
+        return cls._validate_effort_for_model(model, effort, custom_llm_provider)
+
     @staticmethod
     def _model_supports_effort_param(model: str, custom_llm_provider: str) -> bool:
         """Whether the model accepts ``output_config.effort`` at all.
@@ -429,6 +440,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             AnthropicConfig._supports_effort_level(model, level, custom_llm_provider)
             for level in ("low", "minimal", "medium", "high", "xhigh", "max")
         )
+
+    @classmethod
+    def model_supports_effort_param(
+        cls,
+        model: str,
+        custom_llm_provider: str,
+    ) -> bool:
+        return cls._model_supports_effort_param(model, custom_llm_provider)
 
     @staticmethod
     def _model_supports_speed_param(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -470,6 +489,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         optional_params.pop("speed", None)
 
+    @classmethod
+    def maybe_drop_speed_param(
+        cls,
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        drop_params: bool,
+        custom_llm_provider: str | None = None,
+    ) -> None:
+        return cls._maybe_drop_speed_param(model, optional_params, drop_params, custom_llm_provider)
+
     @staticmethod
     def _raise_invalid_reasoning_effort(model: str, value: object, llm_provider: str) -> NoReturn:
         """Raise a ``BadRequestError`` for an unrecognised ``reasoning_effort``.
@@ -492,6 +521,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             model=model,
             llm_provider=llm_provider,
         )
+
+    @classmethod
+    def raise_invalid_reasoning_effort(
+        cls,
+        model: str,
+        value: object,
+        llm_provider: str,
+    ) -> NoReturn:
+        return cls._raise_invalid_reasoning_effort(model, value, llm_provider)
 
     def get_supported_openai_params(self, model: str):
         params: Final = [
@@ -921,6 +959,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return returned_tool, mcp_server
 
+    def map_tool_helper(
+        self,
+        tool: ChatCompletionToolParam,
+    ) -> tuple[AllAnthropicToolsValues | None, AnthropicMcpServerTool | None]:
+        return self._map_tool_helper(tool)
+
     def _map_openai_mcp_server_tool(self, tool: OpenAIMcpServerTool) -> AnthropicMcpServerTool:
         from litellm.types.llms.anthropic import AnthropicMcpServerToolConfiguration
 
@@ -995,6 +1039,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_server_tool is not None:
                     mcp_servers.append(mcp_server_tool)
         return anthropic_tools, mcp_servers
+
+    def map_tools(
+        self,
+        tools: list[  # mutable-ok: mirrors override contract
+            ChatCompletionToolParam | AllAnthropicToolsValues | dict[str, object]
+        ],
+    ) -> tuple[list[AllAnthropicToolsValues], list[AnthropicMcpServerTool]]:  # mutable-ok: mirrors override contract
+        return self._map_tools(tools)
 
     @staticmethod
     def _rewrite_tool_names_in_messages(
@@ -1247,6 +1299,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_stop = new_v
         return new_stop
 
+    def map_stop_sequences(
+        self,
+        stop: str | list[str] | None,  # mutable-ok: mirrors override contract
+    ) -> list[str] | None:  # mutable-ok: mirrors override contract
+        return self._map_stop_sequences(stop)
+
     @staticmethod
     def _map_reasoning_effort(
         reasoning_effort: REASONING_EFFORT | str | None,
@@ -1307,6 +1365,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model,
                 llm_provider=llm_provider,
             )
+
+    @classmethod
+    def map_reasoning_effort(
+        cls,
+        reasoning_effort: REASONING_EFFORT | str | None,
+        model: str,
+        custom_llm_provider: str,
+        llm_provider: str = "anthropic",
+    ) -> AnthropicThinkingParam | None:
+        return cls._map_reasoning_effort(reasoning_effort, model, custom_llm_provider, llm_provider)
 
     @staticmethod
     def cap_thinking_budget_to_max_tokens(
@@ -1978,9 +2046,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # system message stays in the conversation: hoisting it rewrites the cached
         # prefix and re-bills the whole history at cache-write pricing (#36559).
         leading_system_run, later_messages = split_leading_system_run(messages)
-        anthropic_system_message_list: Final = self.translate_system_message(
-            messages=list(leading_system_run)  # mutable-ok: translate_system_message pops from the list it is given
-        )
+        anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
             optional_params["system"] = anthropic_system_message_list
@@ -1994,7 +2060,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         try:
             anthropic_messages = anthropic_messages_pt(
                 model=model,
-                messages=list(conversation),  # mutable-ok: anthropic_messages_pt rewrites entries in place
+                messages=list(conversation),
                 llm_provider=self._resolved_provider,
             )
         except Exception as e:
@@ -2108,7 +2174,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params.pop("output_config", None)
                 data.pop("output_config", None)
                 return
-            format_only: Final = {"format": preserved_format}  # mutable-ok: json body
+            format_only: Final = {"format": preserved_format}
             optional_params["output_config"] = format_only  # rebind-ok: out-param store
             data["output_config"] = format_only  # rebind-ok: out-param store
             return
@@ -2152,11 +2218,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             json_tool: Final = tool_calls[json_indices[0]]
             if json_tool.get("function", {}).get("arguments") is None:
                 return None, tool_calls, None
-            _message: Final = AnthropicConfig._convert_tool_response_to_message(tool_calls=[json_tool])
+            _message: Final = AnthropicConfig.convert_tool_response_to_message(tool_calls=[json_tool])
             return _message, [], None
 
         first_json: Final = tool_calls[json_indices[0]]
-        json_msg: Final = AnthropicConfig._convert_tool_response_to_message([first_json])
+        json_msg: Final = AnthropicConfig.convert_tool_response_to_message([first_json])
         extra_content: Final[str | None] = json_msg.content if json_msg is not None else None
         filtered_tools: Final = [t for i, t in enumerate(tool_calls) if i not in json_indices]
         return None, filtered_tools, extra_content
@@ -2515,7 +2581,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> list[object]:
         content: Final = completion_response.get("content")
         blocks: Final = content if isinstance(content, Sequence) else ()
-        inputs: Final = {  # mutable-ok: indexes provider server inputs
+        inputs: Final = {
             call_id: tool_input
             for block in blocks
             if isinstance(block, Mapping)
@@ -2524,10 +2590,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and isinstance((call_id := block.get("id")), str)
             and isinstance((tool_input := block.get("input")), Mapping)
         }
-        return [  # mutable-ok: provider-neutral response items
+        return [
             build_web_search_call(
                 tool_id=tool_use_id,
-                tool_input=inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+                tool_input=inputs.get(tool_use_id, {}),
                 result=result,
             )
             for result in web_search_results
@@ -2668,7 +2734,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _message = json_mode_message
 
         model_response.choices[0].message = _message
-        model_response._hidden_params["original_response"] = completion_response["content"]
+        model_response.hidden_params["original_response"] = completion_response["content"]
         model_response.choices[0].finish_reason = cast(
             OpenAIChatCompletionFinishReason,
             map_finish_reason(completion_response["stop_reason"]),
@@ -2686,7 +2752,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_response.model = completion_response["model"]
 
         _hidden_params["provider_specific_fields"] = provider_specific_fields
-        model_response._hidden_params = _hidden_params
+        model_response.hidden_params = _hidden_params
         return model_response
 
     def get_prefix_prompt(self, messages: list[AllMessageValues]) -> str | None:
@@ -2785,6 +2851,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)
         return None
+
+    @classmethod
+    def convert_tool_response_to_message(
+        cls,
+        tool_calls: list[ChatCompletionToolCallChunk],  # mutable-ok: mirrors override contract
+    ) -> LitellmMessage | None:
+        return cls._convert_tool_response_to_message(tool_calls)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return AnthropicError(

@@ -3,13 +3,15 @@ use axum::{
     Json,
     response::{IntoResponse, Response},
 };
-use litellm_core::RouteError;
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::RouteError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use serde_json::{Map, Value, json};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Auth(#[from] litellm_gateway_auth::Error),
     #[error("invalid request body: {0}")]
     InvalidBody(String),
     #[error(
@@ -46,6 +48,7 @@ impl From<litellm_host_http::Error<RouteError>> for Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
+            Self::Auth(error) => error.status(),
             Self::Unsupported(_)
             | Self::Route(RouteError::Unsupported(_))
             | Self::Ocr(OcrError::Unsupported(_)) => StatusCode::NOT_IMPLEMENTED,
