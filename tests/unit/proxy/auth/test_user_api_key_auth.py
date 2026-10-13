@@ -2,27 +2,30 @@
 ## Unit tests for user_api_key_auth helper functions
 
 
-import litellm.proxy
-import litellm.proxy.proxy_server
-
+import json
+import logging
 from typing import Dict, Final, List, Mapping, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException, WebSocket, status
+from fastapi import Request as FastAPIRequest
 from starlette.datastructures import URL
 from starlette.types import Message
-from litellm._logging import verbose_proxy_logger
-import json
-import logging
+
 import litellm
+import litellm.proxy
+import litellm.proxy.proxy_server
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from litellm.proxy.auth.impersonation import IMPERSONATE_USER_HEADER
 from litellm.proxy.auth.user_api_key_auth import (
-    user_api_key_auth,
     UserAPIKeyAuth,
     get_api_key_from_custom_header,
+    user_api_key_auth,
+    user_api_key_auth_builder,
 )
-from fastapi import WebSocket, HTTPException, status
-
-from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+from litellm.proxy.proxy_server import hash_token
 from tests._master_key import MASTER_KEY
 
 
@@ -144,8 +147,8 @@ async def test_team_object_has_object_permission_id():
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     team_id = "team-vector"
     permission_id = "perm-vector-123"
@@ -188,9 +191,10 @@ async def test_team_object_has_object_permission_id():
 )
 @pytest.mark.asyncio
 async def test_returned_user_api_key_auth(user_role, expected_role):
+    from datetime import datetime
+
     from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
     from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
-    from datetime import datetime
 
     new_obj = await _return_user_api_key_auth_obj(
         user_obj=LiteLLM_UserTable(user_role=user_role, user_id="", max_budget=None, user_email=""),
@@ -226,8 +230,8 @@ async def test_aaauser_personal_budgets(key_ownership):
 
     from fastapi import Request
     from starlette.datastructures import URL
-    import litellm
 
+    import litellm
     from litellm.proxy._types import (
         LiteLLM_UserTable,
         ProxyErrorTypes,
@@ -388,8 +392,8 @@ def test_ui_token_route_access(route, user_role, should_be_allowed):
     RBAC checks as API tokens. Non-admin dashboard users must not be able
     to access admin-only routes like /config/update.
     """
-    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
     from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
 
     user_obj = LiteLLM_UserTable(
         user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
@@ -411,8 +415,8 @@ def test_ui_token_route_access(route, user_role, should_be_allowed):
         user_role=user_role,
     )
 
-    from starlette.datastructures import URL
     from fastapi import Request
+    from starlette.datastructures import URL
 
     request = Request(scope={"type": "http", "method": "POST", "path": route, "headers": []})
     request._url = URL(url=route)
@@ -444,8 +448,8 @@ def test_ui_token_route_access(route, user_role, should_be_allowed):
     ],
 )
 def test_is_api_route_allowed(route, user_role, expected_result):
-    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
     from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
 
     user_obj = LiteLLM_UserTable(
         user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
@@ -548,8 +552,6 @@ def test_get_api_key_from_custom_header_different_casing():
     )
 
 
-
-
 @pytest.mark.parametrize(
     "user_role, auth_user_id, requested_user_id, expected_result",
     [
@@ -561,8 +563,8 @@ def test_get_api_key_from_custom_header_different_casing():
     ],
 )
 def test_allowed_route_inside_route(user_role, auth_user_id, requested_user_id, expected_result):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.auth_checks import allowed_route_check_inside_route
-    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
 
     assert (
         allowed_route_check_inside_route(
@@ -574,8 +576,9 @@ def test_allowed_route_inside_route(user_role, auth_user_id, requested_user_id, 
 
 
 def test_read_request_body():
-    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from fastapi import Request
+
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
     payload = "()" * 1000000
     request = Request(scope={"type": "http"})
@@ -597,10 +600,11 @@ async def test_auth_with_form_data_and_model():
     """
     from fastapi import Request
     from starlette.datastructures import URL, FormData
+
     from litellm.proxy.proxy_server import (
         hash_token,
-        user_api_key_cache,
         user_api_key_auth,
+        user_api_key_cache,
     )
 
     # Setup
@@ -719,9 +723,10 @@ async def test_soft_budget_alert():
 
 
 def test_is_allowed_route():
-    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
-    from litellm.proxy._types import UserAPIKeyAuth
     import datetime
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
 
     request = MagicMock()
 
@@ -1001,10 +1006,11 @@ async def test_accepted_websocket_reauthorizes_the_frame_model_without_closing()
 @pytest.mark.parametrize("enforce_rbac", [True, False])
 @pytest.mark.asyncio
 async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypatch):
-    from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
-    from unittest.mock import patch, Mock
-    from litellm.proxy._types import LiteLLM_JWTAuth
+    from unittest.mock import Mock, patch
+
     from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "my-fake-url")
     monkeypatch.setenv("JWT_AUDIENCE", "api://LiteLLM_Proxy-dev")
@@ -1083,8 +1089,8 @@ def test_user_api_key_auth_end_user_str():
 
 
 def test_can_rbac_role_call_model():
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager
     from litellm.proxy._types import RoleBasedPermissions
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
     roles_based_permissions = [
         RoleBasedPermissions(
@@ -1156,12 +1162,14 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     """
     Test that a non-admin JWT user cannot access team management routes
     """
-    from fastapi import Request, HTTPException
-    from starlette.datastructures import URL
-    from unittest.mock import patch
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     import json
+    from unittest.mock import patch
+
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
     from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
     mock_jwt_response = {
         "is_proxy_admin": False,
@@ -1192,8 +1200,8 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     # Initialize jwt_handler with a default LiteLLM_JWTAuth so that the
     # virtual_key_claim_field check in user_api_key_auth doesn't fail with
     # "JWTHandler has no attribute 'litellm_jwtauth'"
-    from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
 
     litellm.proxy.proxy_server.jwt_handler.update_environment(
         prisma_client=None,
@@ -1396,6 +1404,7 @@ async def test_user_api_key_from_query_param():
             "type": "http",
             "path": "/v1beta/models/gemini:streamGenerateContent",
             "query_string": f"alt=sse&key={user_key}".encode(),
+            "headers": [],
         }
     )
     request._url = URL(url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}")
@@ -1503,7 +1512,7 @@ async def test_user_model_budget_is_enforced_through_user_api_key_auth(over_budg
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy._types import LiteLLM_UserTable, Litellm_EntityType, UserAPIKeyAuth
+    from litellm.proxy._types import Litellm_EntityType, LiteLLM_UserTable, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
     from litellm.proxy.proxy_server import (
@@ -2348,3 +2357,91 @@ async def test_non_object_metadata_is_served_like_unset_mappings_whatever_the_ba
     )
     assert mapped == unset
     assert mapped[1] == "app-deployment"
+
+
+@pytest.mark.asyncio
+async def test_cached_admin_service_key_applies_impersonation_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    key: Final = "sk-cached-service-impersonation"
+    subject_id: Final = "cached-impersonated-user"
+    token: Final = hash_token(key)
+    actor: Final = UserAPIKeyAuth(
+        token=token,
+        user_id="service-key-owner",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        key_alias="cached-service",
+        permissions={"impersonate": True},
+    )
+    subject: Final = LiteLLM_UserTable(
+        user_id=subject_id,
+        user_email="subject@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+    )
+    cache: Final = litellm.proxy.proxy_server.user_api_key_cache
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", "present")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", "sk-cached-service-master")
+    await cache.async_set_cache(key=token, value=actor, model_type=UserAPIKeyAuth)
+    await cache.async_set_cache(key=subject_id, value=subject, model_type=LiteLLM_UserTable)
+
+    request: Final = FastAPIRequest(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/user/info",
+            "headers": [(IMPERSONATE_USER_HEADER.lower().encode(), subject_id.encode())],
+        }
+    )
+    request._url = URL(url="/user/info")
+
+    result: Final = await user_api_key_auth_builder(
+        request=request,
+        api_key=f"Bearer {key}",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data={},
+    )
+
+    assert (result.user_id, result.impersonated_by) == (subject_id, "cached-service")
+
+
+@pytest.mark.asyncio
+async def test_master_key_impersonates_on_uncached_and_cached_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    key: Final = MASTER_KEY
+    subject_id: Final = "master-key-impersonated-user"
+    token: Final = hash_token(key)
+    subject: Final = LiteLLM_UserTable(
+        user_id=subject_id,
+        user_email="subject@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+    )
+    cache: Final = litellm.proxy.proxy_server.user_api_key_cache
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", "present")
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", key)
+    await cache.async_delete_cache(key=token)
+    await cache.async_set_cache(key=subject_id, value=subject, model_type=LiteLLM_UserTable)
+
+    async def authenticate() -> UserAPIKeyAuth:
+        request: Final = FastAPIRequest(
+            scope={
+                "type": "http",
+                "method": "GET",
+                "path": "/user/info",
+                "headers": [(IMPERSONATE_USER_HEADER.lower().encode(), subject_id.encode())],
+            }
+        )
+        request._url = URL(url="/user/info")
+        return await user_api_key_auth_builder(
+            request=request,
+            api_key=f"Bearer {key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+    first: Final = await authenticate()
+    second: Final = await authenticate()
+    assert (first.user_id, first.impersonated_by) == (subject_id, "litellm_proxy_master_key")
+    assert (second.user_id, second.impersonated_by) == (subject_id, "litellm_proxy_master_key")

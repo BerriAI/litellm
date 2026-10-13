@@ -5097,12 +5097,13 @@ async def info_key_fn(
     )
 
     try:
+        if user_api_key_dict.impersonated_by is not None and key is None:
+            raise HTTPException(status_code=400, detail="A key must be specified when impersonating a user.")
         if prisma_client is None:
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
         hashed_key: str | None = key
         if key is not None:
@@ -8382,7 +8383,7 @@ async def _can_user_query_key_info(
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
         )
-        or user_api_key_dict.api_key == key
+        or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
         or key_info.user_id == user_api_key_dict.user_id
         or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
             user_api_key_dict=user_api_key_dict,

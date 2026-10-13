@@ -1123,7 +1123,7 @@ def request_skips_budget_checks(
 
 
 async def common_checks(
-    request_body: dict,
+    request_body: dict[str, object],
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
     end_user_object: LiteLLM_EndUserTable | None,

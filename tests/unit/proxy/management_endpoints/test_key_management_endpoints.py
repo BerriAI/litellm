@@ -59,6 +59,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     KeyProjectBindingError,
+    _can_user_query_key_info,
     _check_key_project_team,
     _check_key_project_team_on_mutation,
     _check_org_key_limits,
@@ -94,6 +95,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_fn,
     generate_key_helper_fn,
     generate_service_account_key_fn,
+    info_key_fn,
     key_aliases,
     key_generation_check,
     list_key_helper,
@@ -114,6 +116,33 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+async def test_impersonated_caller_cannot_use_the_service_key_for_key_info() -> None:
+    auth: Final = UserAPIKeyAuth(api_key="service-key", user_id="subject").model_copy(
+        update={"impersonated_by": "service-user"}
+    )
+    key_info: Final = LiteLLM_VerificationToken(token="service-key", user_id="service-user")
+
+    assert (
+        await _can_user_query_key_info(
+            user_api_key_dict=auth,
+            key=auth.api_key,
+            key_info=key_info,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_impersonated_key_info_requires_an_explicit_key() -> None:
+    auth: Final = UserAPIKeyAuth(user_id="subject").model_copy(update={"impersonated_by": "service-user"})
+
+    with pytest.raises(ProxyException) as error:
+        await info_key_fn(key=None, user_api_key_dict=auth)
+
+    assert error.value.code == "400"
 
 
 @pytest.mark.asyncio

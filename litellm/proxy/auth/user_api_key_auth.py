@@ -21,6 +21,7 @@ import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import TypeAdapter
+from starlette.datastructures import Headers
 from starlette.exceptions import WebSocketException
 
 import litellm
@@ -123,6 +124,18 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.proxy.auth.impersonation import (
+    IMPERSONATE_USER_HEADER,
+    ImpersonatedUserNotFound,
+    ImpersonationForbidden,
+    ImpersonationRequest,
+    actor_label,
+    impersonate,
+    read_impersonation_request,
+)
+from litellm.proxy.auth.impersonation import (
+    UserLookup as ImpersonationUserLookup,
+)
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
@@ -187,6 +200,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_api import fallbacks_disabled, references_provider_scoped_resource, request_fallback_chain
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.services import ServiceTypes
 
 try:
@@ -249,17 +263,19 @@ azure_apim_header: Final = APIKeyHeader(
 
 
 def _get_model_from_request_context(
-    request_data: dict,
+    request_data: Mapping[str, object],
     route: str,
     request: Request | None,
     llm_router: litellm.Router | None = None,
     team_id: str | None = None,
 ) -> str | list[str] | None:
+    request_headers: Final[Mapping[str, object]] = safe_get_request_headers(request=request)
+    request_query_params: Final[Mapping[str, object]] = safe_get_request_query_params(request=request)
     return get_model_from_request(
         request_data=request_data,
         route=route,
-        request_headers=safe_get_request_headers(request=request),
-        request_query_params=safe_get_request_query_params(request=request),
+        request_headers=request_headers,
+        request_query_params=request_query_params,
         llm_router=llm_router,
         request=request,
         team_id=team_id,
@@ -2773,7 +2789,22 @@ async def user_api_key_auth_builder(
             if _end_user_object is not None:
                 valid_token.end_user_object_permission = _end_user_object.object_permission
 
-            return valid_token
+            return await _apply_impersonation_if_requested(
+                actor=valid_token,
+                request=request,
+                request_data=request_data,
+                route=route,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=llm_router,
+                model_max_budget_limiter=model_max_budget_limiter,
+                actor_is_master_key=(
+                    secrets.compare_digest(valid_token.api_key or "", hash_token(master_key))
+                    or secrets.compare_digest(api_key.encode("utf-8"), master_key.encode("utf-8"))
+                ),
+            )
 
         if (
             valid_token is not None
@@ -2849,7 +2880,19 @@ async def user_api_key_auth_builder(
             )
             _user_api_key_obj.via_virtual_key = True
 
-            return _user_api_key_obj
+            return await _apply_impersonation_if_requested(
+                actor=_user_api_key_obj,
+                request=request,
+                request_data=request_data,
+                route=route,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=llm_router,
+                model_max_budget_limiter=model_max_budget_limiter,
+                actor_is_master_key=True,
+            )
 
         ## IF it's not a master key
         ## Route should not be in master_key_only_routes
@@ -3354,7 +3397,125 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             start_time=start_time,
         )
         virtual_key_auth_obj.via_virtual_key = True
-        return virtual_key_auth_obj
+        return await _apply_impersonation_if_requested(
+            actor=virtual_key_auth_obj,
+            request=request,
+            request_data=request_data,
+            route=route,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            model_max_budget_limiter=model_max_budget_limiter,
+            actor_is_master_key=False,
+        )
+
+
+async def _apply_impersonation_if_requested(
+    actor: UserAPIKeyAuth,
+    request: Request,
+    request_data: Mapping[str, object],
+    route: str,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+    llm_router: litellm.Router | None,
+    model_max_budget_limiter: _UserModelBudgetLimiter,
+    actor_is_master_key: bool,
+) -> UserAPIKeyAuth:
+    impersonation: Final = read_impersonation_request(
+        Headers(scope=request.scope) if "headers" in request.scope else Headers()
+    )
+    if impersonation is None:
+        return actor
+
+    async def lookup(user_id: str) -> LiteLLM_UserTable | None:
+        try:
+            return await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except UserNotFoundError:
+            return None
+
+    return await _impersonate_or_raise(
+        actor=actor,
+        impersonation=impersonation,
+        lookup=lookup,
+        request=request,
+        request_data=request_data,
+        llm_router=llm_router,
+        model_max_budget_limiter=model_max_budget_limiter,
+        route=route,
+        actor_is_master_key=actor_is_master_key,
+    )
+
+
+async def _impersonate_or_raise(
+    actor: UserAPIKeyAuth,
+    impersonation: ImpersonationRequest,
+    lookup: ImpersonationUserLookup,
+    request: Request,
+    request_data: Mapping[str, object],
+    llm_router: litellm.Router | None,
+    model_max_budget_limiter: _UserModelBudgetLimiter,
+    route: str,
+    actor_is_master_key: bool = False,
+) -> UserAPIKeyAuth:
+    if RouteChecks.is_llm_api_route(route=route):
+        raise ProxyException(
+            message=f"Impersonation is not allowed on LLM API route {route}",
+            type=ProxyErrorTypes.auth_error,
+            param=IMPERSONATE_USER_HEADER,
+            code=403,
+        )
+    if not RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=actor, request=request):
+        raise ProxyException(
+            message=f"key {actor_label(actor)} is not allowed to impersonate on route {route}",
+            type=ProxyErrorTypes.auth_error,
+            param=IMPERSONATE_USER_HEADER,
+            code=403,
+        )
+    result: Final = await impersonate(actor, impersonation, lookup, actor_is_master_key=actor_is_master_key)
+    match result:
+        case UserAPIKeyAuth():
+            model: Final = _get_model_from_request_context(
+                request_data=request_data,
+                route=route,
+                request=request,
+                llm_router=llm_router,
+                team_id=result.team_id,
+            )
+            models: Final = _get_model_names_for_budget_checks(model=model)
+            if not request_skips_budget_checks(
+                route=route, model=model, llm_router=llm_router, request_body=request_data
+            ):
+                await _check_user_model_budget(
+                    valid_token=result,
+                    model_max_budget_limiter=model_max_budget_limiter,
+                    models=models,
+                )
+            verbose_proxy_logger.info(
+                "impersonation: actor=%s subject=%s route=%s", actor_label(actor), result.user_id, route
+            )
+            return result.model_copy(update={"via_virtual_key": actor.via_virtual_key})
+        case ImpersonationForbidden(detail=detail):
+            raise ProxyException(
+                message=detail, type=ProxyErrorTypes.auth_error, param=IMPERSONATE_USER_HEADER, code=403
+            )
+        case ImpersonatedUserNotFound(user_id=user_id):
+            raise ProxyException(
+                message=f"impersonated user {user_id!r} does not exist on this proxy",
+                type=ProxyErrorTypes.auth_error,
+                param=IMPERSONATE_USER_HEADER,
+                code=401,
+            )
 
 
 async def _safe_fetch(label: str, awaitable):
