@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Final, TypedDict
+from typing import Awaitable, Final, TypedDict, TypeVar
 from unittest.mock import AsyncMock
 
 import httpx
@@ -22,6 +22,17 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+_T = TypeVar("_T")
+
+
+async def _await_with_spawned_tasks(call: Awaitable[_T]) -> _T:
+    before: Final = asyncio.all_tasks()
+    result: Final = await call
+    spawned: Final = asyncio.all_tasks() - before - {asyncio.current_task()}
+    await asyncio.wait_for(asyncio.gather(*spawned), timeout=5)
+    return result
 
 
 @pytest.fixture(autouse=True)
@@ -56,14 +67,15 @@ async def test_generic_api_callback():
     litellm.callbacks = [generic_logger]
 
     # Make the completion call
-    response = await litellm.acompletion(
-        model="gpt-5.5",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        mock_response="hi",
-        user="test_user",
+    response = await _await_with_spawned_tasks(
+        litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="hi",
+            user="test_user",
+        )
     )
 
-    await asyncio.sleep(0)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
     await generic_logger.flush_queue()
 
@@ -137,14 +149,15 @@ async def test_generic_api_callback_multiple_logs():
 
     # Make the completion call
     for _ in range(10):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    await asyncio.sleep(0)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
     await generic_logger.flush_queue()
 
@@ -218,14 +231,15 @@ async def test_generic_api_callback_ndjson_format():
 
     # Make multiple completion calls to generate multiple logs
     for i in range(3):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    await asyncio.sleep(0)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
     await generic_logger.flush_queue()
 
@@ -288,14 +302,15 @@ async def test_generic_api_callback_single_format():
 
     # Make 3 completion calls
     for i in range(3):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    await asyncio.sleep(0)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
     await generic_logger.flush_queue()
 
@@ -348,14 +363,15 @@ async def test_generic_api_callback_json_array_format_explicit():
 
     # Make multiple completion calls
     for i in range(5):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    await asyncio.sleep(0)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
     await generic_logger.flush_queue()
 
@@ -400,14 +416,15 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
 
     # Make completion calls
     for i in range(2):
-        await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Test {i}"}],
-            mock_response="response",
-            user="test_user",
+        await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Test {i}"}],
+                mock_response="response",
+                user="test_user",
+            )
         )
 
-    await asyncio.sleep(0)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
     await generic_logger.flush_queue()
 

@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from collections.abc import Iterator
+from typing import Awaitable, Final, TypeVar
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -13,6 +14,17 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+_T = TypeVar("_T")
+
+
+async def _await_with_spawned_tasks(call: Awaitable[_T]) -> _T:
+    before: Final = asyncio.all_tasks()
+    result: Final = await call
+    spawned: Final = asyncio.all_tasks() - before - {asyncio.current_task()}
+    await asyncio.wait_for(asyncio.gather(*spawned), timeout=5)
+    return result
 
 
 @pytest.fixture(autouse=True)
@@ -54,28 +66,30 @@ async def test_opik_logging_http_request():
         ]
 
     for _ in range(5):
-        await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Test message"}],
-            max_tokens=10,
-            temperature=0.2,
-            mock_response="This is a mock response",
+        await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Test message"}],
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="This is a mock response",
+            )
         )
-    await asyncio.sleep(0)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
 
     assert opik_batch_calls() == [], "events below batch_size must stay queued"
     assert len(test_opik_logger.log_queue) == 10
 
     for _ in range(3):
-        await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Test message"}],
-            max_tokens=10,
-            temperature=0.2,
-            mock_response="This is a mock response",
+        await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Test message"}],
+                max_tokens=10,
+                temperature=0.2,
+                mock_response="This is a mock response",
+            )
         )
-    await asyncio.sleep(0)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
 
     assert opik_batch_calls(), "crossing batch_size must flush the queue"

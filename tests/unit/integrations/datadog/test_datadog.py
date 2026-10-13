@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Coroutine, Final, TypedDict
+from typing import Awaitable, Coroutine, Final, TypedDict, TypeVar
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -39,6 +39,17 @@ from datetime import datetime as datetime_class
 
 STANDARD_START_TIME: Final[datetime] = datetime(2025, 1, 1)
 STANDARD_END_TIME: Final[datetime] = datetime(2025, 1, 1, 0, 0, 1)
+
+
+_T = TypeVar("_T")
+
+
+async def _await_with_spawned_tasks(call: Awaitable[_T]) -> _T:
+    before: Final = asyncio.all_tasks()
+    result: Final = await call
+    spawned: Final = asyncio.all_tasks() - before - {asyncio.current_task()}
+    await asyncio.wait_for(asyncio.gather(*spawned), timeout=5)
+    return result
 
 
 def _discard_periodic_flush(coroutine: Coroutine[object, object, None]) -> None:
@@ -267,16 +278,17 @@ async def test_datadog_logging_http_request():
 
         # Make the completion call
         for _ in range(5):
-            response = await litellm.acompletion(
-                model="gpt-4.1-mini",
-                messages=[{"role": "user", "content": "what llm are u"}],
-                max_tokens=10,
-                temperature=0.2,
-                mock_response="Accepted",
+            response = await _await_with_spawned_tasks(
+                litellm.acompletion(
+                    model="gpt-4.1-mini",
+                    messages=[{"role": "user", "content": "what llm are u"}],
+                    max_tokens=10,
+                    temperature=0.2,
+                    mock_response="Accepted",
+                )
             )
             print(response)
 
-        await asyncio.sleep(0)
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
         await dd_logger.flush_queue()
 
