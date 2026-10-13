@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
+import litellm
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.llms.openrouter import OpenRouterErrorMessage
 from litellm.types.utils import ModelResponse, ModelResponseStream
@@ -38,6 +40,10 @@ class CacheControlSupportedModels(str, Enum):
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
+    @staticmethod
+    def get_api_base(api_base: str | None = None) -> str:
+        return api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Include reasoning parameters regardless of model-map capabilities.

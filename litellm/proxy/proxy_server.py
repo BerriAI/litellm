@@ -160,7 +160,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.proxy.model_metadata import GatewayModelMetadata, resolve_gateway_model_metadata
+from litellm.types.router import ModelMetadata, resolve_model_metadata
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     ModelResponse,
@@ -14859,7 +14859,7 @@ def _enrich_model_info_with_litellm_data(
             if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
         },
     }
-    gateway_metadata: Final = resolve_gateway_model_metadata(
+    gateway_metadata: Final = resolve_model_metadata(
         MappingProxyType({})
         if llm_router is not None and getattr(llm_router, "model_metadata_authoritative", False) is True
         else MappingProxyType({**litellm_model_info, **discovered_model_info}),
@@ -14868,11 +14868,7 @@ def _enrich_model_info_with_litellm_data(
     published_model: Final = {
         **model,
         "model_info": {
-            **{
-                field: value
-                for field, value in model["model_info"].items()
-                if field not in GatewayModelMetadata.model_fields
-            },
+            **{field: value for field, value in model["model_info"].items() if field not in ModelMetadata.model_fields},
             **gateway_metadata.model_dump(mode="json", exclude_none=True),
             **discover_model_metadata((gateway_metadata,)),
         },

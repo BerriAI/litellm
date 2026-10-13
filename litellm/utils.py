@@ -6205,6 +6205,7 @@ def get_model_info_helper(
                 context_window=_model_info.get("context_window", None),
                 supported_modalities=_model_info.get("supported_modalities", None),
                 supported_output_modalities=_model_info.get("supported_output_modalities", None),
+                request_defaults=_model_info.get("request_defaults", None),
                 max_tokens=_model_info.get("max_tokens", None),
                 max_input_tokens=_model_info.get("max_input_tokens", None),
                 max_output_tokens=_model_info.get("max_output_tokens", None),

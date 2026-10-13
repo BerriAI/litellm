@@ -1,7 +1,7 @@
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # native Router dynamic attribute dispatch
 
@@ -16,7 +16,6 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator, alias_target, caller_alias_maps
 from litellm.router import Router
 from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.types.proxy.model_offerings import OpenRouterProviderPolicy
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 
@@ -27,8 +26,6 @@ class OfferingServingSnapshot:
     unavailable_models: Mapping[str, str]
     allowed_deployments: frozenset[str]
     allowed_deployment_ids: frozenset[str] = frozenset()
-    provider_policies: Mapping[str, OpenRouterProviderPolicy] = field(default_factory=lambda: MappingProxyType({}))
-    deployment_policies: Mapping[str, OpenRouterProviderPolicy] = field(default_factory=lambda: MappingProxyType({}))
 
 
 _PINNED_SNAPSHOT: Final[ContextVar[tuple[int, OfferingServingSnapshot] | None]] = ContextVar(
@@ -50,6 +47,7 @@ _ROUTING_OVERRIDES: Final = (
             "context_window_fallbacks",
             "content_policy_fallbacks",
             "model_list",
+            "provider_policy",
             "deployment_id",
             "specific_deployment",
             "model_id",
@@ -240,7 +238,10 @@ class OfferingAccessGuard(CustomLogger):
                 model="",
                 llm_provider="",
             )
-        if any(name in data for name in ("specific_deployment", "deployment_id", "model_id", "model_list")):
+        if any(
+            name in data
+            for name in ("specific_deployment", "deployment_id", "model_id", "model_list", "provider_policy")
+        ):
             return litellm.BadRequestError(
                 message="External offering mode does not accept caller-defined deployment selection",
                 model="",
@@ -252,7 +253,8 @@ class OfferingAccessGuard(CustomLogger):
         snapshot: Final = self.router.serving_snapshot()
         offering: Final = self._offering_name(model, user_api_key_dict)
         if offering in snapshot.available_models:
-            policy: Final = snapshot.provider_policies.get(offering)
+            deployment: Final = snapshot.router.get_deployment_by_model_group_name(offering)
+            policy: Final = deployment.provider_policy if deployment is not None else None
             if policy is None:
                 return None
             if call_type not in _POLICY_CALLS or _policy_override(data):
@@ -295,7 +297,8 @@ class OfferingAccessGuard(CustomLogger):
         )
         deployment_id: Final = model_info.get("id")
         snapshot: Final = self.router.serving_snapshot()
-        policy: Final = snapshot.deployment_policies.get(deployment_id) if isinstance(deployment_id, str) else None
+        deployment: Final = snapshot.router.get_deployment(deployment_id) if isinstance(deployment_id, str) else None
+        policy: Final = deployment.provider_policy if deployment is not None else None
         if policy is None and call_type not in (
             CallTypes.acompletion,
             CallTypes.completion,

@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 """Response types for the model listing/retrieve endpoints (/v1/models, /models)."""
 
@@ -6,10 +6,7 @@ from typing import Literal
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-
-class ModelRequestDefaultsInfo(TypedDict, total=False):
-    output_token_budget: ReadOnly[int]
-    output_token_budget_by_reasoning_effort: ReadOnly[Mapping[str, int]]
+from litellm.types.utils import ModelRequestDefaultsInfo
 
 
 class ModelDiscoveryInfo(TypedDict, total=False):

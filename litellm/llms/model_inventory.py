@@ -33,10 +33,11 @@ def prevent_supplier_device_login() -> Generator[None]:
 def model_inventory_api_base(provider: str, api_base: str | None) -> str | None:
     if provider == "chatgpt":
         return chatgpt_model_inventory_api_base(api_base)
-    return api_base or {
-        "openrouter": "https://openrouter.ai/api/v1",
-        "vercel_ai_gateway": "https://ai-gateway.vercel.sh/v1",
-    }.get(provider)
+    if provider == "openrouter":
+        return litellm.OpenrouterConfig.get_api_base(api_base)
+    if provider == "vercel_ai_gateway":
+        return litellm.VercelAIGatewayConfig.get_api_base(api_base)
+    return api_base
 
 
 def model_inventory_identity(provider: str) -> str | None:

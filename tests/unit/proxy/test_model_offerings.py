@@ -23,6 +23,67 @@ from litellm.router import Router
 from litellm.types.utils import CallTypesLiteral
 
 
+@pytest.mark.parametrize("provider", ("openrouter", "vercel_ai_gateway"))
+async def test_native_base_changes_invalidate_connection_inventory_and_preserve_pinned_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    variable: Final = "OPENROUTER" if provider == "openrouter" else "VERCEL_AI_GATEWAY"
+    first_base: Final = "https://first.test/custom/v1"
+    second_base: Final = "https://second.test/custom/v1"
+    monkeypatch.setenv(f"{variable}_API_BASE", first_base)
+    monkeypatch.setenv(f"{variable}_API_KEY", "ambient-provider-key")
+    monkeypatch.setattr(litellm, "api_base", None)
+    path: Final = tmp_path / "offerings.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "providers": {"supplier": {"provider": provider, "api_key": "configured-key"}},
+                "offerings": [
+                    {
+                        "model_name": "selected",
+                        "source": "auto",
+                        "provider": "supplier",
+                        "upstream_model": "org/backend",
+                    }
+                ],
+            }
+        )
+    )
+    responses: Final = iter(
+        (
+            (first_base, 200),
+            (second_base, 401),
+            (second_base, 200),
+        )
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        expected_base, status = next(responses)
+        assert str(request.url) == f"{expected_base}/models"
+        assert request.headers["authorization"] == "Bearer configured-key"
+        return httpx.Response(status, json={"data": [{"id": "org/backend"}]})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        manager: Final = ModelOfferingsManager(
+            path=path, template=Router(model_list=[]), client=handler, clock=lambda: 0.0
+        )
+        assert await manager.reload(initial=True)
+        original_ids: Final = manager.router.get_model_ids()
+        with manager.router.pin_snapshot():
+            monkeypatch.setenv(f"{variable}_API_BASE", second_base)
+            assert await manager.reload()
+            assert manager.router.get_model_ids() == original_ids
+            assert manager.router.latest_snapshot().available_models == set()
+        assert manager.router.get_model_names() == []
+        assert await manager.reload(force_inventory=True)
+        assert manager.router.latest_snapshot().available_models == {"selected"}
+        assert manager.router.get_model_ids() != original_ids
+
+
 @pytest.mark.parametrize("catalog_state", ("missing", "known", "different_route_provider"))
 async def test_wildcard_listing_tracks_selected_offerings_and_pinned_reload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog_state: str
@@ -993,7 +1054,10 @@ async def test_endpoint_policy_reload_isolates_aliases_identity_and_metadata(
             path=path, template=Router(model_list=[]), client=handler, clock=lambda: 0.0
         )
         assert await manager.reload(initial=True)
-        before: Final = manager.router.latest_snapshot()
+        selected_deployment: Final = manager.router.get_deployment_by_model_group_name("selected")
+        assert selected_deployment is not None
+        assert selected_deployment.provider_policy.only == ("synthetic/fp8",)
+        assert "provider_policy" not in selected_deployment.model_dump()
         selected_id: Final = manager.router.get_model_ids("selected")
         ordinary_id: Final = manager.router.get_model_ids("ordinary")
         pinned_metadata: Final = create_model_info_response("selected", "openrouter", llm_router=manager.router)
@@ -1020,12 +1084,15 @@ async def test_endpoint_policy_reload_isolates_aliases_identity_and_metadata(
                 )
             )
             assert await manager.reload()
-            assert manager.router.serving_snapshot().provider_policies == before.provider_policies
+            assert (
+                manager.router.get_deployment_by_model_group_name("selected").provider_policy
+                == selected_deployment.provider_policy
+            )
             assert manager.router.get_model_ids("selected") == selected_id
         assert manager.router.get_model_ids("selected") != selected_id
         assert manager.router.get_model_ids("ordinary") == ordinary_id
-        assert manager.router.latest_snapshot().provider_policies["selected"].only == ("synthetic/bf16",)
-        assert "ordinary" not in manager.router.latest_snapshot().provider_policies
+        assert manager.router.get_deployment_by_model_group_name("selected").provider_policy.only == ("synthetic/bf16",)
+        assert manager.router.get_deployment_by_model_group_name("ordinary").provider_policy is None
         valid: Final = manager.router.latest_snapshot()
         path.write_text(
             yaml.safe_dump(

@@ -8,6 +8,7 @@ import httpx
 from pydantic import BeforeValidator, ConfigDict, ValidationError, ValidationInfo, field_validator
 
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.model_inventory import (
@@ -16,7 +17,7 @@ from litellm.types.proxy.model_inventory import (
     SupplierInventoryUnavailable,
     SupplierModelInventory,
 )
-from litellm.types.proxy.model_metadata import GatewayModelMetadata
+from litellm.types.router import ModelMetadata
 from litellm.utils import add_path_to_api_base
 
 MODEL_INFO_REFRESH_SECONDS: Final = 300
@@ -30,8 +31,9 @@ _EMPTY_LIMITS: Final[Mapping[str, object]] = MappingProxyType({})
 def _positive_limit(value: object) -> int | None:
     if value is None or type(value) is int and value == 0:
         return None
-    if type(value) is int and value > 0:
-        return value
+    limit: Final = coerce_token_limit(value, strict_positive=True)
+    if type(value) is int and limit is not None:
+        return limit
     raise ValueError("Supplier token limits must be nonnegative integers or null")
 
 
@@ -73,7 +75,7 @@ class _ReasoningOption(LiteLLMBaseModel):
     values: Sequence[str] | None = None
 
 
-class _ModelCard(GatewayModelMetadata):
+class _ModelCard(ModelMetadata):
     id: str
     type: str | None = None
     mode: str | None = None
@@ -90,16 +92,7 @@ class _ModelCard(GatewayModelMetadata):
     @field_validator("*", mode="before")
     @classmethod
     def strict_supplier_metadata(cls, value: object, info: ValidationInfo) -> object:
-        normalized: Final = (
-            None
-            if info.field_name in ("context_window", "max_input_tokens", "max_output_tokens")
-            and type(value) is int
-            and value == 0
-            else value
-        )
-        if info.field_name in GatewayModelMetadata.model_fields:
-            cls.validate_field_input(info.field_name, normalized)
-        return normalized
+        return ModelMetadata.validate_supplier_field(info.field_name, value)
 
     def token_limits(self, provider: str) -> Mapping[str, object]:
         context: Final = self.context_window or self.max_model_len or self.context_length
@@ -108,7 +101,7 @@ class _ModelCard(GatewayModelMetadata):
         supported_reasoning: Final = (
             "reasoning" in parameters or "reasoning_effort" in parameters if parameters is not None else None
         )
-        metadata: Final = GatewayModelMetadata(
+        metadata: Final = ModelMetadata(
             context_window=(
                 self.top_provider.context_length or context
                 if provider == "openrouter" and self.top_provider is not None

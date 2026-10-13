@@ -52,7 +52,7 @@ def remove_sensitive_info_from_deployment(
     _excluded: Final = (excluded_keys or set()) | _rate_limit_config_keys
 
     return {
-        **deployment_dict,
+        **{key: value for key, value in deployment_dict.items() if key != "provider_policy"},
         "litellm_params": SENSITIVE_DATA_MASKER.mask_dict(
             {key: value for key, value in deployment_dict["litellm_params"].items() if key not in _private_params},
             excluded_keys=_excluded,

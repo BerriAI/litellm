@@ -9485,7 +9485,7 @@ class Router:
 
             deployment = self._add_deployment(deployment=deployment)
 
-            model: Final = deployment.to_json(exclude_none=True)
+            model: Final = deployment.to_router_dict()
 
             self._add_model_to_list_and_index_map(model=model, model_id=deployment.model_info.id)
             return deployment
@@ -10157,7 +10157,7 @@ class Router:
         if "*" in deployment.model_name:
             # store this as a regex pattern - all deployments matching this pattern will be sent to this deployment
             # Store deployment.model_name as a regex pattern
-            self.pattern_router.add_pattern(deployment.model_name, deployment.to_json(exclude_none=True))
+            self.pattern_router.add_pattern(deployment.model_name, deployment.to_router_dict())
             if deployment.model_info.id:
                 self.provider_default_deployment_ids.append(deployment.model_info.id)
 
@@ -10166,9 +10166,7 @@ class Router:
         if _team_id is not None and _team_public_model_name is not None and "*" in _team_public_model_name:
             if _team_id not in self.team_pattern_routers:
                 self.team_pattern_routers[_team_id] = PatternMatchRouter()
-            self.team_pattern_routers[_team_id].add_pattern(
-                _team_public_model_name, deployment.to_json(exclude_none=True)
-            )
+            self.team_pattern_routers[_team_id].add_pattern(_team_public_model_name, deployment.to_router_dict())
 
         # Azure GPT-Vision Enhancements, users can pass os.environ/
         data_sources: Final = deployment.litellm_params.get("dataSources", []) or []
@@ -10282,7 +10280,7 @@ class Router:
         )
 
         # add to model list
-        _deployment: Final = deployment.to_json(exclude_none=True)
+        _deployment: Final = deployment.to_router_dict()
         # initialize client
         self._add_deployment(deployment=deployment)
 

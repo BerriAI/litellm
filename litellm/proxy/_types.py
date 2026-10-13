@@ -85,9 +85,8 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
-from litellm.types.proxy.model_metadata import GatewayModelMetadata
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
-from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
+from litellm.types.router import AllowedModelRegion, ModelMetadata, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -1105,7 +1104,7 @@ class ModelInfoDelete(LiteLLMPydanticObjectBase):
 
 
 class ModelInfo(  # frozen-ok: native model management assigns team_public_model_name after validation
-    GatewayModelMetadata, LiteLLMPydanticObjectBase
+    ModelMetadata, LiteLLMPydanticObjectBase
 ):
     id: str | None
     mode: Literal["embedding", "chat", "completion"] | None

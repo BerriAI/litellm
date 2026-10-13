@@ -9,6 +9,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator
 
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.types.proxy.model_inventory import (
@@ -17,7 +18,7 @@ from litellm.types.proxy.model_inventory import (
     SupplierInventoryUnavailable,
     SupplierModelInventory,
 )
-from litellm.types.proxy.model_metadata import GatewayModelMetadata
+from litellm.types.router import ModelMetadata
 
 from .authenticator import Authenticator
 from .common_utils import get_chatgpt_default_headers
@@ -32,7 +33,7 @@ class _ReasoningLevel(BaseModel):
     effort: str
 
 
-class _ChatGPTModel(GatewayModelMetadata):
+class _ChatGPTModel(ModelMetadata):
     slug: str
     max_context_window: int | None = None
     default_reasoning_level: str | None = None
@@ -44,28 +45,21 @@ class _ChatGPTModel(GatewayModelMetadata):
     @field_validator("*", mode="before")
     @classmethod
     def strict_supplier_metadata(cls, value: object, info: ValidationInfo) -> object:
-        normalized: Final = (
-            None
-            if info.field_name in ("context_window", "max_input_tokens", "max_output_tokens", "max_context_window")
-            and type(value) is int
-            and value == 0
-            else value
+        field_name: Final = (
+            "context_window"
+            if info.field_name == "max_context_window"
+            else "supports_parallel_function_calling"
+            if info.field_name == "supports_parallel_tool_calls"
+            else info.field_name
         )
-        if info.field_name in GatewayModelMetadata.model_fields or info.field_name == "max_context_window":
-            cls.validate_field_input(
-                "context_window" if info.field_name == "max_context_window" else info.field_name, normalized
-            )
-        if info.field_name == "supports_parallel_tool_calls":
-            cls.validate_field_input("supports_parallel_function_calling", normalized)
-        return normalized
+        return ModelMetadata.validate_supplier_field(field_name, value)
 
     @field_validator("max_context_window", mode="before")
     @classmethod
     def maximum_context(cls, value: object) -> int | None:
-        return GatewayModelMetadata.model_validate({"context_window": value}).context_window
+        return coerce_token_limit(value, strict_positive=True)
 
     def metadata(self) -> Mapping[str, object]:
-        maximum: Final = GatewayModelMetadata(context_window=self.max_context_window).context_window
         native_efforts: Final = (
             self.reasoning_effort_levels
             if self.reasoning_effort_levels is not None
@@ -93,7 +87,7 @@ class _ChatGPTModel(GatewayModelMetadata):
             if native_default == "persistent"
             else native_default
         )
-        normalized: Final = GatewayModelMetadata(
+        normalized: Final = ModelMetadata(
             max_input_tokens=self.max_input_tokens,
             max_output_tokens=self.max_output_tokens,
             supports_function_calling=self.supports_function_calling,
@@ -119,7 +113,7 @@ class _ChatGPTModel(GatewayModelMetadata):
         )
         native_windows: Final = {
             "codex_context_window": self.context_window,
-            "codex_max_context_window": maximum,
+            "codex_max_context_window": self.max_context_window,
         }
         return MappingProxyType(
             {

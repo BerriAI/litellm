@@ -13,10 +13,11 @@ from pydantic import (
     model_validator,
 )
 
-from litellm.types.proxy.model_metadata import GatewayModelMetadata
+from litellm.types.llms.openrouter import OpenRouterProviderPolicy
+from litellm.types.router import ModelMetadata
 
 
-class OfferingModelInfo(GatewayModelMetadata):
+class OfferingModelInfo(ModelMetadata):
     model_config = ConfigDict(extra="forbid", frozen=True)
     mode: Literal["chat", "completion", "embedding"] | None = None
 
@@ -50,34 +51,6 @@ class SupplierConnection(BaseModel):
                 "ChatGPT connections use the active native OAuth account rather than configured keys or headers"
             )
         return self
-
-
-class OpenRouterProviderPolicy(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    provider: Literal["openrouter"]
-    only: Annotated[tuple[Annotated[str, Field(min_length=1, strict=True)], ...], Field(min_length=1)]
-    allow_fallbacks: Literal[False] = False
-
-    @field_validator("only")
-    @classmethod
-    def exact_endpoints(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if len(frozenset(value)) != len(value) or any(
-            endpoint != endpoint.strip() or not endpoint.strip() or "*" in endpoint or "://" in endpoint
-            for endpoint in value
-        ):
-            raise ValueError("Provider endpoints must be unique exact slugs, not URLs or wildcards")
-        return value
-
-    @field_validator("allow_fallbacks", mode="before")
-    @classmethod
-    def no_fallbacks(cls, value: object) -> Literal[False]:
-        if value is not False:
-            raise ValueError("Offering provider policies require allow_fallbacks=false")
-        return False
-
-    def request_body(self) -> Mapping[str, object]:
-        return MappingProxyType({"only": list(self.only), "allow_fallbacks": self.allow_fallbacks})
 
 
 class ModelOffering(BaseModel):

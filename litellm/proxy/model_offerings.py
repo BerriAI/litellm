@@ -28,8 +28,8 @@ from litellm.router import Router
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import EncryptedContentAffinityCheck
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
-from litellm.types.proxy.model_metadata import GatewayModelMetadata
 from litellm.types.proxy.model_offerings import ModelOffering, ModelOfferingsConfig, SupplierConnection
+from litellm.types.router import ModelMetadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,9 +174,7 @@ def _deployment(offering: ModelOffering, state: _ProviderState) -> Mapping[str, 
         if offering.source == "auto" and offering.provider_policy is None
         else {}
     )
-    bundled_metadata: Final = GatewayModelMetadata.model_validate(bundled_info).model_dump(
-        mode="json", exclude_none=True
-    )
+    bundled_metadata: Final = ModelMetadata.model_validate(bundled_info).model_dump(mode="json", exclude_none=True)
     bundled_mode: Final = bundled_info.get("mode")
     metadata: Final = {
         **bundled_metadata,
@@ -190,11 +188,6 @@ def _deployment(offering: ModelOffering, state: _ProviderState) -> Mapping[str, 
             "model_name": offering.model_name,
             "litellm_params": {
                 "model": f"{connection.provider}/{offering.upstream_model}",
-                **(
-                    {"extra_body": {"provider": dict(offering.provider_policy.request_body())}}
-                    if offering.provider_policy is not None
-                    else {}
-                ),
                 **({"api_base": connection.api_base} if connection.api_base is not None else {}),
                 **({"api_key": connection.api_key} if connection.api_key is not None else {}),
                 **(
@@ -209,6 +202,7 @@ def _deployment(offering: ModelOffering, state: _ProviderState) -> Mapping[str, 
                 ),
             },
             "model_info": {**metadata, "id": deployment_id, "blocked": reason is not None},
+            **({"provider_policy": offering.provider_policy} if offering.provider_policy is not None else {}),
         }
     )
 
@@ -315,20 +309,6 @@ class ModelOfferingsManager:
             unavailable,
             allowed_deployments,
             frozenset(candidate.get_model_ids()),
-            MappingProxyType(
-                {
-                    offering.model_name: offering.provider_policy
-                    for offering in loaded.config.offerings
-                    if offering.model_name in available and offering.provider_policy is not None
-                }
-            ),
-            MappingProxyType(
-                {
-                    _deployment_id(offering, providers[offering.provider].connection): offering.provider_policy
-                    for offering in loaded.config.offerings
-                    if offering.model_name in available and offering.provider_policy is not None
-                }
-            ),
         )
         self.config = loaded.config
         self.config_fingerprint = loaded.fingerprint

@@ -4,9 +4,9 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-from litellm.types.proxy.model_metadata import GatewayModelMetadata
+from litellm.types.router import ModelMetadata
 
-_METADATA_ADAPTER: Final = TypeAdapter(GatewayModelMetadata)
+_METADATA_ADAPTER: Final = TypeAdapter(ModelMetadata)
 _EMPTY_DEFAULTS: Final[Mapping[str, int]] = MappingProxyType({})
 _OUTPUT_BUDGET_PARAMS: Final = frozenset(("max_tokens", "max_completion_tokens", "max_output_tokens"))
 

@@ -6,6 +6,7 @@ import datetime
 import enum
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -16,19 +17,30 @@ from typing import (
     Literal,
     TypeAlias,
     TypeVar,
+    cast,  # noqa: TID251  # runtime Pydantic field schema boundary
     get_type_hints,
 )
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from openai import Timeout as SDKTimeout
-from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    ValidationInfo,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import coerce_token_limit, normalize_drop_params
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
@@ -41,6 +53,7 @@ from .embedding import EmbeddingRequest
 from .litellm_params import RoutingStrategyName
 from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
+from .llms.openrouter import OpenRouterProviderPolicy
 from .search import SearchProvider
 from .utils import (
     CustomPricingLiteLLMParams,
@@ -238,7 +251,149 @@ class ModelAccessWindow(LiteLLMBaseModel):
         return self
 
 
-class ModelInfo(MirroredPricingParams):
+_STRING_VALUES_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_VALIDATED_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+class ModelRequestDefaults(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    output_token_budget: Annotated[int, Field(gt=0, strict=True)] | None = Field(
+        default=None, description="Default requested output budget, not a physical model limit"
+    )
+    output_token_budget_by_reasoning_effort: Mapping[str, Annotated[int, Field(gt=0, strict=True)]] | None = Field(
+        default=None, description="Requested output budgets keyed by exact reasoning effort"
+    )
+
+    @field_validator("output_token_budget_by_reasoning_effort")
+    @classmethod
+    def immutable_budgets(cls, value: Mapping[str, int] | None) -> Mapping[str, int] | None:
+        return MappingProxyType(dict(value)) if value is not None else None
+
+    @field_serializer("output_token_budget_by_reasoning_effort")
+    def serialize_budgets(self, value: Mapping[str, int] | None) -> Mapping[str, int] | None:
+        return dict(value) if value is not None else None
+
+    def output_budget(self, effort: str | None) -> int | None:
+        return (
+            (self.output_token_budget_by_reasoning_effort or {}).get(effort, self.output_token_budget)
+            if effort is not None
+            else self.output_token_budget
+        )
+
+
+class ModelMetadata(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    context_window: int | None = Field(
+        default=None, gt=0, description="Maximum combined input and generated output tokens"
+    )
+    max_input_tokens: int | None = Field(default=None, gt=0, description="Independent maximum input tokens")
+    max_output_tokens: int | None = Field(default=None, gt=0, description="Independent maximum generated output tokens")
+    supports_function_calling: bool | None = Field(default=None, description="Whether this model accepts tool calls")
+    supports_parallel_function_calling: bool | None = Field(
+        default=None, description="Whether this model accepts parallel tool calls"
+    )
+    supports_reasoning: bool | None = Field(default=None, description="Whether this model supports reasoning controls")
+    reasoning_effort_levels: Sequence[str] | None = Field(
+        default=None, description="Exact effort values this route accepts"
+    )
+    default_reasoning_effort: str | None = Field(default=None, description="Effort used when the request omits it")
+    supported_endpoints: Sequence[str] | None = Field(
+        default=None, description="Inference endpoints exposed by this route"
+    )
+    supported_modalities: Sequence[str] | None = Field(default=None, description="Accepted input modalities")
+    supported_output_modalities: Sequence[str] | None = Field(default=None, description="Supported output modalities")
+    request_defaults: ModelRequestDefaults | None = Field(
+        default=None, description="Configured request defaults, independent of supplier capability limits"
+    )
+
+    @classmethod
+    def validate_field_input(cls, field_name: str, value: object) -> None:
+        TypeAdapter[object](
+            cast(object, cls.model_fields[field_name].rebuild_annotation())  # cast-ok: runtime Pydantic field schema
+        ).validate_python(value, strict=True)
+
+    @classmethod
+    def validate_supplier_field(cls, field_name: str | None, value: object) -> object:
+        normalized: Final = (
+            None
+            if field_name in ("context_window", "max_input_tokens", "max_output_tokens")
+            and type(value) is int
+            and value == 0
+            else value
+        )
+        if field_name is not None and field_name in cls.model_fields:
+            cls.validate_field_input(field_name, normalized)
+        return normalized
+
+    @field_validator("context_window", "max_input_tokens", "max_output_tokens", mode="before")
+    @classmethod
+    def positive_limit(cls, value: object, _info: ValidationInfo) -> int | None:
+        return coerce_token_limit(value, strict_positive=True)
+
+    @field_validator(
+        "supports_function_calling", "supports_parallel_function_calling", "supports_reasoning", mode="before"
+    )
+    @classmethod
+    def known_boolean(cls, value: object) -> bool | None:
+        return value if isinstance(value, bool) else None
+
+    @field_validator(
+        "reasoning_effort_levels",
+        "supported_endpoints",
+        "supported_modalities",
+        "supported_output_modalities",
+        mode="before",
+    )
+    @classmethod
+    def known_string_list(cls, value: object) -> Sequence[str] | None:
+        try:
+            return tuple(dict.fromkeys(_STRING_VALUES_ADAPTER.validate_python(value)))
+        except ValidationError:
+            return None
+
+    @field_validator("default_reasoning_effort", mode="before")
+    @classmethod
+    def known_string(cls, value: object) -> str | None:
+        return value if isinstance(value, str) else None
+
+    @field_validator("reasoning_effort_levels")
+    @classmethod
+    def enabled_reasoning_levels(cls, value: Sequence[str] | None, info: ValidationInfo) -> Sequence[str] | None:
+        data: Final = _VALIDATED_FIELDS_ADAPTER.validate_python(info.data)
+        return None if data.get("supports_reasoning") is False else value
+
+    @field_validator("default_reasoning_effort")
+    @classmethod
+    def supported_default(cls, value: str | None, info: ValidationInfo) -> str | None:
+        data: Final = _VALIDATED_FIELDS_ADAPTER.validate_python(info.data)
+        levels: Final = data.get("reasoning_effort_levels")
+        if data.get("supports_reasoning") is False:
+            return None
+        return value if levels is None or isinstance(levels, (list, tuple)) and value in levels else None
+
+
+def resolve_model_metadata(catalog: Mapping[str, object], configured: Mapping[str, object]) -> ModelMetadata:
+    values: Final = {
+        field: configured[field] if configured.get(field) is not None else catalog.get(field)
+        for field in ModelMetadata.model_fields
+    }
+    return ModelMetadata.model_validate(values)
+
+
+class ModelInfo(ModelMetadata, MirroredPricingParams):
+    max_input_tokens: int | None = Field(default=None, description="Independent maximum input tokens")
+    max_output_tokens: int | None = Field(default=None, description="Independent maximum generated output tokens")
+
+    @field_validator("context_window", "max_input_tokens", "max_output_tokens", mode="before")
+    @classmethod
+    def positive_limit(cls, value: object, _info: ValidationInfo) -> int | None:
+        data: Final = _VALIDATED_FIELDS_ADAPTER.validate_python(_info.data)
+        return coerce_token_limit(
+            value, strict_positive=_info.field_name == "context_window" or data.get("context_window") is not None
+        )
+
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None
@@ -320,7 +475,7 @@ class ModelInfo(MirroredPricingParams):
             raise ValueError("ptu_effective_to must be after ptu_effective_from")
         return self
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", frozen=False)
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -753,6 +908,7 @@ class DeploymentTypedDict(TypedDict, total=False):
     model_name: Required[str]
     litellm_params: Required[LiteLLMParamsTypedDict]
     model_info: dict
+    provider_policy: ReadOnly[OpenRouterProviderPolicy]
 
 
 SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
@@ -762,6 +918,9 @@ class Deployment(LiteLLMBaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
+    provider_policy: OpenRouterProviderPolicy | None = Field(
+        default=None, exclude=True, description="Gateway-owned supplier selection, excluded from public model metadata"
+    )
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked. None means "don't set it
     # on create" -- the Prisma column defaults to False -- rather than "explicitly unblocked".
     blocked: bool | None = None
@@ -798,6 +957,27 @@ class Deployment(LiteLLMBaseModel):
         except Exception:
             # if using pydantic v1
             return self.dict(**kwargs)
+
+    def to_router_dict(self) -> dict[str, object]:  # mutable-ok: native Router stores mutable deployment records
+        return {
+            **self.model_dump(exclude_none=True),
+            **({"provider_policy": self.provider_policy} if self.provider_policy is not None else {}),
+        }
+
+    @model_validator(mode="after")
+    def apply_provider_policy(self) -> "Deployment":
+        policy: Final = self.provider_policy
+        if policy is None:
+            return self
+        provider: Final = self.litellm_params.custom_llm_provider or self.litellm_params.model.partition("/")[0]
+        if provider != policy.provider:
+            raise ValueError("The deployment provider must match its server-owned provider policy")
+        body: Final = _VALIDATED_FIELDS_ADAPTER.validate_python(self.litellm_params.get("extra_body") or {})
+        routing: Final = dict(policy.request_body())
+        if body.get("provider") is not None and body["provider"] != routing:
+            raise ValueError("The deployment routing body conflicts with its server-owned provider policy")
+        self.litellm_params = self.litellm_params.model_copy(update={"extra_body": {**body, "provider": routing}})
+        return self
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

@@ -4,13 +4,13 @@ from typing import Final, Literal
 from pydantic import TypeAdapter
 
 from litellm.types.proxy.model_listing import ModelDiscoveryInfo
-from litellm.types.proxy.model_metadata import GatewayModelMetadata
+from litellm.types.router import ModelMetadata
 
 _ADAPTER: Final = TypeAdapter(ModelDiscoveryInfo)
 
 
 def guaranteed_token_limit(
-    sources: tuple[GatewayModelMetadata, ...], field: Literal["context_window", "max_input_tokens", "max_output_tokens"]
+    sources: tuple[ModelMetadata, ...], field: Literal["context_window", "max_input_tokens", "max_output_tokens"]
 ) -> int | None:
     values: Final = tuple(
         source.context_window
@@ -38,7 +38,7 @@ def _common_list(values: tuple[Sequence[str] | None, ...]) -> Sequence[str] | No
     return tuple(item for item in first if all(value is not None and item in value for value in values))
 
 
-def discover_model_metadata(sources: tuple[GatewayModelMetadata, ...]) -> ModelDiscoveryInfo:
+def discover_model_metadata(sources: tuple[ModelMetadata, ...]) -> ModelDiscoveryInfo:
     efforts: Final = _common_list(tuple(source.reasoning_effort_levels for source in sources))
     defaults: Final = tuple(source.default_reasoning_effort for source in sources)
     default: Final = defaults[0] if defaults and all(value == defaults[0] for value in defaults) else None
@@ -49,7 +49,7 @@ def discover_model_metadata(sources: tuple[GatewayModelMetadata, ...]) -> ModelD
         if request_defaults and all(value == request_defaults[0] for value in request_defaults)
         else None
     )
-    metadata: Final = GatewayModelMetadata(
+    metadata: Final = ModelMetadata(
         context_window=guaranteed_token_limit(sources, "context_window"),
         supports_function_calling=_common_boolean(tuple(source.supports_function_calling for source in sources)),
         supports_parallel_function_calling=_common_boolean(

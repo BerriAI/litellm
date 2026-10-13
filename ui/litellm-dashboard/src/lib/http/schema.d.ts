@@ -31368,6 +31368,8 @@ export interface components {
             model_info: components["schemas"]["litellm__types__router__ModelInfo"];
             /** Model Name */
             model_name: string;
+            /** @description Gateway-owned supplier selection, excluded from public model metadata */
+            provider_policy?: components["schemas"]["OpenRouterProviderPolicy"] | null;
         } & {
             [key: string]: unknown;
         };
@@ -37961,9 +37963,15 @@ export interface components {
         };
         /** ModelRequestDefaults */
         ModelRequestDefaults: {
-            /** Output Token Budget */
+            /**
+             * Output Token Budget
+             * @description Default requested output budget, not a physical model limit
+             */
             output_token_budget?: number | null;
-            /** Output Token Budget By Reasoning Effort */
+            /**
+             * Output Token Budget By Reasoning Effort
+             * @description Requested output budgets keyed by exact reasoning effort
+             */
             output_token_budget_by_reasoning_effort?: {
                 [key: string]: number;
             } | null;
@@ -39211,6 +39219,22 @@ export interface components {
              * @constant
              */
             type: "openIdConnect";
+        };
+        /** OpenRouterProviderPolicy */
+        OpenRouterProviderPolicy: {
+            /**
+             * Allow Fallbacks
+             * @default false
+             * @constant
+             */
+            allow_fallbacks: false;
+            /** Only */
+            only: string[];
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "openrouter";
         };
         /** OpenSourceClassifierConfig */
         OpenSourceClassifierConfig: {
@@ -49431,15 +49455,30 @@ export interface components {
              * @description Inference endpoints exposed by this route
              */
             supported_endpoints?: string[] | null;
-            /** Supported Modalities */
+            /**
+             * Supported Modalities
+             * @description Accepted input modalities
+             */
             supported_modalities?: string[] | null;
-            /** Supported Output Modalities */
+            /**
+             * Supported Output Modalities
+             * @description Supported output modalities
+             */
             supported_output_modalities?: string[] | null;
-            /** Supports Function Calling */
+            /**
+             * Supports Function Calling
+             * @description Whether this model accepts tool calls
+             */
             supports_function_calling?: boolean | null;
-            /** Supports Parallel Function Calling */
+            /**
+             * Supports Parallel Function Calling
+             * @description Whether this model accepts parallel tool calls
+             */
             supports_parallel_function_calling?: boolean | null;
-            /** Supports Reasoning */
+            /**
+             * Supports Reasoning
+             * @description Whether this model supports reasoning controls
+             */
             supports_reasoning?: boolean | null;
         } & {
             [key: string]: unknown;
@@ -49469,6 +49508,11 @@ export interface components {
             cache_creation_input_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
+            /**
+             * Context Window
+             * @description Maximum combined input and generated output tokens
+             */
+            context_window?: number | null;
             /** Cost Per Ptu Per Hour */
             cost_per_ptu_per_hour?: number | null;
             /** Created At */
@@ -49480,6 +49524,11 @@ export interface components {
              * @default false
              */
             db_model: boolean;
+            /**
+             * Default Reasoning Effort
+             * @description Effort used when the request omits it
+             */
+            default_reasoning_effort?: string | null;
             /** Discoverable */
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
@@ -49492,6 +49541,16 @@ export interface components {
             input_cost_per_token?: number | null;
             /** Internal Router Model */
             internal_router_model?: boolean | null;
+            /**
+             * Max Input Tokens
+             * @description Independent maximum input tokens
+             */
+            max_input_tokens?: number | null;
+            /**
+             * Max Output Tokens
+             * @description Independent maximum generated output tokens
+             */
+            max_output_tokens?: number | null;
             /**
              * Member Auto Router
              * @default false
@@ -49507,6 +49566,43 @@ export interface components {
             ptu_effective_from?: string | null;
             /** Ptu Effective To */
             ptu_effective_to?: string | null;
+            /**
+             * Reasoning Effort Levels
+             * @description Exact effort values this route accepts
+             */
+            reasoning_effort_levels?: string[] | null;
+            /** @description Configured request defaults, independent of supplier capability limits */
+            request_defaults?: components["schemas"]["ModelRequestDefaults"] | null;
+            /**
+             * Supported Endpoints
+             * @description Inference endpoints exposed by this route
+             */
+            supported_endpoints?: string[] | null;
+            /**
+             * Supported Modalities
+             * @description Accepted input modalities
+             */
+            supported_modalities?: string[] | null;
+            /**
+             * Supported Output Modalities
+             * @description Supported output modalities
+             */
+            supported_output_modalities?: string[] | null;
+            /**
+             * Supports Function Calling
+             * @description Whether this model accepts tool calls
+             */
+            supports_function_calling?: boolean | null;
+            /**
+             * Supports Parallel Function Calling
+             * @description Whether this model accepts parallel tool calls
+             */
+            supports_parallel_function_calling?: boolean | null;
+            /**
+             * Supports Reasoning
+             * @description Whether this model supports reasoning controls
+             */
+            supports_reasoning?: boolean | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */

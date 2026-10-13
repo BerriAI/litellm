@@ -26,6 +26,30 @@ from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes
 
 
+def _policy_snapshot(policy: OpenRouterProviderPolicy) -> OfferingServingSnapshot:
+    native: Final = Router(
+        model_list=[
+            {
+                "model_name": "selected",
+                "litellm_params": {
+                    "model": "openrouter/backend",
+                    "extra_body": {"provider": dict(policy.request_body())},
+                },
+                "model_info": {"id": "selected-id"},
+                "provider_policy": policy,
+            },
+            {"model_name": "ordinary", "litellm_params": {"model": "openai/ordinary", "api_key": "fixture-key"}},
+        ]
+    )
+    return OfferingServingSnapshot(
+        native,
+        frozenset({"selected", "ordinary"}),
+        MappingProxyType({}),
+        frozenset({"openrouter/backend", "openai/ordinary"}),
+        frozenset(native.get_model_ids()),
+    )
+
+
 async def test_asgi_stream_pins_authority_until_final_chunk_and_passes_lifespan_through() -> None:
     first: Final = OfferingServingSnapshot(
         Router(model_list=[]), frozenset({"first"}), MappingProxyType({}), frozenset()
@@ -251,6 +275,8 @@ async def test_body_model_override_cannot_bypass_offering_authority() -> None:
 @pytest.mark.parametrize(
     "override",
     (
+        {"provider_policy": {"provider": "openrouter", "only": ["other"]}},
+        {"extra_body": {"provider_policy": {"provider": "openrouter", "only": ["other"]}}},
         {"provider": {"only": ["other"]}},
         {"extra_body": {"provider": {"allow_fallbacks": True}}},
         {"extra_body": {"extra_body": {"provider": {"only": ["other"]}}}},
@@ -276,15 +302,7 @@ async def test_body_model_override_cannot_bypass_offering_authority() -> None:
 )
 async def test_pinned_policy_rejects_caller_routing_even_through_alias(override: dict[str, object]) -> None:
     policy: Final = OpenRouterProviderPolicy(provider="openrouter", only=("synthetic/fp8",))
-    view: Final = OfferingRouterView(
-        OfferingServingSnapshot(
-            Router(model_list=[]),
-            frozenset({"selected", "ordinary"}),
-            MappingProxyType({}),
-            frozenset(),
-            provider_policies=MappingProxyType({"selected": policy}),
-        )
-    )
+    view: Final = OfferingRouterView(_policy_snapshot(policy))
     guard: Final = OfferingAccessGuard(view)
     auth: Final = UserAPIKeyAuth(aliases={"alias": "selected"})
     for call_type in ("acompletion", "aresponses", "anthropic_messages"):
@@ -295,15 +313,7 @@ async def test_pinned_policy_rejects_caller_routing_even_through_alias(override:
 
 async def test_pinned_policy_shapes_requests_without_mutation_and_blocks_unsupported_apis() -> None:
     policy: Final = OpenRouterProviderPolicy(provider="openrouter", only=("synthetic/fp8",))
-    view: Final = OfferingRouterView(
-        OfferingServingSnapshot(
-            Router(model_list=[]),
-            frozenset({"selected", "ordinary"}),
-            MappingProxyType({}),
-            frozenset(),
-            provider_policies=MappingProxyType({"selected": policy}),
-        )
-    )
+    view: Final = OfferingRouterView(_policy_snapshot(policy))
     guard: Final = OfferingAccessGuard(view)
     original: Final = {"model": "selected", "extra_body": {"temperature": 0.5}}
     assert await guard.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), original, "acompletion") == {
@@ -333,16 +343,7 @@ async def test_pinned_policy_shapes_requests_without_mutation_and_blocks_unsuppo
 @pytest.mark.parametrize("call_type", (None, CallTypes.aresponses_websocket, CallTypes.aimage_generation))
 async def test_pinned_deployment_rejects_apis_that_cannot_carry_policy(call_type: CallTypes | None) -> None:
     policy: Final = OpenRouterProviderPolicy(provider="openrouter", only=("synthetic/fp8",))
-    view: Final = OfferingRouterView(
-        OfferingServingSnapshot(
-            Router(model_list=[]),
-            frozenset({"selected"}),
-            MappingProxyType({}),
-            frozenset({"openrouter/backend"}),
-            frozenset({"selected-id"}),
-            deployment_policies=MappingProxyType({"selected-id": policy}),
-        )
-    )
+    view: Final = OfferingRouterView(_policy_snapshot(policy))
     with pytest.raises(litellm.BadRequestError, match="configured offering provider policy"):
         await OfferingAccessGuard(view).async_pre_call_deployment_hook(
             {
