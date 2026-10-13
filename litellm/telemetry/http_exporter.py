@@ -6,7 +6,7 @@ import httpx
 from litellm.telemetry.report import Report, report_to_json
 from litellm.telemetry.sink import ExportOutcome
 
-_RETRYABLE_STATUS: Final = frozenset({408, 425, 429})
+_RETRYABLE_STATUS: Final = frozenset({408, 409, 429})
 
 
 def _outcome_for(status_code: int) -> ExportOutcome:
