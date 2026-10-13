@@ -381,7 +381,7 @@ class ContextCachingEndpoints(VertexBase):
             "Content-Type": "application/json",
         }
         if isinstance(token, dict):
-            headers.update(cast(Mapping[str, str], token))
+            headers.update(cast(Mapping[str, str], token))  # cast-ok: token mapping is returned by the Vertex auth helper
         elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
         if extra_headers is not None:
@@ -460,7 +460,7 @@ class ContextCachingEndpoints(VertexBase):
             response: Final = client.post(
                 url=url,
                 headers=headers,
-                json=cast(dict[str, object], cached_content_request_body),
+                json=cast(dict[str, object], cached_content_request_body),  # cast-ok: request body is assembled as JSON object data
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -553,7 +553,7 @@ class ContextCachingEndpoints(VertexBase):
             "Content-Type": "application/json",
         }
         if isinstance(token, dict):
-            headers.update(cast(Mapping[str, str], token))
+            headers.update(cast(Mapping[str, str], token))  # cast-ok: token mapping is returned by the Vertex auth helper
         elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
         if extra_headers is not None:
@@ -628,7 +628,7 @@ class ContextCachingEndpoints(VertexBase):
             response: Final = await client.post(
                 url=url,
                 headers=headers,
-                json=cast(dict[str, object], cached_content_request_body),
+                json=cast(dict[str, object], cached_content_request_body),  # cast-ok: request body is assembled as JSON object data
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:

@@ -211,7 +211,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 if img is None:
                     continue
                 mime_type = ImageEditRequestUtils.get_image_content_type(img)
-                image_bytes = self._read_image_bytes(cast(FileTypes, img))
+                image_bytes = self._read_image_bytes(cast(FileTypes, img))  # cast-ok: image entries were narrowed by the None check and FileTypes contract
                 b64_data = base64.b64encode(image_bytes).decode("utf-8")
                 content_parts.append(
                     {
