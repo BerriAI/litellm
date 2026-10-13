@@ -296,7 +296,6 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             upstream_provider: Final = chunk_body.get("provider")
             if isinstance(upstream_provider, str) and upstream_provider:
                 set_hidden_param(stream_chunk, "upstream_provider", upstream_provider)
-            return stream_chunk
         except KeyError as e:
             raise OpenRouterException(
                 message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
@@ -305,3 +304,5 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             )
         except Exception as e:
             raise e
+        else:
+            return stream_chunk
