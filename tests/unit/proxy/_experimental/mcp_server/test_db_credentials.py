@@ -450,24 +450,29 @@ def _stored_value(prisma) -> str:
 # ── MCP server credentials at rest ──────────────────────────────────────────────
 
 
-def test_client_private_key_encrypted_at_rest():
-    """An ID-JAG client_private_key is a secret and must be encrypted in the stored
-    credentials blob, never persisted in plaintext, and must round-trip back. The
-    pre-fix code left client_private_key out of encrypt_credentials, so it was stored
-    verbatim."""
+def test_id_jag_client_secrets_encrypted_at_rest():
+    """ID-JAG client secrets must be encrypted in the stored credentials blob and round-trip on load."""
     private_key = (
         "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
     )
-    credentials = {"client_secret": "shh", "client_private_key": private_key}
+    resource_client_secret: Final = "resource-client-secret"
+    credentials = {
+        "client_secret": "shh",
+        "client_private_key": private_key,
+        "id_jag_resource_client_secret": resource_client_secret,
+    }
 
     encrypted = encrypt_credentials(dict(credentials), encryption_key=None)
     assert encrypted["client_private_key"] != private_key
     assert private_key not in encrypted["client_private_key"]
     assert encrypted["client_secret"] != "shh"
+    assert encrypted["id_jag_resource_client_secret"] != resource_client_secret
+    assert resource_client_secret not in encrypted["id_jag_resource_client_secret"]
 
     decrypted = decrypt_credentials(dict(encrypted))
     assert decrypted["client_private_key"] == private_key
     assert decrypted["client_secret"] == "shh"
+    assert decrypted["id_jag_resource_client_secret"] == resource_client_secret
 
 
 @pytest.fixture(params=["xsalsa20-poly1305", "aes-256-gcm"])

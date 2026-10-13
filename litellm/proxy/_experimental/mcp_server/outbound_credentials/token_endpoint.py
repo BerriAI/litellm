@@ -1,7 +1,8 @@
 """An authenticated OAuth token-endpoint call plus a short-lived-token cache.
 
 `TokenEndpointClient.fetch` POSTs one grant to a token endpoint, authenticating the gateway as
-an OAuth client via `client_auth` (RFC 7523 private-key JWT, or `client_secret_post`), and returns
+an OAuth client via `client_auth` (RFC 7523 private-key JWT, `client_secret_post`, or public-client
+authentication), and returns
 the minted token or a typed `CredError`. `ExchangedTokenCache` memoizes the final token string per
 opaque cache key with per-key single-flight, so concurrent callers share one round-trip and a hit
 skips the endpoint entirely.
@@ -45,10 +46,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Result,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
-    ClientAuth,
     ClientSecretAuth,
     CredError,
+    NoClientAuth,
     PrivateKeyJwtAuth,
+    ResourceClientAuth,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -79,7 +81,7 @@ class TokenEndpointClient:
         endpoint: str,
         client_id: str,
         grant_params: Mapping[str, str],
-        client_auth: ClientAuth,
+        client_auth: ResourceClientAuth,
     ) -> Result[ExchangedToken, CredError]:
         try:
             data: Final = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
@@ -249,7 +251,7 @@ async def _post_form(endpoint: str, data: dict[str, str]) -> object:
     return response.json()  # pyright: ignore[reportAny]  # untyped JSON; validated by _TokenEndpointResponse in fetch
 
 
-def _client_auth_params(endpoint: str, client_id: str, client_auth: ClientAuth) -> dict[str, str]:
+def _client_auth_params(endpoint: str, client_id: str, client_auth: ResourceClientAuth) -> dict[str, str]:
     match client_auth:
         case PrivateKeyJwtAuth() as auth:
             return {
@@ -262,6 +264,8 @@ def _client_auth_params(endpoint: str, client_id: str, client_auth: ClientAuth) 
                 "client_id": client_id,
                 "client_secret": auth.client_secret.get_secret_value(),
             }
+        case NoClientAuth():
+            return {"client_id": client_id}
     assert_never(client_auth)
 
 

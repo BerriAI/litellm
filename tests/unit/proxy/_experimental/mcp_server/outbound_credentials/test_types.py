@@ -7,6 +7,8 @@ CredError tag/summary surface and the derived auth_spec_kind. Each assertion fai
 corresponding guarantee is mutated away.
 """
 
+from typing import Final
+
 import pytest
 from pydantic import SecretStr, TypeAdapter, ValidationError
 
@@ -23,6 +25,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     CredError,
     Error,
     IdJagConfig,
+    IdJagResourceClient,
+    NoClientAuth,
     NoneConfig,
     Ok,
     PrivateKeyJwtAuth,
@@ -42,6 +46,10 @@ _ID_JAG_MINIMAL = {
     "resource_token_endpoint": "https://mcp-as.example.com/token",
     "client_id": "litellm",
     "client_auth": {"source": "client_secret", "client_secret": "s"},
+    "resource_client": {
+        "client_id": "resource-client",
+        "client_auth": {"source": "client_secret", "client_secret": "resource-secret"},
+    },
 }
 
 
@@ -215,6 +223,22 @@ def test_id_jag_client_auth_rejects_unknown_source():
         )
 
 
+def test_id_jag_resource_client_accepts_public_auth_without_widening_leg1_auth() -> None:
+    config: Final = _AUTH_CONFIG.validate_python(
+        {
+            **_ID_JAG_MINIMAL,
+            "resource_client": {"client_id": "public-client", "client_auth": {"source": "none"}},
+        }
+    )
+    assert isinstance(config, IdJagConfig)
+    assert isinstance(config.resource_client.client_auth, NoClientAuth)
+
+    with pytest.raises(ValidationError):
+        _AUTH_CONFIG.validate_python(
+            {**_ID_JAG_MINIMAL, "client_auth": {"source": "none"}}
+        )
+
+
 def test_id_jag_config_defaults_id_token_subject_and_empty_optionals():
     config = _AUTH_CONFIG.validate_python(_ID_JAG_MINIMAL)
     assert isinstance(config, IdJagConfig)
@@ -225,11 +249,15 @@ def test_id_jag_config_defaults_id_token_subject_and_empty_optionals():
 
 
 def test_id_jag_secrets_do_not_leak_in_repr():
-    config = IdJagConfig(
+    config: Final = IdJagConfig(
         org_token_endpoint="https://idp.example.com/token",
         resource_token_endpoint="https://mcp-as.example.com/token",
         client_id="litellm",
         client_auth=PrivateKeyJwtAuth(private_key=SecretStr("super-secret-pem")),
+        resource_client=IdJagResourceClient(
+            client_id="resource-client",
+            client_auth=PrivateKeyJwtAuth(private_key=SecretStr("super-secret-pem")),
+        ),
     )
     assert "super-secret-pem" not in repr(config)
 
@@ -255,6 +283,10 @@ _CARRIER_CONFIGS = (
             resource_token_endpoint="https://mcp-as.example.com/token",
             client_id="litellm",
             client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+            resource_client=IdJagResourceClient(
+                client_id="litellm",
+                client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+            ),
             **kw,
         ),
     ),

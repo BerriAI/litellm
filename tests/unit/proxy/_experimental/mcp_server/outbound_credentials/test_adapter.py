@@ -31,6 +31,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientSecretAuth,
     CredError,
     IdJagConfig,
+    NoClientAuth,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
@@ -705,6 +706,85 @@ def test_id_jag_private_key_wins_over_client_secret():
     spec = to_server_spec(_id_jag_server(client_private_key="PEM-DATA"))
     assert spec is not None and isinstance(spec.config, IdJagConfig)
     assert isinstance(spec.config.client_auth, PrivateKeyJwtAuth)
+
+
+@pytest.mark.parametrize(
+    "server, expected_auth",
+    [
+        (_id_jag_server(), "legacy"),
+        (_id_jag_server(client_secret=None, client_private_key="LEG1-PRIVATE-KEY"), "legacy"),
+        (
+            _id_jag_server(
+                id_jag_resource_client_id="resource-public-client",
+                id_jag_resource_token_endpoint_auth_method="none",
+            ),
+            "none",
+        ),
+        (
+            _id_jag_server(
+                id_jag_resource_client_id="resource-confidential-client",
+                id_jag_resource_client_secret="resource-client-secret",
+                id_jag_resource_token_endpoint_auth_method="client_secret_post",
+            ),
+            "client_secret_post",
+        ),
+    ],
+    ids=["legacy-client-secret", "legacy-private-key", "public-client", "client-secret-post"],
+)
+def test_id_jag_resource_client_uses_its_configured_identity_and_auth(server: MCPServer, expected_auth: str) -> None:
+    spec: Final = to_server_spec(server)
+
+    assert spec is not None and isinstance(spec.config, IdJagConfig)
+    resource_client: Final = spec.config.resource_client
+    if expected_auth == "legacy":
+        assert resource_client.client_id == spec.config.client_id
+        assert resource_client.client_auth == spec.config.client_auth
+    elif expected_auth == "none":
+        assert resource_client.client_id == "resource-public-client"
+        assert isinstance(resource_client.client_auth, NoClientAuth)
+    else:
+        assert expected_auth == "client_secret_post"
+        assert resource_client.client_id == "resource-confidential-client"
+        assert isinstance(resource_client.client_auth, ClientSecretAuth)
+        assert isinstance(spec.config.client_auth, ClientSecretAuth)
+        assert resource_client.client_auth.client_secret.get_secret_value() == "resource-client-secret"
+        assert (
+            resource_client.client_auth.client_secret.get_secret_value()
+            != spec.config.client_auth.client_secret.get_secret_value()
+        )
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        _id_jag_server(id_jag_resource_client_id="resource-client"),
+        _id_jag_server(id_jag_resource_client_secret="resource-secret"),
+        _id_jag_server(
+            id_jag_resource_client_id="resource-client",
+            id_jag_resource_client_secret="resource-secret",
+            id_jag_resource_token_endpoint_auth_method="none",
+        ),
+        _id_jag_server(id_jag_resource_token_endpoint_auth_method="none"),
+        _id_jag_server(
+            id_jag_resource_client_secret="resource-secret",
+            id_jag_resource_token_endpoint_auth_method="client_secret_post",
+        ),
+        _id_jag_server(
+            id_jag_resource_client_id="resource-client",
+            id_jag_resource_token_endpoint_auth_method="client_secret_post",
+        ),
+    ],
+    ids=[
+        "id-without-method",
+        "secret-without-method",
+        "none-with-secret",
+        "none-without-id",
+        "client-secret-post-without-id",
+        "client-secret-post-without-secret",
+    ],
+)
+def test_id_jag_incomplete_resource_client_overrides_defer_to_v1(server: MCPServer) -> None:
+    assert to_server_spec(server) is None
 
 
 def test_id_jag_honors_explicit_subject_token_type():

@@ -448,12 +448,27 @@ class MCPServerConfig(TypedDict, total=False):
     upstream_token_header: ReadOnly[str]
     id_jag_resource_token_endpoint: str
     id_jag_resource: str
+    id_jag_resource_client_id: ReadOnly[str]
+    id_jag_resource_client_secret: ReadOnly[str]
+    id_jag_resource_token_endpoint_auth_method: ReadOnly[Literal["client_secret_post", "none"]]
     client_private_key: str
     client_private_key_id: str
     client_assertion_signing_alg: str
     timeout: float
     max_concurrent_requests: int
     rpm: ReadOnly[int | None]
+
+
+def _parse_id_jag_resource_token_endpoint_auth_method(
+    value: str | None,
+) -> Literal["client_secret_post", "none"] | None:
+    match value:
+        case "client_secret_post":
+            return "client_secret_post"
+        case "none":
+            return "none"
+        case _:
+            return None
 
 
 class _ProtectedResourceMetadataPayload(TypedDict, total=False):
@@ -1504,7 +1519,14 @@ def _consumes_caller_authorization(server: MCPServer) -> bool:
 
 
 _REGISTRY_DUMP_SECRET_FIELDS: Final = frozenset(
-    {"authentication_token", "client_secret", "client_private_key", "aws_secret_access_key", "aws_session_token"}
+    {
+        "authentication_token",
+        "client_secret",
+        "client_private_key",
+        "id_jag_resource_client_secret",
+        "aws_secret_access_key",
+        "aws_session_token",
+    }
 )
 
 
@@ -2754,6 +2776,11 @@ class MCPServerManager:
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
+                id_jag_resource_client_id=server_config.get("id_jag_resource_client_id", None),
+                id_jag_resource_client_secret=server_config.get("id_jag_resource_client_secret", None),
+                id_jag_resource_token_endpoint_auth_method=server_config.get(
+                    "id_jag_resource_token_endpoint_auth_method", None
+                ),
                 client_private_key=server_config.get("client_private_key", None),
                 client_private_key_id=server_config.get("client_private_key_id", None),
                 client_assertion_signing_alg=server_config.get("client_assertion_signing_alg", "RS256"),
@@ -3343,6 +3370,17 @@ class MCPServerManager:
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
             ),
             id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
+            id_jag_resource_client_id=(
+                credentials_dict.get("id_jag_resource_client_id") if credentials_dict else None
+            ),
+            id_jag_resource_client_secret=self._decrypt_credential_field(
+                credentials_dict.get("id_jag_resource_client_secret") if credentials_dict else None,
+                "id_jag_resource_client_secret",
+                credentials_are_encrypted,
+            ),
+            id_jag_resource_token_endpoint_auth_method=_parse_id_jag_resource_token_endpoint_auth_method(
+                credentials_dict.get("id_jag_resource_token_endpoint_auth_method") if credentials_dict else None
+            ),
             client_private_key=self._decrypt_credential_field(
                 credentials_dict.get("client_private_key") if credentials_dict else None,
                 "client_private_key",

@@ -9,15 +9,17 @@ cache's hit/single-flight behavior. Each assertion fails under a real mutation o
 import asyncio
 import gc
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import jwt
-import litellm
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from pydantic import SecretStr
 
+import litellm
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
@@ -32,9 +34,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientSecretAuth,
     CredError,
+    NoClientAuth,
     PrivateKeyJwtAuth,
 )
-from pydantic import SecretStr
 
 _PATCH_TARGET = (
     "litellm.proxy._experimental.mcp_server.outbound_credentials."
@@ -97,6 +99,29 @@ async def test_fetch_forwards_grant_params_and_client_secret():
     assert data["client_id"] == _CLIENT_ID
     assert data["client_secret"] == "shhh"
     assert "client_assertion" not in data
+
+
+@pytest.mark.asyncio
+async def test_fetch_public_client_posts_only_client_id_and_preserves_grant_params() -> None:
+    client: Final = _client(_resp())
+    grant_params: Final = {
+        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        "assertion": "id-jag-assertion",
+    }
+    with patch(_PATCH_TARGET, return_value=client):
+        result: Final = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            grant_params,
+            NoClientAuth(),
+        )
+
+    assert isinstance(result, Ok)
+    data: Final = _posted_data(client)
+    assert data == {**grant_params, "client_id": _CLIENT_ID}
+    assert "client_secret" not in data
+    assert "client_assertion" not in data
+    assert "client_assertion_type" not in data
 
 
 @pytest.mark.asyncio

@@ -729,8 +729,7 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_debug_dump_redacts_secrets(self, caplog):
-        """The registry debug dump must not leak long-lived credentials: the ID-JAG signing key,
-        client secret, and static token are masked while non-secret fields stay readable."""
+        """The registry debug dump must not leak long-lived credentials while non-secret ID-JAG fields remain readable."""
 
         manager = MCPServerManager()
         config = {
@@ -741,6 +740,9 @@ class TestMCPServerManager:
                 "client_id": "gateway-client",
                 "client_secret": "SECRET-CLIENT-SECRET",
                 "client_private_key": "-----BEGIN PRIVATE KEY-----SECRET-PEM-----END PRIVATE KEY-----",
+                "id_jag_resource_client_id": "resource-client-id",
+                "id_jag_resource_client_secret": "SECRET-RESOURCE-CLIENT-SECRET",
+                "id_jag_resource_token_endpoint_auth_method": "client_secret_post",
                 "token_exchange_endpoint": "https://org-idp.example/oauth2/token",
                 "id_jag_resource_token_endpoint": "https://resource-as.example/oauth2/token",
                 "authentication_token": "SECRET-STATIC-TOKEN",
@@ -753,8 +755,11 @@ class TestMCPServerManager:
         dump = next(m for m in caplog.messages if "Loaded MCP Servers" in m)
         assert "SECRET-PEM" not in dump
         assert "SECRET-CLIENT-SECRET" not in dump
+        assert "SECRET-RESOURCE-CLIENT-SECRET" not in dump
         assert "SECRET-STATIC-TOKEN" not in dump
         assert "gateway-client" in dump
+        assert "resource-client-id" in dump
+        assert "client_secret_post" in dump
         assert "https://org-idp.example/oauth2/token" in dump
 
     async def test_load_servers_from_config_warns_on_invalid_alias(self, config_only_mcp_manager_factory, caplog):
@@ -9779,6 +9784,39 @@ class TestMCPServerTokenExchangeColumns:
         assert mcp_server.token_exchange_endpoint == "https://idp.example.com/legacy/token"
         assert mcp_server.audience == "legacy-audience"
         assert mcp_server.subject_token_type == "urn:ietf:params:oauth:token-type:saml2"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("auth_method", "resource_secret"),
+        [("client_secret_post", "resource-secret"), ("none", None)],
+    )
+    async def test_build_mcp_server_from_table_reads_id_jag_resource_client_credentials(
+        self,
+        auth_method: str,
+        resource_secret: str | None,
+    ) -> None:
+        manager: Final = MCPServerManager()
+        table_record: Final = LiteLLM_MCPServerTable(
+            server_id="id-jag-resource-client",
+            server_name="id_jag_resource_client",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            credentials={
+                "id_jag_resource_client_id": "resource-client",
+                "id_jag_resource_client_secret": resource_secret,
+                "id_jag_resource_token_endpoint_auth_method": auth_method,
+            },
+        )
+
+        mcp_server: Final = await manager.build_mcp_server_from_table(
+            table_record,
+            credentials_are_encrypted=False,
+        )
+
+        assert mcp_server.id_jag_resource_client_id == "resource-client"
+        assert mcp_server.id_jag_resource_client_secret == resource_secret
+        assert mcp_server.id_jag_resource_token_endpoint_auth_method == auth_method
 
     @pytest.mark.asyncio
     async def test_build_mcp_server_from_table_subject_token_type_defaults(self):

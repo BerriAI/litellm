@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, TypeAlias
 
 import httpx2
 from expression import case, tag, tagged_union
@@ -341,14 +341,36 @@ class ClientSecretAuth(LiteLLMBaseModel):
 ClientAuth = Annotated[PrivateKeyJwtAuth | ClientSecretAuth, Field(discriminator="source")]
 
 
+class NoClientAuth(LiteLLMBaseModel):
+    """RFC 6749 public client (`token_endpoint_auth_method: none`): `client_id` only, no client credential."""
+
+    model_config = ConfigDict(frozen=True)
+    source: Literal["none"] = "none"
+
+
+ResourceClientAuth: TypeAlias = Annotated[
+    PrivateKeyJwtAuth | ClientSecretAuth | NoClientAuth,
+    Field(discriminator="source"),
+]
+
+
+class IdJagResourceClient(LiteLLMBaseModel):
+    """The identity the gateway presents to the resource AS on leg 2."""
+
+    model_config = ConfigDict(frozen=True)
+    client_id: str
+    client_auth: ResourceClientAuth
+
+
 class IdJagConfig(HeaderCarrier):
     """draft-ietf-oauth-identity-assertion-authz-grant (Okta "AI agent token exchange").
 
     Two legs: leg 1 is an RFC 8693 token exchange at the IdP org AS (`org_token_endpoint`) that
     swaps the caller's identity token for an ID-JAG assertion; leg 2 is an RFC 7523 jwt-bearer at
     the upstream resource AS (`resource_token_endpoint`) that swaps the assertion for the access
-    token. The gateway authenticates to both endpoints as `client_id` via `client_auth`. Required
-    fields are enforced at construction so a half-configured server cannot reach the arm.
+    token. The gateway authenticates to the org AS as `client_id` via `client_auth`, and to the
+    resource AS as `resource_client`. Required fields are enforced at construction so a
+    half-configured server cannot reach the arm.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -357,6 +379,7 @@ class IdJagConfig(HeaderCarrier):
     resource_token_endpoint: str
     client_id: str
     client_auth: ClientAuth
+    resource_client: IdJagResourceClient
     subject_token_type: str = "urn:ietf:params:oauth:token-type:id_token"
     audience: str | None = None
     resource: str | None = None
