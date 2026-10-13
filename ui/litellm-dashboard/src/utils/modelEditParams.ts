@@ -9,6 +9,8 @@ const FORM_PARAMS = new Set([
   "max_retries",
   "timeout",
   "stream_timeout",
+  "weight",
+  "order",
   "model",
   "input_cost_per_token",
   "output_cost_per_token",

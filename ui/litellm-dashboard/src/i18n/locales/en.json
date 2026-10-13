@@ -19595,6 +19595,14 @@
         "label": "Stream Timeout (seconds)",
         "placeholder": "Enter stream timeout"
       },
+      "weight": {
+        "label": "Weight",
+        "placeholder": "e.g. 0.7"
+      },
+      "order": {
+        "label": "Order",
+        "placeholder": "e.g. 1"
+      },
       "modelAccessGroups": {
         "label": "Model Access Groups",
         "placeholder": "Select existing groups or type to create new ones",

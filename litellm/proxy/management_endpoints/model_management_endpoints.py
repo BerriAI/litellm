@@ -218,7 +218,9 @@ class KubernetesPodsResponse(BaseModel):
     error: str | None
 
 
-CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
+CLEARABLE_LITELLM_PARAMS: Final = frozenset(
+    {"cache_control_injection_points", "litellm_credential_name", "weight", "order"}
+)
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 
