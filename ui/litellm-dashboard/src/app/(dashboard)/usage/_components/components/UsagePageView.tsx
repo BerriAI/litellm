@@ -40,9 +40,9 @@ import {
   EMPTY_DAILY_ACTIVITY_METADATA,
   toDailyData,
   type DailyActivityRequest,
-  type DailyData,
 } from "@/components/UsagePage/dailyActivityApi";
 import { keyDetailFromResponse, overallUsageMetrics } from "@/components/UsagePage/keyActivityData";
+import type { DailyData } from "@/components/UsagePage/types";
 import {
   fetchedRangeKey,
   selectForRange,
