@@ -4027,3 +4027,30 @@ def test_token_type_cost_breakdown_bills_cache_tokens_at_the_provider_speed_mult
 
     assert breakdown.cache_read_cost == pytest.approx(multiplier * 400 * 1e-7)
     assert breakdown.cache_creation_cost == pytest.approx(multiplier * 300 * 1.25e-6)
+
+
+GEMINI_4_ARGON_TOKEN_PRICE_KEYS: Final = (
+    "input_cost_per_token",
+    "input_cost_per_token_batches",
+    "input_cost_per_token_flex",
+    "input_cost_per_token_priority",
+    "output_cost_per_token",
+    "output_cost_per_token_batches",
+    "output_cost_per_token_flex",
+    "output_cost_per_token_priority",
+    "output_cost_per_reasoning_token",
+    "cache_read_input_token_cost",
+    "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_flex",
+    "cache_read_input_token_cost_priority",
+)
+
+
+@pytest.mark.parametrize("model", ["gemini-4-argon", "vertex_ai/gemini-4-argon"])
+def test_vertex_gemini_4_argon_matches_gemini_api_global_pricing(model: str, _local_model_cost_map: None) -> None:
+    vertex_row: Final = litellm.model_cost[model]
+    gemini_row: Final = litellm.model_cost["gemini/gemini-4-argon"]
+    assert {key: vertex_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS} == {
+        key: gemini_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS
+    }
+    assert vertex_row["litellm_provider"].startswith("vertex_ai")
