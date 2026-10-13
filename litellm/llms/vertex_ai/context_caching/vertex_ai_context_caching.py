@@ -64,8 +64,8 @@ class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
 
 
 def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
-    usage_metadata: Final = created.get("usageMetadata") or {}
-    logging_obj.model_call_details[VERTEX_AI_CACHE_CREATION_TOKENS_KEY] = usage_metadata.get("totalTokenCount") or 0
+    tokens: Final = (created.get("usageMetadata") or {}).get("totalTokenCount") or 0
+    logging_obj.model_call_details[VERTEX_AI_CACHE_CREATION_TOKENS_KEY] = tokens  # rebind-ok: shared kwargs bag
 
 
 class ContextCachingEndpoints(VertexBase):
