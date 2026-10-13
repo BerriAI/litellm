@@ -16,6 +16,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.openai.openai import AllMessageValues
+from litellm.types.llms.vertex_ai import VERTEX_AI_CACHE_CREATION_TOKENS_KEY
 from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
@@ -44,8 +45,14 @@ class _CachedContentListBody(TypedDict):
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _CachedContentUsageMetadata(TypedDict):
+    totalTokenCount: ReadOnly[NotRequired[int | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _CreatedCachedContent(TypedDict):
     name: ReadOnly[NotRequired[str | None]]
+    usageMetadata: ReadOnly[NotRequired[_CachedContentUsageMetadata | None]]
 
 
 class _CachedContentListBodyRoot(RootModel[_CachedContentListBody]):
@@ -54,6 +61,11 @@ class _CachedContentListBodyRoot(RootModel[_CachedContentListBody]):
 
 class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
+    tokens: Final = (created.get("usageMetadata") or {}).get("totalTokenCount") or 0
+    logging_obj.model_call_details[VERTEX_AI_CACHE_CREATION_TOKENS_KEY] = tokens  # rebind-ok: shared kwargs bag
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -439,6 +451,7 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+        _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,
@@ -592,6 +605,7 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+        _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,

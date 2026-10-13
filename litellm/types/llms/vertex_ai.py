@@ -583,6 +583,9 @@ class VertexAICachedContentResponseObject(TypedDict):
     model: str
 
 
+VERTEX_AI_CACHE_CREATION_TOKENS_KEY: Final = "vertex_ai_cache_creation_input_tokens"
+
+
 class TaskTypeEnum(Enum):
     TASK_TYPE_UNSPECIFIED = "TASK_TYPE_UNSPECIFIED"
     RETRIEVAL_QUERY = "RETRIEVAL_QUERY"
