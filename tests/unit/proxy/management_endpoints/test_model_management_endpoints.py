@@ -4115,6 +4115,45 @@ class TestModelInfoCostMapEchoFilter:
             "cost-map metadata must not be persisted from an unchanged /model/info echo"
         )
 
+    @pytest.mark.parametrize("case", ("echo", "edited", "stored"))
+    def test_typed_metadata_compares_wire_values_without_freezing_catalog_echoes(
+        self, monkeypatch: pytest.MonkeyPatch, case: str
+    ) -> None:
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        catalog: Final = {
+            "mode": "chat",
+            "litellm_provider": "openai",
+            "supported_endpoints": ["/v1/responses"],
+            "supported_modalities": ["text", "image"],
+            "supported_output_modalities": ["text"],
+            "supports_reasoning": True,
+            "reasoning_effort_levels": ["low", "max"],
+            "default_reasoning_effort": "low",
+            "request_defaults": {"output_token_budget": 100, "output_token_budget_by_reasoning_effort": {"max": 180}},
+        }
+        monkeypatch.setattr(litellm, "model_cost", {"openai/metadata-fixture": catalog})
+        entry: Final = litellm.get_model_info("openai/metadata-fixture")
+        fields: Final = frozenset(catalog) - {"mode", "litellm_provider"}
+        stored: Final = {field: catalog[field] for field in fields} if case == "stored" else {}
+        edited: Final = {"supported_modalities": ["text"]} if case == "edited" else {}
+        deployment: Final = Deployment(
+            model_name="public-model",
+            litellm_params=LiteLLM_Params(model="openai/metadata-fixture"),
+            model_info=ModelInfo(id="private-deployment", **stored),
+        )
+        result: Final = update_db_model(
+            db_model=deployment,
+            updated_patch=updateDeployment(model_info=ModelInfo(**{**entry, **edited, "access_groups": ["allowed"]})),
+            loaded_catalog=lambda: {"openai/metadata-fixture": catalog},
+        )
+        saved: Final = json.loads(result["model_info"])
+        assert saved["access_groups"] == ["allowed"]
+        assert {field: value for field, value in saved.items() if field in fields} == (
+            stored if case == "stored" else edited
+        )
+
     def test_an_edited_value_survives_the_echo_filter(self):
         import litellm
 

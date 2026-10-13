@@ -1041,7 +1041,7 @@ def update_db_model(
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
-    stored_model_info: Final = _dump_without_none(db_model.model_info)
+    stored_model_info: Final = db_model.model_info.model_dump(mode="json", exclude_none=True)
     echoed_pricing: Final = echoed_cost_map_pricing_fields(stored_model_info)
     merged_model_info: Final[dict[str, object]] = {
         k: v for k, v in stored_model_info.items() if k not in echoed_pricing
@@ -1063,7 +1063,7 @@ def update_db_model(
 
     # update model info
     if updated_patch.model_info:
-        incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
+        incoming_model_info: Final = updated_patch.model_info.model_dump(mode="json", exclude_none=True)
         echoed_fields: Final = echoed_cost_map_fields(
             incoming_model_info,
             _cost_map_entry(db_model, incoming_model_info),
