@@ -4053,3 +4053,13 @@ def test_vertex_gemini_4_argon_matches_gemini_api_global_pricing(_local_model_co
         key: gemini_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS
     }
     assert vertex_row["litellm_provider"].startswith("vertex_ai")
+
+
+def _token_limits(model: str) -> tuple[int | None, int | None, int | None]:
+    info: Final = litellm.get_model_info(model)
+    return info["max_input_tokens"], info["max_output_tokens"], info["max_tokens"]
+
+
+@pytest.mark.parametrize("model", ["vertex_ai/gemini-4-argon", "vertex_ai/gemini-4-argon-cyber-permissive"])
+def test_vertex_gemini_4_argon_matches_gemini_api_token_limits(model: str, _local_model_cost_map: None) -> None:
+    assert _token_limits(model) == _token_limits("gemini/gemini-4-argon")
