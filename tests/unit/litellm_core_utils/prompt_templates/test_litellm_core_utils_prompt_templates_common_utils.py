@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_encrypted_reasoning_from_messages,
     system_messages_first,
     update_messages_with_model_file_ids,
+    with_prompt_cache_breakpoint,
 )
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
@@ -2280,3 +2281,28 @@ def test_a_block_without_cache_control_is_returned_untouched() -> None:
     unmarked: Final = {"type": "text", "text": "rules"}
 
     assert cache_control_as_prompt_cache_breakpoint(unmarked) is unmarked
+
+
+def test_a_breakpoint_the_client_wrote_survives_a_message_level_mark_ttl_included() -> None:
+    block: Final = {
+        "type": "input_text",
+        "text": "rules",
+        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+    }
+
+    assert with_prompt_cache_breakpoint(block, {"mode": "explicit"}) is block
+
+
+def test_a_breakpoint_the_client_wrote_survives_a_per_part_cache_control() -> None:
+    both: Final = {
+        "type": "input_text",
+        "text": "rules",
+        "cache_control": {"type": "ephemeral"},
+        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+    }
+
+    assert cache_control_as_prompt_cache_breakpoint(both) == {
+        "type": "input_text",
+        "text": "rules",
+        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+    }
