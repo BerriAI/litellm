@@ -3,9 +3,11 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import ConfigDict, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails
 
 import litellm
+from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelInfo
 
@@ -22,6 +24,32 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
     }
 )
 _THINKING_OFF: Final = "none"
+
+_ANTHROPIC_TOOL_CHOICE: Final = TypeAdapter(AnthropicMessagesToolChoice)
+
+
+def _tool_choice_error(error: ErrorDetails) -> str:
+    field: Final = ".".join(map(str, error["loc"]))
+    return f"tool_choice.{field}: {error['msg']}" if field else f"tool_choice: {error['msg']}"
+
+
+def validated_anthropic_tool_choice(tool_choice: object) -> AnthropicMessagesToolChoice:
+    """The client's ``tool_choice`` as the Messages API defines it, or a 400 naming what is wrong with it.
+
+    Both ``/v1/messages`` adapters took the incoming dict on trust, so a missing or unknown ``type``
+    either raised a bare ``KeyError``/``ValueError`` the Router then retried as a 500, or silently
+    became ``auto`` and dropped the client's choice. The provider answers the same request with a
+    400, so every route through the adapters answers with one too.
+    """
+    try:
+        return _ANTHROPIC_TOOL_CHOICE.validate_python(tool_choice)
+    except ValidationError as invalid:
+        detail: Final = "; ".join(_tool_choice_error(error) for error in invalid.errors())
+        raise litellm.exceptions.BadRequestError(
+            message=detail,
+            model="",
+            llm_provider="anthropic",
+        ) from invalid
 
 
 class _ClaudeCodeUserId(LiteLLMBaseModel):

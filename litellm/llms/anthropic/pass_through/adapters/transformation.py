@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     prompt_cache_key_from_user_id,
+    validated_anthropic_tool_choice,
 )
 
 # OpenAI has a 64-character limit for function/tool names
@@ -764,20 +765,20 @@ class LiteLLMAnthropicMessagesAdapter:
     def translate_anthropic_tool_choice_to_openai(
         self, tool_choice: AnthropicMessagesToolChoice
     ) -> ChatCompletionToolChoiceValues:
-        if tool_choice["type"] == "any":
-            return "required"
-        elif tool_choice["type"] == "auto":
-            return "auto"
-        elif tool_choice["type"] == "tool":
-            # Truncate tool name if it exceeds OpenAI's 64-char limit
-            original_name: Final = tool_choice.get("name", "")
-            truncated_name: Final = truncate_tool_name(original_name)
-            tc_function_param: Final = ChatCompletionToolChoiceFunctionParam(name=truncated_name)
-            return ChatCompletionToolChoiceObjectParam(type="function", function=tc_function_param)
-        elif tool_choice["type"] == "none":
-            return "none"
-        else:
-            raise ValueError(f"Incompatible tool choice param submitted - {tool_choice}")
+        validated: Final = validated_anthropic_tool_choice(tool_choice)
+        match validated["type"]:
+            case "any":
+                return "required"
+            case "auto":
+                return "auto"
+            case "tool":
+                # Truncate tool name if it exceeds OpenAI's 64-char limit
+                original_name: Final = validated.get("name", "")
+                truncated_name: Final = truncate_tool_name(original_name)
+                tc_function_param: Final = ChatCompletionToolChoiceFunctionParam(name=truncated_name)
+                return ChatCompletionToolChoiceObjectParam(type="function", function=tc_function_param)
+            case "none":
+                return "none"
 
     def translate_anthropic_tools_to_openai(
         self, tools: list[AllAnthropicToolsValues], model: str | None = None

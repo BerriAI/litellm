@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -926,6 +926,25 @@ class TestTranslateToolChoiceToResponsesAPI:
     def test_specific_tool_maps_to_function(self):
         result = _ADAPTER.translate_tool_choice_to_responses_api({"type": "tool", "name": "get_weather"})
         assert result == {"type": "function", "name": "get_weather"}
+
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            {"name": "get_weather"},
+            {"type": "web_search"},
+            "auto",
+        ],
+    )
+    def test_invalid_tool_choice_is_a_400(self, tool_choice):
+        """
+        Regression test for issue #46179.
+
+        A tool_choice the Messages API itself rejects used to fall through to "auto" here, so the
+        client's choice was dropped and the request went upstream as a different one. It has to
+        come back as the same 400 the provider answers with.
+        """
+        with pytest.raises(litellm.BadRequestError, match="tool_choice"):
+            _ADAPTER.translate_tool_choice_to_responses_api(tool_choice)
 
 
 # ---------------------------------------------------------------------------
