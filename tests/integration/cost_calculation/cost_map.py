@@ -620,6 +620,12 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         },
         "web_search_billing_unit": "per_query",
     },
+    "azure_ai/claude-sonnet-4-5": {
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+    },
     "groq/qwen/qwen3.8-27b": {
         "litellm_provider": "groq",
         "mode": "chat",
