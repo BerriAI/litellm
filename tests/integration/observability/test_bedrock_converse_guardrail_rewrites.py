@@ -72,6 +72,7 @@ class _Vendor(str, Enum):
     DROPS_A_TOOL = "drops-a-tool"
     ADDS_A_TOOL = "adds-a-tool"
     RETURNS_ROW_TEXTS = "returns-row-texts"
+    MASKS_TEXTS_AND_ROW_CONTENT = "masks-texts-and-row-content"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +112,10 @@ def _blank_content(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
 
 def _compacted(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**row, "content": f"compacted: {row.get('content')}"} if row.get("role") == "tool" else dict(row)
+
+
+def _content_masked(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {**row, "content": _masked(row.get("content"))}
 
 
 def _row_text(row: Mapping[str, JsonValue]) -> str:
@@ -179,6 +184,12 @@ def _generic_verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str
                 "action": "GUARDRAIL_INTERVENED",
                 "texts": list(map(_row_text, rows)),
                 "structured_messages": [dict(row) for row in rows],
+            }
+        case _Vendor.MASKS_TEXTS_AND_ROW_CONTENT:
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": texts,
+                "structured_messages": list(map(_content_masked, sent_rows)),
             }
 
 
@@ -657,7 +668,7 @@ def test_latest_user_bedrock_guardrail_leaves_tool_call_arguments_in_place(rig: 
     ]
 
 
-def test_texts_rebuilt_from_rows_never_overwrite_other_fields(rig: _Rig) -> None:
+def test_texts_rebuilt_from_rows_that_would_blank_a_tool_call_argument_are_refused_before_bedrock(rig: _Rig) -> None:
     body: Final = {
         "messages": [
             _user({"text": "Look up booking 42."}),
@@ -665,11 +676,33 @@ def test_texts_rebuilt_from_rows_never_overwrite_other_fields(rig: _Rig) -> None
             _user(_tool_result({"text": f"paid with {_CARD}"})),
         ]
     }
-    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.RETURNS_ROW_TEXTS), body))
+    assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.RETURNS_ROW_TEXTS), body))
+
+
+def test_text_mask_on_a_tool_call_argument_the_rows_leave_unmasked_is_refused_before_bedrock(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": f"Charge card {_CARD}."}),
+            _assistant(_tool_use(_CARD)),
+            _user(_tool_result({"text": "charged"})),
+        ]
+    }
+    assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.MASKS_TEXTS_AND_ROW_CONTENT), body))
+
+
+def test_text_and_row_content_masks_that_agree_reach_bedrock_masked(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": f"Charge card {_CARD}."}),
+            _assistant(_tool_use("last four 1111")),
+            _user(_tool_result({"text": "charged"})),
+        ]
+    }
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.MASKS_TEXTS_AND_ROW_CONTENT), body))
     assert sent["messages"] == [
-        _user({"text": "Look up booking 42."}),
-        _assistant(_tool_use("booking 42")),
-        _user(_tool_result({"text": f"paid with {_MASK}"})),
+        _user({"text": f"Charge card {_MASK}."}),
+        _assistant(_tool_use("last four 1111")),
+        _user(_tool_result({"text": "charged"})),
     ]
 
 

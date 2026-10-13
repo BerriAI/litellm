@@ -247,9 +247,7 @@ class TestExtractConverseTexts:
         """Tool definitions are app-authored config, so nothing under
         toolConfig.tools reaches the guardrail as input content."""
         body = {
-            "messages": [
-                {"role": "user", "content": [{"text": "How much lag is there in my data?"}]}
-            ],
+            "messages": [{"role": "user", "content": [{"text": "How much lag is there in my data?"}]}],
             "toolConfig": {
                 "tools": [
                     {
@@ -294,11 +292,7 @@ class TestExtractConverseTexts:
     def test_tool_config_definitions_not_extracted_when_tool_messages_skipped(self):
         body = {
             "messages": [{"role": "user", "content": [{"text": "hi"}]}],
-            "toolConfig": {
-                "tools": [
-                    {"toolSpec": {"name": "fn", "description": "tool description"}}
-                ]
-            },
+            "toolConfig": {"tools": [{"toolSpec": {"name": "fn", "description": "tool description"}}]},
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=True)
         assert texts == ["hi"]
@@ -316,11 +310,7 @@ class TestExtractConverseTexts:
                     ],
                 }
             ],
-            "toolConfig": {
-                "tools": [
-                    {"toolSpec": {"name": "fn", "description": "tool description"}}
-                ]
-            },
+            "toolConfig": {"tools": [{"toolSpec": {"name": "fn", "description": "tool description"}}]},
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert texts == ["hi", "user secret"]
@@ -328,9 +318,7 @@ class TestExtractConverseTexts:
     def test_extracts_additional_model_request_fields(self):
         body = {
             "messages": [{"role": "user", "content": [{"text": "hi"}]}],
-            "additionalModelRequestFields": {
-                "reasoning_config": {"prompt": "blocked extra field"}
-            },
+            "additionalModelRequestFields": {"reasoning_config": {"prompt": "blocked extra field"}},
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert "blocked extra field" in texts
@@ -396,11 +384,7 @@ class TestWriteBackTexts:
         assert body["inferenceConfig"] == original["inferenceConfig"]
 
     def test_fewer_guardrailed_texts_logs_warning(self, monkeypatch):
-        body = {
-            "messages": [
-                {"role": "user", "content": [{"text": "a"}, {"text": "b"}]}
-            ]
-        }
+        body = {"messages": [{"role": "user", "content": [{"text": "a"}, {"text": "b"}]}]}
         _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert len(holders) == 2
 
@@ -475,9 +459,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
                 }
             }
         )
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
-        )
+        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -500,9 +482,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
                 }
             }
         )
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
-        )
+        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -516,12 +496,8 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         """Blocked text hidden in toolUse.input must be scanned and masked."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
-        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {
-            "query": "email john@example.com"
-        }
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
-        )
+        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {"query": "email john@example.com"}
+        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -535,9 +511,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         """A blocking guardrail must reject content hidden in toolUse.input."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
-        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {
-            "query": "blocked content"
-        }
+        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {"query": "blocked content"}
         guardrail = MagicMock()
         guardrail.guardrail_name = "block-guard"
         guardrail.skip_system_message_in_guardrail = False
@@ -582,9 +556,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         be blocked because a denied term appears in a tool definition."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
-        data["data"]["toolConfig"] = {
-            "tools": [{"toolSpec": {"name": "fn", "description": "blocked content"}}]
-        }
+        data["data"]["toolConfig"] = {"tools": [{"toolSpec": {"name": "fn", "description": "blocked content"}}]}
 
         async def _block_on_denied_term(**kwargs):
             texts = kwargs["inputs"]["texts"]
@@ -611,9 +583,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
         data["data"]["additionalModelRequestFields"] = {"note": "ssn 123-45-6789"}
-        guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "[REDACTED]", "Hello world"]}
-        )
+        guardrail = _make_guardrail({"texts": ["You are helpful.", "[REDACTED]", "Hello world"]})
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -977,7 +947,10 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         def rebuild_texts_from_user_rows(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
             masked = _with_structured_text(inputs, "4111 1111 1111 1111", "[CARD]")
             rows = masked["structured_messages"]
-            return {**masked, "texts": [part["text"] for row in rows if row["role"] == "user" for part in row["content"]]}
+            return {
+                **masked,
+                "texts": [part["text"] for row in rows if row["role"] == "user" for part in row["content"]],
+            }
 
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(
             data=data, guardrail_to_apply=_ScriptedGuardrail(rebuild_texts_from_user_rows)
@@ -1017,7 +990,10 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         }
         data = {
             "endpoint": "model/test/converse",
-            "data": {"messages": [{"role": "user", "content": [{"text": "Say hi."}]}], "additionalModelRequestFields": fields},
+            "data": {
+                "messages": [{"role": "user", "content": [{"text": "Say hi."}]}],
+                "additionalModelRequestFields": fields,
+            },
         }
 
         def rebuild_texts_from_user_rows(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
@@ -2984,9 +2960,45 @@ def _row_text(message: Mapping[str, object]) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _tool_loop_with_card_data(card_line: str = "Charge card 4111 1111 1111 1111.") -> dict:
+    return {
+        "endpoint": "model/anthropic.claude-sonnet/converse",
+        "custom_llm_provider": "bedrock",
+        "data": {
+            "messages": [
+                {"role": "user", "content": [{"text": card_line}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"toolUse": {"toolUseId": "t1", "name": "charge", "input": {"card": "4111 1111 1111 1111"}}}
+                    ],
+                },
+                {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "charged"}]}}]},
+            ]
+        },
+    }
+
+
+def _content_masked_rows(inputs: GenericGuardrailAPIInputs) -> list:
+    rows = copy.deepcopy(inputs["structured_messages"])
+    for row in rows:
+        content = row.get("content")
+        if isinstance(content, str):
+            row["content"] = content.replace("4111 1111 1111 1111", "****")
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    part["text"] = part["text"].replace("4111 1111 1111 1111", "****")
+    return rows
+
+
+def _fully_masked_texts(inputs: GenericGuardrailAPIInputs) -> list[str]:
+    return [text.replace("4111 1111 1111 1111", "****") for text in inputs["texts"]]
+
+
 class TestConverseTextsRebuiltFromRows:
     @pytest.mark.asyncio
-    async def test_row_shaped_texts_of_the_same_length_never_overwrite_other_fields(self):
+    async def test_row_shaped_texts_that_would_blank_a_tool_call_argument_fail_closed(self):
         data = {
             "endpoint": "model/anthropic.claude-sonnet/converse",
             "custom_llm_provider": "bedrock",
@@ -3008,8 +3020,7 @@ class TestConverseTextsRebuiltFromRows:
                 ]
             },
         }
-        expected = copy.deepcopy(data["data"])
-        expected["messages"][2]["content"][0]["toolResult"]["content"] = [{"text": "paid with [CARD]"}]
+        unchanged = copy.deepcopy(data["data"])
 
         def row_texts(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
             rows = json.loads(json.dumps(inputs["structured_messages"]).replace("4111 1111 1111 1111", "[CARD]"))
@@ -3017,10 +3028,67 @@ class TestConverseTextsRebuiltFromRows:
 
         guard = _ScriptedGuardrail(row_texts)
 
-        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
 
         assert guard.received[-1]["texts"] == ["Look up booking 42.", "booking 42", "paid with 4111 1111 1111 1111"]
-        assert result["data"] == expected
+        assert data["data"] == unchanged
+
+    @pytest.mark.asyncio
+    async def test_user_only_texts_rebuilt_from_the_rows_give_way_to_the_rewritten_rows(self):
+        data = {
+            "endpoint": "model/anthropic.claude-sonnet/converse",
+            "custom_llm_provider": "bedrock",
+            "data": {
+                "system": [{"text": "You are a support bot."}],
+                "messages": [
+                    {"role": "user", "content": [{"text": "My name is Ann."}]},
+                    {"role": "assistant", "content": [{"text": "Hi Ann."}]},
+                    {"role": "user", "content": [{"text": "Card 4111 1111 1111 1111 please."}]},
+                ],
+            },
+        }
+
+        def user_texts(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
+            rows = _card_rows_masked(inputs)
+            return {"texts": [_row_text(row) for row in rows if row["role"] == "user"], "structured_messages": rows}
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, _ScriptedGuardrail(user_texts))
+
+        assert result["data"]["system"] == [{"text": "You are a support bot."}]
+        assert result["data"]["messages"] == [
+            {"role": "user", "content": [{"text": "My name is Ann."}]},
+            {"role": "assistant", "content": [{"text": "Hi Ann."}]},
+            {"role": "user", "content": [{"text": "Card **** please."}]},
+        ]
+
+
+class TestConverseTextMaskTheRowsLeaveOut:
+    @pytest.mark.asyncio
+    async def test_text_mask_on_a_tool_call_argument_the_rows_leave_unmasked_fails_closed(self):
+        data = _tool_loop_with_card_data()
+        unchanged = copy.deepcopy(data["data"])
+        guard = _ScriptedGuardrail(
+            lambda inputs: {"texts": _fully_masked_texts(inputs), "structured_messages": _content_masked_rows(inputs)}
+        )
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert guard.received[-1]["texts"] == ["Charge card 4111 1111 1111 1111.", "4111 1111 1111 1111", "charged"]
+        assert data["data"] == unchanged
+
+    @pytest.mark.asyncio
+    async def test_text_mask_equal_to_a_masked_turn_still_fails_closed_when_the_rows_leave_its_own_field(self):
+        data = _tool_loop_with_card_data(card_line="4111 1111 1111 1111")
+        guard = _ScriptedGuardrail(
+            lambda inputs: {"texts": _fully_masked_texts(inputs), "structured_messages": _content_masked_rows(inputs)}
+        )
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert data["data"]["messages"][1]["content"][0]["toolUse"]["input"] == {"card": "4111 1111 1111 1111"}
 
 
 def _card_rows_masked(inputs: GenericGuardrailAPIInputs) -> list:

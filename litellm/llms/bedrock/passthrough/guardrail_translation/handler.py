@@ -1,9 +1,9 @@
 import copy
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from itertools import dropwhile
+from itertools import dropwhile, zip_longest
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
 from pydantic import InstanceOf, TypeAdapter
@@ -332,6 +332,38 @@ def _holder_edits(
 def _write_back_structured_edits(edits: Sequence[_Write]) -> None:
     for (container, key), value in edits:
         container[key] = value
+
+
+def _edits_drop_a_text_change(
+    body: Mapping[str, object],
+    edits: Sequence[Edit],
+    texts: Sequence[str],
+    guardrailed_texts: Sequence[str],
+    scope: _Scope,
+) -> bool:
+    """
+    Whether applying only the row and tool edits leaves a string the guardrail changed in its returned texts at its
+    original value. A changed text still counts as kept when the edited body holds it elsewhere, since texts rebuilt
+    from the rows list the same strings in another layout.
+    """
+    rewritten: Final = copy.deepcopy(dict(body))
+    _, holders = _extract_converse_texts(
+        rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results, scope.request_fields_first
+    )
+    writes: Final = _holder_edits(rewritten, edits, frozenset())
+    if writes is None:
+        return True
+    _write_back_structured_edits(writes)
+    edited: Final = [container[key] for container, key in holders]
+    dropped: Final = Counter(
+        returned
+        for before, returned, after in zip(texts, guardrailed_texts, edited)
+        if returned != before and after == before
+    )
+    elsewhere: Final = Counter(
+        after for after, returned in zip_longest(edited, guardrailed_texts[: len(edited)]) if after != returned
+    )
+    return bool(dropped - elsewhere)
 
 
 def _extract_converse_output_texts(
@@ -691,12 +723,10 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 if sent != returned
             )
         )
-        applied_texts: Final = (
-            texts
-            if rewritten_rows is not None
-            and not _texts_follow_rows(request_body, rows, texts, guardrailed_texts, changed_rows, scope)
-            else guardrailed_texts
+        texts_follow_rows: Final = rewritten_rows is None or _texts_follow_rows(
+            request_body, rows, texts, guardrailed_texts, changed_rows, scope
         )
+        applied_texts: Final = guardrailed_texts if texts_follow_rows else texts
         row_edits: Final = (
             ()
             if rewritten_rows is None
@@ -708,7 +738,14 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         tool_changes: Final = () if returned_tools is None else tool_edits(tools, returned_tools)
         holder_edits: Final = (
             None
-            if row_edits is None or tool_changes is None
+            if row_edits is None
+            or tool_changes is None
+            or (
+                not texts_follow_rows
+                and _edits_drop_a_text_change(
+                    request_body, (*row_edits, *tool_changes), texts, guardrailed_texts, scope
+                )
+            )
             else _holder_edits(
                 request_body, (*row_edits, *tool_changes), _changed_leaves(holders, texts, applied_texts)
             )
