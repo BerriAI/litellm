@@ -173,9 +173,6 @@ def _extract_converse_texts(
             if isinstance(block, dict):
                 _collect_block_text(block, holders)
 
-    if not scan_only_tool_results:
-        _collect_strings(body.get("additionalModelRequestFields"), holders)
-
     for message in body.get("messages") or []:
         if not isinstance(message, dict):
             continue
@@ -196,6 +193,9 @@ def _extract_converse_texts(
                     if isinstance(inner, dict):
                         _collect_block_text(inner, holders)
                         _collect_strings(inner.get("json"), holders)
+
+    if not scan_only_tool_results:
+        _collect_strings(body.get("additionalModelRequestFields"), holders)
 
     texts: Final = [container[key] for container, key in holders]
     return texts, holders

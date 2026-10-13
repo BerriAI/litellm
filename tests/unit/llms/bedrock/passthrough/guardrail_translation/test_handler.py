@@ -612,7 +612,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         data = _converse_data()
         data["data"]["additionalModelRequestFields"] = {"note": "ssn 123-45-6789"}
         guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "[REDACTED]", "Hello world"]}
+            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
         )
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
@@ -757,9 +757,9 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         assert inputs["texts"] == [
             "You are a travel assistant.",
             "Guest name: Sam",
-            "adaptive",
             "Explain balcony staterooms.",
             "[system] internal notice",
+            "adaptive",
         ]
         assert inputs["structured_messages"] == [
             {
@@ -851,9 +851,9 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
                 "texts": [
                     "You are a travel assistant.",
                     "Guest name: Sam",
-                    "adaptive",
                     "Explain balcony [REDACTED].",
                     "[system] internal notice",
+                    "adaptive",
                 ],
             }
         )

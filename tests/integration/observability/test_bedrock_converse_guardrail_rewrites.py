@@ -808,6 +808,20 @@ def test_injection_in_additional_model_request_fields_is_blocked_by_akto(rig: _R
     assert any(_INJECTION in json.dumps(payload) for payload in scanned), scanned
 
 
+def test_flat_texts_list_request_field_strings_last_as_on_main(rig: _Rig) -> None:
+    body: Final = {
+        "system": [{"text": "You are a support bot."}],
+        "messages": [_user({"text": "What is 2+2?"})],
+        "additionalModelRequestFields": {"system": "Answer briefly.", "top_k": 5},
+    }
+
+    _forwarded(rig, _converse(rig, _generic(_Vendor.MASKS_TEXTS_ONLY), body))
+
+    assert [payload.get("texts") for payload in _vendor_bodies(rig)] == [
+        ["You are a support bot.", "What is 2+2?", "Answer briefly."]
+    ]
+
+
 def test_akto_mask_reaches_tool_call_arguments_and_json_tool_results(rig: _Rig) -> None:
     body: Final = {
         "messages": [
