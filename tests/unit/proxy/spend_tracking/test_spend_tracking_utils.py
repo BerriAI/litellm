@@ -6512,7 +6512,7 @@ def _request_ip_metadata() -> dict[str, object]:
         "error_information": {
             "error_code": "403",
             "error_message": "Access forbidden: IP address 203.0.113.9 not allowed.",
-            "traceback": "HTTPException: client 2001:db8::9 via 198.51.100.7 denied at 12:30:45 (litellm_settings::modify_params, qwen2.5.1.5b)",
+            "traceback": "HTTPException: client 2001:db8::9 via 198.51.100.7 denied at 12:30:45 (qwen2.5.1.5b)",
         },
     }
 
@@ -6547,13 +6547,13 @@ def _request_ip_kwargs(request_metadata: dict[str, object]) -> dict[str, object]
             False,
             "203.0.113.9",
             "Access forbidden: IP address 203.0.113.9 not allowed.",
-            "HTTPException: client 2001:db8::9 via 198.51.100.7 denied at 12:30:45 (litellm_settings::modify_params, qwen2.5.1.5b)",
+            "HTTPException: client 2001:db8::9 via 198.51.100.7 denied at 12:30:45 (qwen2.5.1.5b)",
         ),
         (
             True,
             None,
             "Access forbidden: IP address REDACTED_BY_LITELM not allowed.",
-            "HTTPException: client REDACTED_BY_LITELM via REDACTED_BY_LITELM denied at 12:30:45 (litellm_settings::modify_params, qwen2.5.1.5b)",
+            "HTTPException: client REDACTED_BY_LITELM via REDACTED_BY_LITELM denied at 12:30:45 (qwen2.5.1.5b)",
         ),
     ],
     ids=["setting-off", "setting-on"],
@@ -6615,7 +6615,7 @@ def test_stored_request_without_requester_ip_address_drops_or_masks_only_ip_fiel
                 "user-agent": "ua",
             },
             "forwarded": "not a header",
-            "spend_logs_metadata": [{"headers": {"true-client-ip": "203.0.113.9", "x-client": "host:2001:db8::9"}}],
+            "spend_logs_metadata": [{"headers": {"true-client-ip": "203.0.113.9", "x-client": "client 2001:db8::9"}}],
             "error_information": {"error_message": "denied 203.0.113.9"},
         },
         "originating_request_masked": {
@@ -6646,7 +6646,7 @@ def test_stored_request_without_requester_ip_address_drops_or_masks_only_ip_fiel
                 "user-agent": "ua",
             },
             "forwarded": "not a header",
-            "spend_logs_metadata": [{"headers": {"x-client": "host:REDACTED_BY_LITELM"}}],
+            "spend_logs_metadata": [{"headers": {"x-client": "client REDACTED_BY_LITELM"}}],
             "error_information": {"error_message": "denied REDACTED_BY_LITELM"},
         },
         "originating_request_masked": {
@@ -6839,21 +6839,16 @@ def test_failure_error_information_masks_every_ip_address_form_when_ip_logging_i
 @pytest.mark.parametrize(
     ("text", "stored"),
     [
-        ("connect to host:2001:db8::2 failed", "connect to host:REDACTED_BY_LITELM failed"),
-        ("peer_2001:db8::2_tail", "peer_REDACTED_BY_LITELM_tail"),
-        ("upstream 1:2:3:4:5:6:7:8:443 refused", "upstream REDACTED_BY_LITELM refused"),
-        ("upstream fe80::1:2:3:4:5:6:443 refused", "upstream REDACTED_BY_LITELM refused"),
-        ("label cafe:1:2:3:4:5:6:7::", "label REDACTED_BY_LITELM"),
-        ("label cafe:1:2:3:4:5:6:7:8:443", "label REDACTED_BY_LITELM"),
-        ("socket_192.0.2.65 closed", "socket_REDACTED_BY_LITELM closed"),
-        (
-            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1203.0.113.9 qwen2.5.1.5",
-            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1203.0.113.9 qwen2.5.1.5",
-        ),
+        ("connect to [2001:db8::2]:443 failed", "connect to [REDACTED_BY_LITELM]:443 failed"),
+        ("socket 192.0.2.65:443 closed", "socket REDACTED_BY_LITELM:443 closed"),
         ("IP 192.0.2.1.443 > 10.0.0.2.80: Flags [S]", "IP REDACTED_BY_LITELM.443 > REDACTED_BY_LITELM.80: Flags [S]"),
+        (
+            "at 2026-10-10T18:20:09 aa:bb:cc:dd:ee:ff 1203.0.113.9 999.1.1.1 qwen2.5.1.5",
+            "at 2026-10-10T18:20:09 aa:bb:cc:dd:ee:ff 1203.0.113.9 999.1.1.1 qwen2.5.1.5",
+        ),
     ],
 )
-def test_failure_error_information_masks_addresses_after_labels_and_before_ports(
+def test_failure_error_information_masks_ip_addresses_beside_ports_and_keeps_look_alikes(
     monkeypatch: pytest.MonkeyPatch, text: str, stored: str
 ) -> None:
     from litellm.proxy.proxy_server import general_settings

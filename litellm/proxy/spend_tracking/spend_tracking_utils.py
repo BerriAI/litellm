@@ -1,4 +1,3 @@
-import ipaddress
 import json
 import os
 import re
@@ -58,6 +57,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     SpendLogsRouterMetadata,
 )
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import get_compiled_pattern
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
@@ -1629,27 +1629,12 @@ _IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
 _MAX_IP_ADDRESS_LENGTH: Final = len("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
 _LONG_HEX_GROUP: Final = re.compile(r"[0-9A-Fa-f]{5,}")
 _TRUNCATION_MARKER_GROUP: Final = re.compile(f"({_TRUNCATION_MARKER.pattern})")
-_IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
-_IPV6_ADDRESS_CANDIDATE: Final = re.compile(
-    r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"
-)
-
-
-def _masked_ipv6_address(candidate: re.Match[str]) -> str:
-    """Masks the candidate when it, or it without a leading label or a trailing port group, is an IPv6 address."""
-    text: Final = candidate.group(0)
-    unlabelled: Final = text.partition(":")[2]
-    for address in (text, text.rpartition(":")[0], unlabelled, unlabelled.rpartition(":")[0]):
-        try:
-            ipaddress.IPv6Address(address)
-        except ValueError:
-            continue
-        return REDACTED_BY_LITELM_STRING
-    return text
+_IPV4_ADDRESS: Final = get_compiled_pattern("ipv4")
+_IPV6_ADDRESS: Final = get_compiled_pattern("ipv6")
 
 
 def _without_ip_addresses(text: str) -> str:
-    return _IPV6_ADDRESS_CANDIDATE.sub(_masked_ipv6_address, _IPV4_ADDRESS.sub(REDACTED_BY_LITELM_STRING, text))
+    return _IPV6_ADDRESS.sub(REDACTED_BY_LITELM_STRING, _IPV4_ADDRESS.sub(REDACTED_BY_LITELM_STRING, text))
 
 
 def _is_ip_address_piece(piece: str) -> bool:
