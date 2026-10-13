@@ -164,6 +164,7 @@ type Key struct {
 	Prompts                  []string               `json:"prompts,omitempty"`
 	OrganizationID           string                 `json:"organization_id,omitempty"`
 	ProjectID                string                 `json:"project_id,omitempty"`
+	Status                   string                 `json:"status,omitempty"`
 }
 
 // KeyResponse represents a response from the API containing key information.

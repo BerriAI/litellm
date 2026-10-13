@@ -359,6 +359,10 @@ func (c *Client) parseKeyResponse(resp map[string]interface{}) (*Key, error) {
 			if m, ok := v.(map[string]interface{}); ok {
 				createdKey.ModelTPMLimit = m
 			}
+		case "status":
+			if s, ok := v.(string); ok {
+				createdKey.Status = s
+			}
 		case "guardrails":
 			if guardrails, ok := v.([]interface{}); ok {
 				createdKey.Guardrails = make([]string, len(guardrails))
