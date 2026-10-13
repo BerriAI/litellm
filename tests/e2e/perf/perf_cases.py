@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from perf_base_case import (
+from performance_test_case import (
     ANTHROPIC,
     BEDROCK,
     OPENAI,
