@@ -1,0 +1,402 @@
+Live A/B for PR #45874
+base = main 000b3685ed (port 4782), head = 29c155ed01 product code, identical to tip 59129ad05a which only adds a unit test case (port 4783), merge = origin/main a5d05355b6 + 29c155ed01 = 77bd632201 (port 4784)
+Each line: status, Bedrock model calls, vendor calls per recorder, Bedrock request bytes, raw card strings Bedrock received, error text
+Sets t, full, fc, v, x, fd ran at 29c155ed01, set h (Headroom) at 59129ad05a
+
+=== set t
+DIFF T1_tool_desc_masktools#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=657 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=627 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=627 secrets_to_bedrock=[]  
+DIFF T2_tool_desc_masktools_stream#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=657 secrets_to_bedrock=['4111 1111 1111 1111'] [1]ok 
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=627 secrets_to_bedrock=[] [0]ok 
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=627 secrets_to_bedrock=[]  
+DIFF T3_droptools_leading_cachepoint#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=556 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=351 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=351 secrets_to_bedrock=[]  
+DIFF T4_addtool_refused#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=657 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=500 model=0 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Guardrail 'gg-addtool' rewrote the request in a way this endpoint cannot apply, so the req
+   merge st=500 model=0 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Guardrail 'gg-addtool' rewrote the request in a way this endpoint cannot apply, so the req
+SAME T5_tool_desc_no_tool_reply#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=657 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=657 secrets_to_bedrock=['4111 1111 1111 1111']  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=657 secrets_to_bedrock=['4111 1111 1111 1111']  
+SAME T6_tool_desc_akto#0
+   base  st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=657 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=657 secrets_to_bedrock=['4111 1111 1111 1111']  
+   merge st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=657 secrets_to_bedrock=['4111 1111 1111 1111']  
+
+=== set full
+SAME P1_toolresult_text_masksm#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=601 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=601 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=601 secrets_to_bedrock=[]  
+SAME P2_toolresult_json_masksm#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=626 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=626 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=626 secrets_to_bedrock=[]  
+SAME P3_tooluse_history_masksm_deep#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=613 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=613 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=613 secrets_to_bedrock=[]  
+SAME P4_user_masksm_flat#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+DIFF P5_sm_partial_card_part1#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=157 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=154 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=154 secrets_to_bedrock=[]  
+DIFF P6_user_smonly#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=193 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+SAME P7_user_echo_sm#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=193 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=193 secrets_to_bedrock=['4111 1111 1111 1111']  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=193 secrets_to_bedrock=['4111 1111 1111 1111']  
+DIFF P8_guardcontent_masksm#0
+   base  st=400 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=171 secrets_to_bedrock=['4111 1111 1111 1111']  {'detail': {'error': '{"message":"The guardrail can\'t assess the content in the guardCont
+   head  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=156 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The guardrail can\'t assess the content in the guardCont
+   merge st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=156 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The guardrail can\'t assess the content in the guardCont
+DIFF P8b_guardcontent_plus_text_masksm#0
+   base  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=198 secrets_to_bedrock=['4111 1111 1111 1111']  {'detail': {'error': '{"message":"The guardrail can\'t assess the content in the guardCont
+   head  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=183 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The guardrail can\'t assess the content in the guardCont
+   merge st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=183 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The guardrail can\'t assess the content in the guardCont
+DIFF P8c_guardcontent_masksm_flat#0
+   base  st=400 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=171 secrets_to_bedrock=['4111 1111 1111 1111']  {'detail': {'error': '{"message":"The guardrail can\'t assess the content in the guardCont
+   head  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=156 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The guardrail can\'t assess the content in the guardCont
+   merge st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=156 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The guardrail can\'t assess the content in the guardCont
+SAME P9_system_masksm#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=230 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=230 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=230 secrets_to_bedrock=[]  
+SAME P9b_system_mask_skipsys#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=245 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=245 secrets_to_bedrock=['4111 1111 1111 1111']  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=245 secrets_to_bedrock=['4111 1111 1111 1111']  
+SAME P10_consecutive_users_masksm#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=199 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=199 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=199 secrets_to_bedrock=[]  
+SAME P10b_empty_text_masksm#0
+   base  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=128 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The text field in the ContentBlock object at messages.0.
+   head  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=128 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The text field in the ContentBlock object at messages.0.
+   merge st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=128 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The text field in the ContentBlock object at messages.0.
+SAME P10c_int_text_mask#0
+   base  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=131 secrets_to_bedrock=[]  {'detail': {'error': '{"Message":"NUMBER_VALUE cannot be converted to String"}'}}
+   head  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=131 secrets_to_bedrock=[]  {'detail': {'error': '{"Message":"NUMBER_VALUE cannot be converted to String"}'}}
+   merge st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=131 secrets_to_bedrock=[]  {'detail': {'error': '{"Message":"NUMBER_VALUE cannot be converted to String"}'}}
+DIFF P10d_tool_input_string_masksm_deep#0
+   base  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=553 secrets_to_bedrock=['4111 1111 1111 1111']  {'detail': {'error': '{"message":"The format of the value at messages.1.content.0.toolUse.
+   head  st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=538 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The format of the value at messages.1.content.0.toolUse.
+   merge st=400 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=538 secrets_to_bedrock=[]  {'detail': {'error': '{"message":"The format of the value at messages.1.content.0.toolUse.
+SAME P10e_toolspec_cachepoint_none#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=385 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=385 secrets_to_bedrock=['4111 1111 1111 1111']  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=385 secrets_to_bedrock=['4111 1111 1111 1111']  
+SAME P11_agent_loop_none#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+SAME P11b_user_mask#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+SAME P11c_plain_block#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+SAME P11d_forbidden_blockword#0
+   base  st=400 model=0 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  forbidden word
+   head  st=400 model=0 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  forbidden word
+   merge st=400 model=0 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  forbidden word
+SAME P11e_toolresult_text_mask#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=601 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=601 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=601 secrets_to_bedrock=[]  
+SAME P11f_tooluse_history_mask#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=613 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=613 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=613 secrets_to_bedrock=[]  
+SAME P12_tooluse_history_block_skiptool#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=628 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=628 secrets_to_bedrock=['4111 1111 1111 1111']  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=628 secrets_to_bedrock=['4111 1111 1111 1111']  
+SAME P12b_toolresult_block_skiptool#0
+   base  st=400 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=616 secrets_to_bedrock=['4111 1111 1111 1111']  card or forbidden word
+   head  st=400 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=616 secrets_to_bedrock=['4111 1111 1111 1111']  card or forbidden word
+   merge st=400 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=616 secrets_to_bedrock=['4111 1111 1111 1111']  card or forbidden word
+SAME P13_oai_violent_last_user#0
+   base  st=400 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Violated OpenAI moderation policy
+   head  st=400 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Violated OpenAI moderation policy
+   merge st=400 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Violated OpenAI moderation policy
+DIFF P13_oai_violent_toolresult#0
+   base  st=400 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Violated OpenAI moderation policy
+   head  st=200 model=1 gg=0 oai=2 akto=0 hdr=0 sgl=0 bedrock_body_len=660 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=2 akto=0 hdr=0 sgl=0 bedrock_body_len=660 secrets_to_bedrock=[]  
+DIFF P13_oai_violent_system#0
+   base  st=400 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Violated OpenAI moderation policy
+   head  st=200 model=1 gg=0 oai=2 akto=0 hdr=0 sgl=0 bedrock_body_len=255 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=2 akto=0 hdr=0 sgl=0 bedrock_body_len=255 secrets_to_bedrock=[]  
+DIFF P13_oai_violent_earlier_turn#0
+   base  st=400 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Violated OpenAI moderation policy
+   head  st=200 model=1 gg=0 oai=2 akto=0 hdr=0 sgl=0 bedrock_body_len=321 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=2 akto=0 hdr=0 sgl=0 bedrock_body_len=321 secrets_to_bedrock=[]  
+SAME P13_oai_plain#0
+   base  st=200 model=1 gg=0 oai=2 akto=0 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=2 akto=0 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=2 akto=0 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+SAME P14_akto_agent_loop#0
+   base  st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+SAME P14_akto_inject_toolresult#0
+   base  st=403 model=0 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  [Block] Sorry, the model cannot answer this question. This has been blocked by chatbot-gua
+   head  st=403 model=0 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  [Block] Sorry, the model cannot answer this question. This has been blocked by chatbot-gua
+   merge st=403 model=0 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  [Block] Sorry, the model cannot answer this question. This has been blocked by chatbot-gua
+SAME P14_akto_plain#0
+   base  st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+SAME P15_bedrock_ssn_user#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=150 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=150 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=150 secrets_to_bedrock=[]  
+SAME P15b_bedrock_ssn_toolresult#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=617 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=617 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=617 secrets_to_bedrock=[]  
+SAME P15c_bedrock_latest_ssn_user#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=150 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=150 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=150 secrets_to_bedrock=[]  
+DIFF P15d_bedrock_latest_system_and_user#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=213 secrets_to_bedrock=['123-45-6789']  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=204 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=204 secrets_to_bedrock=[]  
+DIFF P15e_bedrock_latest_tool_history#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=671 secrets_to_bedrock=['123-45-6789']  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=646 secrets_to_bedrock=['123-45-6789']  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=646 secrets_to_bedrock=['123-45-6789']  
+SAME P16_multi_card_user#0
+   base  st=200 model=1 gg=4 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=4 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=4 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+SAME P16b_multi_card_toolresult#0
+   base  st=200 model=1 gg=4 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=601 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=4 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=601 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=4 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=601 secrets_to_bedrock=[]  
+DIFF P17_toolonly_mask_user_and_toolresult#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=630 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=645 secrets_to_bedrock=['4111 1111 1111 1111']  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=645 secrets_to_bedrock=['4111 1111 1111 1111']  
+DIFF P17b_toolonly_masksm_user_and_toolresult#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=630 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=645 secrets_to_bedrock=['4111 1111 1111 1111']  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=645 secrets_to_bedrock=['4111 1111 1111 1111']  
+DIFF P17c_toolonly_mask_system#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=230 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=245 secrets_to_bedrock=['4111 1111 1111 1111']  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=245 secrets_to_bedrock=['4111 1111 1111 1111']  
+SAME P17d_toolonly_mask_agent_loop#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+SAME E1_two_part_user_masksm_flat#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=157 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=157 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=157 secrets_to_bedrock=[]  
+SAME E2_toolresult_two_parts_masksm#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=631 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=631 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=631 secrets_to_bedrock=[]  
+SAME E2b_toolresult_two_parts_mask#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=631 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=631 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=631 secrets_to_bedrock=[]  
+SAME E3_toolresult_text_image_masksm#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=757 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=757 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=757 secrets_to_bedrock=[]  
+SAME E3b_toolresult_text_image_mask#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=757 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=757 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=757 secrets_to_bedrock=[]  
+SAME E4_sm_partial_card_part0#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=161 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=161 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=161 secrets_to_bedrock=[]  
+SAME E5_system_two_blocks_masksm_flat#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=272 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=272 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=272 secrets_to_bedrock=[]  
+SAME E5b_system_two_blocks_masksm#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=272 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=272 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=272 secrets_to_bedrock=[]  
+SAME E6_pg_shape_pglike#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=324 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=324 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=324 secrets_to_bedrock=[]  
+SAME E6b_card_user_pglike#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=178 secrets_to_bedrock=[]  
+SAME E7_additional_fields_violent_oai#0
+   base  st=400 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Violated OpenAI moderation policy
+   head  st=400 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Violated OpenAI moderation policy
+   merge st=400 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Violated OpenAI moderation policy
+SAME E8_agent_loop_droptools#0
+   base  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+SAME S1_stream_parallel_mask#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=772 secrets_to_bedrock=[] [0]ok [1]ok 
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=772 secrets_to_bedrock=[] [0]ok [1]ok 
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=772 secrets_to_bedrock=[] [0]ok [1]ok 
+SAME S1_stream_parallel_mask#1
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=772 secrets_to_bedrock=[] [0]ok [1]ok 
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=772 secrets_to_bedrock=[] [0]ok [1]ok 
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=772 secrets_to_bedrock=[] [0]ok [1]ok 
+SAME S2_stream_card_text_mask#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=183 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=183 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=183 secrets_to_bedrock=[]  
+SAME E9_blank_assistant_masksm_blank#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=613 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=613 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=613 secrets_to_bedrock=[]  
+
+=== set fc
+DIFF F1_smonly_two_part_user_card#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=172 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=157 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=157 secrets_to_bedrock=[]  
+DIFF F2_smonly_two_part_user_card_stream#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=172 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=157 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=157 secrets_to_bedrock=[]  
+
+=== set v
+SAME V1_hdr_tool_text_big#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17345 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17345 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17345 secrets_to_bedrock=[]  
+SAME V2_hdr_tool_text_big_stream#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17345 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17345 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17345 secrets_to_bedrock=[]  
+SAME V3_hdr_tool_json_big#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=13756 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=13756 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=13756 secrets_to_bedrock=[]  
+SAME V4_hdr_history_long#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17005 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17005 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17005 secrets_to_bedrock=[]  
+SAME V5_hdr_agent_loop_small#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=783 secrets_to_bedrock=[]  
+SAME S1_sgl_pii_user#0
+   base  st=400 model=0 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=0 secrets_to_bedrock=[]  Guardrail raised an exception, Guardrail: singulr, Message: Blocked by Singulr, Blocking d
+   head  st=400 model=0 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=0 secrets_to_bedrock=[]  Guardrail raised an exception, Guardrail: singulr, Message: Blocked by Singulr, Blocking d
+   merge st=400 model=0 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=0 secrets_to_bedrock=[]  Guardrail raised an exception, Guardrail: singulr, Message: Blocked by Singulr, Blocking d
+SAME S2_sgl_pii_system#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=203 secrets_to_bedrock=['123-45-6789']  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=203 secrets_to_bedrock=['123-45-6789']  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=203 secrets_to_bedrock=['123-45-6789']  
+SAME S3_sgl_pii_toolresult#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=600 secrets_to_bedrock=['123-45-6789']  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=600 secrets_to_bedrock=['123-45-6789']  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=600 secrets_to_bedrock=['123-45-6789']  
+SAME S4_sgl_pii_earlier_turn#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=258 secrets_to_bedrock=['123-45-6789']  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=258 secrets_to_bedrock=['123-45-6789']  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=258 secrets_to_bedrock=['123-45-6789']  
+SAME S5_sgl_inject_request_fields#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=298 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=298 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=298 secrets_to_bedrock=[]  
+SAME S6_sgl_agent_loop_benign#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=783 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=783 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=1 bedrock_body_len=783 secrets_to_bedrock=[]  
+SAME J1_judge_violent_last_user#0
+   base  st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+   head  st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+   merge st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+DIFF J2_judge_violent_system#0
+   base  st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+   head  st=200 model=1 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=255 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=255 secrets_to_bedrock=[]  
+DIFF J3_judge_violent_earlier_turn#0
+   base  st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+   head  st=200 model=1 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=321 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=321 secrets_to_bedrock=[]  
+SAME J4_judge_violent_toolresult#0
+   base  st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+   head  st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+   merge st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+SAME J5_judge_violent_request_fields#0
+   base  st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+   head  st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+   merge st=422 model=0 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  LLM judge rejected request: score below threshold
+SAME J6_judge_plain#0
+   base  st=200 model=1 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=1 akto=0 hdr=0 sgl=0 bedrock_body_len=122 secrets_to_bedrock=[]  
+
+=== set x
+SAME P18_akto_inject_request_fields#0
+   base  st=403 model=0 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  [Block] Sorry, the model cannot answer this question. This has been blocked by chatbot-gua
+   head  st=403 model=0 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  [Block] Sorry, the model cannot answer this question. This has been blocked by chatbot-gua
+   merge st=403 model=0 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  [Block] Sorry, the model cannot answer this question. This has been blocked by chatbot-gua
+SAME P18b_akto_benign_request_fields#0
+   base  st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=217 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=217 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=217 secrets_to_bedrock=[]  
+SAME P18c_akto_inject_request_fields_stream#0
+   base  st=403 model=0 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  [Block] Sorry, the model cannot answer this question. This has been blocked by chatbot-gua
+   head  st=403 model=0 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  [Block] Sorry, the model cannot answer this question. This has been blocked by chatbot-gua
+   merge st=403 model=0 gg=0 oai=0 akto=1 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  [Block] Sorry, the model cannot answer this question. This has been blocked by chatbot-gua
+SAME P18d_masksm_card_request_fields#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=238 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=238 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=238 secrets_to_bedrock=[]  
+DIFF P18e_smonly_card_request_fields#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=253 secrets_to_bedrock=['4111 1111 1111 1111']  
+   head  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=238 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=238 secrets_to_bedrock=[]  
+
+=== set fd
+DIFF F3_vendor_drops_a_row_card_system#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=230 secrets_to_bedrock=[]  
+   head  st=500 model=0 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Guardrail 'gg-none' rewrote the request in a way this endpoint cannot apply, so the reques
+   merge st=500 model=0 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Guardrail 'gg-none' rewrote the request in a way this endpoint cannot apply, so the reques
+DIFF F4_vendor_drops_a_row_card_system_stream#0
+   base  st=200 model=1 gg=2 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=230 secrets_to_bedrock=[]  
+   head  st=500 model=0 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Guardrail 'gg-none' rewrote the request in a way this endpoint cannot apply, so the reques
+   merge st=500 model=0 gg=1 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=0 secrets_to_bedrock=[]  Guardrail 'gg-none' rewrote the request in a way this endpoint cannot apply, so the reques
+
+=== set h
+SAME V6_hdr_old_tool_text#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17462 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17462 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17462 secrets_to_bedrock=[]  
+SAME V7_hdr_old_tool_text_stream#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17462 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17462 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=17462 secrets_to_bedrock=[]  
+SAME V8_hdr_old_tool_json#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=13864 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=13864 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=13864 secrets_to_bedrock=[]  
+SAME V9_hdr_old_tool_text_and_json#0
+   base  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=30590 secrets_to_bedrock=[]  
+   head  st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=30590 secrets_to_bedrock=[]  
+   merge st=200 model=1 gg=0 oai=0 akto=0 hdr=0 sgl=0 bedrock_body_len=30590 secrets_to_bedrock=[]  
