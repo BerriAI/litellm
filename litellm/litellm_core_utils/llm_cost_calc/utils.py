@@ -551,7 +551,7 @@ def _resolve_cache_read_cost_rate(
     current_time: datetime | None,
     service_tier: str | None = None,
 ) -> float | None:
-    cache_read_cost_key: Final = "implicit_cache_read_input_token_cost"
+    cache_read_cost_key: Final = "explicit_cache_read_input_token_cost"
     service_cache_read_cost_key: Final = _get_service_tier_cost_key(cache_read_cost_key, service_tier)
     if (
         model_info.get(service_cache_read_cost_key) is None
@@ -565,7 +565,7 @@ def _resolve_cache_read_cost_rate(
     cache_type: Final = (
         getattr(prompt_tokens_details, "cache_type", None) if prompt_tokens_details is not None else None
     )
-    if parse_prompt_tokens_details(usage)["cache_hit_tokens"] <= 0 or cache_type is not None:
+    if parse_prompt_tokens_details(usage)["cache_hit_tokens"] <= 0 or cache_type != "ephemeral":
         return None
 
     tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
@@ -575,16 +575,16 @@ def _resolve_cache_read_cost_rate(
         service_cache_read_cost_key,
         default_value=None,
     )
-    tier_has_implicit_rate: Final = tier is not None and cache_read_cost_key in tier
-    off_peak_has_implicit_rate: Final = (
+    tier_has_explicit_rate: Final = tier is not None and cache_read_cost_key in tier
+    off_peak_has_explicit_rate: Final = (
         off_peak is not None and _parse_off_peak_rate(off_peak.get(cache_read_cost_key)) is not None
     )
-    if model_cache_read_cost_rate is None and not tier_has_implicit_rate and not off_peak_has_implicit_rate:
+    if model_cache_read_cost_rate is None and not tier_has_explicit_rate and not off_peak_has_explicit_rate:
         return None
 
     cache_read_cost_rate: Final = (
         tier_rate(tier, cache_read_cost_key)
-        if tier is not None and tier_has_implicit_rate
+        if tier is not None and tier_has_explicit_rate
         else model_cache_read_cost_rate
         if model_cache_read_cost_rate is not None
         else tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")

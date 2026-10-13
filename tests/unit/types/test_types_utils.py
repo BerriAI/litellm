@@ -222,16 +222,16 @@ def test_prompt_tokens_details_preserves_qwen_cache_type():
     assert details.model_dump()["cache_type"] == "ephemeral"
 
 
-def test_custom_pricing_accepts_qwen_implicit_cache_rate():
+def test_custom_pricing_accepts_qwen_explicit_cache_rate():
     from litellm.types.utils import CustomPricingLiteLLMParams
 
     pricing = CustomPricingLiteLLMParams(
-        cache_read_input_token_cost=1e-07,
-        implicit_cache_read_input_token_cost=2e-07,
+        cache_read_input_token_cost=2e-07,
+        explicit_cache_read_input_token_cost=1e-07,
     )
 
-    assert pricing.cache_read_input_token_cost == 1e-07
-    assert pricing.implicit_cache_read_input_token_cost == 2e-07
+    assert pricing.cache_read_input_token_cost == 2e-07
+    assert pricing.explicit_cache_read_input_token_cost == 1e-07
 
 
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():

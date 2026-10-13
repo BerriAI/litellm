@@ -34737,6 +34737,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Explicit Cache Read Input Token Cost */
+            explicit_cache_read_input_token_cost?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -34746,8 +34748,6 @@ export interface components {
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
-            /** Implicit Cache Read Input Token Cost */
-            implicit_cache_read_input_token_cost?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -49425,10 +49425,10 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Explicit Cache Read Input Token Cost */
+            explicit_cache_read_input_token_cost?: number | null;
             /** Id */
             id: string | null;
-            /** Implicit Cache Read Input Token Cost */
-            implicit_cache_read_input_token_cost?: number | null;
             /** Input Cost Per Character */
             input_cost_per_character?: number | null;
             /** Input Cost Per Token */
@@ -49777,6 +49777,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Explicit Cache Read Input Token Cost */
+            explicit_cache_read_input_token_cost?: number | null;
             /**
              * Fireworks Forward User Id
              * @description Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.
@@ -49786,8 +49788,6 @@ export interface components {
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
-            /** Implicit Cache Read Input Token Cost */
-            implicit_cache_read_input_token_cost?: number | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */

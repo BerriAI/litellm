@@ -280,7 +280,7 @@ class OffPeakPricing(TypedDict, total=False):
     output_cost_per_token: ReadOnly[float]
     output_cost_per_reasoning_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
-    implicit_cache_read_input_token_cost: ReadOnly[float]
+    explicit_cache_read_input_token_cost: ReadOnly[float]
     cache_creation_input_token_cost: ReadOnly[float]
 
 
@@ -310,7 +310,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost: float | None
     cache_read_input_audio_token_cost: ReadOnly[float | None]
     cache_read_input_image_token_cost: ReadOnly[float | None]
-    implicit_cache_read_input_token_cost: ReadOnly[float | None]
+    explicit_cache_read_input_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_balanced: ReadOnly[float | None]
@@ -3840,7 +3840,7 @@ class MirroredPricingParams(LiteLLMBaseModel):
     cache_read_input_token_cost: float | None = None
     # Loaded from config dictionaries; keep it in Pydantic/schema without adding a
     # keyword to every generated subclass constructor's static signature.
-    implicit_cache_read_input_token_cost: float | None = Field(default=None, init=False)
+    explicit_cache_read_input_token_cost: float | None = Field(default=None, init=False)
     cache_creation_input_token_cost: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
