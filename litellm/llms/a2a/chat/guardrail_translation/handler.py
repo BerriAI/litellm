@@ -84,12 +84,12 @@ class A2AGuardrailHandler(BaseTranslation):
             return data
 
         def _scan_input_part(part_idx: int, part: dict[str, Any]) -> tuple[str, int, str] | None:
-            kind = part.get("kind")
+            kind: Final = part.get("kind")
             if kind == "text":
-                text = part.get("text", "")
+                text: Final = part.get("text", "")
                 return (text, part_idx, "text") if text else None
             if kind == "data":
-                part_data = part.get("data")
+                part_data: Final = part.get("data")
                 return (serialize_a2a_data_part(part_data), part_idx, "data") if part_data is not None else None
             return None
 
@@ -380,41 +380,51 @@ class A2AGuardrailHandler(BaseTranslation):
 
         Returns a tuple of (text, path_to_parts_list, part_index, field) entries.
         """
-        entries: tuple[tuple[str, tuple[str, ...], int, str], ...] = ()
-
         # Case 1: Direct parts in result (direct message)
-        if "parts" in result:
-            entries += self._extract_texts_from_parts(parts=result["parts"], path=("parts",))
+        case1: Final = (
+            self._extract_texts_from_parts(parts=result["parts"], path=("parts",)) if "parts" in result else ()
+        )
 
         # Case 2: Nested message
         message: Final = result.get("message")
-        if message and isinstance(message, dict) and "parts" in message:
-            entries += self._extract_texts_from_parts(parts=message["parts"], path=("message", "parts"))
+        case2: Final = (
+            self._extract_texts_from_parts(parts=message["parts"], path=("message", "parts"))
+            if message and isinstance(message, dict) and "parts" in message
+            else ()
+        )
 
         # Case 3: Streaming artifact-update (singular artifact)
         artifact: Final = result.get("artifact")
-        if artifact and isinstance(artifact, dict) and "parts" in artifact:
-            entries += self._extract_texts_from_parts(parts=artifact["parts"], path=("artifact", "parts"))
+        case3: Final = (
+            self._extract_texts_from_parts(parts=artifact["parts"], path=("artifact", "parts"))
+            if artifact and isinstance(artifact, dict) and "parts" in artifact
+            else ()
+        )
 
         # Case 4: Task with status message
         status: Final = result.get("status", {})
-        if isinstance(status, dict):
-            status_message: Final = status.get("message")
-            if status_message and isinstance(status_message, dict) and "parts" in status_message:
-                entries += self._extract_texts_from_parts(
-                    parts=status_message["parts"], path=("status", "message", "parts")
-                )
+        status_message: Final = status.get("message") if isinstance(status, dict) else None
+        case4: Final = (
+            self._extract_texts_from_parts(parts=status_message["parts"], path=("status", "message", "parts"))
+            if isinstance(status_message, dict) and "parts" in status_message
+            else ()
+        )
 
         # Case 5: Task with artifacts (plural, array)
         artifacts: Final = result.get("artifacts", [])
-        if artifacts and isinstance(artifacts, list):
-            for artifact_idx, art in enumerate(artifacts):
-                if isinstance(art, dict) and "parts" in art:
-                    entries += self._extract_texts_from_parts(
-                        parts=art["parts"], path=("artifacts", str(artifact_idx), "parts")
-                    )
+        case5: Final = (
+            tuple(
+                chain.from_iterable(
+                    self._extract_texts_from_parts(parts=art["parts"], path=("artifacts", str(artifact_idx), "parts"))
+                    for artifact_idx, art in enumerate(artifacts)
+                    if isinstance(art, dict) and "parts" in art
+                )
+            )
+            if artifacts and isinstance(artifacts, list)
+            else ()
+        )
 
-        return entries
+        return case1 + case2 + case3 + case4 + case5
 
     def _extract_texts_from_parts(
         self,
@@ -435,12 +445,12 @@ class A2AGuardrailHandler(BaseTranslation):
             return ()
 
         def _scan(part_idx: int, part: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...], int, str], ...]:
-            kind = part.get("kind")
+            kind: Final = part.get("kind")
             if kind == "text":
-                text = part.get("text", "")
+                text: Final = part.get("text", "")
                 return ((text, path, part_idx, "text"),) if text else ()
             if kind == "data":
-                part_data = part.get("data")
+                part_data: Final = part.get("data")
                 if part_data is None:
                     return ()
                 return ((serialize_a2a_data_part(part_data), path, part_idx, "data"),)
