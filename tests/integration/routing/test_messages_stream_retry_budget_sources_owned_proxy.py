@@ -42,10 +42,18 @@ _FALLBACK_GROUP: Final = "audit-fallback"
 _CW_FALLBACK_GROUP: Final = "audit-cw-fallback"
 _LONELY: Final = "audit-lonely"
 _POLICY: Final = "audit-policy"
+_OVERLOAD_RETRY_POLICY: Final = "audit-overload-retry-policy"
+_INTERNAL_RETRY_POLICY: Final = "audit-internal-retry-policy"
 _UPSTREAM_URL_PLACEHOLDER: Final = "upstream-url"
 
 Behavior = Literal[
-    "drop-once", "drop-always", "hold-ping", "drop-then-too-long", "drop-then-401", "overloaded-frames-fallback-503"
+    "drop-once",
+    "drop-always",
+    "hold-ping",
+    "drop-then-too-long",
+    "drop-then-401",
+    "overloaded-frames-fallback-503",
+    "overloaded-once",
 ]
 
 pytestmark = pytest.mark.timeout(240)
@@ -72,6 +80,8 @@ def _primary_reply(behavior: str, attempt: int, full: tuple[bytes, bytes, bytes,
             return dropped if attempt == 1 else status_reply(401)
         case "overloaded-frames-fallback-503":
             return stream_reply((error_frame(529, "scripted overloaded"),))
+        case "overloaded-once":
+            return status_reply(529) if attempt == 1 else stream_reply(full)
     raise AssertionError(behavior)
 
 
@@ -120,13 +130,19 @@ def _config(wire: Wire, directory: Path) -> Path:
         _deployment(_CW_FALLBACK_GROUP, _CONTEXT_WINDOW),
         _deployment(_LONELY, _PRIMARY, num_retries=1),
         _deployment(_POLICY, _PRIMARY),
+        _deployment(_OVERLOAD_RETRY_POLICY, _PRIMARY),
+        _deployment(_INTERNAL_RETRY_POLICY, _PRIMARY),
     ]
     config["router_settings"] = {
         "num_retries": 1,
         "disable_cooldowns": True,
         "fallbacks": [{_WITH_FALLBACKS: [_FALLBACK_GROUP]}],
         "context_window_fallbacks": [{_WITH_FALLBACKS: [_CW_FALLBACK_GROUP]}],
-        "model_group_retry_policy": {_POLICY: {"DefaultRetries": 2}},
+        "model_group_retry_policy": {
+            _POLICY: {"DefaultRetries": 2},
+            _OVERLOAD_RETRY_POLICY: {"ServiceUnavailableErrorRetries": 1, "InternalServerErrorRetries": 0},
+            _INTERNAL_RETRY_POLICY: {"InternalServerErrorRetries": 1, "ServiceUnavailableErrorRetries": 0},
+        },
     }
     path: Final = directory / "messages-retry-budget-sources.yaml"
     path.write_text(yaml.safe_dump(config).replace(_UPSTREAM_URL_PLACEHOLDER, wire.url))
@@ -254,10 +270,26 @@ def test_a_retry_rejected_with_401_ends_the_retries_and_reaches_the_client_uncha
     assert rig.attempts_on(_PRIMARY, marker) == 2
 
 
-def test_overloaded_frames_whose_fallback_fails_answer_the_mapped_internal_server_error(rig: _Rig) -> None:
+def test_overloaded_frames_whose_fallback_fails_answer_529_overloaded_error(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = rig.stream(_WITH_FALLBACKS, "overloaded-frames-fallback-503", marker)
-    assert response.status_code == 500, response.text
+    assert response.status_code == 529, response.text
+    assert "overloaded_error" in response.text, response.text
     assert "content_block_delta" not in response.text, response.text
     assert rig.attempts_on(_PRIMARY, marker) == 2
     assert rig.attempts_on(_FALLBACK, marker) == 2
+
+
+def test_a_529_is_retried_under_the_service_unavailable_error_retry_policy(rig: _Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    _assert_completed(rig.stream(_OVERLOAD_RETRY_POLICY, "overloaded-once", marker), _served_id(_PRIMARY, marker, 2))
+    assert rig.attempts_on(_PRIMARY, marker) == 2
+
+
+def test_a_529_is_not_retried_under_the_internal_server_error_retry_policy(rig: _Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    response: Final = rig.stream(_INTERNAL_RETRY_POLICY, "overloaded-once", marker)
+    assert response.status_code == 529, response.text
+    assert "overloaded_error" in response.text, response.text
+    assert "content_block_delta" not in response.text, response.text
+    assert rig.attempts_on(_PRIMARY, marker) == 1
