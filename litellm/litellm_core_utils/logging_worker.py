@@ -466,7 +466,7 @@ class LoggingWorker:
         # Process all tasks concurrently for maximum speed
         await asyncio.gather(*[self._process_single_task(task) for task in tasks])
 
-    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine):
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, None, None]) -> None:
         """
         Ensure the logging worker is initialized and enqueue the coroutine.
         """
