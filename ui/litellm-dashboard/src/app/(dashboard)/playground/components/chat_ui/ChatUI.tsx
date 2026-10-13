@@ -80,6 +80,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isSubmitEnterKey } from "@/utils/keyboardUtils";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { uiHref } from "@/utils/uiHref";
 import {
@@ -529,6 +530,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
     const messages = el?.querySelectorAll<HTMLElement>("[data-role]");
     const last = messages?.[messages.length - 1];
     if (el && last) el.scrollTop = last.offsetTop + last.offsetHeight - el.clientHeight;
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Skip while IME is composing (CJK candidate confirm also sends Enter)
+    if (isSubmitEnterKey(event)) {
+      event.preventDefault(); // Prevent default to avoid newline
+      handleSendMessage();
+    }
+    // If Shift+Enter is pressed, the default behavior (inserting a newline) will occur
   };
 
   const handleCancelRequest = () => {

@@ -2,6 +2,7 @@ import React from "react";
 import { ArrowUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { isSubmitEnterKey } from "@/utils/keyboardUtils";
 
 interface MessageInputProps {
   value: string;
@@ -16,7 +17,7 @@ export function MessageInput({ value, onChange, onSend, disabled, hasAttachment,
   const canSend = !disabled && (value.trim().length > 0 || Boolean(hasAttachment));
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (isSubmitEnterKey(e)) {
       e.preventDefault();
       if (canSend) {
         onSend();
