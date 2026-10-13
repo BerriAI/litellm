@@ -3,9 +3,10 @@ Utility functions for base LLM classes.
 """
 
 import copy
+import itertools
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -211,19 +212,28 @@ def _envelope_layer(
     return None if inner is None else _EnvelopeLayer(inner=inner, names_the_tool=bool(name_keys))
 
 
+def _envelope_layers(
+    payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
+) -> Iterator[_EnvelopeLayer]:
+    layer = _envelope_layer(payload_object, schema, tool_name)  # rebind-ok: the recursion gate needs a loop
+    while layer is not None:
+        yield layer
+        layer = _envelope_layer(layer.inner, schema, tool_name)
+
+
 def _schema_object_inside_envelope(
     payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
 ) -> Mapping[str, JsonValue] | None:
-    layer: Final = _envelope_layer(payload_object, schema, tool_name)
-    if layer is None:
-        return None
-    if layer.names_the_tool:
-        return layer.inner
-    if not schema.property_names:
-        return None
-    if not schema.property_names.isdisjoint(layer.inner):
-        return layer.inner
-    return _schema_object_inside_envelope(layer.inner, schema, tool_name)
+    layers: Final = _envelope_layers(payload_object, schema, tool_name)
+    candidates: Final = layers if schema.property_names else itertools.islice(layers, 1)
+    return next(
+        (
+            layer.inner
+            for layer in candidates
+            if layer.names_the_tool or not schema.property_names.isdisjoint(layer.inner)
+        ),
+        None,
+    )
 
 
 def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
