@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchProxySettings } from "./proxyUtils";
-import { getProxyUISettings } from "@/components/networking";
+import { fetchProxySettings, resolveUiApiDocBaseUrl } from "./proxyUtils";
+import { getProxyBaseUrl, getProxyUISettings } from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
   getProxyUISettings: vi.fn(),
+  getProxyBaseUrl: vi.fn().mockReturnValue("http://runtime-proxy.example"),
 }));
 
 describe("fetchProxySettings", () => {
@@ -74,5 +75,34 @@ describe("fetchProxySettings", () => {
     expect(consoleSpy).toHaveBeenCalledWith("Error fetching proxy settings:", mockError);
 
     consoleSpy.mockRestore();
+  });
+});
+
+describe("resolveUiApiDocBaseUrl", () => {
+  beforeEach(() => {
+    vi.mocked(getProxyBaseUrl).mockReturnValue("http://runtime-proxy.example");
+  });
+
+  it("prefers LITELLM_UI_API_DOC_BASE_URL over PROXY_BASE_URL", () => {
+    expect(
+      resolveUiApiDocBaseUrl({
+        LITELLM_UI_API_DOC_BASE_URL: "https://docs.example.com",
+        PROXY_BASE_URL: "https://proxy.example.com",
+      }),
+    ).toBe("https://docs.example.com");
+  });
+
+  it("falls back to PROXY_BASE_URL when docs URL is empty", () => {
+    expect(
+      resolveUiApiDocBaseUrl({
+        LITELLM_UI_API_DOC_BASE_URL: "   ",
+        PROXY_BASE_URL: "https://proxy.example.com",
+      }),
+    ).toBe("https://proxy.example.com");
+  });
+
+  it("falls back to getProxyBaseUrl when settings are missing", () => {
+    expect(resolveUiApiDocBaseUrl(null)).toBe("http://runtime-proxy.example");
+    expect(getProxyBaseUrl).toHaveBeenCalled();
   });
 });
