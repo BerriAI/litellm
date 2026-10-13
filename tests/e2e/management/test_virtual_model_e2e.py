@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Final, Literal, TypeVar
+from typing import Final, TypeVar
 
 import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, OPENAI_EMBEDDING_MODEL, unique_marker
-from e2e_http import NoBody, UnauthorizedError, UnknownApiError, unwrap
+from e2e_http import NoBody, UnknownApiError, unwrap
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
@@ -26,9 +26,17 @@ from models import (
     LiteLLMParamsBody,
     ResponsesBody,
     ResponsesOutput,
+    TeamMemberEntry,
+    TeamNewBody,
+    UserNewBody,
+    VirtualModelCreateBody,
+    VirtualModelListResponse,
+    VirtualModelMemberRequest,
+    VirtualModelPatchBody,
+    VirtualModelRow,
 )
 from proxy_client import ProxyClient
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel, ConfigDict
 
 pytestmark = pytest.mark.e2e
 
@@ -46,68 +54,6 @@ def _poll(proxy: ProxyClient, attempt: Callable[[], T | None], failure: str) -> 
             return found
         time.sleep(proxy.poll_interval)
     pytest.fail(failure)
-
-
-class VirtualModelMemberRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    model_id: str
-    priority: int = 1
-
-
-RoutingStrategy = Literal[
-    "simple-shuffle",
-    "least-busy",
-    "usage-based-routing-v2",
-    "latency-based-routing",
-    "cost-based-routing",
-    "ordered",
-]
-
-
-class VirtualModelCreateBody(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    virtual_model_name: str
-    members: tuple[VirtualModelMemberRequest, ...]
-    description: str | None = None
-    routing_strategy: RoutingStrategy | None = None
-    num_retries: int | None = None
-    timeout: int | None = None
-    allowed_fails: int | None = None
-    cooldown_time: int | None = None
-
-
-class VirtualModelPatchBody(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    virtual_model_name: str | None = None
-    description: str | None = None
-    add_members: tuple[VirtualModelMemberRequest, ...] | None = None
-    remove_members: tuple[str, ...] | None = None
-
-
-class VirtualModelMemberRow(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    model_id: str
-    priority: int
-    model_name: str | None = None
-
-
-class VirtualModelRow(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    virtual_model_id: str
-    virtual_model_name: str
-    description: str | None = None
-    members: tuple[VirtualModelMemberRow, ...]
-    routing_strategy: str
-    live_member_count: int
-
-
-class VirtualModelListResponse(RootModel[tuple[VirtualModelRow, ...]]):
-    pass
 
 
 def _create_virtual_model(client: ManagementClient, body: VirtualModelCreateBody) -> VirtualModelRow:
@@ -161,6 +107,12 @@ class VirtualModelListParams(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     search: str | None = None
+
+
+class TeamWithMembersNewBody(TeamNewBody):
+    model_config = ConfigDict(frozen=True)
+
+    members_with_roles: tuple[TeamMemberEntry, ...] = ()
 
 
 class ConfigUpdateBody(BaseModel):
@@ -283,99 +235,255 @@ class TestVirtualModelRoutes:
             f"virtual model {vm_name} must not persist after failed creation"
         )
 
-    @pytest.mark.covers("mgmt.virtual_model.update.admin_only")
+    @pytest.mark.covers(
+        "mgmt.virtual_model.update.owner_allowed",
+        "mgmt.virtual_model.delete.owner_allowed",
+        "mgmt.virtual_model.update.stranger_forbidden",
+        "mgmt.virtual_model.delete.stranger_forbidden",
+    )
     @meta(
         Subject(
             domain=Domain.MANAGEMENT,
         )
     )
-    def test_non_admin_forbidden_from_mutations(self, client: ManagementClient, resources: ResourceManager) -> None:
-        non_admin_key = unwrap(
-            client.generate_key(KeyGenerateBody(models=[], key_alias=f"e2e-non-admin-{unique_marker()}"))
-        ).key
-        resources.defer(lambda: client.proxy.delete_key(non_admin_key))
+    def test_owner_manages_own_virtual_model(self, client: ManagementClient, resources: ResourceManager) -> None:
+        owner_email = f"e2e-vm-owner-{unique_marker()}@example.com"
+        owner_user_id = client.create_user(UserNewBody(user_email=owner_email, user_role="internal_user"))
+        resources.defer(lambda: client.delete_user(owner_user_id))
 
-        vm_name = f"e2e-vm-admin-test-{unique_marker()}"
-        member_name = f"e2e-vm-admin-member-{unique_marker()}"
+        owner_key = client.proxy.generate_key(
+            KeyGenerateBody(models=[], user_id=owner_user_id, key_alias=f"e2e-vm-owner-key-{unique_marker()}")
+        )
+        resources.defer(lambda: client.proxy.delete_key(owner_key))
+
+        stranger_email = f"e2e-vm-stranger-{unique_marker()}@example.com"
+        stranger_user_id = client.create_user(UserNewBody(user_email=stranger_email, user_role="internal_user"))
+        resources.defer(lambda: client.delete_user(stranger_user_id))
+
+        stranger_key = client.proxy.generate_key(
+            KeyGenerateBody(models=[], user_id=stranger_user_id, key_alias=f"e2e-vm-stranger-key-{unique_marker()}")
+        )
+        resources.defer(lambda: client.proxy.delete_key(stranger_key))
+
+        vm_name = f"e2e-vm-owner-test-{unique_marker()}"
+        member_name = f"e2e-vm-owner-member-{unique_marker()}"
         member_id = client.proxy.create_model(
             member_name,
             LiteLLMParamsBody(model=BACKEND_MODEL),
         )
         resources.defer(lambda: client.proxy.delete_model(member_id))
 
-        result = client.proxy.transport.post(
-            "/virtual_model",
-            headers=client.proxy.transport.bearer(non_admin_key),
-            json=VirtualModelCreateBody(
-                virtual_model_name=vm_name,
-                members=(VirtualModelMemberRequest(model_id=member_id, priority=1),),
-            ),
-            response_type=VirtualModelRow,
+        created = unwrap(
+            client.proxy.transport.post(
+                "/virtual_model",
+                headers=client.proxy.transport.bearer(owner_key),
+                json=VirtualModelCreateBody(
+                    virtual_model_name=vm_name,
+                    members=(VirtualModelMemberRequest(model_id=member_id, priority=1),),
+                ),
+                response_type=VirtualModelRow,
+            )
+        )
+        resources.defer(lambda: _delete_virtual_model(client, created.virtual_model_id))
+
+        assert created.created_by == owner_user_id, (
+            f"expected created_by to echo owner user_id, got {created.created_by}"
         )
 
-        assert isinstance(result, UnauthorizedError), f"expected auth error for non-admin, got {type(result)}"
-        assert "proxy admin" in result.body, (
-            f"expected the admin-only rejection for non-admin POST /virtual_model, got: {result.body[:300]}"
+        patched = unwrap(
+            client.proxy.transport.patch(
+                f"/virtual_model/{created.virtual_model_id}",
+                headers=client.proxy.transport.bearer(owner_key),
+                json=VirtualModelPatchBody(description="owner update"),
+                response_type=VirtualModelRow,
+            )
         )
+        assert patched.description == "owner update"
+
+        stranger_patch_result = client.proxy.transport.patch(
+            f"/virtual_model/{created.virtual_model_id}",
+            headers=client.proxy.transport.bearer(stranger_key),
+            json=VirtualModelPatchBody(description="stranger update"),
+            response_type=VirtualModelRow,
+        )
+        assert isinstance(stranger_patch_result, UnknownApiError) and stranger_patch_result.status_code == 403, (
+            f"expected 403 for stranger PATCH, got {type(stranger_patch_result)}: {stranger_patch_result}"
+        )
+        assert "owner, a team admin, or a proxy admin" in stranger_patch_result.body, (
+            f"expected owner/team-admin/proxy-admin rejection message, got: {stranger_patch_result.body[:300]}"
+        )
+
+        stranger_delete_result = client.proxy.transport.delete(
+            f"/virtual_model/{created.virtual_model_id}",
+            headers=client.proxy.transport.bearer(stranger_key),
+            params=NoBody(),
+            json=NoBody(),
+            response_type=VirtualModelRow,
+        )
+        assert isinstance(stranger_delete_result, UnknownApiError) and stranger_delete_result.status_code == 403, (
+            f"expected 403 for stranger DELETE, got {type(stranger_delete_result)}: {stranger_delete_result}"
+        )
+        assert "owner, a team admin, or a proxy admin" in stranger_delete_result.body, (
+            f"expected owner/team-admin/proxy-admin rejection message, got: {stranger_delete_result.body[:300]}"
+        )
+
+        deleted = unwrap(
+            client.proxy.transport.delete(
+                f"/virtual_model/{created.virtual_model_id}",
+                headers=client.proxy.transport.bearer(owner_key),
+                params=NoBody(),
+                json=NoBody(),
+                response_type=VirtualModelRow,
+            )
+        )
+        assert deleted.virtual_model_id == created.virtual_model_id
+
+    @pytest.mark.covers("mgmt.virtual_model.update.team_admin_allowed")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+        )
+    )
+    def test_team_admin_manages_team_virtual_model(self, client: ManagementClient, resources: ResourceManager) -> None:
+        admin_email = f"e2e-vm-team-admin-{unique_marker()}@example.com"
+        admin_user_id = client.create_user(UserNewBody(user_email=admin_email, user_role="internal_user"))
+        resources.defer(lambda: client.delete_user(admin_user_id))
+
+        member_email = f"e2e-vm-team-member-{unique_marker()}@example.com"
+        member_user_id = client.create_user(UserNewBody(user_email=member_email, user_role="internal_user"))
+        resources.defer(lambda: client.delete_user(member_user_id))
+
+        team_alias = f"e2e-vm-team-{unique_marker()}"
+        team_id = client.create_team(
+            TeamWithMembersNewBody(
+                team_alias=team_alias,
+                models=[],
+                members_with_roles=(
+                    TeamMemberEntry(role="admin", user_id=admin_user_id),
+                    TeamMemberEntry(role="user", user_id=member_user_id),
+                ),
+            )
+        )
+        resources.defer(lambda: client.delete_team(team_id))
+
+        admin_key = client.proxy.generate_key(
+            KeyGenerateBody(models=[], user_id=admin_user_id, team_id=team_id)
+        )
+        resources.defer(lambda: client.proxy.delete_key(admin_key))
+
+        member_key = client.proxy.generate_key(
+            KeyGenerateBody(models=[], user_id=member_user_id, team_id=team_id)
+        )
+        resources.defer(lambda: client.proxy.delete_key(member_key))
+
+        vm_name = f"e2e-vm-team-test-{unique_marker()}"
+        member_model_name = f"e2e-vm-team-member-model-{unique_marker()}"
+        member_model_id = client.proxy.create_model(
+            member_model_name,
+            LiteLLMParamsBody(model=BACKEND_MODEL),
+        )
+        resources.defer(lambda: client.proxy.delete_model(member_model_id))
 
         created = _create_virtual_model(
             client,
             VirtualModelCreateBody(
                 virtual_model_name=vm_name,
-                members=(VirtualModelMemberRequest(model_id=member_id, priority=1),),
+                members=(VirtualModelMemberRequest(model_id=member_model_id, priority=1),),
+                team_id=team_id,
             ),
         )
         resources.defer(lambda: _delete_virtual_model(client, created.virtual_model_id))
 
-        patch_result = client.proxy.transport.patch(
-            f"/virtual_model/{created.virtual_model_id}",
-            headers=client.proxy.transport.bearer(non_admin_key),
-            json=VirtualModelPatchBody(description="non-admin update"),
-            response_type=VirtualModelRow,
-        )
-        assert isinstance(patch_result, UnauthorizedError), (
-            f"expected auth error for non-admin PATCH, got {type(patch_result)}"
-        )
-        assert "proxy admin" in patch_result.body, (
-            f"expected the admin-only rejection for non-admin PATCH, got: {patch_result.body[:300]}"
-        )
+        assert created.team_id == team_id
 
-        delete_result = client.proxy.transport.delete(
-            f"/virtual_model/{created.virtual_model_id}",
-            headers=client.proxy.transport.bearer(non_admin_key),
-            params=NoBody(),
-            json=NoBody(),
-            response_type=VirtualModelRow,
-        )
-        assert isinstance(delete_result, UnauthorizedError), (
-            f"expected auth error for non-admin DELETE, got {type(delete_result)}"
-        )
-        assert "proxy admin" in delete_result.body, (
-            f"expected the admin-only rejection for non-admin DELETE, got: {delete_result.body[:300]}"
-        )
-
-        body = VirtualModelPatchBody(remove_members=(member_id,))
-        admin_removal_result = unwrap(
+        patched = unwrap(
             client.proxy.transport.patch(
                 f"/virtual_model/{created.virtual_model_id}",
-                headers=client.proxy.transport.master,
-                json=body,
+                headers=client.proxy.transport.bearer(admin_key),
+                json=VirtualModelPatchBody(description="team admin update"),
                 response_type=VirtualModelRow,
             )
         )
-        assert len(admin_removal_result.members) == 0, (
-            f"expected membership to shrink to zero, got {len(admin_removal_result.members)} members"
-        )
+        assert patched.description == "team admin update"
 
-        non_admin_removal = client.proxy.transport.patch(
+        member_patch_result = client.proxy.transport.patch(
             f"/virtual_model/{created.virtual_model_id}",
-            headers=client.proxy.transport.bearer(non_admin_key),
-            json=body,
+            headers=client.proxy.transport.bearer(member_key),
+            json=VirtualModelPatchBody(description="plain member update"),
             response_type=VirtualModelRow,
         )
-        assert isinstance(non_admin_removal, UnauthorizedError), (
-            f"expected auth error for non-admin removal, got {type(non_admin_removal)}"
+        assert isinstance(member_patch_result, UnknownApiError) and member_patch_result.status_code == 403, (
+            f"expected 403 for plain team member PATCH, got {type(member_patch_result)}: {member_patch_result}"
         )
+        assert "owner, a team admin, or a proxy admin" in member_patch_result.body, (
+            f"expected owner/team-admin/proxy-admin rejection message, got: {member_patch_result.body[:300]}"
+        )
+
+    @pytest.mark.covers("mgmt.virtual_model.list.owner_scoped")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+        )
+    )
+    def test_list_is_owner_scoped(self, client: ManagementClient, resources: ResourceManager) -> None:
+        user_email = f"e2e-vm-list-user-{unique_marker()}@example.com"
+        user_id = client.create_user(UserNewBody(user_email=user_email, user_role="internal_user"))
+        resources.defer(lambda: client.delete_user(user_id))
+
+        user_key = client.proxy.generate_key(
+            KeyGenerateBody(models=[], user_id=user_id, key_alias=f"e2e-vm-list-key-{unique_marker()}")
+        )
+        resources.defer(lambda: client.proxy.delete_key(user_key))
+
+        vm_a_name = f"e2e-vm-list-a-{unique_marker()}"
+        vm_b_name = f"e2e-vm-list-b-{unique_marker()}"
+        member_name = f"e2e-vm-list-member-{unique_marker()}"
+
+        member_id = client.proxy.create_model(
+            member_name,
+            LiteLLMParamsBody(model=BACKEND_MODEL),
+        )
+        resources.defer(lambda: client.proxy.delete_model(member_id))
+
+        vm_a = _create_virtual_model(
+            client,
+            VirtualModelCreateBody(
+                virtual_model_name=vm_a_name,
+                members=(VirtualModelMemberRequest(model_id=member_id, priority=1),),
+            ),
+        )
+        resources.defer(lambda: _delete_virtual_model(client, vm_a.virtual_model_id))
+
+        vm_b = unwrap(
+            client.proxy.transport.post(
+                "/virtual_model",
+                headers=client.proxy.transport.bearer(user_key),
+                json=VirtualModelCreateBody(
+                    virtual_model_name=vm_b_name,
+                    members=(VirtualModelMemberRequest(model_id=member_id, priority=1),),
+                ),
+                response_type=VirtualModelRow,
+            )
+        )
+        resources.defer(lambda: _delete_virtual_model(client, vm_b.virtual_model_id))
+
+        user_list = unwrap(
+            client.proxy.transport.get(
+                "/virtual_model",
+                headers=client.proxy.transport.bearer(user_key),
+                params=VirtualModelListParams(search=None),
+                response_type=VirtualModelListResponse,
+            )
+        ).root
+
+        user_vm_names = {vm.virtual_model_name for vm in user_list}
+        assert vm_b_name in user_vm_names, f"user's own VM {vm_b_name} must appear in user's list"
+        assert vm_a_name not in user_vm_names, f"admin-created VM {vm_a_name} must not appear in user's list"
+
+        master_list = _list_virtual_models(client)
+        master_vm_names = {vm.virtual_model_name for vm in master_list}
+        assert vm_a_name in master_vm_names, f"VM {vm_a_name} must appear in master list"
+        assert vm_b_name in master_vm_names, f"VM {vm_b_name} must appear in master list"
 
     @pytest.mark.covers("mgmt.virtual_model.call.happy_path")
     @meta(

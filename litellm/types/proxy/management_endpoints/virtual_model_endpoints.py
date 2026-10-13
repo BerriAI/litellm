@@ -47,6 +47,7 @@ class VirtualModelCreateRequest(BaseModel):
     stream_timeout: int | None = None
     allowed_fails: int | None = None
     cooldown_time: int | None = None
+    team_id: str | None = None
 
     @field_validator("virtual_model_name")
     @classmethod
@@ -67,6 +68,7 @@ class VirtualModelPatchRequest(BaseModel):
     stream_timeout: int | None = None
     allowed_fails: int | None = None
     cooldown_time: int | None = None
+    team_id: str | None = None
 
     @field_validator("virtual_model_name")
     @classmethod
@@ -97,6 +99,7 @@ class VirtualModelResponse(BaseModel):
     stream_timeout: int | None = None
     allowed_fails: int | None = None
     cooldown_time: int | None = None
+    team_id: str | None = None
     live_member_count: int
     created_at: str | None = None
     created_by: str | None = None

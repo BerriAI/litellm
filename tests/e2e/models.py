@@ -1346,6 +1346,65 @@ class FileEntry(BaseModel):
     id: str
 
 
+# ---------- virtual models ----------
+
+
+class VirtualModelMemberRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_id: str
+    priority: int
+    model_name: str | None = None
+
+
+class VirtualModelCreateBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    virtual_model_name: str
+    members: tuple[VirtualModelMemberRequest, ...]
+    description: str | None = None
+    routing_strategy: str | None = None
+    num_retries: int | None = None
+    timeout: int | None = None
+    allowed_fails: int | None = None
+    cooldown_time: int | None = None
+    team_id: str | None = None
+
+
+class VirtualModelMemberRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_id: str
+    priority: int = 1
+
+
+class VirtualModelPatchBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    virtual_model_name: str | None = None
+    description: str | None = None
+    add_members: tuple[VirtualModelMemberRequest, ...] | None = None
+    remove_members: tuple[str, ...] | None = None
+    team_id: str | None = None
+
+
+class VirtualModelRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    virtual_model_id: str
+    virtual_model_name: str
+    description: str | None = None
+    members: tuple[VirtualModelMemberRow, ...]
+    routing_strategy: str
+    live_member_count: int
+    team_id: str | None = None
+    created_by: str | None = None
+
+
+class VirtualModelListResponse(RootModel[tuple[VirtualModelRow, ...]]):
+    pass
+
+
 class FileListResponse(BaseModel):
     """GET /files answer. `data` is required on purpose: a 200 whose body lacks
     the OpenAI-format file list must fail validation, not pass vacuously."""

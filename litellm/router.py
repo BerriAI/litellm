@@ -13866,7 +13866,7 @@ class Router:
 
         # Type narrow: at this point healthy_deployments is always a list
         _healthy_list: Final = healthy_deployments if isinstance(healthy_deployments, list) else [healthy_deployments]
-        
+
         is_virtual: Final = model in self._virtual_model_names
         if is_virtual:
             # Virtual models apply exclusions before order filtering so a failed
@@ -15079,8 +15079,8 @@ class Router:
             # Pin to the legacy chain's bare-element contract: an annotated
             # list[dict[str, object]] here would leak `object` into the inferred
             # return of this unannotated function and break legacy consumers.
-            _virtual_ordered: Final[list[dict]] = litellm.utils.get_order_filtered_deployments(  # mutable-ok: get_order_filtered_deployments declares list[dict[str, object]]; the bare-dict view preserves the legacy inferred contract of this unannotated selection function
-                healthy_deployments, target_order=_target_order
+            _virtual_ordered: Final[list[dict]] = (  # mutable-ok: legacy bare-element contract, see note above
+                litellm.utils.get_order_filtered_deployments(healthy_deployments, target_order=_target_order)
             )
             healthy_deployments = _virtual_ordered  # rebind-ok: virtual-model exclusion-before-order filter chain
         else:

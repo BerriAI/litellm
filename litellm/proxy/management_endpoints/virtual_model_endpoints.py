@@ -12,7 +12,7 @@ from typing import (
     cast,  # noqa: TID251  # Prisma's generated TransactionManager doesn't expose typed table accessors; we narrow to our protocol
 )
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
@@ -50,7 +50,16 @@ if TYPE_CHECKING:
         LiteLLM_VirtualModelTable as PrismaVirtualModelTable,
     )
 
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+
 router: Final = APIRouter()
+
+_VIEW_ONLY_ROLES: Final = frozenset(
+    {
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    }
+)
 
 
 class _VirtualModelTableClient(Protocol):
@@ -143,24 +152,84 @@ async def _resolve_live_deployments_by_id(
     return MappingProxyType({d.model_id: d.model_name for d in deployments if d.model_name})
 
 
-def _require_admin_family(user: UserAPIKeyAuth) -> None:
-    if user.user_role not in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+def _require_can_create(user: UserAPIKeyAuth) -> None:
+    if user.user_role in _VIEW_ONLY_ROLES:
         raise ProxyException(
-            message="Only proxy admin roles can view virtual models",
+            message="View-only roles cannot manage virtual models",
             type=ProxyErrorTypes.auth_error.value,
             code=status.HTTP_403_FORBIDDEN,
             param=None,
         )
 
 
-def _require_admin(user: UserAPIKeyAuth) -> None:
-    if user.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise ProxyException(
-            message="Only proxy admins can manage virtual models",
-            type=ProxyErrorTypes.auth_error.value,
-            code=status.HTTP_403_FORBIDDEN,
-            param=None,
+async def _try_get_team_object(team_id: str, prisma_client: PrismaClient) -> LiteLLM_TeamTableCachedObj | None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    try:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=proxy_server.user_api_key_cache,  # pyright: ignore[reportAny]  # proxy_server module attribute is untyped
+            check_db_only=True,
         )
+    except HTTPException:
+        return None
+
+
+async def _can_modify_virtual_model(
+    user_api_key_dict: UserAPIKeyAuth,
+    vm_row: PrismaVirtualModelTable,
+    prisma_client: PrismaClient,
+) -> bool:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return True
+
+    if vm_row.team_id is not None:
+        from litellm.proxy.management.teams.authz import is_team_admin
+
+        team_table: Final = await _try_get_team_object(vm_row.team_id, prisma_client)
+        if team_table is not None and is_team_admin(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team_table,
+        ):
+            return True
+
+    return user_api_key_dict.user_id is not None and vm_row.created_by == user_api_key_dict.user_id
+
+
+def _can_view_virtual_model(
+    user_api_key_dict: UserAPIKeyAuth,
+    vm_row: PrismaVirtualModelTable,
+    visible_team_ids: frozenset[str],
+) -> bool:
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    ):
+        return True
+
+    return (user_api_key_dict.user_id is not None and vm_row.created_by == user_api_key_dict.user_id) or (
+        vm_row.team_id is not None and vm_row.team_id in visible_team_ids
+    )
+
+
+async def _visible_team_ids(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> frozenset[str]:
+    user_row: Final = (
+        await prisma_client.db.litellm_usertable.find_unique(  # pyright: ignore[reportAny]  # Prisma accessor is Any
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        if user_api_key_dict.user_id is not None
+        else None
+    )
+    user_teams: Final = (
+        tuple(user_row.teams) if user_row is not None and user_row.teams is not None else ()  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # user_row is Any from Prisma
+    )
+    key_team: Final = (user_api_key_dict.team_id,) if user_api_key_dict.team_id is not None else ()
+    return frozenset(key_team + user_teams)
 
 
 async def _validate_members(
@@ -379,6 +448,7 @@ def _build_virtual_model_response(
         stream_timeout=row.stream_timeout,
         allowed_fails=row.allowed_fails,
         cooldown_time=row.cooldown_time,
+        team_id=row.team_id,
         live_member_count=live_count,
         created_at=str(row.created_at) if row.created_at else None,
         created_by=row.created_by,
@@ -403,7 +473,7 @@ async def create_virtual_model(
     """
     from litellm.proxy import proxy_server
 
-    _require_admin(user_api_key_dict)
+    _require_can_create(user_api_key_dict)
 
     prisma_client: Final = proxy_server.prisma_client
     if prisma_client is None:
@@ -414,36 +484,61 @@ async def create_virtual_model(
             param=None,
         )
 
+    if request_body.team_id is not None:
+        team_table: Final = await _try_get_team_object(request_body.team_id, prisma_client)
+
+        if team_table is None:
+            raise ProxyException(
+                message=f"Team {request_body.team_id} not found",
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param="team_id",
+            )
+
+        caller_is_member: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value or (
+            user_api_key_dict.user_id is not None
+            and any(member.user_id == user_api_key_dict.user_id for member in team_table.members_with_roles)
+        )
+
+        if not caller_is_member:
+            raise ProxyException(
+                message="Only team members can create virtual models for this team",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param=None,
+            )
+
     deployments: Final = await _validate_members(prisma_client, request_body.members)
 
     user_id: Final = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
 
     live_before_reload: Final = proxy_server.live_model_ids_snapshot() if proxy_server.llm_router else frozenset()  # pyright: ignore[reportUnknownVariableType]  # live_model_ids_snapshot returns frozenset[str] | Unknown
 
+    create_data: Final = {
+        "virtual_model_name": request_body.virtual_model_name,
+        "description": request_body.description,
+        "routing_strategy": request_body.routing_strategy,
+        "num_retries": request_body.num_retries,
+        "timeout": request_body.timeout,
+        "stream_timeout": request_body.stream_timeout,
+        "allowed_fails": request_body.allowed_fails,
+        "cooldown_time": request_body.cooldown_time,
+        "created_by": user_id,
+        "updated_by": user_id,
+        **({"team_id": request_body.team_id} if request_body.team_id is not None else {}),
+        "members": {
+            "create": [
+                {
+                    "model_id": member.model_id,
+                    "priority": member.priority,
+                }
+                for member in request_body.members
+            ]
+        },
+    }
+
     try:
-        created_row: Final = await VirtualModelRepository(prisma_client, use_writer=True).table.create(
-            data={
-                "virtual_model_name": request_body.virtual_model_name,
-                "description": request_body.description,
-                "routing_strategy": request_body.routing_strategy,
-                "num_retries": request_body.num_retries,
-                "timeout": request_body.timeout,
-                "stream_timeout": request_body.stream_timeout,
-                "allowed_fails": request_body.allowed_fails,
-                "cooldown_time": request_body.cooldown_time,
-                "created_by": user_id,
-                "updated_by": user_id,
-                "members": {
-                    "create": [
-                        {
-                            "model_id": member.model_id,
-                            "priority": member.priority,
-                        }
-                        for member in request_body.members
-                    ]
-                },
-            }
-        )
+        created_row: Final = await VirtualModelRepository(prisma_client, use_writer=True).table.create(data=create_data)
     except Exception as e:
         from prisma.errors import UniqueViolationError
 
@@ -502,6 +597,7 @@ async def create_virtual_model(
         stream_timeout=request_body.stream_timeout,
         allowed_fails=request_body.allowed_fails,
         cooldown_time=request_body.cooldown_time,
+        team_id=created_row.team_id,
         live_member_count=len(member_responses),
         created_at=str(created_row.created_at) if created_row.created_at else None,
         created_by=user_id,
@@ -523,8 +619,6 @@ async def list_virtual_models(
 ) -> tuple[VirtualModelResponse, ...]:
     from litellm.proxy import proxy_server
 
-    _require_admin_family(user_api_key_dict)
-
     prisma_client: Final = proxy_server.prisma_client
     if prisma_client is None:
         raise ProxyException(
@@ -534,10 +628,37 @@ async def list_virtual_models(
             param=None,
         )
 
-    where: Final = (
+    is_admin_family: Final = user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+
+    search_condition: Final = (
         {"virtual_model_name": {"contains": search, "mode": "insensitive"}}
         if isinstance(search, str) and search
         else None
+    )
+
+    visible_teams: Final = (
+        frozenset[str]() if is_admin_family else await _visible_team_ids(user_api_key_dict, prisma_client)
+    )
+
+    if not is_admin_family and user_api_key_dict.user_id is None and not visible_teams:
+        return ()
+
+    visibility_or: Final = (
+        *(() if user_api_key_dict.user_id is None else ({"created_by": user_api_key_dict.user_id},)),
+        *(({"team_id": {"in": sorted(visible_teams)}},) if visible_teams else ()),
+    )
+
+    where: Final = (
+        search_condition
+        if is_admin_family
+        else (
+            {"AND": [{"OR": list(visibility_or)}, search_condition]}
+            if search_condition
+            else {"OR": list(visibility_or)}
+        )
     )
 
     rows_raw: Final = await VirtualModelRepository(prisma_client).table.find_many(
@@ -568,8 +689,6 @@ async def get_virtual_model(
 ) -> VirtualModelResponse:
     from litellm.proxy import proxy_server
 
-    _require_admin_family(user_api_key_dict)
-
     prisma_client: Final = proxy_server.prisma_client
     if prisma_client is None:
         raise ProxyException(
@@ -594,6 +713,16 @@ async def get_virtual_model(
 
     row: Final = _validate_virtual_model(row_raw)
 
+    visible_team_ids: Final = await _visible_team_ids(user_api_key_dict, prisma_client)
+
+    if not _can_view_virtual_model(user_api_key_dict, row, visible_team_ids):
+        raise ProxyException(
+            message="You do not have access to this virtual model",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param=None,
+        )
+
     live_deployments_by_id: Final = await _resolve_live_deployments_by_id(
         prisma_client, frozenset(member.model_id for member in row.members or [])
     )
@@ -612,8 +741,6 @@ async def patch_virtual_model(
 ) -> VirtualModelResponse:
     from litellm.proxy import proxy_server
 
-    _require_admin(user_api_key_dict)
-
     prisma_client: Final = proxy_server.prisma_client
     if prisma_client is None:
         raise ProxyException(
@@ -622,6 +749,49 @@ async def patch_virtual_model(
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             param=None,
         )
+
+    existing_raw: Final = await VirtualModelRepository(prisma_client).table.find_unique(
+        where={"virtual_model_id": virtual_model_id},
+        include={"members": True},
+    )
+
+    if existing_raw is None:
+        raise ProxyException(
+            message=f"Virtual model {virtual_model_id} not found",
+            type=ProxyErrorTypes.not_found_error.value,
+            code=status.HTTP_404_NOT_FOUND,
+            param="virtual_model_id",
+        )
+
+    authz_row: Final = _validate_virtual_model(existing_raw)
+
+    if not await _can_modify_virtual_model(user_api_key_dict, authz_row, prisma_client):
+        raise ProxyException(
+            message="Only the virtual model owner, a team admin, or a proxy admin can manage this virtual model",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param=None,
+        )
+
+    if "team_id" in request_body.model_fields_set:
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+            raise ProxyException(
+                message="Only proxy admins can change a virtual model's team",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param=None,
+            )
+
+        if request_body.team_id is not None:
+            team_table: Final = await _try_get_team_object(request_body.team_id, prisma_client)
+
+            if team_table is None:
+                raise ProxyException(
+                    message=f"Team {request_body.team_id} not found",
+                    type=ProxyErrorTypes.validation_error.value,
+                    code=status.HTTP_400_BAD_REQUEST,
+                    param="team_id",
+                )
 
     if request_body.add_members:
         await _validate_members(prisma_client, request_body.add_members)
@@ -641,6 +811,7 @@ async def patch_virtual_model(
         **({"stream_timeout": request_body.stream_timeout} if request_body.stream_timeout is not None else {}),
         **({"allowed_fails": request_body.allowed_fails} if request_body.allowed_fails is not None else {}),
         **({"cooldown_time": request_body.cooldown_time} if request_body.cooldown_time is not None else {}),
+        **({"team_id": request_body.team_id} if "team_id" in request_body.model_fields_set else {}),
     }
 
     tx_manager: Final[_TransactionManager] = cast(  # cast-ok: generated Prisma tx lacks typed table accessors
@@ -701,8 +872,6 @@ async def delete_virtual_model(
 ) -> VirtualModelResponse:
     from litellm.proxy import proxy_server
 
-    _require_admin(user_api_key_dict)
-
     prisma_client: Final = proxy_server.prisma_client
     if prisma_client is None:
         raise ProxyException(
@@ -726,6 +895,14 @@ async def delete_virtual_model(
         )
 
     existing: Final = _validate_virtual_model(existing_raw)
+
+    if not await _can_modify_virtual_model(user_api_key_dict, existing, prisma_client):
+        raise ProxyException(
+            message="Only the virtual model owner, a team admin, or a proxy admin can manage this virtual model",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param=None,
+        )
 
     deleted_raw: Final = await VirtualModelRepository(prisma_client, use_writer=True).table.delete(
         where={"virtual_model_id": virtual_model_id},
@@ -785,6 +962,7 @@ async def delete_virtual_model(
         stream_timeout=deleted.stream_timeout,
         allowed_fails=deleted.allowed_fails,
         cooldown_time=deleted.cooldown_time,
+        team_id=deleted.team_id,
         live_member_count=0,
         created_by=deleted.created_by,
         updated_by=deleted.updated_by,

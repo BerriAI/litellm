@@ -49193,6 +49193,8 @@ export interface components {
             routing_strategy: "ordered" | "simple-shuffle" | "least-busy" | "usage-based-routing" | "usage-based-routing-v2" | "latency-based-routing" | "cost-based-routing";
             /** Stream Timeout */
             stream_timeout?: number | null;
+            /** Team Id */
+            team_id?: string | null;
             /** Timeout */
             timeout?: number | null;
             /** Virtual Model Name */
@@ -49235,6 +49237,8 @@ export interface components {
             routing_strategy?: ("ordered" | "simple-shuffle" | "least-busy" | "usage-based-routing" | "usage-based-routing-v2" | "latency-based-routing" | "cost-based-routing") | null;
             /** Stream Timeout */
             stream_timeout?: number | null;
+            /** Team Id */
+            team_id?: string | null;
             /** Timeout */
             timeout?: number | null;
             /** Virtual Model Name */
@@ -49262,6 +49266,8 @@ export interface components {
             routing_strategy: string;
             /** Stream Timeout */
             stream_timeout?: number | null;
+            /** Team Id */
+            team_id?: string | null;
             /** Timeout */
             timeout?: number | null;
             /** Updated At */

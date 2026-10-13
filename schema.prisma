@@ -75,6 +75,7 @@ model LiteLLM_VirtualModelTable {
   stream_timeout     Int?
   allowed_fails      Int?
   cooldown_time      Int?
+  team_id            String?
   created_at         DateTime @default(now()) @map("created_at")
   created_by         String
   updated_at         DateTime @default(now()) @updatedAt @map("updated_at")
