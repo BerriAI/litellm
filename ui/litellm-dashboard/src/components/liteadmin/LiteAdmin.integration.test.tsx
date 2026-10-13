@@ -184,7 +184,7 @@ async function openWidget() {
 }
 
 function send(text: string) {
-  fireEvent.change(screen.getByPlaceholderText("Ask LiteAdmin…"), { target: { value: text } });
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: text } });
   fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 }
 
@@ -209,7 +209,7 @@ describe("LiteAdmin in the gateway", () => {
     renderWidget(undefined, true);
     const home = await screen.findByRole("region", { name: "Ask LiteAdmin" });
     await selectModel();
-    const input = within(home).getByPlaceholderText("Ask LiteAdmin…");
+    const input = within(home).getByPlaceholderText("What would you like to do?");
     fireEvent.change(input, { target: { value: "First question" } });
     if (method === "keyboard") fireEvent.keyDown(input, { key: "Enter" });
     else fireEvent.click(within(home).getByRole("button", { name: "Send message" }));
@@ -235,6 +235,31 @@ describe("LiteAdmin in the gateway", () => {
     ]);
   });
 
+  it("prefills each Home suggestion without sending until the edited draft is submitted", async () => {
+    const requests = gateway([answer("Budget details received.")]);
+    renderWidget(undefined, true);
+    await selectModel();
+    const input = screen.getByRole("textbox", { name: "Message LiteAdmin" });
+    for (const label of ["Create a key", "Add a model", "Set a budget"]) {
+      fireEvent.click(screen.getByRole("button", { name: label, exact: true }));
+      expect(input).toHaveValue(label);
+      expect(input).toHaveFocus();
+      expect(screen.queryByRole("complementary", { name: "LiteAdmin" })).not.toBeInTheDocument();
+      expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(0);
+    }
+    fireEvent.change(input, { target: { value: "Set a budget of $10 for my team" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(requests.filter((request) => request.url.endsWith("/chat/completions"))).toHaveLength(0);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("Budget details received.")).toBeInTheDocument();
+    const completions = requests.filter((request) => request.url.endsWith("/chat/completions"));
+    expect(completions).toHaveLength(1);
+    expect(completions[0].body.model).toBe("chat-model");
+    expect(completions[0].body.messages).toContainEqual({ role: "user", content: "Set a budget of $10 for my team" });
+    expect(requests.filter((request) => request.url.endsWith("/key/generate"))).toHaveLength(0);
+  });
+
   it("preserves the draft and chosen model when opening, closing and leaving Home", async () => {
     const requests = gateway([answer("Draft received.")], {
       models: [
@@ -244,12 +269,14 @@ describe("LiteAdmin in the gateway", () => {
     });
     const view = renderWidget(undefined, true);
     await selectModel();
-    fireEvent.change(screen.getByPlaceholderText("Ask LiteAdmin…"), { target: { value: "Keep this draft" } });
-    fireEvent.click(screen.getByRole("button", { name: "LiteAdmin" }));
+    fireEvent.change(screen.getByPlaceholderText("What would you like to do?"), {
+      target: { value: "Keep this draft" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Recent chats" }));
     expect(screen.getByPlaceholderText("Ask LiteAdmin…")).toHaveValue("Keep this draft");
     fireEvent.click(screen.getByRole("button", { name: "Close LiteAdmin" }));
     const home = screen.getByRole("region", { name: "Ask LiteAdmin" });
-    expect(within(home).getByPlaceholderText("Ask LiteAdmin…")).toHaveValue("Keep this draft");
+    expect(within(home).getByPlaceholderText("What would you like to do?")).toHaveValue("Keep this draft");
     view.refresh(false);
     expect(home).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "LiteAdmin" }));
@@ -293,16 +320,16 @@ describe("LiteAdmin in the gateway", () => {
     fireEvent.change(screen.getByPlaceholderText("Ask LiteAdmin…"), { target: { value: "First draft" } });
     fireEvent.click(screen.getByRole("button", { name: "Close LiteAdmin" }));
     const home = screen.getByRole("region", { name: "Ask LiteAdmin" });
-    expect(within(home).getByPlaceholderText("Ask LiteAdmin…")).toHaveValue("First draft");
-    expect(screen.getAllByPlaceholderText("Ask LiteAdmin…")).toHaveLength(1);
+    expect(within(home).getByPlaceholderText("What would you like to do?")).toHaveValue("First draft");
+    expect(screen.getAllByPlaceholderText("What would you like to do?")).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "LiteAdmin" }));
+    fireEvent.click(screen.getByRole("button", { name: "Recent chats" }));
     fireEvent.click(screen.getByRole("tab", { name: "Chat 2" }));
     expect(screen.getByPlaceholderText("Ask LiteAdmin…")).toHaveValue("Second draft");
     expect(screen.getByRole("combobox", { name: "LiteAdmin model" })).toHaveValue("other-chat-model");
     expect(screen.getAllByLabelText("LiteAdmin conversation")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Close LiteAdmin" }));
-    expect(within(home).getByPlaceholderText("Ask LiteAdmin…")).toHaveValue("Second draft");
+    expect(within(home).getByPlaceholderText("What would you like to do?")).toHaveValue("Second draft");
     fireEvent.click(within(home).getByRole("button", { name: "Send message" }));
     await screen.findByText("Second follow-up.");
     expect(screen.getByRole("tab", { name: "Chat 2" })).toHaveAttribute("aria-selected", "true");
@@ -531,13 +558,13 @@ describe("LiteAdmin in the gateway", () => {
     const { client } = renderWidget(undefined, true);
     const home = await screen.findByRole("region", { name: "Ask LiteAdmin" });
     expect(await within(home).findByText("Add a chat model to your gateway to use LiteAdmin.")).toBeInTheDocument();
-    expect(within(home).getByPlaceholderText("Ask LiteAdmin…")).toBeDisabled();
+    expect(within(home).getByPlaceholderText("What would you like to do?")).toBeDisabled();
     expect(within(home).getByRole("button", { name: "Send message" })).toBeDisabled();
     options.models = [{ model_group: "chat-model", mode: "chat" }];
     await act(async () => client.invalidateQueries({ queryKey: ["liteadmin-models"] }));
     await selectModel();
     for (const text of ["   ", "x".repeat(MAX_INPUT_LENGTH + 1)]) {
-      const input = within(home).getByPlaceholderText("Ask LiteAdmin…");
+      const input = within(home).getByPlaceholderText("What would you like to do?");
       fireEvent.change(input, { target: { value: text } });
       fireEvent.keyDown(input, { key: "Enter" });
       const submit = within(home).getByRole("button", { name: "Send message" });
@@ -566,15 +593,17 @@ describe("LiteAdmin in the gateway", () => {
     await act(async () => settingsReady.resolve());
     const consent = await within(home).findByRole("button", { name: "Use configured gateway" });
     expect(within(home).getByText(EXTERNAL_INFERENCE)).toBeInTheDocument();
-    expect(within(home).queryByPlaceholderText("Ask LiteAdmin…")).not.toBeInTheDocument();
+    expect(within(home).queryByPlaceholderText("What would you like to do?")).not.toBeInTheDocument();
     fireEvent.click(consent);
     await selectModel();
-    fireEvent.change(within(home).getByPlaceholderText("Ask LiteAdmin…"), { target: { value: "Old gateway draft" } });
+    fireEvent.change(within(home).getByPlaceholderText("What would you like to do?"), {
+      target: { value: "Old gateway draft" },
+    });
     settings.target = `${EXTERNAL_INFERENCE}/changed`;
     await act(async () => client.invalidateQueries({ queryKey: ["proxySettings"] }));
     fireEvent.click(await within(home).findByRole("button", { name: "Use configured gateway" }));
     await selectModel();
-    expect(within(home).getByPlaceholderText("Ask LiteAdmin…")).toHaveValue("");
+    expect(within(home).getByPlaceholderText("What would you like to do?")).toHaveValue("");
     expect(home).toBeVisible();
     expect(requests.some((request) => request.url.endsWith("/chat/completions"))).toBe(false);
   });

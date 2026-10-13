@@ -150,7 +150,7 @@ describe("HomePage", () => {
       </QueryClientProvider>,
     );
     const entry = screen.getByRole("region", { name: "Ask LiteAdmin" });
-    expect(await within(entry).findByPlaceholderText("Ask LiteAdmin…")).toBeInTheDocument();
+    expect(await within(entry).findByPlaceholderText("What would you like to do?")).toBeInTheDocument();
     expect(within(entry).getByRole("button", { name: "Send message" })).toBeDisabled();
     expect(await screen.findByText("$501.74")).toBeInTheDocument();
   });
