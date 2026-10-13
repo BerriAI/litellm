@@ -3423,6 +3423,7 @@ async def run_centralized_common_checks(
     route: str,
     *,
     force_virtual_key_checks: bool = False,
+    check_budgets: bool = True,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
     boundary, regardless of which ``_user_api_key_auth_builder`` path
@@ -3708,7 +3709,7 @@ async def run_centralized_common_checks(
             keep_token_limits=user_custom_auth is not None,
         )
 
-    skip_budget_checks: Final = _should_skip_budget_checks(
+    skip_budget_checks: Final = not check_budgets or _should_skip_budget_checks(
         request_data=request_data,
         route=route,
         request=request,

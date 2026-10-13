@@ -26,7 +26,11 @@ from litellm.llms.anthropic.pass_through.caller_model_checks import (
     caller_within_model_budget,
     caller_within_model_rate_limit,
 )
-from litellm.llms.anthropic.pass_through.utils import proxy_general_settings, proxy_spend_attribution_metadata
+from litellm.llms.anthropic.pass_through.utils import (
+    ProxySubCallLoggingKwargs,
+    proxy_general_settings,
+    proxy_sub_call_metadata,
+)
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
@@ -72,7 +76,7 @@ def _is_tool_result_block(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in ("tool_result",)
 
 
-class _SummaryCallKwargs(TypedDict):
+class _SummaryCallKwargs(ProxySubCallLoggingKwargs):
     model: ReadOnly[str]
     max_tokens: ReadOnly[int]
     timeout: ReadOnly[float]
@@ -491,6 +495,7 @@ async def _call_summary_model(
     llm_router: Optional["Router"],
     allowed_model_region: str | None = None,
     max_tokens: int = COMPACT_SUMMARY_MAX_TOKENS,
+    logging_kwargs: ProxySubCallLoggingKwargs | None = None,
 ) -> Union["ModelResponse", "CustomStreamWrapper"]:
     """Invoke the configured summary model.
 
@@ -535,6 +540,7 @@ async def _call_summary_model(
         else _SummaryOptionalKwargs()
     )
     call_kwargs: Final[_SummaryCallKwargs] = {
+        **(logging_kwargs or {}),
         "model": summary_model,
         "max_tokens": max_tokens,
         "timeout": COMPACT_SUMMARY_TIMEOUT_SECONDS,
@@ -634,6 +640,7 @@ async def apply_compact_20260112(
     litellm_metadata: Mapping[str, object] | None = None,
     llm_router: Optional["Router"] = None,
     user_api_key_auth: Optional["UserAPIKeyAuth"] = None,
+    sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
 ) -> PolyfillResult:
     """Apply ``compact_20260112``; return a ``PolyfillResult``.
 
@@ -730,6 +737,7 @@ async def apply_compact_20260112(
         user_api_key_auth=user_api_key_auth,
         model=summary_model,
         llm_router=llm_router,
+        parent_litellm_metadata=litellm_metadata,
     )
     if summary_access != "allowed":
         verbose_logger.warning(
@@ -777,7 +785,7 @@ async def apply_compact_20260112(
 
     prompt: Final = _build_summary_prompt(edit_spec, tools)
     summary_messages: Final = _build_summary_messages(effective_messages, prompt, system=augmented_system)
-    propagated_metadata: Final = proxy_spend_attribution_metadata(litellm_metadata)
+    propagated_metadata: Final = proxy_sub_call_metadata(litellm_metadata)
     allowed_model_region: Final = getattr(user_api_key_auth, "allowed_model_region", None)
 
     try:
@@ -788,6 +796,7 @@ async def apply_compact_20260112(
             llm_router=llm_router,
             allowed_model_region=allowed_model_region,
             max_tokens=_read_summary_max_tokens_setting(),
+            logging_kwargs=sub_call_logging_kwargs,
         )
     except Exception as e:
         verbose_logger.warning("compact_20260112: summary call failed: %s", e)

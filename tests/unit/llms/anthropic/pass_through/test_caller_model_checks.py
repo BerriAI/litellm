@@ -2,19 +2,33 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.llms.anthropic.pass_through.caller_model_checks import (
     _caller_within_team_member_model_budget,
     caller_model_verdict,
     rate_limit_verdict,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
     RateLimitResponse,
     RateLimitUnverifiableError,
 )
+from litellm.proxy.utils import InternalUsageCache, hash_token
+from litellm.types.agents import AgentResponse
+from tests.unit.llms.anthropic.pass_through.conftest import ProxyAuthState
 
 CLASSIFIER: Final = "classifier"
 CLASSIFIER_BUDGET: Final = {CLASSIFIER: {"max_budget": 0.1, "budget_duration": "1d"}}
@@ -177,3 +191,149 @@ async def test_a_full_rate_limit_window_denies_for_now(limiter: _RecordingRateLi
 
     assert result == verdict
     assert limiter.read_only is True
+
+
+_ProxyRow = (
+    LiteLLM_TeamTableCachedObj
+    | LiteLLM_UserTable
+    | LiteLLM_EndUserTable
+    | LiteLLM_ProjectTableCachedObj
+    | LiteLLM_TeamMembership
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller, rows, verdict",
+    [
+        (
+            UserAPIKeyAuth(api_key="sk-personal", user_id="u-1"),
+            (LiteLLM_UserTable(user_id="u-1", models=["other-model"]),),
+            "denied",
+        ),
+        (
+            UserAPIKeyAuth(api_key="sk-team", user_id="u-1", team_id="t-1"),
+            (
+                LiteLLM_TeamTableCachedObj(team_id="t-1", models=[CLASSIFIER]),
+                LiteLLM_UserTable(user_id="u-1", models=["other-model"]),
+                LiteLLM_TeamMembership(user_id="u-1", team_id="t-1"),
+            ),
+            "allowed",
+        ),
+        (
+            UserAPIKeyAuth(api_key="sk-team", team_id="t-1"),
+            (LiteLLM_TeamTableCachedObj(team_id="t-1", models=["other-model"]),),
+            "denied",
+        ),
+        (
+            UserAPIKeyAuth(api_key="sk-team", user_id="u-1", team_id="t-1"),
+            (
+                LiteLLM_TeamTableCachedObj(team_id="t-1", models=[CLASSIFIER]),
+                LiteLLM_TeamMembership(
+                    user_id="u-1",
+                    team_id="t-1",
+                    litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["other-model"]),
+                ),
+            ),
+            "denied",
+        ),
+        (
+            UserAPIKeyAuth(api_key="sk-project", project_id="p-1"),
+            (LiteLLM_ProjectTableCachedObj(project_id="p-1", models=["other-model"]),),
+            "denied",
+        ),
+        (
+            UserAPIKeyAuth(api_key="sk-app", end_user_id="eu-1"),
+            (LiteLLM_EndUserTable(user_id="eu-1", blocked=False, models=["other-model"]),),
+            "denied",
+        ),
+        (
+            UserAPIKeyAuth(api_key="sk-team", user_id="u-1", team_id="t-1"),
+            (LiteLLM_TeamTableCachedObj(team_id="t-1", models=[CLASSIFIER]),),
+            "denied_for_now",
+        ),
+    ],
+    ids=[
+        "personal-key-user-scope-excludes",
+        "team-key-team-grants-though-the-users-personal-scope-does-not",
+        "team-scope-excludes",
+        "team-member-scope-excludes",
+        "project-scope-excludes",
+        "end-user-scope-excludes",
+        "team-membership-unreadable",
+    ],
+)
+async def test_the_proxys_own_access_checks_decide_the_classifier_for_every_scope(
+    proxy_auth_state: ProxyAuthState, caller: UserAPIKeyAuth, rows: Sequence[_ProxyRow], verdict: str
+) -> None:
+    proxy_auth_state.seed(*rows)
+
+    assert await caller_model_verdict(caller, CLASSIFIER, llm_router=None) == verdict
+
+
+def _managed_agent(object_permission: Mapping[str, object] | None) -> UserAPIKeyAuth:
+    agent_key: Final = UserAPIKeyAuth(api_key="sk-agent", agent_id="agent-1")
+    agent_key.managed_agent_policy = AgentResponse(
+        agent_id="agent-1",
+        agent_name="coder",
+        agent_card_params={},
+        object_permission=dict(object_permission) if object_permission is not None else None,
+    )
+    return agent_key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "object_permission, verdict",
+    [(None, "denied"), ({"models": ["other-model"]}, "denied"), ({"models": [CLASSIFIER]}, "allowed")],
+    ids=["no-model-grants", "grant-for-another-model", "grant-for-the-classifier"],
+)
+async def test_a_managed_agent_reaches_the_classifier_only_through_a_grant_for_it(
+    proxy_auth_state: ProxyAuthState, object_permission: Mapping[str, object] | None, verdict: str
+) -> None:
+    assert await caller_model_verdict(_managed_agent(object_permission), CLASSIFIER, llm_router=None) == verdict
+
+
+def _limiter() -> PROXY_MaxParallelRequestsHandler_v3:
+    return PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(dual_cache=DualCache()),
+        model_group_resolver=lambda model: None,
+        fail_closed_resolver=lambda: False,
+    )
+
+
+async def _admit(limiter: PROXY_MaxParallelRequestsHandler_v3, caller: UserAPIKeyAuth, model: str) -> None:
+    await limiter.async_pre_call_hook(
+        user_api_key_dict=caller, cache=DualCache(), data={"model": model}, call_type="acompletion"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_parent_turn_holding_the_keys_only_rpm_slot_leaves_the_classifier_allowed() -> None:
+    limiter: Final = _limiter()
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-one-rpm"), rpm_limit=1)
+    await _admit(limiter, caller, "kimi-k3")
+    with pytest.raises(HTTPException):
+        await _admit(limiter, caller, "kimi-k3")
+
+    verdict: Final = await rate_limit_verdict(
+        user_api_key_auth=caller, model=CLASSIFIER, limiter=limiter, unverifiable=RateLimitUnverifiableError
+    )
+
+    assert verdict == "allowed"
+
+
+@pytest.mark.asyncio
+async def test_a_full_per_model_rpm_limit_on_the_classifier_still_denies_for_now() -> None:
+    limiter: Final = _limiter()
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-model-rpm"), metadata={"model_rpm_limit": {CLASSIFIER: 1}})
+    before: Final = await rate_limit_verdict(
+        user_api_key_auth=caller, model=CLASSIFIER, limiter=limiter, unverifiable=RateLimitUnverifiableError
+    )
+    await _admit(limiter, caller, CLASSIFIER)
+
+    after: Final = await rate_limit_verdict(
+        user_api_key_auth=caller, model=CLASSIFIER, limiter=limiter, unverifiable=RateLimitUnverifiableError
+    )
+
+    assert (before, after) == ("allowed", "denied_for_now")

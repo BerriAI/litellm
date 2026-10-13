@@ -8,12 +8,16 @@ before the sub-call runs.
 """
 
 from collections.abc import Awaitable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias
+
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
+    from starlette.requests import Request
+
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitDescriptor,
         RateLimitDescriptorRateLimitObject,
@@ -22,8 +26,10 @@ if TYPE_CHECKING:
     from litellm.router import Router
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
-_ScopeObject: Final = TypeVar("_ScopeObject")
 CallerModelVerdict: TypeAlias = Literal["allowed", "denied", "denied_for_now"]
+_DEFAULT_SUB_CALL_ROUTE: Final = "/v1/messages"
+_MODEL_SCOPED_DESCRIPTOR_PREFIX: Final = "model_per_"
+_HEADERS: Final = TypeAdapter(Mapping[str, str])
 
 
 class _TeamMemberModelBudgetLimiter(Protocol):
@@ -82,11 +88,17 @@ async def caller_model_verdict(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     model: str,
     llm_router: Optional["Router"],
+    parent_litellm_metadata: Mapping[str, object] | None = None,
 ) -> CallerModelVerdict:
     """``denied`` when an allowlist or a per-model budget refuses ``model`` for the caller, which only an
     admin or the next budget window changes; ``denied_for_now`` when a rate-limit window is full or a check
     could not run, which the caller's next request may clear."""
-    access: Final = await caller_can_call_model(user_api_key_auth=user_api_key_auth, model=model, llm_router=llm_router)
+    access: Final = await caller_can_call_model(
+        user_api_key_auth=user_api_key_auth,
+        model=model,
+        llm_router=llm_router,
+        parent_litellm_metadata=parent_litellm_metadata,
+    )
     if access != "allowed":
         return access
     budget: Final = await caller_within_model_budget(user_api_key_auth=user_api_key_auth, model=model)
@@ -99,196 +111,95 @@ async def caller_can_call_model(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     model: str,
     llm_router: Optional["Router"],
+    parent_litellm_metadata: Mapping[str, object] | None = None,
 ) -> CallerModelVerdict:
-    """Return ``allowed`` when every model-allowlist scope on the parent request is
-    satisfied for ``model``.
+    """Run the proxy's own model-access checks for ``model`` against the caller of the parent request.
 
-    Mirrors the model-scope enforcement that ``litellm.proxy.auth.common_checks``
-    runs for the client-requested model: key, team, user (personal), project, and
-    team-member allowlists.
-
-    Returns ``allowed`` when ``user_api_key_auth`` is not present — SDK
-    callers and tests run outside the proxy, where no key/team policy exists.
-    Returns ``denied`` when any of the active allowlists denies the model
-    (``ProxyException`` from ``_can_object_call_model`` / ``can_*_model``).
-    Unexpected errors during an access check answer ``denied_for_now`` and are
-    logged separately so operators can distinguish them from a real access-denied
-    response. User and project lookup failures (object missing from cache or
-    DB) skip the corresponding scope — matching ``common_checks``, which only
-    enforces a scope when its backing object can be loaded. A failed team
-    membership read (a database outage) answers ``denied_for_now`` instead, since a member
-    whose limits cannot be read must not have the model invoked with those
-    limits dropped.
+    These are the checks the parent request passed for its own model, so every scope they cover (key, team,
+    team member, user, project, end user, managed agent grants) applies to the sub-call's model too, and a
+    deployment that skips them for the parent (no-auth dev mode, custom auth without common checks) skips
+    them here. Budgets are left to ``caller_within_model_budget`` so nothing is reserved. ``denied`` answers
+    a refusal, ``denied_for_now`` a check that could not run, and ``allowed`` a caller outside the proxy.
     """
     if user_api_key_auth is None:
         return "allowed"
     try:
+        from fastapi import HTTPException
+
         from litellm.proxy._types import ProxyException
-        from litellm.proxy.auth.auth_checks import (
-            can_object_call_model,
-            can_project_access_model,
-            can_user_call_model,
-            get_project_object,
-            get_team_membership,
-            get_user_object,
+        from litellm.proxy.auth.user_api_key_auth import (
+            enforce_key_and_fallback_model_access,  # pyright: ignore[reportUnknownVariableType]  # takes the bare dict and list the proxy passes
+            run_centralized_common_checks,
         )
         from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
+            llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy global has untyped deployment entries
         )
-    except Exception:
+    except ImportError:
         return "allowed"
 
-    key_models: Final = list(getattr(user_api_key_auth, "models", None) or [])
-    team_id: Final[str | None] = getattr(user_api_key_auth, "team_id", None)
-    team_model_aliases: Final[dict[str, str] | None] = getattr(user_api_key_auth, "team_model_aliases", None)
-    team_models: Final = list(getattr(user_api_key_auth, "team_models", None) or [])
-    user_id: Final[str | None] = getattr(user_api_key_auth, "user_id", None)
-    project_id: Final[str | None] = getattr(user_api_key_auth, "project_id", None)
-
-    checks: Final[tuple[tuple[Literal["key", "team"], list[str]], ...]] = (
-        ("key", key_models),
-        ("team", team_models),
-    )
-    for object_type, models in checks:
-        if not models:
-            continue
-        try:
-            can_object_call_model(
-                model=model,
-                llm_router=llm_router,
-                models=models,
-                team_model_aliases=team_model_aliases,
-                team_id=team_id,
-                object_type=object_type,
-            )
-        except ProxyException:
-            return "denied"
-        except Exception as e:
-            verbose_logger.warning(
-                "proxy sub-call: unexpected error during %s-level access check for model=%s; denying access: %s",
-                object_type,
-                model,
-                e,
-            )
-            return "denied_for_now"
-
-    if user_id is not None and prisma_client is not None:
-        user_obj: Final = await _scope_object_or_none(
-            get_user_object(
-                user_id=user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_id_upsert=False,
-                proxy_logging_obj=proxy_logging_obj,
-            ),
-            scope="user",
-            model=model,
+    route: Final = user_api_key_auth.request_route or _DEFAULT_SUB_CALL_ROUTE
+    request: Final = _sub_call_request(route, parent_litellm_metadata)
+    request_data: Final = _sub_call_request_data(model, parent_litellm_metadata)
+    caller: Final = user_api_key_auth.model_copy(update={"budget_reservation": None})
+    try:
+        await enforce_key_and_fallback_model_access(
+            valid_token=caller,
+            request_data=request_data,
+            route=route,
+            request=request,
+            llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy global has untyped deployment entries
+            llm_router=llm_router,
         )
-        if user_obj is not None:
-            try:
-                await can_user_call_model(
-                    model=model,
-                    llm_router=llm_router,
-                    user_object=user_obj,
-                )
-            except ProxyException:
-                return "denied"
-            except Exception as e:
-                verbose_logger.warning(
-                    "proxy sub-call: unexpected error during user-level access check for model=%s; denying access: %s",
-                    model,
-                    e,
-                )
-                return "denied_for_now"
-
-    if project_id is not None and prisma_client is not None:
-        project_obj: Final = await _scope_object_or_none(
-            get_project_object(
-                project_id=project_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            ),
-            scope="project",
-            model=model,
+        await run_centralized_common_checks(caller, request, request_data, route, check_budgets=False)
+    except (ProxyException, HTTPException, litellm.BudgetExceededError):
+        return "denied"
+    except Exception as e:  # noqa: BLE001  # a check that cannot run must not invoke the model with the caller's limits dropped
+        verbose_logger.warning(
+            "proxy sub-call: model access check for model=%s could not run; denying for now: %s", model, e
         )
-        if project_obj is not None and project_obj.models:
-            try:
-                can_project_access_model(
-                    model=model,
-                    project_object=project_obj,
-                    llm_router=llm_router,
-                )
-            except ProxyException:
-                return "denied"
-            except Exception as e:
-                verbose_logger.warning(
-                    "proxy sub-call: unexpected error during project-level access check for model=%s; "
-                    "denying access: %s",
-                    model,
-                    e,
-                )
-                return "denied_for_now"
-
-    if user_id is not None and team_id is not None and prisma_client is not None:
-        try:
-            team_membership: Final = await get_team_membership(
-                user_id=user_id,
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception as e:
-            verbose_logger.warning(
-                "proxy sub-call: team membership lookup failed for model=%s access check; denying access: %s",
-                model,
-                e,
-            )
-            return "denied_for_now"
-        member_allowed_models: Final = (
-            team_membership.litellm_budget_table.allowed_models
-            if team_membership is not None and team_membership.litellm_budget_table is not None
-            else None
-        )
-        if member_allowed_models:
-            try:
-                can_object_call_model(
-                    model=model,
-                    llm_router=llm_router,
-                    models=list(member_allowed_models),
-                    team_model_aliases=team_model_aliases,
-                    team_id=team_id,
-                    object_type="team",
-                )
-            except ProxyException:
-                return "denied"
-            except Exception as e:
-                verbose_logger.warning(
-                    "proxy sub-call: unexpected error during member-level access check for model=%s; "
-                    "denying access: %s",
-                    model,
-                    e,
-                )
-                return "denied_for_now"
-
+        return "denied_for_now"
     return "allowed"
 
 
-async def _scope_object_or_none(lookup: Awaitable[_ScopeObject], *, scope: str, model: str) -> _ScopeObject | None:
+def _sub_call_request(route: str, parent_litellm_metadata: Mapping[str, object] | None) -> "Request":
+    from starlette.requests import Request
+
+    headers: Final = _parent_headers(parent_litellm_metadata)
+    return Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": route,
+            "scheme": "http",
+            "query_string": b"",
+            "root_path": "",
+            "headers": tuple(
+                (name.lower().encode("latin-1"), value.encode("latin-1")) for name, value in headers.items()
+            ),
+        }
+    )
+
+
+def _parent_headers(parent_litellm_metadata: Mapping[str, object] | None) -> Mapping[str, str]:
+    if not parent_litellm_metadata:
+        return {}
     try:
-        return await lookup
-    except Exception as e:
-        verbose_logger.debug(
-            "proxy sub-call: %s object lookup failed for model=%s access check; skipping %s-level scope: %s",
-            scope,
-            model,
-            scope,
-            e,
-        )
-        return None
+        return _HEADERS.validate_python(parent_litellm_metadata.get("headers") or {})
+    except ValidationError:
+        return {}
+
+
+def _sub_call_request_data(
+    model: str, parent_litellm_metadata: Mapping[str, object] | None
+) -> dict[str, object]:  # mutable-ok: the proxy's checks merge metadata and tags into the body they are handed
+    parent: Final[Mapping[str, object]] = parent_litellm_metadata or {}
+    end_user_id: Final = parent.get("user_api_key_end_user_id")
+    trace_id: Final = parent.get("trace_id")
+    return {
+        "model": model,
+        **({"user": end_user_id} if isinstance(end_user_id, str) and end_user_id else {}),
+        **({"litellm_trace_id": trace_id} if isinstance(trace_id, str) and trace_id else {}),
+    }
 
 
 async def caller_within_model_budget(
@@ -433,18 +344,19 @@ async def _caller_within_team_member_model_budget(
     return "allowed"
 
 
-def _without_parallel_request_gauges(
+def _sub_call_descriptors(
     descriptors: "Sequence[RateLimitDescriptor]",
 ) -> "tuple[RateLimitDescriptor, ...]":
-    return tuple(_without_parallel_request_gauge(descriptor) for descriptor in descriptors)
+    return tuple(_sub_call_descriptor(descriptor) for descriptor in descriptors)
 
 
-def _without_parallel_request_gauge(descriptor: "RateLimitDescriptor") -> "RateLimitDescriptor":
+def _sub_call_descriptor(descriptor: "RateLimitDescriptor") -> "RateLimitDescriptor":
     rate_limit: Final = descriptor.get("rate_limit")
-    if rate_limit is None or rate_limit.get("max_parallel_requests") is None:
+    if rate_limit is None:
         return descriptor
+    caller_wide: Final = not descriptor["key"].startswith(_MODEL_SCOPED_DESCRIPTOR_PREFIX)
     windowed_limits: Final[RateLimitDescriptorRateLimitObject] = {
-        "requests_per_unit": rate_limit.get("requests_per_unit"),
+        "requests_per_unit": None if caller_wide else rate_limit.get("requests_per_unit"),
         "tokens_per_unit": rate_limit.get("tokens_per_unit"),
         "window_size": rate_limit.get("window_size"),
     }
@@ -463,9 +375,11 @@ async def caller_within_model_rate_limit(
     so no counter is reserved or incremented. The sub-call's tokens are still
     charged once by the limiter's post-call success hook (via the propagated
     ``litellm_metadata``), but it takes no request slot, so it does not count
-    toward the caller's RPM. ``max_parallel_requests`` gauges are left
-    out of the check: the sub-call runs inside the caller's already admitted
-    request, whose own slot would otherwise count against it.
+    toward the caller's RPM. ``max_parallel_requests`` gauges and the RPM of
+    every caller-wide scope (key, user, team, org, ...) are left out of the
+    check: the sub-call runs inside the caller's already admitted request,
+    whose own slot would otherwise count against it. The RPM of a limit on
+    ``model`` itself still gates the sub-call, as do token limits.
 
     Returns ``allowed`` outside the proxy, when the active limiter does not
     expose the read-only descriptor check (legacy limiter), or when the
@@ -539,7 +453,7 @@ async def rate_limit_verdict(
             requested_model=model,
             descriptors=base_descriptors,
         )
-        descriptors: Final = _without_parallel_request_gauges(
+        descriptors: Final = _sub_call_descriptors(
             (*base_descriptors, *create_org_descriptors(user_api_key_auth, model))
         )
         if not descriptors:

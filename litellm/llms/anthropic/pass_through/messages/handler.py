@@ -31,12 +31,18 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
-from ..safeguards import SafeguardsEvaluator, native_route_classifies, with_safeguard_results
+from ..safeguards import (
+    SafeguardsEvaluator,
+    native_route_classifies,
+    read_classifier_model_setting,
+    requested_dangerous_tool_use,
+    with_safeguard_results,
+)
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
 
@@ -123,6 +129,34 @@ def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
 
 def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
     return isinstance(model_info, dict) and model_info.get("cache_control_ttl") is True
+
+
+def _native_messages_config(
+    model: str, custom_llm_provider: str | None, model_info: object
+) -> BaseAnthropicMessagesConfig | None:
+    provider_config: Final = (
+        ProviderConfigManager.get_provider_anthropic_messages_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
+        )
+        if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]
+        else None
+    )
+    if provider_config is not None or not _deployment_passes_through_anthropic_messages(model_info):
+        return provider_config
+    from litellm.llms.openai_like.messages.transformation import (
+        OpenAILikeAnthropicMessagesConfig,
+    )
+
+    return OpenAILikeAnthropicMessagesConfig(cache_control_ttl=_deployment_supports_cache_control_ttl(model_info))
+
+
+def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
+    """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
+    safeguards: Final = kwargs.get("safeguards")
+    if _native_messages_config(model, custom_llm_provider, kwargs.get("model_info")) is not None:
+        return native_route_classifies(model, safeguards)
+    return requested_dangerous_tool_use(safeguards) is not None and read_classifier_model_setting() is not None
 
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -464,8 +498,6 @@ def anthropic_messages_handler(
     Args:
         container: Container config with skills for code execution
     """
-    from litellm.types.utils import LlmProviders
-
     messages, system = prepare_native_messages(
         messages,
         system,
@@ -568,23 +600,9 @@ def anthropic_messages_handler(
                 **kwargs,
             )
 
-    anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None = None
-
-    if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
-        anthropic_messages_provider_config = ProviderConfigManager.get_provider_anthropic_messages_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
-        )
-    if anthropic_messages_provider_config is None and _deployment_passes_through_anthropic_messages(
-        kwargs.get("model_info")
-    ):
-        from litellm.llms.openai_like.messages.transformation import (
-            OpenAILikeAnthropicMessagesConfig,
-        )
-
-        anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig(
-            cache_control_ttl=_deployment_supports_cache_control_ttl(kwargs.get("model_info")),
-        )
+    anthropic_messages_provider_config: Final = _native_messages_config(
+        model, custom_llm_provider, kwargs.get("model_info")
+    )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if kwargs.get("compaction") is None and _should_route_to_responses_api(

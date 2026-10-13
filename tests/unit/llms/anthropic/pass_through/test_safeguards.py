@@ -26,11 +26,13 @@ from litellm.llms.anthropic.pass_through.safeguards import (
     requested_dangerous_tool_use,
     with_safeguard_results,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_EndUserTable, UserAPIKeyAuth
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.router import Router
 from litellm.types.llms.anthropic import AnthropicResponseContentBlockToolUse
 from litellm.types.router import RouterErrors
 from litellm.types.utils import Choices, Message, ModelResponse
+from tests.unit.llms.anthropic.pass_through.conftest import ProxyAuthState
 
 DANGEROUS_TOOL_USE_REQUEST: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
 LS: Final = ToolUseUnderReview(id="call_ls", name="Bash", input={"command": "ls"})
@@ -340,7 +342,12 @@ def test_build_evaluator_is_a_no_op_without_safeguards_or_without_the_setting():
     with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
         assert (
             build_safeguards_evaluator(
-                safeguards=None, messages=[], litellm_metadata=None, user_api_key_auth=None, llm_router=None
+                safeguards=None,
+                messages=[],
+                litellm_metadata=None,
+                user_api_key_auth=None,
+                llm_router=None,
+                logging_kwargs={},
             )
             is None
         )
@@ -352,26 +359,38 @@ def test_build_evaluator_is_a_no_op_without_safeguards_or_without_the_setting():
                 litellm_metadata=None,
                 user_api_key_auth=None,
                 llm_router=None,
+                logging_kwargs={},
             )
             is None
         )
 
 
 @pytest.mark.asyncio
-async def test_build_evaluator_prefers_the_router_and_keeps_only_the_attribution_metadata():
+async def test_build_evaluator_prefers_the_router_and_keeps_only_the_attribution_auth_and_header_metadata():
     router: Final = _Router()
+    caller: Final = UserAPIKeyAuth(allowed_model_region="us")
     with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
         evaluator: Final = build_safeguards_evaluator(
             safeguards=DANGEROUS_TOOL_USE_REQUEST,
             messages=[{"role": "user", "content": "hi"}],
-            litellm_metadata={"user_api_key": "hashed", "user_api_key_auth": object(), "headers": {"x": "y"}},
-            user_api_key_auth=UserAPIKeyAuth(allowed_model_region="us"),
+            litellm_metadata={
+                "user_api_key": "hashed",
+                "user_api_key_auth": caller,
+                "headers": {"x": "y"},
+                "model_group": "kimi-k3",
+            },
+            user_api_key_auth=caller,
             llm_router=router,
+            logging_kwargs={},
         )
     assert evaluator is not None
     assert _verdicts(await evaluator.evaluate((LS,))) == {"call_ls": {"type": "evaluated", "outcome": "not_flagged"}}
     assert router.calls[0]["model"] == "classifier"
-    assert router.calls[0]["litellm_metadata"] == {"user_api_key": "hashed"}
+    assert router.calls[0]["litellm_metadata"] == {
+        "user_api_key": "hashed",
+        "headers": {"x": "y"},
+        "user_api_key_auth": caller,
+    }
     assert router.calls[0]["allowed_model_region"] == "us"
     assert evaluator.classifier_context == '{"permission_mode": "auto"}'
     assert evaluator.transcript == '{"user": "hi"}'
@@ -388,6 +407,7 @@ async def test_classifier_spend_row_logs_under_the_callers_key_hash():
             litellm_metadata={"user_api_key": key_hash, "user_api_key_hash": key_hash, "user_api_key_alias": "dev"},
             user_api_key_auth=UserAPIKeyAuth(),
             llm_router=router,
+            logging_kwargs={},
         )
     assert evaluator is not None
     await evaluator.evaluate((LS,))
@@ -411,10 +431,74 @@ async def test_build_evaluator_answers_unsupported_when_the_callers_key_cannot_c
             litellm_metadata={"user_api_key": "hashed"},
             user_api_key_auth=UserAPIKeyAuth(models=["kimi-k3"]),
             llm_router=router,
+            logging_kwargs={},
         )
     assert evaluator is not None
     assert await evaluator.evaluate((LS,)) == UNSUPPORTED
     assert router.calls == []
+
+
+@pytest.mark.asyncio
+async def test_build_evaluator_answers_unsupported_when_the_end_users_models_exclude_the_classifier(
+    proxy_auth_state: ProxyAuthState,
+) -> None:
+    proxy_auth_state.seed(LiteLLM_EndUserTable(user_id="eu-1", blocked=False, models=["kimi-k3"]))
+    router: Final = _Router()
+    caller: Final = UserAPIKeyAuth(api_key="sk-app", end_user_id="eu-1")
+    with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
+        evaluator: Final = build_safeguards_evaluator(
+            safeguards=DANGEROUS_TOOL_USE_REQUEST,
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_metadata={
+                "user_api_key": "hashed",
+                "user_api_key_end_user_id": "eu-1",
+                "user_api_key_auth": caller,
+            },
+            user_api_key_auth=caller,
+            llm_router=router,
+            logging_kwargs={},
+        )
+    assert evaluator is not None
+    assert await evaluator.evaluate((LS,)) == UNSUPPORTED
+    assert router.calls == []
+
+
+def _classifier_deployment(access_group: str, order: int, reply: str) -> dict[str, object]:
+    return {
+        "model_name": "classifier",
+        "litellm_params": {
+            "model": "openai/gpt-5.4-mini",
+            "api_key": "sk-fake",
+            "order": order,
+            "mock_response": reply,
+        },
+        "model_info": {"access_groups": [access_group]},
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_classifier_call_reaches_only_a_deployment_in_the_callers_access_group(
+    proxy_auth_state: ProxyAuthState,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            _classifier_deployment("group-b", 1, "not a verdict"),
+            _classifier_deployment("group-a", 2, '{"verdicts": {"call_ls": {"flagged": false}}}'),
+        ]
+    )
+    proxy_auth_state.serve(router)
+    caller: Final = UserAPIKeyAuth(api_key="sk-a", models=["group-a"])
+    with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
+        evaluator: Final = build_safeguards_evaluator(
+            safeguards=DANGEROUS_TOOL_USE_REQUEST,
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_metadata={"user_api_key": "hashed", "user_api_key_auth": caller},
+            user_api_key_auth=caller,
+            llm_router=router,
+            logging_kwargs={},
+        )
+    assert evaluator is not None
+    assert _verdicts(await evaluator.evaluate((LS,))) == {"call_ls": {"type": "evaluated", "outcome": "not_flagged"}}
 
 
 def test_build_evaluator_without_a_router_calls_litellm_directly():
@@ -425,6 +509,7 @@ def test_build_evaluator_without_a_router_calls_litellm_directly():
             litellm_metadata=None,
             user_api_key_auth=None,
             llm_router=None,
+            logging_kwargs={},
         )
     assert evaluator is not None
     assert evaluator.acompletion is litellm.acompletion

@@ -4,11 +4,13 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import ConfigDict, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly
 
 import litellm
+from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import ModelInfo
+from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -48,7 +50,7 @@ def prompt_cache_key_from_user_id(user_id: object) -> str | None:
         return None
 
 
-PROXY_SPEND_ATTRIBUTION_METADATA_KEYS: Final = (
+PROXY_SUB_CALL_METADATA_KEYS: Final = (
     "user_api_key",
     "user_api_key_hash",
     "user_api_key_alias",
@@ -67,7 +69,12 @@ PROXY_SPEND_ATTRIBUTION_METADATA_KEYS: Final = (
     "user_api_key_end_user_model_max_budget",
     "litellm_call_id",
     "litellm_parent_otel_span",
+    "headers",
 )
+_USER_API_KEY_AUTH_METADATA_KEY: Final = "user_api_key_auth"
+_PROXY_SERVER_REQUEST_KWARG: Final = "proxy_server_request"
+_STRING_MAPPING: Final = TypeAdapter(Mapping[str, str])
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 _NO_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
@@ -82,17 +89,61 @@ def proxy_general_settings() -> Mapping[str, object]:
     return general_settings or _NO_SETTINGS
 
 
-def proxy_spend_attribution_metadata(
+def proxy_sub_call_metadata(
     parent_litellm_metadata: Mapping[str, object] | None,
 ) -> dict[str, object]:  # mutable-ok: the router writes model_group and fallback keys into the metadata it is handed
-    """The parent request's auth and budget fields, so a sub-call bills the same key, team, and end user."""
+    """The parent request's auth, budget, and header fields, so a sub-call bills the same key, team, and end
+    user, the router filters deployments by the caller's access groups, and header-driven logging options
+    such as message redaction apply to it. The caller's auth object goes without its budget reservation,
+    which belongs to the parent request."""
     if not parent_litellm_metadata:
         return {}
-    return {
-        key: parent_litellm_metadata[key]
-        for key in PROXY_SPEND_ATTRIBUTION_METADATA_KEYS
-        if key in parent_litellm_metadata
+    carried: Final = {
+        key: parent_litellm_metadata[key] for key in PROXY_SUB_CALL_METADATA_KEYS if key in parent_litellm_metadata
     }
+    caller: Final = parent_litellm_metadata.get(_USER_API_KEY_AUTH_METADATA_KEY)
+    if caller is None:
+        return carried
+    return {**carried, _USER_API_KEY_AUTH_METADATA_KEY: sanitize_user_api_key_auth(caller)}
+
+
+class ProxySubCallLoggingKwargs(StandardCallbackDynamicParams, total=False):
+    litellm_trusted_callback_vars: ReadOnly[Mapping[str, object]]
+    proxy_server_request: ReadOnly[Mapping[str, Mapping[str, str]]]
+
+
+def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxySubCallLoggingKwargs:
+    """The parent request's callback params, proxy-stamped callback vars, and request headers, so a sub-call
+    logs under the same message-logging, redaction, and callback-disable settings as the request it serves."""
+    parent_logging: Final = litellm_logging_obj_from_kwargs(parent_kwargs)
+    dynamic_params: Final[ProxySubCallLoggingKwargs] = (
+        {**parent_logging.standard_callback_dynamic_params} if parent_logging is not None else {}
+    )
+    trusted_vars: Final = _object_mapping(parent_kwargs.get(TRUSTED_CALLBACK_VARS_FIELD))
+    with_trusted_vars: Final[ProxySubCallLoggingKwargs] = (
+        {**dynamic_params, "litellm_trusted_callback_vars": trusted_vars}
+        if trusted_vars is not None
+        else dynamic_params
+    )
+    parent_request: Final = _object_mapping(parent_kwargs.get(_PROXY_SERVER_REQUEST_KWARG))
+    headers: Final = _string_mapping(parent_request.get("headers")) if parent_request is not None else None
+    if headers is None:
+        return with_trusted_vars
+    return {**with_trusted_vars, "proxy_server_request": {"headers": headers}}
+
+
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _string_mapping(value: object) -> Mapping[str, str] | None:
+    try:
+        return _STRING_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def litellm_logging_obj_from_kwargs(kwargs: Mapping[str, object]) -> "LiteLLMLoggingObject | None":

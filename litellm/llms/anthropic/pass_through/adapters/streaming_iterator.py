@@ -1046,13 +1046,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
         """
-        safeguard_results: Final = StreamedSafeguardResults(self.safeguards_evaluator)
+        safeguard_results: Final = (
+            StreamedSafeguardResults(self.safeguards_evaluator) if self.safeguards_evaluator is not None else None
+        )
         try:
             async for chunk in self:
-                if isinstance(chunk, dict):
-                    yield anthropic_sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
-                else:
+                if not isinstance(chunk, dict):
                     yield chunk
+                elif safeguard_results is None:
+                    yield anthropic_sse_frame(chunk)
+                else:
+                    yield anthropic_sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
             verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
             logging_obj: Final = self.litellm_logging_obj

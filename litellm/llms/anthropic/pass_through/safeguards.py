@@ -1,18 +1,22 @@
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack, assert_never
+from typing_extensions import NotRequired, ReadOnly, Unpack, assert_never
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.pass_through.caller_model_checks import CallerModelVerdict, caller_model_verdict
-from litellm.llms.anthropic.pass_through.utils import proxy_general_settings, proxy_spend_attribution_metadata
+from litellm.llms.anthropic.pass_through.utils import (
+    ProxySubCallLoggingKwargs,
+    proxy_general_settings,
+    proxy_sub_call_metadata,
+)
 from litellm.types.llms.anthropic import (
     SafeguardResult,
     SafeguardStatusAvailable,
@@ -81,7 +85,7 @@ Reply with only a JSON object of this shape and nothing else:
 Include every tool call id you were given exactly once."""
 
 
-class ClassifierCallKwargs(TypedDict):
+class ClassifierCallKwargs(ProxySubCallLoggingKwargs):
     model: ReadOnly[str]
     max_tokens: ReadOnly[int]
     num_retries: ReadOnly[int]
@@ -142,6 +146,7 @@ class SafeguardsEvaluator:
     acompletion: ClassifierAcompletion
     caller_model_verdict: CallerModelGate
     timeout_seconds: float = CLASSIFIER_TIMEOUT_SECONDS
+    logging_kwargs: ProxySubCallLoggingKwargs = field(default_factory=ProxySubCallLoggingKwargs)
 
     async def evaluate(self, tool_uses: Sequence[PendingToolUse]) -> Sequence[SafeguardResult]:
         complete: Final = tuple(use for use in tool_uses if isinstance(use, ToolUseUnderReview))
@@ -203,7 +208,7 @@ class SafeguardsEvaluator:
                     "safeguards classifier %s is not served by this proxy: %s", self.classifier_model, error
                 )
                 return ClassifierNotServed()
-            verbose_logger.exception("safeguards classifier %s failed: %s", self.classifier_model, error)
+            verbose_logger.warning("safeguards classifier %s failed: %s", self.classifier_model, error)
             return _every_tool_use_unavailable(tool_uses, "error")
         parsed: Final = _parse_classifier_output(_response_text(response))
         if parsed is None:
@@ -228,6 +233,7 @@ class SafeguardsEvaluator:
     def _call_kwargs(self) -> ClassifierCallKwargs:
         end_user_id: Final = self.litellm_metadata.get("user_api_key_end_user_id")
         base: Final[ClassifierCallKwargs] = {
+            **self.logging_kwargs,
             "model": self.classifier_model,
             "max_tokens": CLASSIFIER_MAX_TOKENS,
             "num_retries": 0,
@@ -282,6 +288,7 @@ def build_safeguards_evaluator(
     litellm_metadata: Mapping[str, object] | None,
     user_api_key_auth: "UserAPIKeyAuth | None",
     llm_router: "Router | None",
+    logging_kwargs: ProxySubCallLoggingKwargs,
 ) -> SafeguardsEvaluator | None:
     request: Final = requested_dangerous_tool_use(safeguards)
     if request is None:
@@ -292,16 +299,22 @@ def build_safeguards_evaluator(
     router_acompletion: Final[ClassifierAcompletion | None] = getattr(llm_router, "acompletion", None)
 
     async def caller_verdict(model: str) -> CallerModelVerdict:
-        return await caller_model_verdict(user_api_key_auth=user_api_key_auth, model=model, llm_router=llm_router)
+        return await caller_model_verdict(
+            user_api_key_auth=user_api_key_auth,
+            model=model,
+            llm_router=llm_router,
+            parent_litellm_metadata=litellm_metadata,
+        )
 
     return SafeguardsEvaluator(
         classifier_model=classifier_model,
         classifier_context=render_classifier_context(request.get("classifier_context")),
         transcript=render_transcript(messages),
-        litellm_metadata=proxy_spend_attribution_metadata(litellm_metadata),
+        litellm_metadata=proxy_sub_call_metadata(litellm_metadata),
         allowed_model_region=getattr(user_api_key_auth, "allowed_model_region", None),
         acompletion=router_acompletion if router_acompletion is not None else litellm.acompletion,
         caller_model_verdict=caller_verdict,
+        logging_kwargs=logging_kwargs,
     )
 
 

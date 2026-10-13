@@ -1,13 +1,22 @@
+import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Final
 from unittest.mock import patch
 
 import pytest
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
+    request_safeguards_evaluator,
 )
+from litellm.llms.anthropic.pass_through.safeguards import ToolUseUnderReview
+from litellm.router import Router
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -157,7 +166,11 @@ async def test_non_stream_response_carries_a_verdict_for_the_tool_use_and_bills_
     assert "safeguards" not in backend.calls[0]
     classifier_call: Final = router.calls[0]
     assert classifier_call["model"] == "classifier"
-    assert classifier_call["litellm_metadata"] == {"user_api_key": "hashed-key", "user_api_key_team_id": "team-1"}
+    assert classifier_call["litellm_metadata"] == {
+        "user_api_key": "hashed-key",
+        "user_api_key_team_id": "team-1",
+        "headers": {},
+    }
     assert json.dumps({"command": "npm ci"}) in str(classifier_call["messages"][1]["content"])
 
 
@@ -236,3 +249,76 @@ async def test_request_without_safeguards_gets_no_results_even_with_a_classifier
     else:
         assert isinstance(response, dict) and "safeguard_results" not in response
     assert router.calls == []
+
+
+class _ClassifierLogs(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final[list[object]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.logged.append(kwargs["standard_logging_object"])
+
+
+async def _drain_logging_worker() -> None:
+    for _ in range(10):
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "parent_kwargs, headers, redacted",
+    [
+        ({}, {}, False),
+        ({"turn_off_message_logging": True}, {}, True),
+        ({}, {"x-litellm-enable-message-redaction": "true"}, True),
+    ],
+    ids=["parent-logs-messages", "parent-turns-message-logging-off", "parent-enables-redaction-by-header"],
+)
+async def test_the_classifier_call_logs_under_the_parent_requests_message_redaction(
+    monkeypatch: pytest.MonkeyPatch, parent_kwargs: dict[str, object], headers: dict[str, str], redacted: bool
+) -> None:
+    await _drain_logging_worker()
+    logs: Final = _ClassifierLogs()
+    monkeypatch.setattr(litellm, "callbacks", [logs])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logs])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "classifier",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-fake",
+                    "mock_response": '{"verdicts": {"call_ls": {"flagged": false}}}',
+                },
+            }
+        ]
+    )
+    parent_logging: Final = Logging(
+        model="fireworks_ai/kimi",
+        messages=list(MESSAGES),
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="parent-call",
+        function_id="parent",
+        kwargs=parent_kwargs,
+    )
+    with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
+        evaluator: Final = request_safeguards_evaluator(
+            {
+                "safeguards": SAFEGUARDS,
+                "litellm_metadata": {**LITELLM_METADATA, "headers": headers},
+                "litellm_router": router,
+                "litellm_logging_obj": parent_logging,
+            },
+            MESSAGES,
+        )
+    assert evaluator is not None
+
+    await evaluator.evaluate((ToolUseUnderReview(id="call_ls", name="Bash", input={"command": "ls"}),))
+    await _drain_logging_worker()
+
+    assert len(logs.logged) == 1
+    assert ("install the deps" not in json.dumps(logs.logged[0]["messages"])) is redacted
