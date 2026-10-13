@@ -17,6 +17,7 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
     WavUpload,
 )
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
@@ -5572,7 +5573,59 @@ AZURE_GPT_6_LUNA_TOOL_CALL: Final = CostTrackingTestCase(
     ),
 )
 
+AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON: Final = AZURE_GPT_6_SOL_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure-gpt-6-sol-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "azure chat native fixture"}],
+        },
+    }
+)
+
+AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON: Final = AZURE_GPT_6_LUNA_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure-gpt-6-luna-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "azure chat native fixture"}],
+        },
+    }
+)
+
+AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON: Final = AZURE_GPT_6_ASTRA_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure-gpt-6-astra-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "azure chat native fixture"}],
+        },
+    }
+)
+
+AZURE_GPT_6_1_SOL_MESSAGES_BRIDGED_JSON: Final = AZURE_GPT_6_1_SOL_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure-gpt-6.1-sol-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "azure chat native fixture"}],
+        },
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON,
+    AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON,
+    AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON,
+    AZURE_GPT_6_1_SOL_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_5_4_MINI_INPUT_TEXT,
     AZURE_GPT_5_4_MINI_CACHE_READ,
     AZURE_GPT_5_4_MINI_AUDIO_INPUT,
@@ -5655,4 +5708,11 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=AZURE_GPT_6_LUNA_INPUT_TEXT, streamed=AZURE_GPT_6_LUNA_STREAM),
     StreamParityTestCase(plain=AZURE_GPT_6_ASTRA_INPUT_TEXT, streamed=AZURE_GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=AZURE_GPT_6_1_SOL_INPUT_TEXT, streamed=AZURE_GPT_6_1_SOL_STREAM),
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    BridgeCostParityTestCase(native=AZURE_GPT_6_SOL_INPUT_TEXT, bridged=AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=AZURE_GPT_6_LUNA_INPUT_TEXT, bridged=AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=AZURE_GPT_6_ASTRA_INPUT_TEXT, bridged=AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=AZURE_GPT_6_1_SOL_INPUT_TEXT, bridged=AZURE_GPT_6_1_SOL_MESSAGES_BRIDGED_JSON),
 )
