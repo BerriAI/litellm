@@ -759,7 +759,7 @@ def get_logging_payload(
         if isinstance(usage_object, dict):
             prompt_tokens_details = usage_object.get("prompt_tokens_details")
     if isinstance(prompt_tokens_details, dict):
-        typed_prompt_tokens_details: Final = cast(dict[str, object], prompt_tokens_details)
+        typed_prompt_tokens_details: Final[Mapping[str, object]] = prompt_tokens_details
         if "cache_read_input_tokens" not in additional_usage_values:
             cached_tokens: Final = typed_prompt_tokens_details.get("cached_tokens")
             if isinstance(cached_tokens, int) and cached_tokens > 0:
