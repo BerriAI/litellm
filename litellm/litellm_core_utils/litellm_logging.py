@@ -760,7 +760,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.defer_async_logging: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
-        self._last_failed_attempt: Exception | None = None
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -3714,16 +3713,6 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return start_time, end_time
 
-    async def _dispatch_attempt_failure(self, loggers: Sequence[CustomLogger], exception: Exception) -> None:
-        if self._last_failed_attempt is exception:
-            return
-        self._last_failed_attempt = exception
-        for logger in loggers:
-            try:
-                await logger.async_log_attempt_failure_event(kwargs=self.model_call_details, exception=exception)
-            except Exception:  # noqa: BLE001  # a third-party callback must never replace the provider error
-                verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] attempt failure callback failed")
-
     async def special_failure_handlers(self, exception: Exception):
         """
         Custom events, emitted for specific failures.
@@ -3982,13 +3971,6 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.baseline_cache_context is not None:
             await self.invalidate_baseline_cache_estimate("failed_request")
         await self.special_failure_handlers(exception=exception)
-        callbacks: Final = self.get_combined_callback_list(
-            dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
-            global_callbacks=litellm._async_failure_callback,
-        )
-        await self._dispatch_attempt_failure(
-            loggers=tuple(cb for cb in callbacks if isinstance(cb, CustomLogger)), exception=exception
-        )
         if not self.should_run_logging(event_type="async_failure"):  # prevent double logging
             return
         start_time, end_time = self._failure_handler_helper_fn(
@@ -3996,6 +3978,11 @@ class Logging(LiteLLMLoggingBaseClass):
             traceback_exception=traceback_exception,
             start_time=start_time,
             end_time=end_time,
+        )
+
+        callbacks: Final = self.get_combined_callback_list(
+            dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
+            global_callbacks=litellm._async_failure_callback,
         )
 
         result: Final = None  # result sent to all loggers, init this to None incase it's not created
@@ -4114,9 +4101,7 @@ class Logging(LiteLLMLoggingBaseClass):
         _filtered_failure_callbacks = self._remove_internal_litellm_callbacks(_filtered_failure_callbacks)
         return len(_filtered_failure_callbacks) > 0
 
-    def get_combined_callback_list(
-        self, dynamic_success_callbacks: list | None, global_callbacks: list
-    ) -> list[litellm.CALLBACK_TYPES]:
+    def get_combined_callback_list(self, dynamic_success_callbacks: list | None, global_callbacks: list) -> list:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
         return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))

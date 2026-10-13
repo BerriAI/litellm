@@ -1,10 +1,12 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Final
 
 import pytest
 
 import litellm
+from litellm import Router
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.proxy.telemetry.attempt_logger import TelemetryAttemptLogger
 from litellm.proxy.telemetry.request_context import RequestAccumulator, bind_call_id, current_request
@@ -18,6 +20,7 @@ from litellm.telemetry.records import (
     TokenCounts,
     UIEvent,
 )
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 
 
 @dataclass
@@ -100,9 +103,9 @@ async def test_a_logged_stream_success_becomes_an_attempt_and_joins_the_in_fligh
 def _failed_call(provider: str = "anthropic", model_id: str = "deployment-1") -> dict[str, object]:
     return {
         "litellm_call_id": _CALL_ID,
-        "custom_llm_provider": provider,
+        "model": f"{provider}/claude",
         "stream": True,
-        "litellm_params": {"metadata": {"model_info": {"id": model_id}}, "proxy_server_request": {}},
+        "metadata": {"model_info": {"id": model_id}},
     }
 
 
@@ -124,7 +127,7 @@ async def test_a_failed_attempt_carries_the_provider_status_class(
     logger: Final = TelemetryAttemptLogger(lambda: sink, hash_deployment=lambda model_id: f"h({model_id})")
     token: Final = current_request.set(_request())
     try:
-        await logger.async_log_attempt_failure_event(_failed_call(), exception)
+        await logger.async_post_call_failure_deployment_hook(_failed_call(), exception, None)
     finally:
         current_request.reset(token)
     assert sink.attempts == (
@@ -135,39 +138,78 @@ async def test_a_failed_attempt_carries_the_provider_status_class(
 
 
 @pytest.mark.asyncio
-async def test_every_failed_fallback_on_a_shared_logging_object_is_its_own_attempt() -> None:
+async def test_every_failed_fallback_on_a_shared_logging_object_is_its_own_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sink: Final = _RecordingSink()
     logger: Final = TelemetryAttemptLogger(lambda: sink, hash_deployment=lambda model_id: model_id)
-    logging_obj: Final = LitellmLogging(
-        model="claude",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "a",
+                "litellm_params": {"model": "anthropic/a", "api_key": "k", "mock_response": "litellm.RateLimitError"},
+                "model_info": {"id": "a"},
+            },
+            {
+                "model_name": "b",
+                "litellm_params": {
+                    "model": "bedrock/b",
+                    "api_key": "k",
+                    "mock_response": "litellm.InternalServerError",
+                },
+                "model_info": {"id": "b"},
+            },
+            {
+                "model_name": "c",
+                "litellm_params": {"model": "openai/c", "api_key": "k", "mock_timeout": True, "timeout": 0.01},
+                "model_info": {"id": "c"},
+            },
+        ],
+        fallbacks=[{"a": ["b", "c"]}],
+        num_retries=0,
+    )
+    messages: Final[list[AllMessageValues]] = [ChatCompletionUserMessage(role="user", content="hi")]
+    shared_logging_obj: Final = LitellmLogging(
+        model="a",
+        messages=messages,
+        stream=False,
         call_type="acompletion",
-        start_time=0.0,
+        start_time=datetime(2026, 1, 1),
         litellm_call_id=_CALL_ID,
         function_id=_CALL_ID,
-        dynamic_async_failure_callbacks=[logger],
-    )
-    failures: Final = (
-        ("anthropic", "a", litellm.ServiceUnavailableError("503", "anthropic", "claude")),
-        ("bedrock", "b", litellm.RateLimitError("429", "bedrock", "claude")),
-        ("vertex_ai", "c", litellm.ServiceUnavailableError("503", "vertex_ai", "claude")),
     )
     request: Final = _request()
     token: Final = current_request.set(request)
     try:
-        for provider, model_id, failure in failures:
-            logging_obj.model_call_details.update(_failed_call(provider, model_id))
-            await logging_obj.async_failure_handler(failure, "tb")
-            await logging_obj.async_failure_handler(failure, "tb")
+        with pytest.raises(litellm.RateLimitError):
+            await router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion's overloads return partially untyped responses
+                model="a", messages=messages, litellm_call_id=_CALL_ID, litellm_logging_obj=shared_logging_obj
+            )
     finally:
         current_request.reset(token)
     assert [(a.provider, a.deployment_hash, a.provider_status) for a in sink.attempts] == [
-        ("anthropic", "a", StatusClass.SERVER_ERROR),
-        ("bedrock", "b", StatusClass.CLIENT_ERROR),
-        ("vertex_ai", "c", StatusClass.SERVER_ERROR),
+        ("anthropic", "a", StatusClass.CLIENT_ERROR),
+        ("bedrock", "b", StatusClass.SERVER_ERROR),
+        ("openai", "c", StatusClass.TIMEOUT),
     ]
     assert len(request.observations) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_request_level_failure_event_is_not_counted_again() -> None:
+    sink: Final = _RecordingSink()
+    request: Final = _request()
+    token: Final = current_request.set(request)
+    try:
+        logger = TelemetryAttemptLogger(lambda: sink, hash_deployment=lambda model_id: model_id)
+        await logger.async_log_failure_event(  # pyright: ignore[reportUnknownMemberType]  # the base callback's signature is untyped
+            _failed_call(), None, None, None
+        )
+    finally:
+        current_request.reset(token)
+    assert sink.attempts == ()
+    assert request.observations == ()
 
 
 @pytest.mark.asyncio
@@ -177,24 +219,6 @@ async def test_a_call_without_a_standard_logging_payload_is_skipped() -> None:
         {}, None, None, None
     )
     assert sink.attempts == ()
-
-
-@pytest.mark.asyncio
-async def test_a_proxy_side_reject_that_never_reached_a_provider_is_not_an_attempt() -> None:
-    sink: Final = _RecordingSink()
-    request: Final = _request()
-    token: Final = current_request.set(request)
-    try:
-        await TelemetryAttemptLogger(
-            lambda: sink, hash_deployment=lambda model_id: model_id
-        ).async_log_attempt_failure_event(
-            {**_failed_call(), "litellm_params": {"proxy_rejected_before_routing": True}},
-            litellm.AuthenticationError("401", "anthropic", "claude"),
-        )
-    finally:
-        current_request.reset(token)
-    assert sink.attempts == ()
-    assert request.observations == ()
 
 
 @pytest.mark.asyncio
@@ -281,7 +305,7 @@ async def test_blocks_are_counted_once_per_request_and_only_when_enabled(enabled
     kwargs: Final = {"litellm_call_id": _CALL_ID, "standard_logging_object": _payload(), "messages": ["m"]}
     token: Final = current_request.set(request)
     try:
-        await logger.async_log_attempt_failure_event(kwargs, ValueError("first attempt failed"))
+        await logger.async_post_call_failure_deployment_hook(kwargs, ValueError("first attempt failed"), None)
         await logger.async_log_success_event(kwargs, None, None, None)
     finally:
         current_request.reset(token)

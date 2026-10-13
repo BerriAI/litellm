@@ -4,12 +4,14 @@ from typing import Final, TypeAlias
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.exceptions import APIConnectionError, Timeout
+from litellm.exceptions import APIConnectionError, BadRequestError, Timeout
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy.telemetry.blocks import count_blocks
 from litellm.proxy.telemetry.request_context import AttemptObservation, RequestAccumulator, current_request
 from litellm.telemetry.records import AttemptRecord, BlockCounts, StatusClass, TokenCounts
 from litellm.telemetry.sink import TelemetrySink
+from litellm.types.utils import CallTypes
 
 DeploymentHasher: TypeAlias = Callable[[str], str]
 
@@ -66,6 +68,16 @@ class _LoggedParams(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     proxy_rejected_before_routing: bool = False
+
+
+class _FailedCall(BaseModel):
+    """The slice of one deployment attempt's own kwargs telemetry reads"""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    model: str | None = None
+    custom_llm_provider: str | None = None
+    stream: bool | None = None
     metadata: _CallMetadata | None = None
     litellm_metadata: _CallMetadata | None = None
 
@@ -74,13 +86,14 @@ class _LoggedParams(BaseModel):
         infos: Final = (meta.model_info for meta in (self.litellm_metadata, self.metadata) if meta is not None)
         return next((info.id for info in infos if info is not None and info.id is not None), None)
 
-
-class _FailedCall(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    custom_llm_provider: str | None = None
-    stream: bool | None = None
-    litellm_params: _LoggedParams = _LoggedParams()
+    @property
+    def provider(self) -> str | None:
+        if self.custom_llm_provider is not None or self.model is None:
+            return self.custom_llm_provider
+        try:
+            return get_llm_provider(self.model)[1]
+        except BadRequestError:
+            return None
 
 
 def _rejected_before_routing(litellm_params: object) -> bool:
@@ -131,10 +144,10 @@ def _failure_status(exception: Exception) -> StatusClass:
 def observe_failure(
     call: _FailedCall, exception: Exception, *, hash_deployment: DeploymentHasher
 ) -> AttemptObservation:
-    model_id: Final = call.litellm_params.model_id
+    model_id: Final = call.model_id
     return AttemptObservation(
         attempt=AttemptRecord(
-            provider=call.custom_llm_provider or "unknown",
+            provider=call.provider or "unknown",
             provider_status=_failure_status(exception),
             stream=call.stream is True,
             deployment_hash=hash_deployment(model_id) if model_id else None,
@@ -145,6 +158,9 @@ def observe_failure(
 
 class TelemetryAttemptLogger(CustomLogger):
     """Records the provider calls made for the in-flight proxy request itself
+
+    Failures come from the deployment-level hook, which runs once per attempt (retries and fallbacks included);
+    the request-level failure event runs once per shared logging object, so it would miss all but one
 
     Calls with another ``litellm_call_id`` (guardrails, moderation, background jobs) and calls outside a request
     are skipped
@@ -199,13 +215,19 @@ class TelemetryAttemptLogger(CustomLogger):
             return
         self._add(*owner, kwargs, observe(logged, hash_deployment=self._hash_deployment))
 
-    async def async_log_attempt_failure_event(self, kwargs: Mapping[str, object], exception: Exception) -> None:
-        owner: Final = self._owning_request(kwargs)
+    async def async_post_call_failure_deployment_hook(
+        self,
+        request_data: Mapping[str, object],
+        exception: Exception,
+        call_type: CallTypes | None,
+        fallback_depth: int | None = None,
+    ) -> None:
+        owner: Final = self._owning_request(request_data)
         if owner is None:
             return
         try:
-            call: Final = _FailedCall.model_validate(kwargs)
+            call: Final = _FailedCall.model_validate(request_data)
         except ValidationError:
             verbose_proxy_logger.debug("telemetry: skipping a failed attempt without call details")
             return
-        self._add(*owner, kwargs, observe_failure(call, exception, hash_deployment=self._hash_deployment))
+        self._add(*owner, request_data, observe_failure(call, exception, hash_deployment=self._hash_deployment))
