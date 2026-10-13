@@ -2,7 +2,6 @@ from http import HTTPStatus
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Security
-from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.proxy.control_plane.auth.dependencies import require_scopes
 from litellm.proxy.control_plane.auth.rbac import Principal, Scope
@@ -15,6 +14,7 @@ from litellm.proxy.control_plane.dataplanes.dependencies import (
     get_dataplane_client,
     get_registry,
 )
+from litellm.proxy.control_plane.dataplanes.identity import USER_INFO_PATH, UserInfo, parse_user_info
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane, DataplaneRegistry, visible_to
 from litellm.types.proxy.control_plane.dataplanes import (
     DataplaneHealthResponse,
@@ -26,22 +26,6 @@ from litellm.types.proxy.control_plane.dataplanes import (
 router: Final = APIRouter(prefix="/dataplanes", tags=["dataplanes"])
 
 LIVENESS_PATH: Final = "/health/liveliness"
-USER_INFO_PATH: Final = "/user/info"
-
-
-class _UserInfo(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    user_id: str | None = None
-    user_email: str | None = None
-    user_role: str | None = None
-
-
-class _UserInfoBody(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    user_id: str | None = None
-    user_info: _UserInfo | None = None
 
 
 def _to_response(dataplane: Dataplane) -> DataplaneResponse:
@@ -96,10 +80,10 @@ async def dataplane_whoami(
     result: Final = await client.get(dataplane, USER_INFO_PATH, caller)
     match result:
         case DataplaneReply(status=status, body=body, credential=credential) if status < 400:
-            info: Final = _identity_body(body)
+            info: Final = parse_user_info(body)
             if info is None:
                 raise ControlPlaneException(bad_gateway("Dataplane returned a malformed /user/info body."))
-            user: Final = info.user_info or _UserInfo()
+            user: Final = info.user_info or UserInfo()
             return DataplaneIdentityResponse(
                 id=dataplane.id,
                 credential=credential,
@@ -119,12 +103,3 @@ async def dataplane_whoami(
             raise ControlPlaneException(bad_gateway(f"Dataplane unreachable after {attempts} attempt(s): {detail}"))
         case CredentialUnavailable(reason=reason):
             raise ControlPlaneException(bad_gateway(f"No usable credential for this dataplane: {reason}"))
-
-
-def _identity_body(body: object) -> _UserInfoBody | None:
-    if not isinstance(body, dict):
-        return None
-    try:
-        return _UserInfoBody.model_validate(body)
-    except ValidationError:
-        return None
