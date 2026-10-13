@@ -1,40 +1,38 @@
-import { Box, Sparkles } from "lucide-react";
 import { describe, expect, it } from "vitest";
-import { latestLaunches, launchIcon, type WhatsNewLaunch } from "./homeContent";
+import type { BlogPost } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
+import { DAY_ZERO_TAG, latestLaunches } from "./homeContent";
 
-const launch = (title: string, published_on: string): WhatsNewLaunch => ({
-  icon: "box",
+const post = (title: string, date: string, tags: string[] = [DAY_ZERO_TAG]): BlogPost => ({
   title,
   description: "d",
-  href: `https://docs.litellm.ai/${title}`,
-  published_on,
+  date,
+  url: `https://docs.litellm.ai/blog/${title}`,
+  tags,
 });
 
 describe("latestLaunches", () => {
-  it("orders launches by published_on, newest first, without mutating the input", () => {
-    const launches = [launch("old", "2026-09-01"), launch("new", "2026-10-11"), launch("mid", "2026-10-01")];
-    expect(latestLaunches(launches).map((l) => l.title)).toEqual(["new", "mid", "old"]);
-    expect(launches.map((l) => l.title)).toEqual(["old", "new", "mid"]);
+  it("keeps only posts tagged day 0 support", () => {
+    const posts = [
+      post("townhall", "2026-10-12", ["announcement"]),
+      post("argon", "2026-10-13"),
+      post("untagged", "2026-10-11", []),
+    ];
+    expect(latestLaunches(posts).map((p) => p.title)).toEqual(["argon"]);
+  });
+
+  it("orders launches by date, newest first, without mutating the input", () => {
+    const posts = [post("old", "2026-09-01"), post("new", "2026-10-11"), post("mid", "2026-10-01")];
+    expect(latestLaunches(posts).map((p) => p.title)).toEqual(["new", "mid", "old"]);
+    expect(posts.map((p) => p.title)).toEqual(["old", "new", "mid"]);
   });
 
   it("keeps only the three newest so the cards fill one row", () => {
-    const launches = [
-      launch("oldest", "2026-08-01"),
-      launch("a", "2026-10-03"),
-      launch("b", "2026-10-02"),
-      launch("c", "2026-10-01"),
+    const posts = [
+      post("oldest", "2026-08-01"),
+      post("a", "2026-10-03"),
+      post("b", "2026-10-02"),
+      post("c", "2026-10-01"),
     ];
-    expect(latestLaunches(launches).map((l) => l.title)).toEqual(["a", "b", "c"]);
-  });
-});
-
-describe("launchIcon", () => {
-  it("maps a known icon name to its lucide icon", () => {
-    expect(launchIcon("box")).toBe(Box);
-  });
-
-  it("falls back to Sparkles for an icon name this dashboard version does not know", () => {
-    expect(launchIcon("hologram")).toBe(Sparkles);
-    expect(launchIcon("constructor")).toBe(Sparkles);
+    expect(latestLaunches(posts).map((p) => p.title)).toEqual(["a", "b", "c"]);
   });
 });
