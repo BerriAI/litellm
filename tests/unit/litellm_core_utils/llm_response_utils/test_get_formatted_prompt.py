@@ -1,4 +1,4 @@
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 import pytest
 
@@ -22,3 +22,21 @@ def test_null_tool_calls_are_skipped(call_type: Literal["acompletion", "completi
     }
 
     assert get_formatted_prompt(data=data, call_type=call_type) == 'pingpong{"x":1}'
+
+
+@pytest.mark.parametrize(
+    ("data", "call_type", "expected"),
+    [
+        ({"prompt": "transcribe speech"}, "transcription", "transcribe speech"),
+        ({"prompt": "async speech"}, "atranscription", "async speech"),
+        ({"prompt": "audio legacy"}, "audio_transcription", "audio legacy"),
+        ({"input": "embed async"}, "aembedding", "embed async"),
+        ({"input": ["embed", "dings"]}, "embeddings", "embeddings"),
+        ({"input": "mod async"}, "amoderation", "mod async"),
+        ({"prompt": "gen image async"}, "aimage_generation", "gen image async"),
+        ({"prompt": "complete async"}, "atext_completion", "complete async"),
+    ],
+)
+def test_get_formatted_prompt_call_types(data: dict[str, Any], call_type: Any, expected: str) -> None:
+    assert get_formatted_prompt(data=data, call_type=call_type) == expected
+
