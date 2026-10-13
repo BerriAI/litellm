@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use axum::{Json, body::Bytes, extract::State, response::Response};
-use litellm_core::responses::{route::Responses, types::ResponsesCall};
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
+use litellm_inference_responses::{route::Responses, types::ResponsesCall};
 use serde_json::json;
 
 use crate::{Error, Gateway, JsonObject, request};
@@ -38,7 +38,7 @@ pub(crate) async fn create(
         extra_headers: None,
         timeout: deployment.timeout,
     };
-    let machine = route.machine(call, cache_options);
+    let machine = route.machine(call, cache_options.policy);
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         let error = Error::from(error);
         Bytes::from(format!(

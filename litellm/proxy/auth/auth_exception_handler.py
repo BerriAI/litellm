@@ -20,8 +20,9 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import (
-    _get_request_ip_address,
+from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
+    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_request_ip_address,
     is_invalid_virtual_key_error,
     mark_invalid_virtual_key_error,
     normalize_request_route,
@@ -101,7 +102,7 @@ def _with_client_context(
     }
     if not stamped:
         return request_data
-    return {**request_data, key: {**base, **stamped}}  # mutable-ok: logging needs dicts
+    return {**request_data, key: {**base, **stamped}}
 
 
 def _escape_control_chars(value: str) -> str:
@@ -125,7 +126,7 @@ def _identity_log_suffix(resolved_identity: UserAPIKeyAuth | None) -> str:
 
 class UserAPIKeyAuthExceptionHandler:
     @staticmethod
-    async def _handle_authentication_error(
+    async def handle_authentication_error(
         e: Exception,
         request: Request,
         request_data: dict[str, object],
@@ -180,7 +181,7 @@ class UserAPIKeyAuthExceptionHandler:
             )
         else:
             # raise the exception to the caller
-            requester_ip: Final = _get_request_ip_address(
+            requester_ip: Final = get_request_ip_address(
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
@@ -258,3 +259,5 @@ class UserAPIKeyAuthExceptionHandler:
                     extra=log_extra,
                 )
             raise final_exception
+
+    _handle_authentication_error = handle_authentication_error

@@ -37,6 +37,12 @@ describe("getModelHubTableColumns", () => {
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
   });
 
+  it("shows the legacy evaluation mode as decisions", () => {
+    renderTable([{ ...mockModel, mode: "evaluation" }]);
+    expect(screen.getByText("decisions")).toBeInTheDocument();
+    expect(screen.queryByText("evaluation")).not.toBeInTheDocument();
+  });
+
   it("shows the first two providers and '+1' for overflow", () => {
     renderTable([mockModel]);
     expect(screen.getByText("openai")).toBeInTheDocument();
@@ -50,6 +56,9 @@ describe("getModelHubTableColumns", () => {
     expect(screen.getByText("128.0K / 16.4K")).toBeInTheDocument();
     expect(screen.getByText("$2.50")).toBeInTheDocument();
     expect(screen.getByText("$10.00")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "128.0K / 16.4K" })).toHaveClass("text-right");
+    expect(screen.getByRole("cell", { name: /\$2\.50/ })).toHaveClass("text-right");
+    expect(screen.getByRole("cell", { name: "gpt-4o" })).not.toHaveClass("text-right");
   });
 
   it("shows capability badges only for supported features", () => {

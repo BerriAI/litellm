@@ -10,16 +10,21 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
-use litellm_core::messages::{MessagesCall, messages_body, route::Messages};
 use litellm_host_http::Sse;
-use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
+use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
 use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
-const ANTHROPIC_API_HEADER_PROVIDERS: &str = "anthropic,bedrock,bedrock_mantle,vertex_ai";
+const OPENROUTER_API_HEADERS: [&str; 2] = [
+    "x-openrouter-metadata",
+    "x-openrouter-experimental-metadata",
+];
+const ANTHROPIC_API_HEADER_PROVIDERS: &str =
+    "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter";
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
@@ -54,7 +59,7 @@ async fn handle(
     };
 
     let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options);
+    let machine = route.machine(call, cache_options.policy);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let headers = crate::caching::CacheHeaders::default();
@@ -79,6 +84,7 @@ fn project(
         api_key: deployment.api_key.clone(),
         api_base: deployment.api_base.clone(),
         custom_llm_provider: deployment.custom_llm_provider.clone(),
+        litellm_params: deployment.litellm_params.clone(),
         extra_headers: None,
         provider_specific_header: anthropic_api_headers(headers),
         timeout: deployment.timeout,
@@ -87,17 +93,28 @@ fn project(
 }
 
 fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders> {
-    let extra_headers: Map<String, Value> = ANTHROPIC_API_HEADERS
+    let scopes = [
+        (
+            ANTHROPIC_API_HEADER_PROVIDERS,
+            ANTHROPIC_API_HEADERS.as_slice(),
+        ),
+        ("openrouter", OPENROUTER_API_HEADERS.as_slice()),
+    ];
+    let forwarded: Vec<ProviderSpecificHeader> = scopes
         .into_iter()
-        .filter_map(|name| {
-            let value = headers.get(name)?.to_str().ok()?;
-            Some((name.to_owned(), Value::from(value)))
+        .filter_map(|(provider, names)| {
+            let extra_headers: Map<String, Value> = names
+                .iter()
+                .filter_map(|name| {
+                    let value = headers.get(*name)?.to_str().ok()?;
+                    Some(((*name).to_owned(), Value::from(value)))
+                })
+                .collect();
+            (!extra_headers.is_empty()).then(|| ProviderSpecificHeader {
+                custom_llm_provider: provider.into(),
+                extra_headers,
+            })
         })
         .collect();
-    (!extra_headers.is_empty()).then(|| {
-        ProviderSpecificHeaders::One(ProviderSpecificHeader {
-            custom_llm_provider: ANTHROPIC_API_HEADER_PROVIDERS.into(),
-            extra_headers,
-        })
-    })
+    (!forwarded.is_empty()).then_some(ProviderSpecificHeaders::Many(forwarded))
 }

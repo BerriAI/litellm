@@ -10,6 +10,8 @@ protocol version, and an unsupported version is refused at registration).
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 
 from a2a_client import (
@@ -31,6 +33,9 @@ from a2a_client import (
 from e2e_config import unique_marker
 from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+
+BRIDGE_MODEL: Final = "claude-haiku-4-5"
 
 # No api_key: litellm resolves ANTHROPIC_API_KEY from the proxy's own environment
 # for this provider, which is what the agent-owner flow relies on. Pinning
@@ -42,7 +47,7 @@ from lifecycle import ResourceManager
 # omitted -> 200, "os.environ/..." -> 500 invalid x-api-key, literal key -> 200.
 BRIDGE = A2ABridgeParams(
     custom_llm_provider="anthropic",
-    model="claude-haiku-4-5",
+    model=BRIDGE_MODEL,
 )
 
 MOVEHOME_AGENT_CARD_URL = "https://movehome.org/.well-known/agent.json"
@@ -96,6 +101,12 @@ def _ask(text: str) -> A2AJsonRpcRequest:
 
 class TestA2AAgentLifecycle:
     @pytest.mark.covers("other.a2a.register.persists")
+    @meta(
+        Subject(
+            domain=Domain.AGENTS_API,
+            route=Route.A2A,
+        )
+    )
     def test_register_persists(self, client: A2AClient, resources: ResourceManager) -> None:
         agent = _register(client, resources, "0.3")
         fetched = unwrap(client.get_agent(agent.agent_id))
@@ -104,6 +115,15 @@ class TestA2AAgentLifecycle:
         assert fetched.agent_card_params.protocol_version == "0.3"
 
     @pytest.mark.covers("other.a2a.register.semver_version_accepted")
+    @meta(
+        Subject(
+            domain=Domain.AGENTS_API,
+            route=Route.A2A,
+            providers=(Provider.ANTHROPIC,),
+            models=(BRIDGE_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_semver_protocol_version_registers_and_serves(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
         agent = _register(client, resources, "0.3.0")
         assert agent.agent_card_params.protocol_version == "0.3"
@@ -116,6 +136,12 @@ class TestA2AAgentLifecycle:
         assert result.text != ""
 
     @pytest.mark.covers("other.a2a.message_send.real_world_agent_replies")
+    @meta(
+        Subject(
+            domain=Domain.AGENTS_API,
+            route=Route.A2A,
+        )
+    )
     def test_real_world_agent_replies_to_property_query(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
         upstream = unwrap(fetch_agent_card(MOVEHOME_AGENT_CARD_URL)).model_copy(update={"url": MOVEHOME_ORIGIN})
         assert upstream.protocol_version == "0.3.0"
@@ -152,6 +178,12 @@ class TestA2AAgentLifecycle:
         assert all(listing.location.un_locode == location for listing in results.listings)
 
     @pytest.mark.covers("other.a2a.discovery.proxy_fronted_card")
+    @meta(
+        Subject(
+            domain=Domain.AGENTS_API,
+            route=Route.A2A,
+        )
+    )
     def test_discovery_card_is_proxy_fronted(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
         agent = _register(client, resources, "0.3")
         card = unwrap(client.agent_card(agent.agent_id, scoped_key))
@@ -163,6 +195,15 @@ class TestA2AAgentLifecycle:
         assert card.supported_interfaces[0].url == card.url
 
     @pytest.mark.covers("other.a2a.message_send.bridge_invokes")
+    @meta(
+        Subject(
+            domain=Domain.AGENTS_API,
+            route=Route.A2A,
+            providers=(Provider.ANTHROPIC,),
+            models=(BRIDGE_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_message_send_runs_completion_bridge(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
         agent = _register(client, resources, "0.3")
         request = _ask("Reply with exactly the word PONG and nothing else")
@@ -177,6 +218,15 @@ class TestA2AAgentLifecycle:
         assert rows[0].model == f"a2a_agent/{agent.agent_card_params.name}"
 
     @pytest.mark.covers("other.a2a.version.serves_pinned_0_3")
+    @meta(
+        Subject(
+            domain=Domain.AGENTS_API,
+            route=Route.A2A,
+            providers=(Provider.ANTHROPIC,),
+            models=(BRIDGE_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_pinned_v0_3_serves_flat_message_shape(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
         agent = _register(client, resources, "0.3")
         request = _ask("Say hi in one word")
@@ -188,6 +238,15 @@ class TestA2AAgentLifecycle:
         assert result.text != ""
 
     @pytest.mark.covers("other.a2a.version.serves_pinned_1_0")
+    @meta(
+        Subject(
+            domain=Domain.AGENTS_API,
+            route=Route.A2A,
+            providers=(Provider.ANTHROPIC,),
+            models=(BRIDGE_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_pinned_v1_0_serves_nested_message_shape(self, client: A2AClient, resources: ResourceManager, scoped_key: str) -> None:
         agent = _register(client, resources, "1.0")
         request = _ask("Say hi in one word")
@@ -199,6 +258,12 @@ class TestA2AAgentLifecycle:
         assert result.text != ""
 
     @pytest.mark.covers("other.a2a.register.unsupported_version_rejected")
+    @meta(
+        Subject(
+            domain=Domain.AGENTS_API,
+            route=Route.A2A,
+        )
+    )
     def test_unsupported_protocol_version_rejected(self, client: A2AClient) -> None:
         result = _register_rejection(client, "9.9")
         match result:
@@ -209,6 +274,12 @@ class TestA2AAgentLifecycle:
                 pytest.fail(f"expected 400 for unsupported protocolVersion, got {result}")
 
     @pytest.mark.covers("other.a2a.register.malformed_version_rejected")
+    @meta(
+        Subject(
+            domain=Domain.AGENTS_API,
+            route=Route.A2A,
+        )
+    )
     def test_malformed_protocol_version_rejected(self, client: A2AClient) -> None:
         result = _register_rejection(client, "0.3.garbage")
         match result:

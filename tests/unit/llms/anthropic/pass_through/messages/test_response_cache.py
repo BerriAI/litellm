@@ -10,6 +10,7 @@ import litellm
 from litellm._internal_context import in_post_response_phase
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.pass_through.messages import handler
 from litellm.llms.anthropic.pass_through.messages.response_cache import (
     AnthropicMessagesStreamCacheWriter,
@@ -61,6 +62,12 @@ async def _byte_stream(chunks: List[bytes]) -> AsyncIterator[bytes]:
 
 async def _collect(stream: AsyncIterator[bytes]) -> List[bytes]:
     return [chunk async for chunk in stream]
+
+
+@pytest.fixture(autouse=True)
+async def _drain_logging_worker():
+    yield
+    await GLOBAL_LOGGING_WORKER.flush()
 
 
 @pytest.fixture
@@ -151,6 +158,26 @@ async def test_streaming_cache_is_not_shared_with_non_streaming(local_cache, req
 
     assert len(fake_handler.calls) == 2
     assert non_streaming["content"][0]["text"] == "ALPHA"
+
+
+@pytest.mark.asyncio
+async def test_stream_without_content_blocks_is_not_cached(local_cache, request_kwargs, monkeypatch):
+    empty_events = [STREAM_EVENTS[0], STREAM_EVENTS[4], STREAM_EVENTS[5]]
+    fake_handler = _CountingHandler(
+        [_byte_stream(empty_events), _byte_stream(STREAM_EVENTS), _byte_stream([b"event: never_used\n\n"])]
+    )
+    monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
+
+    empty = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    await asyncio.sleep(0)
+    refilled = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    await asyncio.sleep(0)
+    replayed = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+
+    assert empty == empty_events
+    assert refilled == STREAM_EVENTS
+    assert replayed == STREAM_EVENTS
+    assert len(fake_handler.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -262,7 +289,7 @@ async def test_cached_stream_replay_logs_once_when_polled_after_exhaustion():
 
     with patch.object(
         PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
+        "route_streaming_logging_to_handler",
         new=AsyncMock(),
     ) as mock_route:
         assert await _collect(iterator) == STREAM_EVENTS
@@ -280,6 +307,40 @@ class _HeldBackStream:
 
     async def __anext__(self) -> bytes:
         raise StopAsyncIteration
+
+
+class _AttributedStream:
+    """Stream stub carrying the billing attributes the disconnect helper reads."""
+
+    def __init__(self, chunks: list) -> None:
+        self.chunks = [object()]
+        self.messages = [{"role": "user", "content": "hi"}]
+        self.model = "gpt-4o-mini"
+        self._pending = list(chunks)
+
+    def __aiter__(self) -> "_AttributedStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        if not self._pending:
+            raise StopAsyncIteration
+        return self._pending.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_cache_writer_exposes_inner_stream_billing_attributes(request_kwargs):
+    caching_handler = LLMCachingHandler(
+        original_function=handler.anthropic_messages,
+        request_kwargs=dict(request_kwargs),
+        start_time=datetime.datetime.now(),
+    )
+    inner = _AttributedStream(STREAM_EVENTS)
+    writer = AnthropicMessagesStreamCacheWriter(stream=inner, caching_handler=caching_handler)
+
+    assert writer.chunks is inner.chunks
+    assert writer.messages is inner.messages
+    assert writer.model == "gpt-4o-mini"
+    assert await _collect(writer) == STREAM_EVENTS
 
 
 @pytest.mark.asyncio

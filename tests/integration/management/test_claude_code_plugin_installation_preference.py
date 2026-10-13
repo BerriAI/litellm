@@ -1,5 +1,4 @@
 import json
-import signal
 import uuid
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -8,7 +7,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 from pydantic import JsonValue
 
@@ -31,15 +29,6 @@ MARKETPLACE: Final = "/claude-code/marketplace.json"
 PLUGINS: Final = "/claude-code/plugins"
 SKILL_HUB: Final = "/public/skill_hub"
 PLUGIN_ROWS: Final = 'SELECT manifest_json, enabled, files_json FROM "LiteLLM_ClaudeCodePluginTable" WHERE name = %s'
-
-
-def serving_workers(owned: OwnedProxy) -> tuple[psutil.Process, ...]:
-    port: Final = owned.gateway.client.base_url.port
-    return tuple(
-        child
-        for child in psutil.Process(owned.process.pid).children(recursive=True)
-        if any(conn.status == psutil.CONN_LISTEN and conn.laddr.port == port for conn in child.net_connections("inet"))
-    )
 
 
 def plugin_name() -> str:
@@ -472,7 +461,7 @@ def test_registration_burst_survives_a_worker_kill(gateway: Gateway, tmp_path: P
     with gateway.scenario() as scenario, owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned:
         for name in names:
             scenario.cleanups.callback(delete_plugin, gateway, name)
-        workers: Final = eventually(lambda: serving_workers(owned), lambda found: len(found) == 2, seconds=30)
+        workers: Final = eventually(owned.worker_pids, lambda found: len(found) == 2, seconds=30)
 
         def submit(index: int) -> int:
             try:
@@ -485,14 +474,10 @@ def test_registration_burst_survives_a_worker_kill(gateway: Gateway, tmp_path: P
         with ThreadPoolExecutor(max_workers=8) as pool:
             futures: Final = tuple(pool.submit(submit, index) for index in range(len(names)))
             eventually(lambda: sum(1 for future in futures if future.done()), lambda done: done >= 3, seconds=30)
-            workers[0].send_signal(signal.SIGKILL)
-            eventually(lambda: workers[0].is_running(), lambda alive: not alive, seconds=10)
+            owned.kill_worker(min(workers))
             statuses: Final = tuple(future.result() for future in futures)
         assert set(statuses) <= {200, -1}, statuses
         assert statuses.count(200) >= 3, statuses
-        eventually(
-            lambda: owned.gateway.client.get("/health/readiness").status_code, lambda code: code == 200, seconds=30
-        )
         served: Final = tuple(marketplace_entries(owned.gateway, name) for name in names)
         for index, found in enumerate(served):
             assert len(found) == (1 if statuses[index] == 200 else len(found)), (names[index], statuses[index], found)
