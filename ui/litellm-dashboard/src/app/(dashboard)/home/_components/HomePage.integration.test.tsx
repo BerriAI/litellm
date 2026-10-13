@@ -189,6 +189,26 @@ describe("HomePage", () => {
     expect(within(section).queryByText("townhall")).not.toBeInTheDocument();
   });
 
+  it("renders card_title, card_summary and the provider logo, falling back to the title and first sentence", async () => {
+    blogPosts.posts = [
+      post("Gemini 4 Argon API Pricing and Day 0 Support on LiteLLM", "2026-10-13", [
+        "gemini",
+        "card_title:Gemini 4 Argon",
+        "card_summary:Gemini 4 Argon costs $2.00 per 1M input tokens.",
+        "day 0 support",
+      ]),
+      post("Day 0 Support: Grok 4.7", "2026-09-21", ["nano banana", "day 0 support"]),
+    ];
+    renderHome();
+    const section = await screen.findByTestId("home-whats-new");
+    expect(await within(section).findByText("Gemini 4 Argon")).toBeInTheDocument();
+    expect(within(section).getByText("Gemini 4 Argon costs $2.00 per 1M input tokens.")).toBeInTheDocument();
+    expect(within(section).getByRole("img", { name: "gemini logo" })).toBeInTheDocument();
+    expect(within(section).getByText("Day 0 Support: Grok 4.7")).toBeInTheDocument();
+    expect(within(section).getByText("Day 0 Support: Grok 4.7 description")).toBeInTheDocument();
+    expect(within(section).getAllByRole("img")).toHaveLength(1);
+  });
+
   it("hides What's new when no blog post is tagged day 0 support", async () => {
     blogPosts.posts = [post("Post one", "2026-10-09", ["announcement"])];
     renderHome();
