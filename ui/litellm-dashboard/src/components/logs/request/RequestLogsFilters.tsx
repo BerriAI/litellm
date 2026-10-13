@@ -108,7 +108,7 @@ function KeyAliasFilterField({
   teamId: string;
 }) {
   const [search, setSearch] = useState("");
-  const [operator, setOperator] = useState<KeyAliasOperator>("is");
+  const [operator, setOperator] = useState<KeyAliasOperator>(excludeValue !== "" ? "is not" : "is");
   let activeOperator: KeyAliasOperator = operator;
   if (excludeValue !== "") {
     activeOperator = "is not";

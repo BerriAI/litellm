@@ -92,7 +92,9 @@ describe("useLogFilterLogic", () => {
       { id: LOG_FILTER_IDS.MODEL_ID, value: "model-uuid-1", param: "model_id" },
       { id: LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL, value: "gpt-4o", param: "model" },
       { id: LOG_FILTER_IDS.KEY_ALIAS, value: "alias-1", param: "key_alias" },
-      { id: "exclude_key_alias", value: "alias-1", param: "exclude_key_alias" },
+      { id: LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS, value: "alias-1", param: "exclude_key_alias" },
+      { id: LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS, value: " alias-1 ", param: "exclude_key_alias" },
+      { id: LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS, value: "   ", param: "exclude_key_alias" },
       { id: LOG_FILTER_IDS.ERROR_CODE, value: "429", param: "error_code" },
       { id: LOG_FILTER_IDS.ERROR_MESSAGE, value: "rate limited", param: "error_message" },
       { id: LOG_FILTER_IDS.USER_ID, value: "user-9", param: "user_id" },
@@ -111,6 +113,7 @@ describe("useLogFilterLogic", () => {
         columnFilters: [
           { id: LOG_FILTER_IDS.TEAM_ID, value: "   " },
           { id: LOG_FILTER_IDS.KEY_HASH, value: "" },
+          { id: LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS, value: "" },
         ],
       });
 
@@ -118,6 +121,7 @@ describe("useLogFilterLogic", () => {
       const params = lastCallParams()?.params;
       expect(params?.team_id).toBeUndefined();
       expect(params?.api_key).toBeUndefined();
+      expect(params?.exclude_key_alias).toBeUndefined();
       expect(params?.error_code).toBeUndefined();
     });
   });

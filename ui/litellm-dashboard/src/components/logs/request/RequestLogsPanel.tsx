@@ -18,6 +18,7 @@ import type { LogEntry } from "../types";
 import {
   DEFAULT_LOGS_SORTING,
   formatLogsWindow,
+  getExactFilterValue,
   getFilterValue,
   getLogsWindowEndBound,
   LOG_FILTER_IDS,
@@ -224,7 +225,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     (updaterOrValue) => {
       const next = typeof updaterOrValue === "function" ? updaterOrValue(columnFiltersRef.current) : updaterOrValue;
       const nextKeyAlias = getFilterValue(next, LOG_FILTER_IDS.KEY_ALIAS);
-      const nextExcludeKeyAlias = getFilterValue(next, LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS);
+      const nextExcludeKeyAlias = getExactFilterValue(next, LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS);
       const normalizedNext = next.filter(
         (filter) => filter.id !== LOG_FILTER_IDS.KEY_ALIAS && filter.id !== LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS,
       );

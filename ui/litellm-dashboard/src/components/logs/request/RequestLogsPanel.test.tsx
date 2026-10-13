@@ -566,6 +566,21 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => expect(lastCall()?.params?.exclude_key_alias).toBeUndefined());
     });
 
+    it.each([" noisy ", "   "])(
+      "preserves the exact excluded alias %j when reapplying bookmarked filters",
+      async (alias) => {
+        const user = userEvent.setup();
+        renderPanel(new URLSearchParams({ exclude_key_alias: alias }).toString());
+
+        await waitFor(() => expect(lastCall()?.params?.exclude_key_alias).toBe(alias));
+        await user.click(screen.getByTestId("datatable-filters-trigger"));
+        await user.click(screen.getByTestId("filter-drawer-apply"));
+
+        await waitFor(() => expect(urlParams().get("exclude_key_alias")).toBe(alias));
+        expect(lastCall()?.params?.exclude_key_alias).toBe(alias);
+      },
+    );
+
     it("treats conflicting Key Alias URL parameters as one mutually exclusive filter", async () => {
       renderPanel("key_alias=quiet&exclude_key_alias=noisy");
 

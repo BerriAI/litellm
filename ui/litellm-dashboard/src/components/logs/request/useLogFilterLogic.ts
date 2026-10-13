@@ -98,10 +98,13 @@ export const DEFAULT_LOGS_SORTING: SortingState = [{ id: "startTime", desc: true
 
 const isSortField = (id: string): id is LogsSortField => Object.hasOwn(LOGS_SORT_FIELD_MAP, id);
 
-export const getFilterValue = (columnFilters: ColumnFiltersState, columnId: string): string | undefined => {
+export const getExactFilterValue = (columnFilters: ColumnFiltersState, columnId: string): string | undefined => {
   const entry = columnFilters.find((filter) => filter.id === columnId);
-  if (typeof entry?.value !== "string") return undefined;
-  const trimmed = entry.value.trim();
+  return typeof entry?.value === "string" && entry.value !== "" ? entry.value : undefined;
+};
+
+export const getFilterValue = (columnFilters: ColumnFiltersState, columnId: string): string | undefined => {
+  const trimmed = getExactFilterValue(columnFilters, columnId)?.trim();
   return trimmed === "" ? undefined : trimmed;
 };
 
@@ -194,7 +197,7 @@ export function useLogFilterLogic({
           model_id: getFilterValue(columnFilters, LOG_FILTER_IDS.MODEL_ID),
           model: getFilterValue(columnFilters, LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL),
           key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_ALIAS),
-          exclude_key_alias: getFilterValue(columnFilters, LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS),
+          exclude_key_alias: getExactFilterValue(columnFilters, LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS),
           error_code: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_CODE),
           error_message: getFilterValue(columnFilters, LOG_FILTER_IDS.ERROR_MESSAGE),
           sort_by: sortBy,
