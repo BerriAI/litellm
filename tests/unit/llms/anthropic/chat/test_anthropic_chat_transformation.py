@@ -1,5 +1,6 @@
 import copy
 import json
+from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -7700,6 +7701,246 @@ def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_mode
     assert json.loads(result.choices[0].message.content) == _RISK_OBJECT
     assert result.choices[0].message.tool_calls is None
     assert result.choices[0].finish_reason == "stop"
+
+
+_SPLIT_RISK_SCHEMA: Final = {
+    "title": "RiskAssessment",
+    "type": "object",
+    "properties": {
+        "tier": {"type": "integer"},
+        "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+        "score": {"type": "integer"},
+        "summary": {"type": "string"},
+        "affected_systems": {"type": "array", "items": {"type": "string"}},
+        "findings": {"type": "array", "items": {"type": "object"}},
+        "rollback_plan": {"type": "string"},
+        "requires_downtime": {"type": "boolean"},
+    },
+    "required": [
+        "tier",
+        "risk_level",
+        "score",
+        "summary",
+        "affected_systems",
+        "findings",
+        "rollback_plan",
+        "requires_downtime",
+    ],
+}
+_SPLIT_RISK_OBJECT: Final = {
+    "tier": 1,
+    "risk_level": "high",
+    "score": 78,
+    "summary": "Migrating loyalty-points ledger DB to managed cloud with weekend read-only cutover; financial data, high risk.",
+    "affected_systems": ["Loyalty-points ledger DB", "Loyalty rewards API", "Reporting/analytics pipeline"],
+    "findings": [
+        {
+            "title": "Financial data integrity risk",
+            "severity": "high",
+            "detail": "Loyalty points are monetary-equivalent; any sync error causes customer-facing balance discrepancies.",
+        },
+        {
+            "title": "Weekend support coverage",
+            "severity": "low",
+            "detail": "Reduced staff availability over weekend may delay incident response if issues arise.",
+        },
+    ],
+    "rollback_plan": "Keep old cluster live/read-only; revert DNS/connection strings to original cluster if migration fails.",
+    "requires_downtime": True,
+}
+# Block shape captured from vertex_ai/claude-sonnet-5 tool emulation on 2026-10-13, one tool_use block per field
+_SPLIT_RISK_BLOCKS: Final = tuple(
+    {"$FUNCTION_NAME": "RiskAssessment", "$PARAMETER_NAME": name, "$PARAMETER_VALUE": value}
+    for name, value in _SPLIT_RISK_OBJECT.items()
+)
+_CONTACT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    "required": ["name", "email"],
+}
+_FLAGS_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"urgent": {"type": "boolean"}, "reviewed": {"type": "boolean"}},
+    "required": ["urgent", "reviewed"],
+}
+
+
+def _json_tool_calls(*blocks: object) -> list[ChatCompletionToolCallChunk]:
+    return list(chain.from_iterable(_json_tool_call(block) for block in blocks))
+
+
+def test_vertex_claude_json_answer_split_into_one_tool_block_per_field_returns_one_schema_object():
+    config = VertexAIAnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "RiskAssessment", "schema": _SPLIT_RISK_SCHEMA},
+            },
+        },
+        optional_params={},
+        model="claude-emulated-structured-output",
+        drop_params=False,
+    )
+    json_mode = optional_params.pop("json_mode")
+    completion_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-emulated-structured-output",
+        "content": [
+            {"type": "tool_use", "id": f"toolu_{index}", "name": RESPONSE_FORMAT_TOOL_NAME, "input": block}
+            for index, block in enumerate(_SPLIT_RISK_BLOCKS)
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 30},
+    }
+
+    result = config.transform_response(
+        model="claude-emulated-structured-output",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params=optional_params,
+        litellm_params={},
+        encoding=None,
+        json_mode=json_mode,
+    )
+
+    assert json.loads(result.choices[0].message.content) == _SPLIT_RISK_OBJECT
+    assert result.choices[0].message.tool_calls is None
+    assert result.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "schema, blocks, expected_content",
+    [
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": _RISK_OBJECT["tier"]},
+                {"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": _RISK_OBJECT["summary"]},
+            ),
+            _RISK_OBJECT,
+            id="name_and_value_keys_only",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            (
+                {"function": "Contact", "parameter_name": "name", "parameter_value": "Ada"},
+                {"function": "Contact", "parameter_name": "email", "parameter_value": "ada@example.com"},
+            ),
+            {"name": "Ada", "email": "ada@example.com"},
+            id="string_values_beside_a_repeated_label",
+        ),
+        pytest.param(
+            _FLAGS_SCHEMA,
+            ({"field": "urgent", "value": True}, {"field": "reviewed", "value": True}),
+            {"urgent": True, "reviewed": True},
+            id="every_field_holds_the_same_value",
+        ),
+    ],
+)
+def test_json_tool_blocks_that_each_name_one_schema_property_become_one_object(
+    schema: dict[str, object], blocks: tuple[object, ...], expected_content: dict[str, object]
+):
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=_json_tool_calls(*blocks),
+        response_format_schema=_schema(schema),
+    )
+
+    assert replacement is not None
+    assert json.loads(replacement.content) == expected_content
+    assert remaining_tool_calls == []
+    assert extra_content is None
+
+
+@pytest.mark.parametrize(
+    "schema, blocks",
+    [
+        pytest.param(_RISK_SCHEMA, ({"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3},), id="one_field_alone"),
+        pytest.param(
+            _RISK_SCHEMA,
+            ({"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3}, {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 4}),
+            id="same_property_named_twice",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3},
+                {"$PARAMETER_NAME": "color", "$PARAMETER_VALUE": "red"},
+            ),
+            id="property_the_schema_does_not_declare",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3},
+                {"parameter_name": "summary", "parameter_value": "Read-only window"},
+            ),
+            id="blocks_with_different_keys",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3, "note": "first"},
+                {"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "Read-only window", "note": "second"},
+            ),
+            id="two_keys_that_could_hold_the_value",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            ({"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3}, ["summary", "Read-only window"]),
+            id="block_that_is_not_an_object",
+        ),
+        pytest.param(
+            _PERSON_SCHEMA,
+            ({"name": "name", "age": 1}, {"name": "age", "age": 2}),
+            id="blocks_keyed_by_schema_properties",
+        ),
+    ],
+)
+def test_json_tool_blocks_that_are_not_one_field_each_keep_the_first_block(
+    schema: dict[str, object], blocks: tuple[object, ...]
+):
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=_json_tool_calls(*blocks),
+        response_format_schema=_schema(schema),
+    )
+
+    assert replacement is not None
+    assert json.loads(replacement.content) == blocks[0]
+    assert remaining_tool_calls == []
+    assert extra_content is None
+
+
+def test_json_mode_with_user_tool_call_joins_the_split_answer_into_content():
+    user_tool_call: Final = ChatCompletionToolCallChunk(
+        id="toolu_user",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name="lookup_change_window", arguments='{"system": "ledger"}'),
+        index=2,
+    )
+    first_field, second_field = _json_tool_calls(
+        {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": _RISK_OBJECT["tier"]},
+        {"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": _RISK_OBJECT["summary"]},
+    )
+
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=[first_field, user_tool_call, second_field],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert replacement is None
+    assert remaining_tool_calls == [user_tool_call]
+    assert extra_content is not None
+    assert json.loads(extra_content) == _RISK_OBJECT
 
 
 def test_anthropic_tool_with_image():

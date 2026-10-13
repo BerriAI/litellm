@@ -2978,6 +2978,88 @@ def test_streamed_json_mode_answer_with_a_foreign_name_matches_the_non_streamed_
     assert unwrap_response_format_envelope(answer, schema, RESPONSE_FORMAT_TOOL_NAME) == answer
 
 
+def _json_tool_block_events(index: int, encoded: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {
+                "type": "tool_use",
+                "id": f"toolu_{index}",
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "input": {},
+            },
+        },
+        *(
+            {"type": "content_block_delta", "index": index, "delta": {"type": "input_json_delta", "partial_json": part}}
+            for part in (encoded[:7], encoded[7:])
+        ),
+        {"type": "content_block_stop", "index": index},
+    )
+
+
+def _streamed_json_tool_blocks(
+    blocks: tuple[str, ...], schema: dict[str, object] = _STREAMED_RISK_SCHEMA
+) -> tuple[str, ...]:
+    message_start, *_, message_delta = _json_tool_events(())
+    events = (
+        message_start,
+        *chain.from_iterable(_json_tool_block_events(index, encoded) for index, encoded in enumerate(blocks)),
+        message_delta,
+    )
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        json_mode=True,
+        response_format_schema=response_format_schema(schema),
+    )
+    chunks = tuple(iterator.chunk_parser(event) for event in events)
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+_STREAMED_TIER_FIELD: Final = json.dumps(
+    {"$FUNCTION_NAME": "RiskAssessment", "$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": _STREAMED_RISK_OBJECT["tier"]}
+)
+_STREAMED_SUMMARY_FIELD: Final = json.dumps(
+    {
+        "$FUNCTION_NAME": "RiskAssessment",
+        "$PARAMETER_NAME": "summary",
+        "$PARAMETER_VALUE": _STREAMED_RISK_OBJECT["summary"],
+    }
+)
+
+
+def test_streamed_json_mode_answer_split_into_one_block_per_field_arrives_as_one_object():
+    contents = _streamed_json_tool_blocks((_STREAMED_TIER_FIELD, _STREAMED_SUMMARY_FIELD))
+
+    assert json.loads(contents[-1]) == _STREAMED_RISK_OBJECT
+    assert contents[:-1] == ("",) * (len(contents) - 1)
+
+
+def test_streamed_json_mode_field_block_alone_keeps_the_model_text():
+    contents = _streamed_json_tool_blocks((_STREAMED_TIER_FIELD,))
+
+    assert "".join(contents) == _STREAMED_TIER_FIELD
+
+
+def test_streamed_json_mode_whole_answer_after_a_field_block_keeps_the_order_the_model_sent():
+    whole_answer = json.dumps(_STREAMED_RISK_OBJECT)
+
+    contents = _streamed_json_tool_blocks((_STREAMED_TIER_FIELD, whole_answer))
+
+    assert "".join(contents) == _STREAMED_TIER_FIELD + whole_answer
+
+
+def test_streamed_json_mode_envelope_whose_label_is_a_property_name_is_still_unwrapped():
+    envelope = json.dumps({"$FUNCTION_NAME": "summary", "PARAMETER_VALUE": _STREAMED_RISK_OBJECT})
+
+    contents = _streamed_json_tool_blocks((envelope,))
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+
+
 @respx.mock
 def test_anthropic_streaming_function_call_arguments_are_assembled(
     monkeypatch: pytest.MonkeyPatch,

@@ -25,7 +25,9 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
+    names_a_response_format_property,
     response_format_envelope_contents,
+    split_response_format_answer,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -128,6 +130,13 @@ def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
         return held
     contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
     return held if contents is None else json.dumps(contents)
+
+
+def _split_answer_text(blocks: tuple[str, ...], schema: ResponseFormatSchema) -> str:
+    answer: Final = split_response_format_answer(blocks, schema)
+    if answer is not None:
+        return json.dumps(answer)
+    return "".join(_held_answer(block, schema) for block in blocks)
 
 
 def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
@@ -655,6 +664,7 @@ class ModelResponseIterator:
         self.response_format_schema = response_format_schema
         self._response_format_buffer: io.StringIO = io.StringIO()
         self._response_format_verdict: _EnvelopeVerdict = "undecided"
+        self._split_answer_blocks: tuple[str, ...] = ()
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -1049,6 +1059,7 @@ class ModelResponseIterator:
                 pass
             elif type_chunk == "message_delta":
                 finish_reason, usage, container = self._handle_message_delta(chunk)
+                text = self._drain_split_answer_blocks()
                 if container:
                     provider_specific_fields["container"] = container
                     # Store container_id and re-emit code_interpreter_results
@@ -1176,7 +1187,7 @@ class ModelResponseIterator:
     ) -> str:
         if tool_use.get("id") is not None:
             self._response_format_buffer = io.StringIO()
-            self._response_format_verdict = "undecided"
+            self._response_format_verdict = "hold" if self._split_answer_blocks else "undecided"
             return ""
         fragment: Final = tool_use.get("function", {}).get("arguments") or ""
         if self._response_format_verdict == "pass_through":
@@ -1194,7 +1205,17 @@ class ModelResponseIterator:
         held: Final = self._response_format_buffer.getvalue()
         self._response_format_buffer = io.StringIO()
         self._response_format_verdict = "undecided"
+        if self._split_answer_blocks or names_a_response_format_property(held, self.response_format_schema):
+            self._split_answer_blocks = (*self._split_answer_blocks, held)
+            return ""
         return _held_answer(held, self.response_format_schema) if held else ""
+
+    def _drain_split_answer_blocks(self) -> str:
+        blocks: Final = self._split_answer_blocks
+        self._split_answer_blocks = ()
+        if self.response_format_schema is None or not blocks:
+            return ""
+        return _split_answer_text(blocks, self.response_format_schema)
 
     def _handle_message_delta(self, chunk: dict) -> tuple[str, Usage | None, dict[str, Any] | None]:
         """

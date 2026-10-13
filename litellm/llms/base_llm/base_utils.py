@@ -6,7 +6,7 @@ import copy
 import itertools
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -287,6 +287,53 @@ def response_format_envelope_contents(payload: object, schema: ResponseFormatSch
 def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
     contents: Final = response_format_envelope_contents(payload, schema, tool_name)
     return payload if contents is None else contents
+
+
+def _field_names(
+    blocks: tuple[Mapping[str, JsonValue], ...], key: str, schema: ResponseFormatSchema
+) -> tuple[str, ...] | None:
+    values: Final = (block[key] for block in blocks)
+    names: Final = tuple(value for value in values if isinstance(value, str) and value in schema.property_names)
+    return names if len(frozenset(names)) == len(blocks) else None
+
+
+def _is_a_label_every_block_repeats(blocks: tuple[Mapping[str, JsonValue], ...], key: str) -> bool:
+    return isinstance(blocks[0][key], str) and all(block[key] == blocks[0][key] for block in blocks)
+
+
+def _split_answer_fields(
+    blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
+) -> Mapping[str, JsonValue] | None:
+    keys: Final = frozenset(blocks[0])
+    if not keys.isdisjoint(schema.property_names) or any(frozenset(block) != keys for block in blocks):
+        return None
+    named: Final = tuple((key, names) for key in keys if (names := _field_names(blocks, key, schema)) is not None)
+    if len(named) != 1:
+        return None
+    ((name_key, field_names),) = named
+    value_keys: Final = tuple(
+        key for key in keys if key != name_key and not _is_a_label_every_block_repeats(blocks, key)
+    )
+    if len(value_keys) != 1:
+        return None
+    return dict(zip(field_names, (block[value_keys[0]] for block in blocks), strict=True))
+
+
+def split_response_format_answer(
+    encoded_blocks: Sequence[str], schema: ResponseFormatSchema
+) -> Mapping[str, JsonValue] | None:
+    decoded: Final = tuple(_json_object_or_encoded_object(encoded) for encoded in encoded_blocks)
+    blocks: Final = tuple(block for block in decoded if block is not None)
+    if len(blocks) < 2 or len(blocks) != len(decoded):
+        return None
+    return _split_answer_fields(blocks, schema)
+
+
+def names_a_response_format_property(encoded_block: str, schema: ResponseFormatSchema) -> bool:
+    block: Final = _json_object_or_encoded_object(encoded_block)
+    if block is None:
+        return False
+    return any(isinstance(value, str) and value in schema.property_names for value in block.values())
 
 
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:
