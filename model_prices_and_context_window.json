@@ -45710,14 +45710,14 @@
         "supports_reasoning": true
     },
     "together_ai/Qwen/Qwen3.7-Max": {
-        "cache_read_input_token_cost": 5e-07,
-        "input_cost_per_token": 2.5e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 1.5e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1000000,
         "max_tokens": 1000000,
         "mode": "chat",
-        "output_cost_per_token": 7.5e-06,
-        "source": "https://api.together.ai/v1/models",
+        "output_cost_per_token": 4.5e-06,
+        "source": "https://www.together.ai/pricing",
         "supports_prompt_caching": true
     },
     "together_ai/Qwen/Qwen3.7-Plus": {
@@ -66697,7 +66697,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/google/gemma-4-31B-it": {
-        "deprecation_date": "2026-09-14",
+        "deprecation_date": "2026-09-15",
         "input_cost_per_token": 3.9e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
@@ -66840,7 +66840,7 @@
         "source": "https://api.together.ai/v1/models"
     },
     "together_ai/openai/gpt-oss-20b": {
-        "deprecation_date": "2026-09-14",
+        "deprecation_date": "2026-09-15",
         "input_cost_per_token": 5e-08,
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
