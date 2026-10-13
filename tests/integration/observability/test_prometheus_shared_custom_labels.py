@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
@@ -62,6 +63,16 @@ class _Call:
     route: str
     model: str
     stream: bool
+
+    @property
+    def upstream(self) -> tuple[str, str, bool]:
+        if self.model == _CLAUDE:
+            return ("/v1/messages", cc.OPUS, self.stream)
+        return (
+            "/v1/chat/completions" if self.route == "/v1/chat/completions" else "/v1/responses",
+            "gpt-4o-mini",
+            self.stream,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +194,11 @@ def _send(gateway: Gateway, call: _Call, key: str, **extra: JsonValue) -> int:
     return response.status_code
 
 
+def _forwarded(request: Request) -> tuple[str, str, bool]:
+    body: Final = json.loads(request.body)
+    return (urlsplit(request.target).path, body["model"], bool(body.get("stream")))
+
+
 def _series(samples: Sequence[Sample], name: str, **labels: str) -> tuple[Sample, ...]:
     return tuple(
         sample
@@ -216,7 +232,7 @@ def test_a_project_key_call_on_every_endpoint_lands_in_the_request_latency_and_p
         owner: Final = _project_key(scenario, call.model)
         assert _send(rig.gateway, call, owner.key) == 200
         forwarded: Final = rig.upstream.drain()
-        assert len(forwarded) == 1, forwarded
+        assert [_forwarded(request) for request in forwarded] == [call.upstream], forwarded
         samples: Final = eventually(
             lambda: scrape(rig.gateway),
             lambda found: (
@@ -254,7 +270,6 @@ def test_a_failed_project_key_call_counts_as_one_failed_request_with_each_shared
             seconds=30,
         )
         failed: Final = _series(samples, _FAILED_REQUESTS, hashed_api_key=owner.hashed)
-        # A failure event carries no project alias in its metadata, so the custom label reads "None" (as on main)
         assert [_shared_labels(sample) for sample in failed] == [("None", owner.team, _DOWN, "None")], failed
         requests: Final = _series(samples, _TOTAL_REQUESTS, hashed_api_key=owner.hashed)
         assert [(sample.labels["status_code"], sample.value) for sample in requests] == [(str(status), 1.0)], requests
