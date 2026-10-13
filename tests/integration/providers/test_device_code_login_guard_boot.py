@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import itertools
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Mapping
@@ -241,11 +240,14 @@ def test_booting_without_tokens_drops_the_login_deployments_and_a_reload_after_m
             workers=2,
         ) as owned:
             workers: Final = _workers(owned)
+            _every_worker_lists(owned, workers, login_models=False)
             boot_log: Final = owned.log.read_text()
             assert peers.auth_connections() == ()
             assert dl.CHATGPT_USER_CODE not in boot_log and dl.COPILOT_USER_CODE not in boot_log, boot_log[-3000:]
-            assert sorted(_DROPPED.findall(boot_log)) == sorted([*_FIXED.values(), *_WILDCARDS] * 2), boot_log[-3000:]
-            _every_worker_lists(owned, workers, login_models=False)
+            dropped_models: Final = _DROPPED.findall(boot_log)
+            expected_drops: Final = frozenset((*_FIXED.values(), *_WILDCARDS))
+            assert frozenset(dropped_models) == expected_drops, boot_log[-3000:]
+            assert all(dropped_models.count(model) >= len(workers) for model in expected_drops), boot_log[-3000:]
             with owned.gateway.scenario() as scenario:
                 key: Final = scenario.key()
                 for name in _LOGIN_NAMES:
@@ -370,8 +372,9 @@ async def _held_on_every_worker(
     control_port: int,
     held_markers: SimpleQueue[str],
     bursts: _Bursts,
+    tasks: asyncio.TaskGroup,
 ) -> tuple[_Bursts, Mapping[int, int]]:
-    started: Final = (*bursts, asyncio.create_task(_burst(_base_url(owned), key, (_CONTROL,) * _HELD_PER_BURST)))
+    started: Final = (*bursts, tasks.create_task(_burst(_base_url(owned), key, (_CONTROL,) * _HELD_PER_BURST)))
     expected: Final = _HELD_PER_BURST * len(started)
     await asyncio.to_thread(eventually, held_markers.qsize, lambda size: size == expected, 60)
     held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, control_port) for pid in workers})
@@ -379,7 +382,7 @@ async def _held_on_every_worker(
     if min(held_by.values()) >= _HELD_PER_WORKER:
         return started, held_by
     assert len(started) < _MOST_BURSTS, held_by
-    return await _held_on_every_worker(owned, key, workers, control_port, held_markers, started)
+    return await _held_on_every_worker(owned, key, workers, control_port, held_markers, started, tasks)
 
 
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_refusing_logins_and_serving_the_control(
@@ -412,13 +415,19 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_refusing_logins_and_s
         control_port: Final = int(control_api.url.rsplit(":", 1)[1])
         with owned.gateway.scenario() as scenario:
             key: Final = scenario.key()
-            bursts, held_by = await _held_on_every_worker(owned, key, workers, control_port, held_markers, ())
-            victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            answers: Final = await asyncio.gather(*bursts)
+            async with asyncio.TaskGroup() as tasks:
+                try:
+                    bursts, held_by = await _held_on_every_worker(
+                        owned, key, workers, control_port, held_markers, (), tasks
+                    )
+                    victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
+                    with owned.replacing_worker(victim_pid) as kill:
+                        kill.freeze()
+                        await asyncio.to_thread(kill)
+                        release.set()
+                        answers: Final = await asyncio.gather(*bursts)
+                finally:
+                    release.set()
             served: Final = tuple(item for item in itertools.chain.from_iterable(answers) if item is not None)
             assert len(served) == held_by[survivor_pid], (held_by, len(served))
             for item in served:

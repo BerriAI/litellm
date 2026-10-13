@@ -326,7 +326,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         openai_dialect: Final = (
             stamped_dialect
             if isinstance(stamped_dialect, bool)
-            else AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+            else AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 model,
                 non_default_params.get("custom_llm_provider"),
                 non_default_params.get("api_base") or non_default_params.get("base_url"),
@@ -384,7 +384,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return model, processed_messages, non_default_params
 
     @staticmethod
-    def _targets_openai_prompt_cache_breakpoint(
+    def targets_openai_prompt_cache_breakpoint(
         model: str | None,
         custom_llm_provider: str | None,
         api_base: object = None,
@@ -786,7 +786,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return AnthropicCacheControlHook._stamped(
             points,
             "_litellm_openai_dialect",
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 model, custom_llm_provider, api_base, prompt_cache_options
             ),
         )
@@ -1103,7 +1103,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return messages, system
 
-        openai_dialect: Final = AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+        openai_dialect: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
             model, custom_llm_provider, api_base, kwargs.get("prompt_cache_options")
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)
