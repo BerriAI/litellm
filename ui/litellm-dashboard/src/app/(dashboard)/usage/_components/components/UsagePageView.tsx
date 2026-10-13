@@ -40,6 +40,7 @@ import {
   EMPTY_DAILY_ACTIVITY_METADATA,
   toDailyData,
   type DailyActivityRequest,
+  type DailyData,
 } from "@/components/UsagePage/dailyActivityApi";
 import { keyDetailFromResponse, overallUsageMetrics } from "@/components/UsagePage/keyActivityData";
 import {
@@ -266,10 +267,25 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     [userSpendData.results, topKeysLimit],
   );
 
-  const sortedDailyResults = useMemo(
-    () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
-    [userSpendData.results],
-  );
+  const sortedDailyResults = useMemo(() => {
+    const resultsByDate = new Map<string, DailyData>();
+
+    userSpendData.results.forEach((result) => {
+      const existing = resultsByDate.get(result.date);
+      if (!existing) {
+        resultsByDate.set(result.date, { ...result, metrics: { ...result.metrics } });
+        return;
+      }
+
+      existing.metrics.spend += result.metrics.spend;
+      existing.metrics.api_requests += result.metrics.api_requests;
+      existing.metrics.successful_requests += result.metrics.successful_requests;
+      existing.metrics.failed_requests += result.metrics.failed_requests;
+      existing.metrics.total_tokens += result.metrics.total_tokens;
+    });
+
+    return [...resultsByDate.values()].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }, [userSpendData.results]);
   const gatewayRequestsByRoute = useMemo(() => topGatewayRoutes(gatewayActivity), [gatewayActivity]);
   const modelMetrics = useMemo(
     () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),
