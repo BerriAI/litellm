@@ -19,8 +19,7 @@ def extract_cache_read_tokens(usage_object: Mapping[str, object] | None) -> int:
     details: Final = usage_object.get("prompt_tokens_details")
     if not isinstance(details, Mapping):
         return 0
-    typed_details: Final = cast(Mapping[str, object], details)
-    cached: Final = typed_details.get("cached_tokens")
+    cached: Final = details.get("cached_tokens")
     return int(cached) if isinstance(cached, (int, float)) else 0
 
 
