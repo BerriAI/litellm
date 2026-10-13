@@ -612,3 +612,52 @@ def test_a_chat_pinned_chatgpt_alias_still_bridges_to_the_responses_api(monkeypa
     _pin_shared_mode(monkeypatch, "chatgpt/gpt-5.4", "responses")
     info, _ = responses_api_bridge_check(model="gpt-5.4", custom_llm_provider="chatgpt", deployment_model_info=_CHAT)
     assert info["mode"] == "responses"
+
+
+_FUNCTION_TOOL: Final[dict[str, JsonValue]] = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_a_chat_pin_cannot_pull_gpt_5_4_function_tool_calls_off_the_responses_api(custom_llm_provider: str) -> None:
+    """Chat Completions rejects function tools while reasoning is on for gpt-5.4+, so the capability rule
+    must still bridge the request even when the deployment pins ``mode: chat``."""
+    info, model = responses_api_bridge_check(
+        model="gpt-5.4",
+        custom_llm_provider=custom_llm_provider,
+        tools=[_FUNCTION_TOOL],
+        api_base="https://example.openai.azure.com" if custom_llm_provider == "azure" else None,
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], model) == ("responses", "gpt-5.4")
+
+
+def test_a_chat_pin_cannot_pull_xai_web_search_off_the_responses_api() -> None:
+    info, model = responses_api_bridge_check(
+        model="grok-4",
+        custom_llm_provider="xai",
+        web_search_options={"search_context_size": "medium"},
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], model) == ("responses", "grok-4")
+
+
+def test_a_chat_pin_does_not_override_an_explicit_responses_prefix() -> None:
+    info, model = responses_api_bridge_check(
+        model="responses/my-azure-deployment",
+        custom_llm_provider="azure",
+        api_base="https://example.openai.azure.com",
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], model) == ("responses", "my-azure-deployment")
+
+
+def test_a_chat_pin_keeps_a_plain_gpt_5_4_chat_request_on_chat_completions() -> None:
+    """Without tools or a reasoning summary nothing forces the Responses API, so the deployment's own
+    mode decides and the shared ``responses`` row is left alone."""
+    shared_mode = litellm.model_cost["gpt-5.4"]["mode"]
+    info, model = responses_api_bridge_check(model="gpt-5.4", custom_llm_provider="openai", deployment_model_info=_CHAT)
+    assert (info["mode"], model) == ("chat", "gpt-5.4")
+    assert litellm.model_cost["gpt-5.4"]["mode"] == shared_mode

@@ -28,6 +28,8 @@ def deployment_routing_mode(deployment_model_info: Mapping[str, object] | None, 
         return None
     mode: Final = deployment_model_info.get("mode")
     return mode if isinstance(mode, str) and mode in _ROUTABLE_MODES else None
+
+
 _OPENAI_API_HOST: Final = "api.openai.com"
 
 
@@ -61,10 +63,6 @@ def responses_api_bridge_check(
     deployment_model_info: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, object], str]:
     model_info: dict[str, object] = {}
-    pinned_mode: Final = deployment_routing_mode(deployment_model_info, custom_llm_provider)
-    if pinned_mode is not None:
-        model_info["mode"] = pinned_mode
-        return model_info, model.replace("responses/", "") if pinned_mode == "responses" else model
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
     # Returns early with minimal model_info; callers only inspect the "mode" key.
@@ -73,23 +71,29 @@ def responses_api_bridge_check(
         model_info["mode"] = "responses"
         return model_info, model
 
+    lookup_failed = False
     try:
         model_info = cast(
             dict[str, object],
             get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
         )
-        if model_info.get("mode") is None and model.startswith("responses/"):
-            model = model.replace("responses/", "")
-            mode = "responses"
-            model_info["mode"] = mode
-
     except Exception as e:
         verbose_logger.debug("Error getting model info: %s", e)
+        lookup_failed = True
 
-        if model.startswith("responses/"):  # handle azure models - `azure/responses/<deployment-name>`
+    # A deployment's own mode replaces only the shared-row mode. The capability rules below still run,
+    # so a pin cannot send a request Chat Completions rejects (gpt-5.4+ function tools with reasoning,
+    # xAI web search, an explicit ``responses/`` prefix) off the Responses API.
+    pinned_mode: Final = deployment_routing_mode(deployment_model_info, custom_llm_provider)
+    if pinned_mode is not None:
+        model_info["mode"] = pinned_mode
+        if pinned_mode == "responses":
             model = model.replace("responses/", "")
-            mode = "responses"
-            model_info["mode"] = mode
+
+    # handle azure models - `azure/responses/<deployment-name>`
+    if model.startswith("responses/") and (lookup_failed or model_info.get("mode") is None):
+        model = model.replace("responses/", "")
+        model_info["mode"] = "responses"
 
     if web_search_options is not None and custom_llm_provider == "xai":
         model_info["mode"] = "responses"
