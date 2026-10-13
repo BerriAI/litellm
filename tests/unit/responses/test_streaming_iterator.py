@@ -5,6 +5,7 @@ completion_start_time = end_time."""
 
 import asyncio, importlib
 import json
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from typing import Final, Optional
@@ -1350,6 +1351,8 @@ class _FakeLoggingObj:
         self.start_time = datetime.now()
         self.completion_start_time = None
         self.model_call_details = {"litellm_params": {}}
+        self.success_logged = threading.Event()
+        self.failure_logged = threading.Event()
 
     # Signature alignment with Logging handlers
     async def dispatch_success_handlers(self, *args, **kwargs):
@@ -1360,6 +1363,7 @@ class _FakeLoggingObj:
     def success_handler(self, *args, **kwargs):
         self.success_calls += 1
         self.last_success_kwargs = kwargs
+        self.success_logged.set()
 
     async def async_success_handler(self, *args, **kwargs):
         self.async_success_calls += 1
@@ -1367,6 +1371,7 @@ class _FakeLoggingObj:
 
     def failure_handler(self, *args, **kwargs):
         self.failure_calls += 1
+        self.failure_logged.set()
 
     async def async_failure_handler(self, *args, **kwargs):
         self.async_failure_calls += 1
@@ -1374,6 +1379,10 @@ class _FakeLoggingObj:
     def update_completion_start_time(self, completion_start_time):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = completion_start_time
+
+async def _await_tasks_spawned_since(existing: set["asyncio.Task[object]"]) -> None:
+    spawned: Final = asyncio.all_tasks() - existing
+    await asyncio.wait_for(asyncio.gather(*spawned, return_exceptions=True), timeout=5)
 
 def _make_completed_response(response_id: str = "resp_test") -> ResponseCompletedEvent:
     return ResponseCompletedEvent(
@@ -1525,8 +1534,9 @@ async def test_responses_streaming_triggers_hooks(monkeypatch):
         type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=SimpleNamespace()
     )
 
+    existing_tasks = asyncio.all_tasks()
     iterator._handle_logging_completed_response()
-    await asyncio.sleep(0.2)  # allow async tasks to run
+    await _await_tasks_spawned_since(existing_tasks)
 
     assert logging_obj.success_calls == 1
     assert logging_obj.async_success_calls == 1
@@ -1601,8 +1611,7 @@ async def test_responses_streaming_failure_triggers_failure_handlers():
     with pytest.raises(ValueError, match="boom"):
         iterator._process_chunk('{"delta": "chunk"}')
 
-    # allow failure callbacks to run
-    await asyncio.sleep(0.2)
+    assert await asyncio.to_thread(logging_obj.failure_logged.wait, 5)
     assert logging_obj.failure_calls >= 1
     assert logging_obj.async_failure_calls >= 1
 
@@ -1769,7 +1778,7 @@ async def test_handle_logging_failed_response_uses_response_error_message():
     )
 
     iterator._handle_logging_failed_response()
-    await asyncio.sleep(0.2)
+    assert await asyncio.to_thread(logging_obj.failure_logged.wait, 5)
 
     assert logging_obj.failure_calls == 1
     assert logging_obj.async_failure_calls == 1
@@ -1891,8 +1900,9 @@ async def test_responses_streaming_completed_event_persists_async_cache():
     )
     iterator.completed_response = _make_completed_response()
 
+    existing_tasks = asyncio.all_tasks()
     iterator._handle_logging_completed_response()
-    await asyncio.sleep(0.2)
+    await _await_tasks_spawned_since(existing_tasks)
 
     litellm.cache.async_add_cache.assert_called_once()
     assert litellm.cache.async_add_cache.call_args.kwargs["stream"] is True
@@ -1981,7 +1991,7 @@ def test_log_completed_response_sync_direct_path(monkeypatch):
     iterator.completed_response = _make_completed_response("resp_log_sync")
 
     iterator._log_completed_response(is_async=False)
-    asyncio.run(asyncio.sleep(0.2))
+    assert logging_obj.success_logged.wait(timeout=5)
 
     assert logging_obj.success_calls == 1
     assert logging_obj.async_success_calls == 1
@@ -2012,7 +2022,7 @@ def test_log_completed_response_falls_back_when_model_validate_fails(monkeypatch
     monkeypatch.setattr(iterator, "_run_post_success_hooks", MagicMock())
 
     iterator._log_completed_response(is_async=False)
-    asyncio.run(asyncio.sleep(0.2))
+    assert logging_obj.success_logged.wait(timeout=5)
 
     assert logging_obj.success_calls == 1
     assert logging_obj.async_success_calls == 1
@@ -2178,8 +2188,9 @@ async def test_mock_responses_streaming_iterator_async_iteration_logs_completion
         call_type=CallTypes.responses.value,
     )
 
+    existing_tasks = asyncio.all_tasks()
     streamed_events = [event async for event in iterator]
-    await asyncio.sleep(0.2)
+    await _await_tasks_spawned_since(existing_tasks)
 
     assert streamed_events[0].type == ResponsesAPIStreamEvents.RESPONSE_CREATED
     assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
@@ -2224,7 +2235,7 @@ def test_mock_responses_streaming_iterator_sync_iteration_logs_completion(monkey
     )
 
     streamed_events = list(iterator)
-    asyncio.run(asyncio.sleep(0.2))
+    assert logging_obj.success_logged.wait(timeout=5)
 
     assert streamed_events[0].type == ResponsesAPIStreamEvents.RESPONSE_CREATED
     assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
@@ -2277,8 +2288,9 @@ async def test_cached_responses_stream_async_hit_triggers_success_callbacks(
         call_type=CallTypes.aresponses.value,
     )
 
+    existing_tasks = asyncio.all_tasks()
     streamed_events = [event async for event in iterator]
-    await asyncio.sleep(0.2)
+    await _await_tasks_spawned_since(existing_tasks)
 
     assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert logging_obj.success_calls == 1
@@ -2333,7 +2345,7 @@ def test_cached_responses_stream_sync_hit_triggers_success_callbacks(monkeypatch
     )
 
     streamed_events = list(iterator)
-    asyncio.run(asyncio.sleep(0.2))
+    assert logging_obj.success_logged.wait(timeout=5)
 
     assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert logging_obj.success_calls == 1

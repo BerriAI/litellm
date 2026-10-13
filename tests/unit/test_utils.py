@@ -6264,25 +6264,30 @@ async def test_wrapper_async_preserves_original_exception_when_hook_await_is_can
     the caller - not get replaced by CancelledError/TimeoutError from the hook's own
     await getting cancelled."""
 
+    hook_entered: Final = asyncio.Event()
+    hook_released: Final = asyncio.Event()
+
     class SlowLogger(CustomLogger):
         async def async_post_call_failure_deployment_hook(
             self, request_data, exception, call_type, fallback_depth=None
         ):
-            await asyncio.sleep(5)
+            hook_entered.set()
+            await hook_released.wait()
 
     monkeypatch.setattr(litellm, "callbacks", [SlowLogger()])
 
-    with pytest.raises(litellm.AuthenticationError):
-        await asyncio.wait_for(
-            litellm.acompletion(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": "hi"}],
-                mock_response=litellm.AuthenticationError(
-                    message="bad key", llm_provider="openai", model="gpt-4o-mini"
-                ),
-            ),
-            timeout=0.2,
+    call: Final = asyncio.create_task(
+        litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
         )
+    )
+    assert await asyncio.wait_for(hook_entered.wait(), timeout=5)
+    call.cancel()
+
+    with pytest.raises(litellm.AuthenticationError):
+        await call
 
 
 @pytest.mark.asyncio

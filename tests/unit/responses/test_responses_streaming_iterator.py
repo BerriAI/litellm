@@ -119,6 +119,11 @@ def _make_iterator(logging_obj: LitellmLogging) -> ResponsesAPIStreamingIterator
     return iterator
 
 
+async def _await_tasks_spawned_since(existing: set["asyncio.Task[object]"]) -> None:
+    spawned = asyncio.all_tasks() - existing
+    await asyncio.wait_for(asyncio.gather(*spawned, return_exceptions=True), timeout=5)
+
+
 @pytest.mark.asyncio
 async def test_custom_logger_only_never_submits_sync_success_handler(recording_executor):
     recorder = RecordingCustomLogger()
@@ -128,8 +133,9 @@ async def test_custom_logger_only_never_submits_sync_success_handler(recording_e
     logging_obj = _make_logging_obj()
     iterator = _make_iterator(logging_obj)
 
+    existing_tasks = asyncio.all_tasks()
     iterator._log_completed_response(is_async=True)
-    await asyncio.sleep(0.6)
+    await _await_tasks_spawned_since(existing_tasks)
 
     assert recorder.async_hook_started is not None
     assert recording_executor.submit_times_for(logging_obj) == []
@@ -149,8 +155,9 @@ async def test_sync_callbacks_run_only_after_async_handler_completes(recording_e
     logging_obj = _make_logging_obj()
     iterator = _make_iterator(logging_obj)
 
+    existing_tasks = asyncio.all_tasks()
     iterator._log_completed_response(is_async=True)
-    await asyncio.sleep(0.8)
+    await _await_tasks_spawned_since(existing_tasks)
 
     assert recorder.async_hook_finished is not None
     submit_times = recording_executor.submit_times_for(logging_obj)
