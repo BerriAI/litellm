@@ -25,7 +25,7 @@ use litellm_inference::{context::CallContext, outbound::outbound_request};
 pub(super) struct ProviderCall {
     pub identity: ProviderIdentity,
     pub wire: WireRequest,
-    provider: super::common_utils::MessagesProvider,
+    pub(super) provider: super::common_utils::MessagesProvider,
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
     stream: bool,
@@ -70,7 +70,9 @@ impl MessagesRoute {
                 WireRequest {
                     url,
                     headers: authenticated.headers,
-                    body: serde_json::to_value(&body).map_err(serialize_failure)?,
+                    body: provider
+                        .config()
+                        .wire_body(serde_json::to_value(&body).map_err(serialize_failure)?),
                 },
                 request_context,
             )

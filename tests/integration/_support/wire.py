@@ -3,13 +3,13 @@ from __future__ import annotations
 import ssl
 import threading
 import time
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import SimpleQueue
 from types import MappingProxyType
-from typing import Final
+from typing import BinaryIO, Final
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +18,37 @@ class Request:
     target: str
     headers: Mapping[str, str]
     body: bytes
+
+
+class AbortedBody(Exception):
+    """The client closed the connection before the body it announced was complete."""
+
+
+def exactly(stream: BinaryIO, size: int) -> bytes:
+    data: Final = stream.read(size)
+    if len(data) < size:
+        raise AbortedBody
+    return data
+
+
+def chunked_body(stream: BinaryIO) -> Iterator[bytes]:
+    while True:
+        size_line: Final = stream.readline()
+        if not size_line:
+            raise AbortedBody
+        size: Final = int(size_line.split(b";")[0].strip(), 16)
+        if size == 0:
+            while stream.readline().strip():
+                pass
+            return
+        yield exactly(stream, size)
+        stream.readline()
+
+
+def read_body(headers: Mapping[str, str], stream: BinaryIO) -> bytes:
+    if headers.get("transfer-encoding", "").lower() == "chunked":
+        return b"".join(chunked_body(stream))
+    return exactly(stream, int(headers.get("content-length", "0")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,12 +109,14 @@ def wire_server(
             connected.put(f"{self.client_address[0]}:{self.client_address[1]}")
 
         def respond(self) -> None:
-            request: Final = Request(
-                self.command,
-                self.path,
-                {name.lower(): value for name, value in self.headers.items()},
-                self.rfile.read(int(self.headers.get("content-length", "0"))),
-            )
+            headers: Final = {name.lower(): value for name, value in self.headers.items()}
+            try:
+                body: Final = read_body(headers, self.rfile)
+            except AbortedBody:
+                self.close_connection = True
+                disconnected.put(self.path)
+                return
+            request: Final = Request(self.command, self.path, headers, body)
             received.put(request)
             try:
                 reply = respond(request)

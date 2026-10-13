@@ -14,10 +14,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.llm_translation.base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 
-class TestVoyageAI(BaseLLMEmbeddingTest):
+class TestVoyageAI:
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.VOYAGE
 

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm._uuid import uuid
@@ -939,3 +940,36 @@ async def test_ollama_json_mode_completion_turns_a_name_and_arguments_object_int
     assert (tool_call.function.name, tool_call.function.arguments) == ("get_weather", expected_arguments)
     assert response.choices[0].message.content is None
     assert response.choices[0].finish_reason == "tool_calls"
+
+
+def test_ollama_vision_model_sends_the_image_beside_the_user_prompt(respx_mock: respx.MockRouter) -> None:
+    image_base64: Final = _image_base64("PNG")
+    route: Final = respx_mock.post("http://ollama.test:11434/api/generate").respond(
+        json={
+            "model": "llama3.2-vision:11b",
+            "response": "A white square",
+            "done": True,
+            "prompt_eval_count": 5,
+            "eval_count": 3,
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="ollama/llama3.2-vision:11b",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Whats in this image?"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
+                ],
+            }
+        ],
+        api_base="http://ollama.test:11434",
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["model"] == "llama3.2-vision:11b"
+    assert body["images"] == [image_base64]
+    assert body["prompt"] == "### User:\nWhats in this image?\n\n"
+    assert response.choices[0].message.content == "A white square"

@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
 
@@ -29,6 +30,7 @@ MCPInfo = Annotated[dict[str, Any], AfterValidator(_validate_mcp_protocol_metada
 
 
 class MCPOAuthMetadata(LiteLLMBaseModel):
+    authorization_server_metadata: Mapping[str, object] | None = Field(default=None, exclude=True)
     scopes: list[str] | None = None
     """Resource-driven scopes for the authorization request: the RFC 9728 protected-resource
     ``scopes_supported``, or the ``scope`` from the WWW-Authenticate 401 challenge when the resource
@@ -117,6 +119,7 @@ class MCPServer(LiteLLMBaseModel):
     # scope=="user" values must be supplied per-user.
     env_vars: list[dict[str, Any]] | None = None
     # OAuth-specific fields
+    authorization_server_metadata: Mapping[str, object] | None = Field(default=None, exclude=True)
     client_id: str | None = None
     client_secret: str | None = None
     issuer: str | None = None
