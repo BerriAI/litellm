@@ -238,7 +238,12 @@ def _tool_call_sse_body() -> bytes:
             "output_index": 0,
             "item": {**FUNCTION_CALL_ITEM, "arguments": "", "status": "in_progress"},
         },
-        {"type": "response.function_call_arguments.delta", "output_index": 0, "item_id": "fc_1", "delta": CURL_ARGUMENTS},
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "item_id": "fc_1",
+            "delta": CURL_ARGUMENTS,
+        },
         {"type": "response.output_item.done", "output_index": 0, "item": FUNCTION_CALL_ITEM},
         {"type": "response.completed", "response": TOOL_CALL_RESPONSE},
     )
@@ -317,7 +322,11 @@ async def test_non_stream_bridge_response_carries_the_classifier_verdict_for_the
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     response: Final = await _bridge_response(
-        respx_mock, monkeypatch, stream=False, settings={"safeguards_classifier_model": "classifier"}, safeguards=SAFEGUARDS
+        respx_mock,
+        monkeypatch,
+        stream=False,
+        settings={"safeguards_classifier_model": "classifier"},
+        safeguards=SAFEGUARDS,
     )
     assert isinstance(response, dict)
     assert [block["id"] for block in response["content"] if block["type"] == "tool_use"] == ["call_curl"]
@@ -329,7 +338,11 @@ async def test_streamed_bridge_response_carries_the_verdict_in_the_final_message
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     events: Final = await _bridge_response(
-        respx_mock, monkeypatch, stream=True, settings={"safeguards_classifier_model": "classifier"}, safeguards=SAFEGUARDS
+        respx_mock,
+        monkeypatch,
+        stream=True,
+        settings={"safeguards_classifier_model": "classifier"},
+        safeguards=SAFEGUARDS,
     )
     final_delta: Final = _final_delta(events)
     assert final_delta["stop_reason"] == "tool_use"
@@ -358,3 +371,76 @@ async def test_bridge_response_gets_no_results_without_both_the_setting_and_the_
         assert "safeguard_results" not in _final_delta(response)
     else:
         assert isinstance(response, dict) and "safeguard_results" not in response
+
+
+OPENAI_API: Final = {"custom_llm_provider": "openai", "api_base": "https://api.openai.com/v1"}
+OTHER_HOST: Final = {"custom_llm_provider": "openai", "api_base": "https://gateway.example/v1"}
+EPHEMERAL: Final = {"type": "ephemeral"}
+
+
+def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> dict[str, object]:
+    mark: Final = {} if cache_control is None else {"cache_control": cache_control}
+    return {
+        "max_tokens": 1024,
+        "system": [{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful.", **mark}],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "look", **mark}, {"type": "text", "text": "now"}]}
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "extra_kwargs",
+    [
+        pytest.param(OPENAI_API, id="api.openai.com"),
+        pytest.param({**OTHER_HOST, "prompt_cache_options": {"mode": "implicit"}}, id="other-host-opted-in"),
+    ],
+)
+def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_the_same_block(
+    extra_kwargs: dict[str, object],
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs=extra_kwargs,
+        **_request_with_client_cache_marks({**EPHEMERAL, "ttl": "1h"}),
+    )
+
+    assert "instructions" not in responses_kwargs
+    assert responses_kwargs["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": {"mode": "explicit"}},
+            ],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "look", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "input_text", "text": "now"},
+            ],
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "extra_kwargs"),
+    [
+        pytest.param("openai/gpt-5.5", OPENAI_API, id="model-older-than-gpt-5.6"),
+        pytest.param("openai/gpt-5.6", OTHER_HOST, id="other-host-not-opted-in"),
+    ],
+)
+def test_client_cache_control_changes_nothing_for_a_deployment_that_does_not_read_prompt_cache_breakpoint(
+    model: str, extra_kwargs: dict[str, object]
+) -> None:
+    marked: Final = _build_responses_kwargs(
+        model=model, extra_kwargs=extra_kwargs, **_request_with_client_cache_marks(EPHEMERAL)
+    )
+    unmarked: Final = _build_responses_kwargs(
+        model=model, extra_kwargs=extra_kwargs, **_request_with_client_cache_marks(None)
+    )
+
+    assert marked == unmarked

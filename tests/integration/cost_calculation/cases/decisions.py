@@ -190,8 +190,8 @@ PERPLEXITY_PPLX_DECIDER_V1_27B_DECISIONS: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=3.92e-06,
-        input_cost=3.92e-06,
+        spend=1.96e-06,
+        input_cost=1.96e-06,
         output_cost=0.0,
         prompt_tokens=98,
         completion_tokens=1,
@@ -221,8 +221,8 @@ PERPLEXITY_PPLX_DECIDER_V1_27B_SYSTEMONE: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=3.92e-06,
-        input_cost=3.92e-06,
+        spend=1.96e-06,
+        input_cost=1.96e-06,
         output_cost=0.0,
         prompt_tokens=98,
         completion_tokens=1,
@@ -443,6 +443,72 @@ OPENROUTER_TYPESAFE_JEV_1_13_SYSTEMONE: Final = CostTrackingTestCase(
     ),
 )
 
+# fireworks_ai/accounts/fireworks/routers/rune
+FIREWORKS_AI_RUNE_DECISIONS: Final = CostTrackingTestCase(
+    name="fireworks_ai/accounts/fireworks/routers/rune-decisions",
+    covers="quota_management.spend_tracking.decisions.logs_cost",
+    model="fireworks_ai/accounts/fireworks/routers/rune",
+    endpoint="/v1/decisions",
+    request={
+        "model": "$MODEL",
+        "input": "My order arrived broken and I want a refund today.",
+        "questions": [
+            {"type": "predicate", "name": "is_refund", "instructions": "Is the customer asking for a refund?"}
+        ],
+    },
+    upstream_body={
+        "model": "accounts/fireworks/routers/rune",
+        "state": "My order arrived broken and I want a refund today.",
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "accounts/fireworks/routers/rune",
+            "answers": {"is_refund": {"type": "noul", "noul": 0.99}},
+            "usage": {"input_tokens": 300, "cached_input_tokens": 200, "output_tokens": 0},
+        },
+    ),
+    expected=ExactExpected(
+        spend=5.88e-06,
+        input_cost=5.88e-06,
+        output_cost=0.0,
+        prompt_tokens=300,
+        completion_tokens=0,
+    ),
+)
+FIREWORKS_AI_RUNE_SYSTEMONE: Final = CostTrackingTestCase(
+    name="fireworks_ai/accounts/fireworks/routers/rune-systemone",
+    covers="quota_management.spend_tracking.systemone.logs_cost",
+    model="fireworks_ai/accounts/fireworks/routers/rune",
+    endpoint="/v1/systemone",
+    request={
+        "model": "$MODEL",
+        "state": "My order arrived broken and I want a refund today.",
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+    },
+    upstream_body={
+        "model": "accounts/fireworks/routers/rune",
+        "state": "My order arrived broken and I want a refund today.",
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "accounts/fireworks/routers/rune",
+            "answers": {"is_refund": {"type": "noul", "noul": 0.99}},
+            "usage": {"input_tokens": 300, "cached_input_tokens": 200, "output_tokens": 0},
+        },
+    ),
+    expected=ExactExpected(
+        spend=5.88e-06,
+        input_cost=5.88e-06,
+        output_cost=0.0,
+        prompt_tokens=300,
+        completion_tokens=0,
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OPENAI_GPT_6_LUNA_DECISIONS,
     OPENAI_GPT_6_LUNA_SYSTEMONE,
@@ -456,6 +522,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     DATABRICKS_OPENJEV_QWEN35_4B_SYSTEMONE,
     OPENROUTER_TYPESAFE_JEV_1_13_DECISIONS,
     OPENROUTER_TYPESAFE_JEV_1_13_SYSTEMONE,
+    FIREWORKS_AI_RUNE_DECISIONS,
+    FIREWORKS_AI_RUNE_SYSTEMONE,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = ()

@@ -438,6 +438,26 @@ def test_supports_audio_output_reads_its_own_cost_map_flag(
     assert litellm.supports_audio_output(model) is audio_output
 
 
+@pytest.mark.parametrize(("audio_input", "video_input"), [(True, False), (False, True)])
+def test_supports_video_input_reads_its_own_cost_map_flag(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, audio_input: bool, video_input: bool
+) -> None:
+    model: Final = "openai/video-flags-disagree-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_audio_input": audio_input,
+            "supports_video_input": video_input,
+        },
+    )
+    assert litellm.supports_video_input(model) is video_input
+    assert litellm.supports_audio_input(model) is audio_input
+    assert litellm.get_model_info(model)["supports_video_input"] is video_input
+
+
 def test_get_optional_params_image_gen():
     from litellm.llms.azure.image_generation import AzureGPTImageGenerationConfig
 
@@ -918,6 +938,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_batches": {"type": "number"},
+                "cache_creation_input_token_cost_decisions": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "cache_read_input_token_cost_decisions": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_decisions": {"type": "number"},
+                "input_cost_per_token_decisions": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
+                "output_cost_per_token_decisions": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_decisions": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
