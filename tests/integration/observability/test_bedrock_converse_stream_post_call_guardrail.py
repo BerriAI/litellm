@@ -26,7 +26,8 @@ from botocore.config import Config
 from botocore.eventstream import EventStreamBuffer
 from botocore.exceptions import ClientError, EventStreamError
 from integration._support.budget import case_timeout_seconds, import_seconds
-from integration._support.client import Gateway, JsonValue, Scenario
+from integration._support.client import Gateway, JsonValue, Scenario, eventually
+from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import aws_event_stream_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -36,6 +37,8 @@ ROUTER_MODEL: Final = "converse-relay"
 EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 SAMPLED: Final = "relay-sampled"
 BUFFERED: Final = "relay-buffered"
+CODE: Final = "relay-code"
+CODE_BLOCK_REASON: Final = "code says no"
 BLOCK_REASON: Final = "Violated guardrail policy"
 MASKED_WORD: Final = "Paris"
 MASK: Final = "[CITY]"
@@ -199,6 +202,21 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             config["guardrails"] = [
                 _guardrail(SAMPLED, sink),
                 _guardrail(BUFFERED, sink, streaming_buffer_until_moderated=True),
+                {
+                    "guardrail_name": CODE,
+                    "litellm_params": {
+                        "guardrail": "custom_code",
+                        "mode": "post_call",
+                        "default_on": False,
+                        "custom_code": (
+                            "def apply_guardrail(inputs, request_data, input_type):\n"
+                            "    for text in inputs['texts']:\n"
+                            f"        if '{BLOCKED_WORD}' in text:\n"
+                            f"            return block('{CODE_BLOCK_REASON}')\n"
+                            "    return allow()\n"
+                        ),
+                    },
+                },
             ]
             config["model_list"] = [
                 {
@@ -222,7 +240,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                         upstream,
                         sink,
                         scripts,
-                        {name: scenario.key(guardrails=[name]) for name in (SAMPLED, BUFFERED)},
+                        {name: scenario.key(guardrails=[name]) for name in (SAMPLED, BUFFERED, CODE)},
                     )
 
 
@@ -235,6 +253,11 @@ def _stream_body(marker: str) -> dict[str, JsonValue]:
 
 
 def _stream(rig: Rig, guardrail: str, marker: str) -> tuple[int, str, bytes]:
+    status, content_type, body, _ = _stream_with_call_id(rig, guardrail, marker)
+    return status, content_type, body
+
+
+def _stream_with_call_id(rig: Rig, guardrail: str, marker: str) -> tuple[int, str, bytes, str]:
     with rig.gateway.client.stream(
         "POST",
         _stream_path(),
@@ -242,7 +265,20 @@ def _stream(rig: Rig, guardrail: str, marker: str) -> tuple[int, str, bytes]:
         headers={"Authorization": f"Bearer {rig.keys[guardrail]}"},
         timeout=case_timeout_seconds(),
     ) as response:
-        return response.status_code, response.headers.get("content-type", ""), response.read()
+        return (
+            response.status_code,
+            response.headers.get("content-type", ""),
+            response.read(),
+            response.headers.get("x-litellm-call-id", ""),
+        )
+
+
+def _spend_rows(call_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT status, api_base FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s OR request_id=%s '
+        "OR metadata->>'litellm_call_id'=%s ORDER BY status",
+        (call_id, call_id, call_id),
+    )
 
 
 def test_first_frames_reach_the_caller_while_the_upstream_is_still_streaming(rig: Rig) -> None:
@@ -292,6 +328,23 @@ def test_block_mid_stream_reaches_boto3_as_an_event_stream_exception(rig: Rig) -
     assert outcome.events[:2] == ("messageStart", "contentBlockDelta"), outcome
     assert "messageStop" not in outcome.events, outcome
     assert (outcome.error_code, outcome.error_message) == ("validationException", BLOCK_REASON), outcome
+
+
+def test_block_raised_mid_stream_logs_the_relayed_spend_and_the_failure(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=converse_frames((f"The secret {marker} is ", BLOCKED_WORD, "."))
+    )
+    status, content_type, body, call_id = _stream_with_call_id(rig, CODE, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    frames: Final = decode(body)
+    assert frames[0].kind == "messageStart", frames
+    assert frames[-1].message_type == "exception" and frames[-1].kind == "validationException", frames
+    assert CODE_BLOCK_REASON in str(frames[-1].payload["message"]), frames
+    assert call_id, "the relayed stream carries no x-litellm-call-id"
+    rows: Final = eventually(lambda: _spend_rows(call_id), lambda rows: len(rows) >= 2, seconds=70)
+    assert [row["status"] for row in rows] == ["failure", "success"], rows
+    assert rows[1]["api_base"], rows
 
 
 def test_clean_stream_reaches_boto3_unchanged(rig: Rig) -> None:

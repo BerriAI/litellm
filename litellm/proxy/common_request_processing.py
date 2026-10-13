@@ -3500,8 +3500,10 @@ class ProxyBaseLLMRequestProcessing:
             delivered = False  # rebind-ok: set once the first frame reached the caller
             try:
                 async for item in guarded:
-                    yield LlmPassthroughRouteHandler.encode_event_stream_item(provider, item)
-                    delivered = True
+                    frame = LlmPassthroughRouteHandler.encode_event_stream_item(provider, item)
+                    if frame:
+                        yield frame
+                        delivered = True
             except Exception as e:
                 if not delivered:
                     raise
@@ -3526,7 +3528,10 @@ class ProxyBaseLLMRequestProcessing:
                     raise
                 yield error_item
             finally:
-                await guarded.aclose()
+                try:
+                    await guarded.aclose()
+                finally:
+                    await _close_upstream(generator)
 
         relayed: Final = relay()
         read_ahead: Final[list[bytes]] = []  # mutable-ok: the first frame, read before the response starts
@@ -3536,7 +3541,7 @@ class ProxyBaseLLMRequestProcessing:
             pass
         except BaseException:
             with anyio.CancelScope(shield=True):
-                await _close_upstream(generator)
+                await _close_upstream_and_log_its_spend(generator)
             raise
 
         async def body() -> AsyncGenerator[bytes, None]:
@@ -3550,7 +3555,7 @@ class ProxyBaseLLMRequestProcessing:
             content=body(),  # pyright: ignore[reportArgumentType]  # bytes body, as on the unguarded relay
             media_type=self._passthrough_event_stream_media_type(),
             headers={k: v for k, v in headers.items() if k.lower() != "content-length"},
-            upstream_generator=generator,  # pyright: ignore[reportArgumentType]  # raw upstream byte stream
+            upstream_generator=relayed,  # pyright: ignore[reportArgumentType]  # closing it closes the guardrails and the upstream
         )
 
     def _passthrough_event_stream_media_type(self) -> str | None:

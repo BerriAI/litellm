@@ -20,8 +20,6 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import PassThrou
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
-
     from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
@@ -338,16 +336,6 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         if translation is None:
             return None
         return translation.build_block_sse_chunks(exc, stream_started=stream_started, responses_so_far=responses_so_far)
-
-    def build_stream_error_items(
-        self,
-        exc: "HTTPException",
-        responses_so_far: Sequence[object] | None = None,
-    ) -> Sequence[object] | None:
-        translation: Final = self._event_stream_translation(responses_so_far or ())
-        if translation is None:
-            return None
-        return translation.build_stream_error_items(exc, responses_so_far=responses_so_far)
 
     @staticmethod
     def event_stream_items(provider: object, chunks: AsyncIterable[bytes]) -> AsyncIterator[object] | None:

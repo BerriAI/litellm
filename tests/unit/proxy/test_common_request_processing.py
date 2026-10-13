@@ -6142,8 +6142,31 @@ class TestAllmPassthroughStreamingProviderGate:
 
         return _NativeHooksGuardrail(guardrail_name="native", event_hook="post_call", default_on=True)
 
+    @staticmethod
+    def _recording_upstream(frames: list[bytes], events: list[str]):
+        class _Upstream:
+            def __init__(self) -> None:
+                self._frames = iter(frames)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> bytes:
+                frame = next(self._frames, None)
+                if frame is None:
+                    raise StopAsyncIteration
+                return frame
+
+            async def aclose(self) -> None:
+                events.append("upstream closed")
+
+            async def wait_for_spend_flush(self) -> None:
+                events.append("spend logged")
+
+        return _Upstream()
+
     async def _run_converse_stream(
-        self, monkeypatch, guardrail, chunks, event_stream_hook=None, stream=None, failure_hook=None
+        self, monkeypatch, guardrail, chunks, event_stream_hook=None, stream=None, failure_hook=None, read_body=True
     ):
         processing_obj = self._build_processing_obj("bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream")
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
@@ -6175,6 +6198,8 @@ class TestAllmPassthroughStreamingProviderGate:
             )
             body = (
                 b"".join([chunk async for chunk in result.body_iterator])
+                if isinstance(result, StreamingResponse) and read_body
+                else None
                 if isinstance(result, StreamingResponse)
                 else result.body
             )
@@ -6260,25 +6285,6 @@ class TestAllmPassthroughStreamingProviderGate:
         events: list[str] = []
         frames = self._converse_stream()
 
-        class _Upstream:
-            def __init__(self) -> None:
-                self._frames = iter(frames)
-
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self) -> bytes:
-                frame = next(self._frames, None)
-                if frame is None:
-                    raise StopAsyncIteration
-                return frame
-
-            async def aclose(self) -> None:
-                events.append("upstream closed")
-
-            async def wait_for_spend_flush(self) -> None:
-                events.append("spend logged")
-
         async def block_after_first_frame(response, user_api_key_dict, request_data, guardrails):
             async for item in response:
                 yield item
@@ -6294,7 +6300,7 @@ class TestAllmPassthroughStreamingProviderGate:
             self._apply_guardrail(),
             frames,
             event_stream_hook=block_after_first_frame,
-            stream=_Upstream(),
+            stream=self._recording_upstream(frames, events),
             failure_hook=failure_hook,
         )
 
@@ -6302,7 +6308,73 @@ class TestAllmPassthroughStreamingProviderGate:
         assert events[:3] == ["upstream closed", "spend logged", "failure hook"]
 
     @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_block_raised_after_the_first_frame_runs_the_failure_hook(self, monkeypatch):
+        from botocore.eventstream import EventStreamBuffer
+
+        async def block_after_first_frame(response, user_api_key_dict, request_data, guardrails):
+            async for item in response:
+                yield item
+                raise HTTPException(status_code=400, detail="Violated guardrail policy")
+
+        frames = self._converse_stream()
+        result, body, _, _ = await self._run_converse_stream(
+            monkeypatch, self._apply_guardrail(), frames, event_stream_hook=block_after_first_frame
+        )
+
+        assert body.startswith(frames[0])
+        buffer = EventStreamBuffer()
+        buffer.add_data(body[len(frames[0]) :])
+        messages = list(buffer)
+        assert [(m.headers[":message-type"], m.headers[":exception-type"]) for m in messages] == [
+            ("exception", "validationException")
+        ]
+        assert json.loads(messages[0].payload) == {"message": "Violated guardrail policy"}
+        self._proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+        assert self._proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"].status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_failing_after_an_empty_upstream_raises(self, monkeypatch):
+        async def fail_at_the_end(response, user_api_key_dict, request_data, guardrails):
+            async for item in response:
+                yield item
+            raise HTTPException(status_code=503, detail="guardrail unavailable")
+
+        with pytest.raises(HTTPException) as raised:
+            await self._run_converse_stream(monkeypatch, self._apply_guardrail(), [], event_stream_hook=fail_at_the_end)
+
+        assert raised.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_closed_before_its_body_starts_closes_the_guardrails_and_the_upstream(
+        self, monkeypatch
+    ):
+        events: list[str] = []
+        frames = self._converse_stream()
+
+        async def scan(response, user_api_key_dict, request_data, guardrails):
+            try:
+                async for item in response:
+                    yield item
+            finally:
+                events.append("guardrails closed")
+
+        result, _, _, _ = await self._run_converse_stream(
+            monkeypatch,
+            self._apply_guardrail(),
+            frames,
+            event_stream_hook=scan,
+            stream=self._recording_upstream(frames, events),
+            read_body=False,
+        )
+        await result.upstream_generator.aclose()
+
+        assert events == ["guardrails closed", "upstream closed"]
+
+    @pytest.mark.asyncio
     async def test_bedrock_converse_stream_failure_before_the_first_frame_raises(self, monkeypatch):
+        events: list[str] = []
+        frames = self._converse_stream()
+
         async def block_before_any_frame(response, user_api_key_dict, request_data, guardrails):
             async for _ in response:
                 raise HTTPException(status_code=400, detail="Violated guardrail policy")
@@ -6310,10 +6382,17 @@ class TestAllmPassthroughStreamingProviderGate:
 
         with pytest.raises(HTTPException) as raised:
             await self._run_converse_stream(
-                monkeypatch, self._apply_guardrail(), self._converse_stream(), event_stream_hook=block_before_any_frame
+                monkeypatch,
+                self._apply_guardrail(),
+                frames,
+                event_stream_hook=block_before_any_frame,
+                stream=self._recording_upstream(frames, events),
             )
 
         assert raised.value.status_code == 400
+        assert events[-1] == "spend logged"
+        assert "upstream closed" in events
+        self._proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_bedrock_invoke_stream_is_not_buffered(self, monkeypatch):

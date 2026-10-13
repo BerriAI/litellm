@@ -22,8 +22,6 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
-
     from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.pass_through.guardrail_translation.handler import (
@@ -367,14 +365,15 @@ class ConverseStreamFrame:
     """One frame of a Converse event stream as the proxy relays it.
 
     ``payload`` is the parsed JSON of an event frame; exception frames and bytes that do not decode keep it None and
-    are relayed as received. ``is_exception`` marks an exception frame, which ends the stream.
-    ``guardrailed_payload`` is set when a guardrail rewrote the frame's text."""
+    are relayed as received. ``ends_stream`` marks the empty item the framer adds once the upstream has ended, so an
+    exception frame or a closed connection ends the stream as ``messageStop`` does. ``guardrailed_payload`` is set
+    when a guardrail rewrote the frame's text."""
 
     raw: bytes
     event_type: str | None = None
     payload: Mapping[str, object] | None = None
     guardrailed_payload: Mapping[str, object] | None = None
-    is_exception: bool = False
+    ends_stream: bool = False
 
     @property
     def block_index(self) -> int | None:
@@ -419,19 +418,18 @@ def _decode_converse_frame(raw: bytes) -> ConverseStreamFrame:
     # botocore-stubs types EventStreamMessage.headers as int; at runtime it is the decoded header dict.
     headers: Final = _JSON_OBJECT.validate_python(message.headers)
     event_type: Final = headers.get(":event-type")
-    if headers.get(":message-type") == "exception":
-        return ConverseStreamFrame(raw=raw, is_exception=True)
     if headers.get(":message-type") != "event" or not isinstance(event_type, str):
         return ConverseStreamFrame(raw=raw)
     try:
-        payload: Final = _JSON_OBJECT.validate_json(message.payload)
-    except ValidationError:
+        payload: Final = _JSON_OBJECT.validate_python(json.loads(message.payload))
+    except (json.JSONDecodeError, ValidationError):
         return ConverseStreamFrame(raw=raw, event_type=event_type)
     return ConverseStreamFrame(raw=raw, event_type=event_type, payload=payload)
 
 
 async def _converse_stream_frames(chunks: AsyncIterable[bytes]) -> AsyncGenerator[ConverseStreamFrame, None]:
-    """Cut the upstream bytes into frames as soon as each frame has fully arrived.
+    """Cut the upstream bytes into frames as soon as each frame has fully arrived, then add an empty item that ends
+    the stream once the upstream has ended.
 
     Bytes that cannot be framed (a length below the 16-byte minimum, or a stream that ends inside a frame) are relayed
     as received."""
@@ -456,6 +454,7 @@ async def _converse_stream_frames(chunks: AsyncIterable[bytes]) -> AsyncGenerato
             pending = b""
     if pending:
         yield ConverseStreamFrame(raw=pending)
+    yield ConverseStreamFrame(raw=b"", ends_stream=True)
 
 
 def _converse_frames(items: Sequence[object]) -> tuple[ConverseStreamFrame, ...]:
@@ -756,7 +755,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         return any(
-            frame.event_type == "messageStop" or frame.is_exception for frame in _converse_frames(responses_so_far)
+            frame.event_type == "messageStop" or frame.ends_stream for frame in _converse_frames(responses_so_far)
         )
 
     def build_block_sse_chunks(
@@ -794,16 +793,6 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             _converse_event("contentBlockStop", {"contentBlockIndex": block_index}),
             _converse_event("messageStop", {"stopReason": "guardrail_intervened"}),
         )
-
-    def build_stream_error_items(
-        self,
-        exc: "HTTPException",
-        responses_so_far: Sequence[object] | None = None,
-    ) -> Sequence[object] | None:
-        from litellm.proxy.common_request_processing import sse_error_payload
-
-        status_code, error = sse_error_payload(exc)
-        return (_converse_exception(str(error.get("message")), status_code),)
 
     @staticmethod
     def owns_event_stream_item(item: object) -> bool:

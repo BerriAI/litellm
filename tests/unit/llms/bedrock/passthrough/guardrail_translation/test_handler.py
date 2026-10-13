@@ -803,10 +803,16 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
 
 def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
     import json
+
+    return _build_frame(
+        {":event-type": event_type, ":content-type": "application/json", ":message-type": "event"},
+        json.dumps(payload, separators=(",", ":")).encode(),
+    )
+
+
+def _build_frame(headers: dict[str, str], payload_bytes: bytes) -> bytes:
     import struct
     from binascii import crc32 as esm_crc32
-
-    payload_bytes = json.dumps(payload, separators=(",", ":")).encode()
 
     def _encode_str_header(name: str, value: str) -> bytes:
         name_b = name.encode()
@@ -815,11 +821,7 @@ def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
             struct.pack("!B", len(name_b)) + name_b + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
         )
 
-    headers_bytes = (
-        _encode_str_header(":event-type", event_type)
-        + _encode_str_header(":content-type", "application/json")
-        + _encode_str_header(":message-type", "event")
-    )
+    headers_bytes = b"".join(_encode_str_header(name, value) for name, value in headers.items())
 
     headers_length = len(headers_bytes)
     total_length = 12 + headers_length + len(payload_bytes) + 4
@@ -1370,8 +1372,11 @@ async def _relay_through_post_call_guardrail(
     guardrail: CustomGuardrail,
     monkeypatch: pytest.MonkeyPatch,
     holds_until_moderated: bool = False,
+    received: list[bytes] | None = None,
+    outer: tuple[CustomGuardrail, bool] | None = None,
 ) -> bytes:
-    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    layers = [(guardrail, holds_until_moderated), *([outer] if outer is not None else [])]
+    monkeypatch.setattr(litellm, "callbacks", [layer for layer, _ in layers])
     logging_obj = LiteLLMLoggingObj(
         model="claude",
         messages=[],
@@ -1390,9 +1395,14 @@ async def _relay_through_post_call_guardrail(
             "endpoint": "model/claude/converse-stream",
             "litellm_logging_obj": logging_obj,
         },
-        guardrails=[(guardrail, holds_until_moderated)],
+        guardrails=layers,
     )
-    return b"".join([BedrockPassthroughGuardrailHandler.encode_event_stream_item(item) async for item in relayed])
+    frames = [] if received is None else received
+    async for item in relayed:
+        frame = BedrockPassthroughGuardrailHandler.encode_event_stream_item(item)
+        if frame:
+            frames.append(frame)
+    return b"".join(frames)
 
 
 def _card_stream() -> tuple[bytes, ...]:
@@ -1425,6 +1435,22 @@ class _RaisingGuardrail(CustomGuardrail):
         return inputs
 
 
+class _RecordingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="recorder", event_hook=GuardrailEventHooks.post_call, default_on=True)
+        self.received_texts: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.received_texts.append(list(inputs.get("texts", [])))
+        return inputs
+
+
 class TestConverseStreamFrames:
     @pytest.mark.asyncio
     async def test_frames_are_cut_at_their_boundaries_whatever_the_transport_chunks(self):
@@ -1433,7 +1459,7 @@ class TestConverseStreamFrames:
 
         frames = [frame async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(_chunks(*transport))]
 
-        assert [frame.raw for frame in frames] == list(_card_stream())
+        assert [frame.raw for frame in frames] == [*_card_stream(), b""]
         assert [frame.event_type for frame in frames] == [
             "messageStart",
             "contentBlockDelta",
@@ -1442,7 +1468,9 @@ class TestConverseStreamFrames:
             "contentBlockDelta",
             "contentBlockStop",
             "messageStop",
+            None,
         ]
+        assert [frame.ends_stream for frame in frames] == [False] * 7 + [True]
 
     @pytest.mark.asyncio
     async def test_bytes_that_cannot_be_framed_are_relayed_as_received(self):
@@ -1454,8 +1482,8 @@ class TestConverseStreamFrames:
             async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(_chunks(frame + garbage, b"tail"))
         ]
 
-        assert [item.raw for item in frames] == [frame, garbage, b"tail"]
-        assert [item.payload for item in frames[1:]] == [None, None]
+        assert [item.raw for item in frames] == [frame, garbage, b"tail", b""]
+        assert [item.payload for item in frames[1:]] == [None, None, None]
 
     @pytest.mark.asyncio
     async def test_a_stream_ending_inside_a_frame_relays_the_partial_frame(self):
@@ -1466,7 +1494,20 @@ class TestConverseStreamFrames:
             async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(_chunks(complete + partial[:-3]))
         ]
 
-        assert [frame.raw for frame in frames] == [complete, partial[:-3]]
+        assert [frame.raw for frame in frames] == [complete, partial[:-3], b""]
+
+    @pytest.mark.asyncio
+    async def test_a_delta_ending_in_half_a_surrogate_pair_is_still_decoded(self):
+        delta = {"contentBlockIndex": 0, "delta": {"text": "abc\ud83d"}}
+
+        frames = [
+            frame
+            async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(
+                _chunks(_build_event_stream_frame("contentBlockDelta", delta))
+            )
+        ]
+
+        assert frames[0].payload == delta
 
 
 class TestConverseStreamGuardrailRelay:
@@ -1521,30 +1562,69 @@ class TestConverseStreamGuardrailRelay:
         assert TestDeAnonymizeConverseStream._deltas_by_block(relayed, "text") == {0: "Card: ****.", 1: "Thanks!"}
         assert relayed.endswith(b"".join(_card_stream()[3:]))
 
+    @pytest.mark.parametrize(
+        "ending",
+        [
+            pytest.param(
+                BedrockPassthroughGuardrailHandler.event_stream_error_item("Model stream error", 500),
+                id="exception-frame",
+            ),
+            pytest.param(
+                _build_frame(
+                    {":message-type": "error", ":error-code": "InternalFailure", ":error-message": "boom"}, b""
+                ),
+                id="error-frame",
+            ),
+            pytest.param(b"", id="upstream-closed-without-messageStop"),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_held_stream_ending_in_an_upstream_exception_frame_still_applies_masks(self, monkeypatch):
-        upstream_error = BedrockPassthroughGuardrailHandler.event_stream_error_item("Model stream error", 500)
-        stream = (*_card_stream()[:3], upstream_error)
+    async def test_held_stream_that_ends_without_messageStop_still_applies_masks(self, monkeypatch, ending: bytes):
+        stream = (*_card_stream()[:3], ending)
 
         relayed = await _relay_through_post_call_guardrail(
             stream, _CardMaskingGuardrail(), monkeypatch, holds_until_moderated=True
         )
 
         assert TestDeAnonymizeConverseStream._deltas_by_block(relayed, "text") == {0: "Card: ****."}
-        assert relayed.endswith(upstream_error)
+        assert relayed.endswith(ending)
 
     @pytest.mark.asyncio
-    async def test_block_after_frames_were_relayed_ends_the_stream_with_an_exception_frame(self, monkeypatch):
+    async def test_a_sampled_guardrail_rewriting_at_the_end_never_reaches_frames_a_later_guardrail_holds(
+        self, monkeypatch
+    ):
+        stream = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"}),
+            *(
+                _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text}})
+                for text in ("Card: 4111", " 1111", " 1111", " 1111", " now.")
+            ),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            _build_event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+        )
+        held = _RecordingGuardrail()
+
+        relayed = await _relay_through_post_call_guardrail(
+            stream, _CardMaskingGuardrail(), monkeypatch, outer=(held, True)
+        )
+
+        assert relayed == b"".join(stream)
+        assert held.received_texts[-1] == [f"Card: {_TEST_CARD} now."]
+
+    @pytest.mark.asyncio
+    async def test_block_after_frames_were_relayed_raises_for_the_relay_to_report(self, monkeypatch):
         from fastapi import HTTPException
 
-        guardrail = _RaisingGuardrail(HTTPException(status_code=400, detail="Violated guardrail policy"), "Thanks")
+        block = HTTPException(status_code=400, detail="Violated guardrail policy")
+        relayed: list[bytes] = []
 
-        relayed = await _relay_through_post_call_guardrail(_card_stream(), guardrail, monkeypatch)
+        with pytest.raises(HTTPException) as raised:
+            await _relay_through_post_call_guardrail(
+                _card_stream(), _RaisingGuardrail(block, "Thanks"), monkeypatch, received=relayed
+            )
 
-        assert relayed.startswith(b"".join(_card_stream()[:4]))
-        assert _decoded_frames(relayed)[4:] == [
-            ("exception", "validationException", {"message": "Violated guardrail policy"})
-        ]
+        assert raised.value is block
+        assert relayed == list(_card_stream()[:4])
 
     @pytest.mark.asyncio
     async def test_guardrail_message_ends_the_message_after_closing_the_open_block(self, monkeypatch):
@@ -1603,13 +1683,6 @@ class TestConverseStreamGuardrailRelay:
         [(400, "validationException"), (503, "internalServerException")],
     )
     def test_stream_error_frame_type_follows_the_status(self, status_code: int, exception_type: str):
-        from fastapi import HTTPException
+        item = BedrockPassthroughGuardrailHandler.event_stream_error_item("scan failed", status_code)
 
-        items = BedrockPassthroughGuardrailHandler().build_stream_error_items(
-            HTTPException(status_code=status_code, detail={"error": "scan failed"})
-        )
-
-        assert items is not None
-        assert [frame for item in items for frame in _decoded_frames(item)] == [
-            ("exception", exception_type, {"message": "scan failed"})
-        ]
+        assert _decoded_frames(item) == [("exception", exception_type, {"message": "scan failed"})]

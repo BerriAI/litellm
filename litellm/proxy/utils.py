@@ -4149,6 +4149,9 @@ class ProxyLogging:
         current_response: AsyncIterable[object] = response  # rebind-ok: each guardrail wraps the previous layer
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         for guardrail, holds_until_moderated in guardrails:
+            if guarded_layers:
+                current_response = ProxyLogging._released_copies(current_response)
+                guarded_layers.append(current_response)
             current_response = self._wrap_streaming_iterator_with_enrichment(
                 guardrail,
                 current_response,
@@ -4352,6 +4355,13 @@ class ProxyLogging:
                         guardrail_status="guardrail_failed_to_respond",
                         event_type=GuardrailEventHooks.post_call,
                     )
+
+    @staticmethod
+    async def _released_copies(items: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+        """Each item a guardrail layer released, copied for the next layer, so a rewrite the earlier layer writes
+        back once its stream ends never reaches items the next layer is still holding."""
+        async for item in items:
+            yield copy.copy(item)
 
     @staticmethod
     async def _close_guarded_layers(layers: Sequence[AsyncGenerator[object, None]]) -> None:
