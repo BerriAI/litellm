@@ -11,9 +11,11 @@ from typing import Final, Literal, Protocol
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.integrations.focus.database import FocusLiteLLMDatabase
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.focus.destinations.ternary_destination import FocusTernaryDestination
 from litellm.integrations.focus.export_engine import FocusExportEngine
+from litellm.integrations.focus.transformer import FocusTransformer
 
 _TOKEN_TAG_KEYS: Final = (
     "prompt_tokens",
@@ -193,7 +195,14 @@ class TernaryExportEngine(FocusExportEngine):
     """FocusExportEngine that uploads one whole UTC day per delivery, with token counts merged into Tags."""
 
     def __init__(self, *, prefix: str, destination: FocusTernaryDestination) -> None:
-        super().__init__(provider="ternary", export_format="csv", prefix=prefix, destination=destination)
+        """Set the base engine's fields directly, since the generic destination factory has no Ternary destination."""
+        self.provider = "ternary"
+        self.export_format = "csv"
+        self.prefix = prefix
+        self.destination = destination
+        self.serializer = self._init_serializer()
+        self.transformer = FocusTransformer()
+        self.database = FocusLiteLLMDatabase()
 
     async def export_window(self, *, window: FocusTimeWindow, limit: int | None) -> None:
         data: Final = await _read_usage(self._database, limit=limit, window=window)

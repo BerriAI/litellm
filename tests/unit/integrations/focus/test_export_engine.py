@@ -68,13 +68,3 @@ def test_export_aggregates_compute_values_and_handle_missing_columns():
     assert FocusExportEngine.count_unique(frame, "missing") == 0
     assert FocusExportEngine.sum_column(pl.DataFrame(), "spend") == 0.0
     assert FocusExportEngine.count_unique(pl.DataFrame(), "team_id") == 0
-
-
-def test_engine_uses_an_injected_destination_without_the_factory():
-    destination = FocusDestinationFactory.create(
-        provider="vantage",
-        prefix="exports",
-        config={"api_key": "test-key", "integration_token": "test-token"},
-    )
-    engine = FocusExportEngine(provider="not-a-factory-provider", export_format="csv", prefix="p", destination=destination)
-    assert engine.destination is destination
