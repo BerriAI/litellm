@@ -763,13 +763,66 @@ class TestVertexAILivePassthroughIntegration:
 
         handler = PassThroughEndpointLogging()
 
-        assert handler.is_vertex_ai_live_route("/vertex_ai/live") == True
-        assert handler.is_vertex_ai_live_route("/vertex_ai/live/") == True
-        assert handler.is_vertex_ai_live_route("/vertex_ai/live/stream") == True
+        assert handler.live_api_provider("/vertex_ai/live") == "vertex_ai"
+        assert handler.live_api_provider("/vertex_ai/live/") == "vertex_ai"
+        assert handler.live_api_provider("/vertex_ai/live/stream") == "vertex_ai"
+        assert (
+            handler.live_api_provider(
+                "/gemini/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
+            )
+            == "gemini"
+        )
 
-        assert handler.is_vertex_ai_live_route("/vertex_ai") == False
-        assert handler.is_vertex_ai_live_route("/vertex_ai/discovery") == False
-        assert handler.is_vertex_ai_live_route("/openai/chat/completions") == False
+        assert handler.live_api_provider("/vertex_ai") is None
+        assert handler.live_api_provider("/vertex_ai/discovery") is None
+        assert handler.live_api_provider("/openai/chat/completions") is None
+        assert handler.live_api_provider("/gemini/v1beta/models/gemini-2.5-flash:generateContent") is None
+
+    @pytest.mark.usefixtures("local_model_cost_map")
+    def test_gemini_live_session_is_billed_per_modality_at_google_ai_studio_rates(self):
+        model = "gemini-2.5-flash-native-audio-preview-09-2025"
+        start_time = datetime.now()
+        logging_obj = LiteLLMLoggingObj(
+            model=model,
+            messages=[],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=start_time,
+            litellm_call_id=str(uuid.uuid4()),
+            function_id="websocket_passthrough",
+        )
+        logging_obj.update_environment_variables(model=model, user=None, optional_params={}, litellm_params={})
+        logging_obj.model_call_details["custom_llm_provider"] = "gemini"
+        usage_metadata = {
+            "promptTokenCount": 140,
+            "candidatesTokenCount": 95,
+            "totalTokenCount": 235,
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 13}, {"modality": "AUDIO", "tokenCount": 127}],
+            "candidatesTokensDetails": [{"modality": "AUDIO", "tokenCount": 95}],
+        }
+
+        normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+            httpx_response=MagicMock(),
+            response_body=[{"setupComplete": {}}, {"serverContent": {"turnComplete": True}, "usageMetadata": usage_metadata}],
+            request_body={},
+            logging_obj=logging_obj,
+            url_route="/gemini/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+            result="websocket_connection_successful",
+            start_time=start_time,
+            end_time=datetime.now(),
+            cache_hit=False,
+            custom_llm_provider="gemini",
+            model=model,
+        )
+
+        info = litellm.get_model_info(model=model, custom_llm_provider="gemini")
+        audio_in = info.get("input_cost_per_audio_token") or info["input_cost_per_token"]
+        audio_out = info.get("output_cost_per_audio_token") or info["output_cost_per_token"]
+        expected = 13 * info["input_cost_per_token"] + 127 * audio_in + 95 * audio_out
+        response = normalized["standard_logging_response_object"]
+        assert response.usage.prompt_tokens_details.audio_tokens == 127
+        assert response._hidden_params["response_cost"] == pytest.approx(expected, rel=1e-9)
+        assert normalized["kwargs"]["custom_llm_provider"] == "gemini"
 
     @patch(
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.VertexAILivePassthroughLoggingHandler"
@@ -792,7 +845,7 @@ class TestVertexAILivePassthroughIntegration:
         success_handler = PassThroughEndpointLogging()
 
         # Mock the route check
-        success_handler.is_vertex_ai_live_route = MagicMock(return_value=True)
+        success_handler.live_api_provider = MagicMock(return_value="vertex_ai")
 
         # Test data
         response_body = [{"type": "response.create", "response": {"text": "Hello"}}]

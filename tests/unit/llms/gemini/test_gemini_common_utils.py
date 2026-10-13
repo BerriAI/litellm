@@ -2,7 +2,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
+from litellm.llms.gemini.common_utils import (
+    GeminiModelInfo,
+    GoogleAIStudioTokenCounter,
+    gemini_live_setup_model,
+    gemini_live_websocket_target,
+)
 
 
 class TestGeminiModelInfo:
@@ -221,3 +226,61 @@ class TestGoogleAIStudioTokenCounter:
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
+
+
+@pytest.mark.parametrize(
+    ("frame", "expected"),
+    [
+        pytest.param(
+            '{"setup": {"model": "models/gemini-live-2.5-flash-preview", "generationConfig": {}}}',
+            "gemini-live-2.5-flash-preview",
+            id="sdk form",
+        ),
+        pytest.param('{"setup": {"model": "gemini-2.0-flash-live-001"}}', "gemini-2.0-flash-live-001", id="bare id"),
+        pytest.param(b'{"setup": {"model": "models/gemini-3.1-flash-live-preview"}}', "gemini-3.1-flash-live-preview"),
+    ],
+)
+def test_gemini_live_setup_model_reads_the_bare_model_id(frame, expected):
+    assert gemini_live_setup_model(frame) == expected
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param('{"realtimeInput": {"audio": {"data": "AAAA"}}}', id="not a setup frame"),
+        pytest.param('{"setup": {}}', id="setup without a model"),
+        pytest.param('{"setup": {"model": 7}}', id="model not a string"),
+        pytest.param('{"setup": {"model": ""}}', id="empty model"),
+        pytest.param('{"setup": {"model": "models/x\\", \\"admin\\": \\"1"}}', id="quote smuggling"),
+        pytest.param('{"setup": {"model": "tunedModels/mine"}}', id="not a models/ name"),
+        pytest.param('{"setup": {"model": "models/../files/abc"}}', id="path traversal"),
+        pytest.param("not json", id="not json"),
+        pytest.param("[]", id="json array"),
+    ],
+)
+def test_gemini_live_setup_model_refuses_frames_it_cannot_authorize(frame):
+    assert gemini_live_setup_model(frame) is None
+
+
+@pytest.mark.parametrize(
+    ("api_base", "api_version", "expected"),
+    [
+        (
+            "https://generativelanguage.googleapis.com",
+            "v1beta",
+            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+        ),
+        (
+            "https://generativelanguage.googleapis.com/",
+            "v1alpha",
+            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent",
+        ),
+        (
+            "http://localhost:8080/google/",
+            "v1beta",
+            "ws://localhost:8080/google/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+        ),
+    ],
+)
+def test_gemini_live_websocket_target_keeps_the_operator_base_and_version(api_base, api_version, expected):
+    assert gemini_live_websocket_target(api_base, api_version) == expected
