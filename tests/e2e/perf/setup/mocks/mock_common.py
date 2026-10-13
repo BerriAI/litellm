@@ -133,11 +133,12 @@ def reply_for(marker: str | None, max_tokens: int) -> str:
 
 def max_tokens_in(body: object) -> int:
     """The request's output cap in any of the wire formats: `max_tokens` (OpenAI chat, Anthropic,
-    Bedrock invoke), `max_output_tokens` (Responses) or `inferenceConfig.maxTokens` (Converse)."""
+    Bedrock invoke), `max_completion_tokens` (what the gateway sends newer OpenAI models),
+    `max_output_tokens` (Responses) or `inferenceConfig.maxTokens` (Converse)."""
     if not isinstance(body, dict):
         return 0
     data: Final = cast(dict[object, object], body)
-    for key in ("max_tokens", "max_output_tokens"):
+    for key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
         value = data.get(key)
         if isinstance(value, int):
             return value
