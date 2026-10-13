@@ -1760,3 +1760,49 @@ async def test_route_request_router_settings_override_skips_null_fields():
     assert "context_window_fallbacks" not in call_kwargs
     assert "num_retries" not in call_kwargs
     assert "model_group_retry_policy" not in call_kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [{"api_key": "sk-test"}, {"api_base": "http://localhost:1234"}])
+async def test_route_request_router_settings_override_stripped_with_api_key_or_base(extra):
+    """
+    router_settings_override must not leak to the provider when the request
+    carries api_key/api_base, and its settings must still reach the Router.
+    """
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {"num_retries": 2},
+        **extra,
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert "router_settings_override" not in call_kwargs
+    assert call_kwargs["num_retries"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_override", [None, "not-a-dict", ["num_retries"]])
+async def test_route_request_router_settings_override_non_dict_is_stripped_and_ignored(bad_override):
+    """A malformed override is dropped from the body and applies no settings."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": bad_override,
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert "router_settings_override" not in call_kwargs
+    assert "num_retries" not in call_kwargs
