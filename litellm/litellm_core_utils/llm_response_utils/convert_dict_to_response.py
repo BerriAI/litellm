@@ -236,7 +236,7 @@ async def convert_to_streaming_response_async(
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        setattr(model_response_object, "usage", Usage(**response_object["usage"]))
+        setattr(model_response_object, "usage", Usage.model_validate(response_object["usage"]))
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
@@ -322,7 +322,7 @@ def convert_to_streaming_response(
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        setattr(model_response_object, "usage", Usage(**response_object["usage"]))
+        setattr(model_response_object, "usage", Usage.model_validate(response_object["usage"]))
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
