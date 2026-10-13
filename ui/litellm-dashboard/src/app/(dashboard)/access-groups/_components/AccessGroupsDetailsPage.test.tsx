@@ -54,6 +54,7 @@ const createMockAccessGroup = (overrides: Partial<AccessGroupResponse> = {}): Ac
   access_model_names: ["model-1", "model-2"],
   access_mcp_server_ids: ["mcp-1"],
   access_agent_ids: ["agent-1"],
+  access_routes: ["/global/spend/report"],
   assigned_team_ids: ["team-1"],
   assigned_key_ids: ["key-1", "key-2"],
   access_mcp_servers: [{ id: "mcp-1", name: "GitHub MCP" }],
@@ -141,6 +142,15 @@ describe("AccessGroupDetail", () => {
 
     expect(screen.getByText("Group Details")).toBeInTheDocument();
     expect(screen.getByText("A test access group")).toBeInTheDocument();
+  });
+
+  it("should display allowed routes", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
+
+    await user.click(screen.getByRole("tab", { name: /Routes/ }));
+
+    expect(screen.getByText("/global/spend/report")).toBeInTheDocument();
   });
 
   it("should display em dash when description is empty", () => {

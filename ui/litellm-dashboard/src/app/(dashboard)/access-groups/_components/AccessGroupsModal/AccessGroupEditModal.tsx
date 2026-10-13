@@ -15,6 +15,7 @@ import {
   GENERAL_TAB,
   MCP_SERVERS_TAB,
   MODELS_TAB,
+  ROUTES_TAB,
   type AccessGroupFormValues,
 } from "./AccessGroupBaseForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -32,6 +33,7 @@ const toFormValues = (accessGroup: AccessGroupResponse): AccessGroupFormValues =
   modelIds: accessGroup.access_model_names ?? [],
   mcpServerIds: accessGroup.access_mcp_server_ids ?? [],
   agentIds: accessGroup.access_agent_ids ?? [],
+  accessRoutes: accessGroup.access_routes ?? [],
 });
 
 function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGroupEditModalProps, "visible">) {
@@ -53,6 +55,7 @@ function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGr
         access_model_names: visitedTabs.has(MODELS_TAB) ? values.modelIds : undefined,
         access_mcp_server_ids: visitedTabs.has(MCP_SERVERS_TAB) ? values.mcpServerIds : undefined,
         access_agent_ids: visitedTabs.has(AGENTS_TAB) ? values.agentIds : undefined,
+        access_routes: visitedTabs.has(ROUTES_TAB) ? values.accessRoutes : undefined,
       };
 
       editMutation.mutate(

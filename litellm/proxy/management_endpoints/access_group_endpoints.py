@@ -13,6 +13,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_AccessGroupTable,
+    LiteLLMRoutes,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
@@ -59,6 +60,9 @@ class _AccessGroupRecord(Protocol):
 
     @property
     def access_agent_ids(self) -> Sequence[str] | None: ...
+
+    @property
+    def access_routes(self) -> Sequence[str] | None: ...
 
     @property
     def assigned_team_ids(self) -> Sequence[str] | None: ...
@@ -189,6 +193,19 @@ class _ResourceNames:
 
 def _label(ids: Sequence[str], names: Mapping[str, str | None]) -> tuple[AccessGroupResource, ...]:
     return tuple(AccessGroupResource(id=resource_id, name=names.get(resource_id)) for resource_id in ids)
+
+
+def _validate_access_routes(routes: Sequence[str] | None) -> tuple[str, ...]:
+    candidate_routes: Final = tuple(routes or ())
+    invalid_routes: Final = tuple(
+        route for route in candidate_routes if route not in LiteLLMRoutes._member_names_ and not route.startswith("/")
+    )
+    if invalid_routes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid access route(s): {', '.join(invalid_routes)}",
+        )
+    return candidate_routes
 
 
 def _record_to_response(
@@ -545,6 +562,7 @@ async def create_access_group(
                     "access_model_names": data.access_model_names or [],
                     "access_mcp_server_ids": data.access_mcp_server_ids or [],
                     "access_agent_ids": data.access_agent_ids or [],
+                    "access_routes": _validate_access_routes(data.access_routes),
                     "assigned_team_ids": data.assigned_team_ids or [],
                     "assigned_key_ids": data.assigned_key_ids or [],
                     "created_by": user_api_key_dict.user_id,
@@ -636,7 +654,9 @@ async def update_access_group(
     update_fields: Final = data.model_dump(exclude_unset=True)
     update_data: Final[dict] = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
-        if (
+        if field == "access_routes":
+            update_data[field] = _validate_access_routes(data.access_routes)
+        elif (
             field
             in (
                 "assigned_team_ids",
@@ -647,8 +667,9 @@ async def update_access_group(
             )
             and value is None
         ):
-            value = []
-        update_data[field] = value
+            update_data[field] = []
+        else:
+            update_data[field] = value
 
     # Initialize delta lists before the try block so they remain accessible
     # for cache updates after the transaction, even if an error path is added later.
@@ -707,6 +728,7 @@ async def update_access_group(
 
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
+    await invalidate_access_group_cache(access_group_id)
     await _cache_access_group_record(record)
     await _patch_team_caches_add_access_group(teams_to_add, access_group_id, user_api_key_cache, proxy_logging_obj)
     await _patch_team_caches_remove_access_group(

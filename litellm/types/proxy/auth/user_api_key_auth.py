@@ -148,6 +148,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     user_model_max_budget: Mapping[str, object] | None = None
     team_member_model_max_budget: Mapping[str, object] | None = Field(default=None, exclude=True)
     request_route: str | None = None
+    access_group_routes: tuple[str, ...] = ()
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path
     # (reload_admitted_user) for a keyless user-subject admitted via a gateway DCR session

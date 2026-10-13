@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { BotIcon, InfoIcon, LayersIcon, ServerIcon } from "lucide-react";
+import { BotIcon, InfoIcon, LayersIcon, RouteIcon, ServerIcon } from "lucide-react";
 import * as React from "react";
 
 import { accessGroupKeys } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
@@ -22,8 +22,10 @@ import { fetchClient } from "@/lib/http/api";
 
 import { buildAccessGroupCreateBody, emptyAccessGroupFormValues, type AccessGroupCreateBody } from "./mapper";
 import { accessGroupCreateSchema } from "./schema";
+import { ACCESS_ROUTE_OPTIONS } from "../AccessGroupsModal/AccessGroupBaseForm";
 
 const GENERAL_TAB = "general";
+const ROUTES_TAB = "routes";
 
 const defaultCreateAccessGroup = async (body: AccessGroupCreateBody): Promise<unknown> => {
   const { data } = await fetchClient.POST("/v1/access_group", { body });
@@ -118,6 +120,10 @@ export const AccessGroupCreateDialog = ({
                 <BotIcon />
                 Agents
               </TabsTrigger>
+              <TabsTrigger value={ROUTES_TAB}>
+                <RouteIcon />
+                Routes
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value={GENERAL_TAB} className="pt-4">
@@ -167,6 +173,21 @@ export const AccessGroupCreateDialog = ({
                     onValueChange={onChange}
                     options={agentOptions}
                     placeholder="Select agents"
+                  />
+                )}
+              </FormField>
+            </TabsContent>
+            <TabsContent value={ROUTES_TAB} className="pt-4">
+              <FormField control={form.control} name="accessRoutes" label="Allowed Routes">
+                {({ id, value, onChange }) => (
+                  <MultiSelect
+                    id={id}
+                    value={value}
+                    onValueChange={onChange}
+                    options={ACCESS_ROUTE_OPTIONS}
+                    allowCustomValues
+                    placeholder="Select route groups or enter paths"
+                    emptyText="Enter a route group or path"
                   />
                 )}
               </FormField>

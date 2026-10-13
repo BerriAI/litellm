@@ -209,6 +209,9 @@ class RouteChecks:
         if denied_auth_enforced_pass_through_route:
             raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
+        if RouteChecks._access_group_route_allowed(route=route, valid_token=valid_token, request=request):
+            return True
+
         if valid_token.metadata.get("password_reset_required") is True:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -360,11 +363,15 @@ class RouteChecks:
             pass
         elif route.startswith("/v1/mcp/") or route.startswith("/mcp-rest/"):
             pass  # authN/authZ handled by api itself
-        elif RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token) or (
-            valid_token.is_team_service_account
-            and RouteChecks.check_route_access(
-                route=route, allowed_routes=LiteLLMRoutes.team_service_account_key_routes.value
+        elif (
+            RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token)
+            or (
+                valid_token.is_team_service_account
+                and RouteChecks.check_route_access(
+                    route=route, allowed_routes=LiteLLMRoutes.team_service_account_key_routes.value
+                )
             )
+            or RouteChecks._access_group_route_allowed(route=route, valid_token=valid_token, request=request)
         ):
             pass
         elif valid_token.allowed_routes is not None:
@@ -383,6 +390,43 @@ class RouteChecks:
                 RouteChecks._raise_admin_only_route_exception(user_obj=user_obj, route=route)
         else:
             RouteChecks._raise_admin_only_route_exception(user_obj=user_obj, route=route)
+
+    @staticmethod
+    def _access_group_route_allowed(route: str, valid_token: UserAPIKeyAuth, request: Request | None) -> bool:
+        for allowed_route in valid_token.access_group_routes:
+            if allowed_route in LiteLLMRoutes._member_names_:
+                route_allowed = RouteChecks.check_route_access(
+                    route=route,
+                    allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
+                )
+                if route_allowed:
+                    if (
+                        allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
+                        and RouteChecks.is_auth_enforced_pass_through_route(
+                            route=route,
+                            method=RouteChecks.get_request_method(request=request),
+                        )
+                    ):
+                        return RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token)
+                    return True
+                if allowed_route == "llm_api_routes":
+                    if (
+                        route == "/auto_router/session" and RouteChecks.get_request_method(request) == "GET"
+                    ) or RouteChecks._is_get_mcp_server_discovery_route(route=route, request=request):
+                        return True
+                    if RouteChecks.check_route_access(
+                        route=route,
+                        allowed_routes=LiteLLMRoutes.agent_management_routes.value,
+                    ):
+                        return True
+                continue
+            if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
+                return True
+            if allowed_route.endswith("/*") and RouteChecks.route_matches_wildcard_pattern(
+                route=route, pattern=allowed_route
+            ):
+                return True
+        return False
 
     @staticmethod
     def custom_admin_only_route_check(route: str):

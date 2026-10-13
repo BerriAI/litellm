@@ -1405,11 +1405,30 @@ class MCPRequestHandler:
         credential was invalid, which on a DCR client reads as broken auth and can trigger a
         pointless re-authorize loop that cannot fix a budget problem, and it masked a DB outage as an
         auth error."""
+        from litellm.proxy.auth.auth_checks import (
+            get_access_group_routes_for_auth,
+            get_team_object_for_access_group_routes,
+        )
         from litellm.proxy.auth.route_checks import RouteChecks
+        from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
         admitted.budget_reservation = None
+        team_object: Final = await get_team_object_for_access_group_routes(
+            valid_token=admitted,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        access_group_routes: Final = await get_access_group_routes_for_auth(
+            valid_token=admitted,
+            team_object=team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        route_auth: Final = admitted.model_copy(update={"access_group_routes": access_group_routes})
         try:
-            RouteChecks.should_call_route(route=route, valid_token=admitted, request=request)
+            RouteChecks.should_call_route(route=route, valid_token=route_auth, request=request)
             await run_centralized_common_checks(
                 user_api_key_auth_obj=admitted,
                 request=request,

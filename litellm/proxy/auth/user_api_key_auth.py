@@ -3981,7 +3981,28 @@ async def _authorize_authenticated_request(
     failed but the request may proceed anyway, else ``None``.
     """
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
-    RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
+    from litellm.proxy.auth.auth_checks import (
+        get_access_group_routes_for_auth,
+        get_team_object_for_access_group_routes,
+    )
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    team_object: Final = await get_team_object_for_access_group_routes(
+        valid_token=user_api_key_auth_obj,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    access_group_routes: Final = await get_access_group_routes_for_auth(
+        valid_token=user_api_key_auth_obj,
+        team_object=team_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    route_auth: Final = user_api_key_auth_obj.model_copy(update={"access_group_routes": access_group_routes})
+    RouteChecks.should_call_route(route=route, valid_token=route_auth, request=request)
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
     await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
 

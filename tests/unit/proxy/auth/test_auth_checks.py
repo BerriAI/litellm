@@ -1,8 +1,14 @@
 # What is this?
 ## Tests if 'get_end_user_object' works as expected
 
-import sys, os, asyncio, time, random, uuid
+import asyncio
+import os
+import random
+import sys
+import time
 import traceback
+import uuid
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,36 +19,38 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest, litellm
 import httpx
+import pytest
 from fastapi import Request, status
 from prisma import Prisma
+
+import litellm
 from litellm._service_logger import ServiceTypes
-from litellm.proxy._types import LiteLLM_OrganizationTable, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import get_org_object, get_user_object
-from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import (
-    LiteLLM_EndUserTable,
     LiteLLM_BudgetTable,
-    LiteLLM_UserTable,
-    LiteLLM_TeamTable,
+    LiteLLM_EndUserTable,
     Litellm_EntityType,
+    LiteLLM_OrganizationTable,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyException,
+    UserAPIKeyAuth,
 )
-from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
+    _team_soft_budget_check,
     can_team_access_model,
+    common_checks,
+    get_end_user_object,
+    get_org_object,
+    get_user_object,
     is_model_cost_zero,
     virtual_key_soft_budget_check,
-    _team_soft_budget_check,
-    common_checks,
 )
-from litellm.proxy.utils import ProxyLogging
-from litellm.proxy.utils import CallInfo
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.utils import CallInfo, PrismaClient, ProxyLogging
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 
 
@@ -545,8 +553,9 @@ async def test_can_key_call_model(model, expect_to_work):
     """
     If wildcard model + specific model is used, choose the specific model settings
     """
-    from litellm.proxy.auth.auth_checks import can_key_call_model
     from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import can_key_call_model
 
     llm_model_list = [
         {
@@ -598,8 +607,9 @@ async def test_can_key_call_model(model, expect_to_work):
 )
 @pytest.mark.asyncio
 async def test_can_team_call_model(model, expect_to_work):
-    from litellm.proxy.auth.auth_checks import model_in_access_group
     from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import model_in_access_group
 
     llm_model_list = [
         {
@@ -845,8 +855,8 @@ async def test_add_known_models_explicit_map_updates_provider_sets():
 
 @pytest.mark.asyncio
 async def test_is_valid_fallback_model():
-    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
     from litellm import Router
+    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
 
     router = Router(
         model_list=[
@@ -1180,9 +1190,9 @@ async def test_team_soft_budget_check(
 
 @pytest.mark.asyncio
 async def test_can_user_call_model():
-    from litellm.proxy.auth.auth_checks import can_user_call_model
-    from litellm.proxy._types import ProxyException
     from litellm import Router
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_user_call_model
 
     router = Router(
         model_list=[
@@ -1220,9 +1230,10 @@ async def test_can_user_call_model():
 
 @pytest.mark.asyncio
 async def test_can_user_call_model_with_no_default_models():
-    from litellm.proxy.auth.auth_checks import can_user_call_model
-    from litellm.proxy._types import ProxyException, SpecialModelNames
     from unittest.mock import MagicMock
+
+    from litellm.proxy._types import ProxyException, SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_user_call_model
 
     args = {
         "model": "anthropic-claude",
@@ -1244,8 +1255,9 @@ async def test_can_user_call_model_with_no_default_models():
 
 @pytest.mark.asyncio
 async def test_get_fuzzy_user_object():
-    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
     from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
 
     # Setup mock Prisma client
     mock_prisma = MagicMock()
@@ -1383,8 +1395,8 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
 @pytest.mark.asyncio
 async def test_cache_access_object():
     """Test _cache_access_object stores access group in cache with correct key."""
-    from litellm.proxy.auth.auth_checks import cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import cache_access_object
 
     cache = DualCache()
     ag_id = "ag-test-123"
@@ -1409,10 +1421,9 @@ async def test_cache_access_object():
 
 
 @pytest.mark.asyncio
-async def test_delete_cache_access_object():
-    """Test _delete_cache_access_object removes access group from in-memory cache."""
-    from litellm.proxy.auth.auth_checks import delete_cache_access_object
+async def test_delete_cache_access_object_evicts_and_broadcasts():
     from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import delete_cache_access_object
 
     cache = DualCache()
     ag_id = "ag-delete-test"
@@ -1421,9 +1432,12 @@ async def test_delete_cache_access_object():
         access_group_name="to-delete",
     )
     await cache.async_set_cache(key=f"access_group_id:{ag_id}", value=ag_table, ttl=60)
-    await delete_cache_access_object(access_group_id=ag_id, user_api_key_cache=cache)
+    invalidation: Final = AsyncMock()
+    with patch("litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation", new=invalidation):
+        await delete_cache_access_object(access_group_id=ag_id, user_api_key_cache=cache)
     cached = await cache.async_get_cache(key=f"access_group_id:{ag_id}")
     assert cached is None
+    invalidation.assert_awaited_once_with(cache_key=f"access_group_id:{ag_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -1500,6 +1514,83 @@ async def test_get_models_from_access_groups_empty_ids():
     assert result == []
 
 
+@pytest.mark.asyncio
+async def test_access_group_routes_union_key_and_team_ids_with_deduplication():
+    from litellm.proxy._types import LiteLLM_AccessGroupTable, LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import get_access_group_routes_for_auth
+
+    groups: Final = {
+        "key-group": LiteLLM_AccessGroupTable(
+            access_group_id="key-group", access_group_name="key", access_routes=["/key/info", "/shared"]
+        ),
+        "team-group": LiteLLM_AccessGroupTable(
+            access_group_id="team-group", access_group_name="team", access_routes=["/shared", "/spend/logs"]
+        ),
+    }
+
+    async def fetch_group_side_effect(access_group_id: str, **_: object) -> LiteLLM_AccessGroupTable:
+        return groups[access_group_id]
+
+    fetch_group: Final = AsyncMock(side_effect=fetch_group_side_effect)
+    valid_token: Final = UserAPIKeyAuth(access_group_ids=["key-group"])
+    team_object: Final = LiteLLM_TeamTable(
+        team_id="team-id", access_group_ids=["team-group", "key-group"]
+    )
+    routes: Final = await get_access_group_routes_for_auth(
+        valid_token=valid_token,
+        team_object=team_object,
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        access_group_fetcher=fetch_group,
+    )
+
+    assert routes == ("/key/info", "/shared", "/spend/logs")
+    assert tuple(call.kwargs["access_group_id"] for call in fetch_group.await_args_list) == ("key-group", "team-group")
+
+
+@pytest.mark.asyncio
+async def test_access_group_route_lookup_failure_contributes_nothing():
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import get_access_group_routes_for_key_and_team
+
+    async def fetch_group_side_effect(access_group_id: str, **_: object) -> LiteLLM_AccessGroupTable:
+        if access_group_id == "broken":
+            raise RuntimeError("temporary failure")
+        return LiteLLM_AccessGroupTable(
+            access_group_id=access_group_id, access_group_name="working", access_routes=["/key/info"]
+        )
+
+    fetch_group: Final = AsyncMock(side_effect=fetch_group_side_effect)
+    routes: Final = await get_access_group_routes_for_key_and_team(
+        key_access_group_ids=["broken", "working"],
+        team_access_group_ids=[],
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        access_group_fetcher=fetch_group,
+    )
+
+    assert routes == ("/key/info",)
+
+
+@pytest.mark.asyncio
+async def test_access_group_route_lookup_is_skipped_without_group_ids():
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import get_access_group_routes_for_key_and_team
+
+    async def fetch_group_side_effect(access_group_id: str, **_: object) -> LiteLLM_AccessGroupTable:
+        return LiteLLM_AccessGroupTable(access_group_id=access_group_id, access_group_name="unused")
+
+    fetch_group: Final = AsyncMock(side_effect=fetch_group_side_effect)
+    routes: Final = await get_access_group_routes_for_key_and_team(
+        key_access_group_ids=[],
+        team_access_group_ids=None,
+        access_group_fetcher=fetch_group,
+    )
+
+    assert routes == ()
+    assert fetch_group.await_count == 0
+
+
 # ---------------------------------------------------------------------------
 # can_team_access_model with access_group_ids fallback
 # ---------------------------------------------------------------------------
@@ -1537,8 +1628,8 @@ async def test_can_team_access_model_access_group_ids_denied():
     """Test can_team_access_model denies when neither team models nor access_group_ids grant access."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import can_team_access_model
     from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_team_access_model
 
     team_object = LiteLLM_TeamTable(
         team_id="test-team",

@@ -11,6 +11,7 @@ export interface AccessGroupUpdateParams {
   access_model_names?: string[];
   access_mcp_server_ids?: string[];
   access_agent_ids?: string[];
+  access_routes?: string[];
   assigned_team_ids?: string[];
   assigned_key_ids?: string[];
 }

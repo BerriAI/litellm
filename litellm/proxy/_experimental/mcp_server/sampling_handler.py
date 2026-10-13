@@ -975,11 +975,20 @@ async def _run_budget_checks(
     # This mirrors the RouteChecks.should_call_route gate that runs in
     # user_api_key_auth before common_checks for regular requests.
     try:
+        from litellm.proxy.auth.auth_checks import get_access_group_routes_for_auth
         from litellm.proxy.auth.route_checks import RouteChecks
 
+        access_group_routes: Final = await get_access_group_routes_for_auth(
+            valid_token=user_api_key_auth,
+            team_object=team_obj,
+            prisma_client=_prisma_client,
+            user_api_key_cache=_user_api_key_cache,
+            proxy_logging_obj=_proxy_logging_obj,
+        )
+        route_auth: Final = user_api_key_auth.model_copy(update={"access_group_routes": access_group_routes})
         RouteChecks.should_call_route(
             route="/chat/completions",
-            valid_token=user_api_key_auth,
+            valid_token=route_auth,
             request=dummy_request,
         )
     except HTTPException as route_err:

@@ -9,6 +9,7 @@ class AccessGroupCreateRequest(LiteLLMBaseModel):
     access_model_names: list[str] | None = None
     access_mcp_server_ids: list[str] | None = None
     access_agent_ids: list[str] | None = None
+    access_routes: tuple[str, ...] | None = None
     assigned_team_ids: list[str] | None = None
     assigned_key_ids: list[str] | None = None
 
@@ -19,6 +20,7 @@ class AccessGroupUpdateRequest(LiteLLMBaseModel):
     access_model_names: list[str] | None = None
     access_mcp_server_ids: list[str] | None = None
     access_agent_ids: list[str] | None = None
+    access_routes: tuple[str, ...] | None = None
     assigned_team_ids: list[str] | None = None
     assigned_key_ids: list[str] | None = None
 
@@ -37,6 +39,7 @@ class AccessGroupResponse(LiteLLMBaseModel):
     access_model_names: list[str]
     access_mcp_server_ids: list[str]
     access_agent_ids: list[str]
+    access_routes: tuple[str, ...]
     assigned_team_ids: list[str]
     assigned_key_ids: list[str]
     access_mcp_servers: tuple[AccessGroupResource, ...]

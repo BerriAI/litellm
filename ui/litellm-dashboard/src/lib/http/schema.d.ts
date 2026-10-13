@@ -24938,6 +24938,8 @@ export interface components {
             access_mcp_server_ids?: string[] | null;
             /** Access Model Names */
             access_model_names?: string[] | null;
+            /** Access Routes */
+            access_routes?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */
@@ -24983,6 +24985,8 @@ export interface components {
             access_mcp_servers: components["schemas"]["AccessGroupResource"][];
             /** Access Model Names */
             access_model_names: string[];
+            /** Access Routes */
+            access_routes: string[];
             /** Assigned Key Ids */
             assigned_key_ids: string[];
             /** Assigned Keys */
@@ -25018,6 +25022,8 @@ export interface components {
             access_mcp_server_ids?: string[] | null;
             /** Access Model Names */
             access_model_names?: string[] | null;
+            /** Access Routes */
+            access_routes?: string[] | null;
             /** Assigned Key Ids */
             assigned_key_ids?: string[] | null;
             /** Assigned Team Ids */
@@ -48369,6 +48375,11 @@ export interface components {
         UserAPIKeyAuth: {
             /** Access Group Ids */
             access_group_ids?: string[] | null;
+            /**
+             * Access Group Routes
+             * @default []
+             */
+            access_group_routes: string[];
             /** Agent Id */
             agent_id?: string | null;
             /**

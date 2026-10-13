@@ -3635,11 +3635,20 @@ async def delete_cache_access_object(
 ) -> None:
     key: Final = f"access_group_id:{access_group_id}"
 
-    user_api_key_cache.delete_cache(key=key)
+    try:
+        user_api_key_cache.delete_cache(key=key)
 
-    ## UPDATE REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        ## UPDATE REDIS CACHE ##
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+    except Exception as e:  # noqa: BLE001  # a cache error must not fail a committed access-group mutation
+        verbose_proxy_logger.warning(
+            "Failed to invalidate cached access group entry %s; a stale object may be served until its TTL expires: %s",
+            key,
+            e,
+        )
+
+    await publish_auth_cache_invalidation(cache_key=key)
 
 
 _delete_cache_access_object: Final = delete_cache_access_object
@@ -4549,13 +4558,47 @@ async def get_org_object_for_request(
     return org
 
 
+class _AccessGroupFetcher(Protocol):
+    def __call__(
+        self,
+        *,
+        access_group_id: str,
+        prisma_client: DatabaseClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        proxy_logging_obj: ProxyLogging | None,
+        check_db_only: bool = False,
+    ) -> Awaitable[LiteLLM_AccessGroupTable]: ...
+
+
+async def get_team_object_for_access_group_routes(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> LiteLLM_TeamTable | None:
+    if valid_token.team_id is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=valid_token.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # a failed team lookup must not grant team routes
+        verbose_proxy_logger.debug("Unable to resolve team access groups: %s", e)
+        return None
+
+
 async def _get_resources_from_access_groups(
     access_group_ids: Sequence[str],
-    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
+    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids", "access_routes"],
     prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     check_db_only: bool = False,
+    access_group_fetcher: _AccessGroupFetcher | None = None,
 ) -> list[str]:
     """
     Fetch access groups by their IDs (from cache or DB) and collect
@@ -4590,10 +4633,11 @@ async def _get_resources_from_access_groups(
     if user_api_key_cache is None:
         return []
 
+    fetch_group: Final[_AccessGroupFetcher] = access_group_fetcher or get_access_object
     resources: Final[list[str]] = []
     for ag_id in access_group_ids:
         try:
-            ag = await get_access_object(
+            ag = await fetch_group(
                 access_group_id=ag_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
@@ -4609,7 +4653,49 @@ async def _get_resources_from_access_groups(
                 ag_id,
                 resource_field,
             )
-    return list(set(resources))
+    return list(dict.fromkeys(resources))
+
+
+async def get_access_group_routes_for_key_and_team(
+    key_access_group_ids: Sequence[str] | None,
+    team_access_group_ids: Sequence[str] | None,
+    prisma_client: DatabaseClient | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+    access_group_fetcher: _AccessGroupFetcher | None = None,
+) -> tuple[str, ...]:
+    access_group_ids: Final = tuple(
+        dict.fromkeys((*tuple(key_access_group_ids or ()), *tuple(team_access_group_ids or ())))
+    )
+    if not access_group_ids:
+        return ()
+    routes: Final = await _get_resources_from_access_groups(
+        access_group_ids=access_group_ids,
+        resource_field="access_routes",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        access_group_fetcher=access_group_fetcher,
+    )
+    return tuple(dict.fromkeys(routes))
+
+
+async def get_access_group_routes_for_auth(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    prisma_client: DatabaseClient | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+    access_group_fetcher: _AccessGroupFetcher | None = None,
+) -> tuple[str, ...]:
+    return await get_access_group_routes_for_key_and_team(
+        key_access_group_ids=valid_token.access_group_ids,
+        team_access_group_ids=team_object.access_group_ids if team_object is not None else None,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        access_group_fetcher=access_group_fetcher,
+    )
 
 
 async def get_models_from_access_groups(

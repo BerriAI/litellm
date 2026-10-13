@@ -45,6 +45,7 @@ const accessGroup: AccessGroupResponse = {
   access_model_names: ["gpt-4"],
   access_mcp_server_ids: ["srv-1"],
   access_agent_ids: ["agent-1"],
+  access_routes: ["spend_tracking_routes"],
   assigned_team_ids: [],
   assigned_key_ids: [],
   access_mcp_servers: [{ id: "srv-1", name: "Server One" }],
@@ -80,13 +81,15 @@ describe("AccessGroupEditModal submit payload", () => {
 
     expect(mutate).toHaveBeenCalledTimes(1);
     expect(variables().accessGroupId).toBe("ag-1");
-    expect(variables().params).toStrictEqual({
+    const expectedParams = {
       access_group_name: "Engineering",
       description: "Engineers",
       access_model_names: undefined,
       access_mcp_server_ids: undefined,
       access_agent_ids: undefined,
-    });
+      access_routes: undefined,
+    };
+    expect(variables().params).toStrictEqual(expectedParams);
   });
 
   it("sends a tab's field only once that tab has been visited", async () => {
@@ -100,13 +103,15 @@ describe("AccessGroupEditModal submit payload", () => {
     await save(user);
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());
-    expect(variables().params).toStrictEqual({
+    const expectedParams = {
       access_group_name: "Engineering",
       description: "Engineers",
       access_model_names: undefined,
       access_mcp_server_ids: ["srv-1"],
       access_agent_ids: ["agent-1"],
-    });
+      access_routes: undefined,
+    };
+    expect(variables().params).toStrictEqual(expectedParams);
   });
 
   it("coerces a null description to an empty string", async () => {
@@ -221,5 +226,21 @@ describe("AccessGroupEditModal submit payload", () => {
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());
     expect(variables().params.access_model_names).toStrictEqual(["gpt-4"]);
+  });
+
+  it("sends edited routes and omits routes on an untouched save", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /Routes/ }));
+    const routesInput = screen.getByRole("combobox", { name: "Select route groups or enter paths" });
+    await user.type(routesInput, "/global/spend/report");
+    await user.click(await screen.findByRole("option", { name: 'Create "/global/spend/report"' }));
+    await user.click(screen.getByRole("tab", { name: /General Info/ }));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_routes).toStrictEqual(["spend_tracking_routes", "/global/spend/report"]);
   });
 });

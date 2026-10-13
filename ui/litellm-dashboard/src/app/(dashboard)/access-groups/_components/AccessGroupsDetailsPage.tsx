@@ -1,5 +1,5 @@
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
-import { ArrowLeftIcon, BotIcon, EditIcon, KeyIcon, LayersIcon, ServerIcon, UsersIcon } from "lucide-react";
+import { ArrowLeftIcon, BotIcon, EditIcon, KeyIcon, LayersIcon, RouteIcon, ServerIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
 import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import { BadgeLink } from "@/components/shared/BadgeLink";
@@ -95,6 +95,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
   const models = accessGroup.access_model_names.map((id) => ({ id, name: null }));
   const mcpServers = accessGroup.access_mcp_servers;
   const agents = accessGroup.access_agents;
+  const routes = accessGroup.access_routes.map((id) => ({ id, name: null }));
   const keys = accessGroup.assigned_keys;
   const teams = accessGroup.assigned_teams;
 
@@ -231,6 +232,11 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
                 Agents
                 <Badge variant="secondary">{agents.length}</Badge>
               </TabsTrigger>
+              <TabsTrigger value="routes" className="flex-none gap-2 rounded-none px-4 py-2">
+                <RouteIcon className="size-4" />
+                Routes
+                <Badge variant="secondary">{routes.length}</Badge>
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="models" className="pt-4">
               <ResourceList items={models} emptyMessage="No models assigned to this group" />
@@ -240,6 +246,9 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             </TabsContent>
             <TabsContent value="agents" className="pt-4">
               <ResourceList items={agents} emptyMessage="No agents assigned to this group" />
+            </TabsContent>
+            <TabsContent value="routes" className="pt-4">
+              <ResourceList items={routes} emptyMessage="No routes assigned to this group" />
             </TabsContent>
           </Tabs>
         </CardContent>

@@ -1,6 +1,6 @@
 "use client";
 
-import { BotIcon, InfoIcon, LayersIcon, ServerIcon } from "lucide-react";
+import { BotIcon, InfoIcon, LayersIcon, RouteIcon, ServerIcon } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -14,13 +14,16 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-export const accessGroupFormSchema = z.object({
+const accessGroupFormSchemaFields = {
   name: z.string().min(1, "Please enter the access group name"),
   description: z.string(),
   modelIds: z.array(z.string()),
   mcpServerIds: z.array(z.string()),
   agentIds: z.array(z.string()),
-});
+  accessRoutes: z.array(z.string()),
+};
+
+export const accessGroupFormSchema = z.object(accessGroupFormSchemaFields);
 
 export type AccessGroupFormValues = z.output<typeof accessGroupFormSchema>;
 
@@ -28,6 +31,21 @@ export const GENERAL_TAB = "general";
 export const MODELS_TAB = "models";
 export const MCP_SERVERS_TAB = "mcp-servers";
 export const AGENTS_TAB = "agents";
+export const ROUTES_TAB = "routes";
+
+export const ACCESS_ROUTE_OPTIONS = [
+  "llm_api_routes",
+  "management_routes",
+  "spend_tracking_routes",
+  "internal_user_routes",
+  "org_admin_allowed_routes",
+  "internal_user_view_only_routes",
+  "self_managed_routes",
+  "team_service_account_key_routes",
+  "mcp_inference_routes",
+  "agent_inference_routes",
+  "litellm_native_routes",
+].map((value) => ({ value, label: value }));
 
 interface AccessGroupBaseFormProps {
   form: UseFormReturn<AccessGroupFormValues>;
@@ -72,6 +90,10 @@ export function AccessGroupBaseForm({
         <TabsTrigger value={AGENTS_TAB}>
           <BotIcon size={16} />
           Agents
+        </TabsTrigger>
+        <TabsTrigger value={ROUTES_TAB}>
+          <RouteIcon size={16} />
+          Routes
         </TabsTrigger>
       </TabsList>
 
@@ -119,6 +141,22 @@ export function AccessGroupBaseForm({
               onValueChange={onChange}
               options={agentOptions}
               placeholder="Select agents"
+            />
+          )}
+        </FormField>
+      </TabsContent>
+
+      <TabsContent value={ROUTES_TAB} className="pt-4">
+        <FormField control={form.control} name="accessRoutes" label="Allowed Routes">
+          {({ id, value, onChange }) => (
+            <MultiSelect
+              id={id}
+              value={value}
+              onValueChange={onChange}
+              options={ACCESS_ROUTE_OPTIONS}
+              allowCustomValues
+              placeholder="Select route groups or enter paths"
+              emptyText="Enter a route group or path"
             />
           )}
         </FormField>

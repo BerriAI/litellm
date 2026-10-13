@@ -29,6 +29,7 @@ def _make_access_group_record(
     access_model_names: list | None = None,
     access_mcp_server_ids: list | None = None,
     access_agent_ids: list | None = None,
+    access_routes: list[str] | None = None,
     assigned_team_ids: list | None = None,
     assigned_key_ids: list | None = None,
     created_by: str | None = "admin-user",
@@ -44,6 +45,7 @@ def _make_access_group_record(
         "access_model_names": access_model_names or [],
         "access_mcp_server_ids": access_mcp_server_ids or [],
         "access_agent_ids": access_agent_ids or [],
+        "access_routes": access_routes or [],
         "assigned_team_ids": assigned_team_ids or [],
         "assigned_key_ids": assigned_key_ids or [],
         "created_at": created_at_val,
@@ -89,6 +91,7 @@ def client_and_mocks(monkeypatch):
             access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
+            access_routes=data.get("access_routes", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             created_by=data.get("created_by"),
@@ -106,6 +109,7 @@ def client_and_mocks(monkeypatch):
             access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
+            access_routes=data.get("access_routes", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             updated_by=data.get("updated_by"),
@@ -217,6 +221,30 @@ def test_create_access_group_success(client_and_mocks, base_path, payload):
     mock_table.create.assert_awaited_once()
 
 
+def test_create_access_group_persists_access_routes(client_and_mocks):
+    client, _, mock_table, *_ = client_and_mocks
+
+    response = client.post(
+        "/v1/access_group",
+        json={"access_group_name": "routes-group", "access_routes": ["/key/info", "spend_tracking_routes"]},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["access_routes"] == ["/key/info", "spend_tracking_routes"]
+    assert mock_table.create.call_args.kwargs["data"]["access_routes"] == ("/key/info", "spend_tracking_routes")
+
+
+@pytest.mark.parametrize("path", ["/v1/access_group", "/v1/unified_access_group"])
+def test_create_access_group_rejects_invalid_access_route(client_and_mocks, path):
+    client, _, mock_table, *_ = client_and_mocks
+
+    response = client.post(path, json={"access_group_name": "invalid-routes", "access_routes": ["key-info"]})
+
+    assert response.status_code == 400
+    assert "Invalid access route" in response.json()["detail"]
+    mock_table.create.assert_not_awaited()
+
+
 def test_create_access_group_duplicate_name_conflict(client_and_mocks):
     """Create with duplicate name returns 409."""
     client, _, mock_table, *_ = client_and_mocks
@@ -312,7 +340,9 @@ def test_list_access_groups_attributes_teams_per_group_with_one_query(client_and
     mock_team_table = mock_prisma.db.litellm_teamtable
 
     records = [
-        _make_access_group_record(access_group_id="ag-1", access_group_name="group-1"),
+        _make_access_group_record(
+            access_group_id="ag-1", access_group_name="group-1", access_routes=["/key/info"]
+        ),
         _make_access_group_record(access_group_id="ag-2", access_group_name="group-2"),
     ]
     mock_table.find_many = AsyncMock(return_value=records)
@@ -342,7 +372,9 @@ def test_list_access_groups_success_with_items(client_and_mocks, base_path):
     client, _, mock_table, *_ = client_and_mocks
 
     records = [
-        _make_access_group_record(access_group_id="ag-1", access_group_name="group-1"),
+        _make_access_group_record(
+            access_group_id="ag-1", access_group_name="group-1", access_routes=["/key/info"]
+        ),
         _make_access_group_record(access_group_id="ag-2", access_group_name="group-2"),
     ]
     mock_table.find_many = AsyncMock(return_value=records)
@@ -353,6 +385,7 @@ def test_list_access_groups_success_with_items(client_and_mocks, base_path):
     assert len(body) == 2
     assert body[0]["access_group_name"] == "group-1"
     assert body[1]["access_group_name"] == "group-2"
+    assert body[0]["access_routes"] == ["/key/info"]
 
 
 @pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
@@ -415,12 +448,13 @@ def test_get_access_group_success(client_and_mocks, base_path, access_group_id):
     """Get access group by id returns record when found."""
     client, _, mock_table, *_ = client_and_mocks
 
-    record = _make_access_group_record(access_group_id=access_group_id)
+    record = _make_access_group_record(access_group_id=access_group_id, access_routes=["/key/info"])
     mock_table.find_unique = AsyncMock(return_value=record)
 
     resp = client.get(f"{base_path}/{access_group_id}")
     assert resp.status_code == 200
     assert resp.json()["access_group_id"] == access_group_id
+    assert resp.json()["access_routes"] == ["/key/info"]
 
 
 @pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
@@ -513,6 +547,32 @@ def test_update_access_group_success(client_and_mocks, base_path, update_payload
     resp = client.put(f"{base_path}/ag-update", json=update_payload)
     assert resp.status_code == 200
     mock_table.update.assert_awaited_once()
+
+
+def test_update_access_group_persists_access_routes_and_invalidates_cache(client_and_mocks):
+    client, _, mock_table, mock_cache, _ = client_and_mocks
+    existing = _make_access_group_record(access_group_id="ag-update")
+    mock_table.find_unique = AsyncMock(return_value=existing)
+
+    response = client.put(
+        "/v1/access_group/ag-update",
+        json={"access_routes": ["/key/info", "spend_tracking_routes"]},
+    )
+
+    assert response.status_code == 200
+    assert mock_table.update.call_args.kwargs["data"]["access_routes"] == ("/key/info", "spend_tracking_routes")
+    mock_cache.delete_cache.assert_called_with(key="access_group_id:ag-update")
+
+
+def test_update_access_group_rejects_invalid_access_route(client_and_mocks):
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(return_value=_make_access_group_record(access_group_id="ag-update"))
+
+    response = client.put("/v1/access_group/ag-update", json={"access_routes": ["not-a-route"]})
+
+    assert response.status_code == 400
+    assert "Invalid access route" in response.json()["detail"]
+    mock_table.update.assert_not_awaited()
 
 
 def test_update_access_group_not_found(client_and_mocks):

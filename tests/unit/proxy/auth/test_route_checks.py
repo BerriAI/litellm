@@ -380,6 +380,103 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed():
     assert result is True
 
 
+def test_team_access_group_route_grant_allows_internal_user_on_global_spend_route():
+    user_obj: Final = LiteLLM_UserTable(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        access_group_routes=("/global/spend/report",),
+    )
+
+    result: Final = RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/global/spend/report",
+        request=MagicMock(spec=Request),
+        valid_token=valid_token,
+        request_data={},
+    )
+    assert result is None
+
+
+def test_internal_user_without_access_group_route_grant_is_denied():
+    user_obj: Final = LiteLLM_UserTable(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/global/spend/report",
+            request=MagicMock(spec=Request),
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
+def test_access_group_route_enum_name_expands_but_key_allowlist_does_not():
+    route: Final = LiteLLMRoutes.global_spend_tracking_routes.value[0]
+    group_token: Final = UserAPIKeyAuth(access_group_routes=("global_spend_tracking_routes",))
+    key_token: Final = UserAPIKeyAuth(allowed_routes=["global_spend_tracking_routes"])
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value),
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=MagicMock(spec=Request),
+        valid_token=group_token,
+        request_data={},
+    )
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value),
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=MagicMock(spec=Request),
+            valid_token=key_token,
+            request_data={},
+        )
+
+
+def test_access_group_spend_tracking_route_name_expands_by_enum_name():
+    token: Final = UserAPIKeyAuth(allowed_routes=["/unrelated"], access_group_routes=("spend_tracking_routes",))
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route="/spend/logs", valid_token=token) is True
+
+
+def test_access_group_path_grants_use_boundary_prefixes_and_trailing_wildcards():
+    path_token: Final = UserAPIKeyAuth(allowed_routes=["/unrelated"], access_group_routes=("/service",))
+    wildcard_token: Final = UserAPIKeyAuth(allowed_routes=["/unrelated"], access_group_routes=("/service/*",))
+    invalid_wildcard_token: Final = UserAPIKeyAuth(allowed_routes=["/unrelated"], access_group_routes=("/service*",))
+
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route="/service/items", valid_token=path_token) is True
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route="/service/items", valid_token=wildcard_token) is True
+    with pytest.raises(HTTPException):
+        RouteChecks.is_virtual_key_allowed_to_call_route(route="/services", valid_token=path_token)
+    with pytest.raises(HTTPException):
+        RouteChecks.is_virtual_key_allowed_to_call_route(route="/services", valid_token=wildcard_token)
+    with pytest.raises(HTTPException):
+        RouteChecks.is_virtual_key_allowed_to_call_route(route="/services", valid_token=invalid_wildcard_token)
+
+
+def test_access_group_route_adds_to_nonempty_key_allowlist():
+    token: Final = UserAPIKeyAuth(allowed_routes=["llm_api_routes"], access_group_routes=("/key/info",))
+    RouteChecks.is_virtual_key_allowed_to_call_route(route="/key/info", valid_token=token)
+
+    with pytest.raises(HTTPException):
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/key/info",
+            valid_token=UserAPIKeyAuth(allowed_routes=["llm_api_routes"]),
+        )
+
+
+def test_empty_key_allowlist_remains_unrestricted_with_access_group_routes():
+    token: Final = UserAPIKeyAuth(allowed_routes=[], access_group_routes=("/key/info",))
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route="/chat/completions", valid_token=token) is True
+
+
 def test_virtual_key_mcp_routes_allows_v1_mcp_server():
     """Regression test for #20325: allow virtual keys to list MCP servers."""
 

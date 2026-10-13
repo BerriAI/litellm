@@ -10,6 +10,7 @@ export const emptyAccessGroupFormValues: AccessGroupCreateFormValues = {
   modelIds: [],
   mcpServerIds: [],
   agentIds: [],
+  accessRoutes: [],
 };
 
 export const buildAccessGroupCreateBody = (values: AccessGroupCreateFormValues): AccessGroupCreateBody => ({
@@ -18,4 +19,5 @@ export const buildAccessGroupCreateBody = (values: AccessGroupCreateFormValues):
   ...(values.modelIds.length > 0 && { access_model_names: values.modelIds }),
   ...(values.mcpServerIds.length > 0 && { access_mcp_server_ids: values.mcpServerIds }),
   ...(values.agentIds.length > 0 && { access_agent_ids: values.agentIds }),
+  ...(values.accessRoutes.length > 0 && { access_routes: values.accessRoutes }),
 });

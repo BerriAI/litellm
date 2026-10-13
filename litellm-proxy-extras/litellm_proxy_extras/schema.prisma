@@ -1589,6 +1589,7 @@ model LiteLLM_AccessGroupTable {
   access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
   access_agent_ids        String[] @default([])
+  access_routes           String[] @default([])
 
   assigned_team_ids         String[] @default([])
   assigned_key_ids          String[] @default([])
