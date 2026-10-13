@@ -1130,6 +1130,17 @@ class CustomGuardrail(CustomLogger):
         """
         return False
 
+    def supports_structured_messages(self) -> bool:
+        """Whether this guardrail scans every row of ``structured_messages`` and returns texts that agree with them.
+
+        Guardrails that scan only part of the rows (the latest user turn, the
+        last row, the turns after the last assistant turn, or no tool results),
+        or derive their returned texts from the rows, override this to return
+        False. Translation handlers that can rewrite the request from ``texts``
+        alone, like Bedrock Converse, then hand them only ``texts``.
+        """
+        return True
+
     def _suppressed_by_auto_router_compression(self) -> bool:
         """True when an auto router's own compression policy suppresses this guardrail.
 

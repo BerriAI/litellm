@@ -170,6 +170,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
     def supports_scan_only_tool_results(self) -> bool:
         return self.check_tool_results
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,

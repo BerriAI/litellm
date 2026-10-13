@@ -1743,6 +1743,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def supports_scan_only_tool_results(self) -> bool:
         return False
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
     @classmethod
     def _get_scannable_text_indices(
         cls,

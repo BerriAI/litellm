@@ -2828,6 +2828,11 @@ def _card_in_every_turn_data() -> dict:
     }
 
 
+class _FlatTextsOnlyGuardrail(_ScriptedGuardrail):
+    def supports_structured_messages(self) -> bool:
+        return False
+
+
 class TestConverseGuardrailsThatReadFlatTextsOnly:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -2868,6 +2873,21 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
         ]
         assert "structured_messages" not in received[-1]
         assert "tools" not in received[-1]
+        assert "4111" not in json.dumps({key: value for key, value in result["data"].items() if key != "toolConfig"})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("guardrail_class", "gets_rows"),
+        [(_ScriptedGuardrail, True), (_FlatTextsOnlyGuardrail, False)],
+        ids=["supports-structured-messages", "flat-texts-only"],
+    )
+    async def test_guardrail_flag_decides_whether_it_gets_rows_and_tools(self, guardrail_class, gets_rows):
+        guard = guardrail_class(lambda inputs: {"texts": _masked_texts(inputs)})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(_card_in_every_turn_data(), guard)
+
+        assert ("structured_messages" in guard.received[-1]) is gets_rows
+        assert ("tools" in guard.received[-1]) is gets_rows
         assert "4111" not in json.dumps({key: value for key, value in result["data"].items() if key != "toolConfig"})
 
 

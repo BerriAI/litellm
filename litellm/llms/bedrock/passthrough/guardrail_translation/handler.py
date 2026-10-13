@@ -49,22 +49,6 @@ if TYPE_CHECKING:
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
 _EVENT_STREAM_MEDIA_TYPE: Final = "application/vnd.amazon.eventstream"
-# Handed rows, these scan only part of the conversation (the latest user turn, the last row, the turns
-# after the last assistant turn, or no tool results) or derive their returned texts from the rows, while
-# the flat texts carry every string of the body in the order the write-back expects.
-_FLAT_TEXT_PROVIDERS: Final = frozenset(
-    {
-        "akto",
-        "bedrock",
-        "openai_moderation",
-        "llm_as_a_judge",
-        "crowdstrike_aidr",
-        "prompt_security",
-        "panw_prisma_airs",
-        "hiddenlayer",
-        "promptguard",
-    }
-)
 
 
 def _is_converse_endpoint(endpoint: str) -> bool:
@@ -87,14 +71,7 @@ def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
 
 def _reads_flat_texts_only(guardrail: "CustomGuardrail") -> bool:
     """Whether `guardrail` gets only the flat texts on Converse, without rows or tools."""
-    from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import HiddenlayerGuardrailV2
-    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
-
-    flat_text_readers: Final = (
-        HiddenlayerGuardrailV2,
-        *(cls for name, cls in guardrail_class_registry.items() if name in _FLAT_TEXT_PROVIDERS),
-    )
-    return is_compression_guardrail(guardrail) or isinstance(guardrail, flat_text_readers)
+    return is_compression_guardrail(guardrail) or not guardrail.supports_structured_messages()
 
 
 _StringHolder = tuple[Any, str | int]
