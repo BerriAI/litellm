@@ -220,9 +220,6 @@ class OpenrouterConfig(OpenAIGPTConfig):
                         dict[str, object], hidden_params["additional_headers"]
                     )
                     additional_headers["llm_provider-x-litellm-response-cost"] = float(response_cost)
-            # OpenRouter names the provider that actually served the request. Since cost is
-            # provider-reported per call, this is the field that explains per-call cost
-            # variation on one model.
             response_body: Final = cast(  # cast-ok: raw JSON body; only a string-valued top-level key is read
                 dict[str, object], response_json
             )
@@ -230,7 +227,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
             if isinstance(upstream_provider, str) and upstream_provider:
                 set_hidden_param(model_response, "upstream_provider", upstream_provider)
         except Exception:
-            # If we can't extract cost or provider, continue without them - don't fail the response
+            # If we can't extract cost, continue without it - don't fail the response
             pass
 
         return model_response
@@ -288,8 +285,6 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 model=chunk["model"],
                 choices=new_choices,
             )
-            # Each OpenRouter chunk carries the serving provider at the top level; keep it as a
-            # hidden param so the stream wrapper and the chunk builder can surface it.
             chunk_body: Final = cast(  # cast-ok: parsed SSE chunk; only a string-valued top-level key is read
                 dict[str, object], chunk
             )
