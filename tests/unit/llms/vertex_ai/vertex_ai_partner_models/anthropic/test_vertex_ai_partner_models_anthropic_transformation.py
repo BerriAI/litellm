@@ -886,8 +886,8 @@ _CALLER_FORMAT: Final = {
         pytest.param(
             "claude-opus-4-6",
             {"output_format": _STRUCTURED_FORMAT, "output_config": {"format": _CALLER_FORMAT}},
-            {"format": _CALLER_FORMAT},
-            id="caller_output_config_format_wins",
+            {"format": _STRUCTURED_FORMAT},
+            id="output_format_wins_over_output_config_format",
         ),
         pytest.param(
             "claude-opus-4-6",

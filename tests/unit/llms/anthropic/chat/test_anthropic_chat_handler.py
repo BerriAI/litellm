@@ -2869,6 +2869,11 @@ def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
             {"note": "read-only window", "meta": {"score": 7}},
             id="string_first_key_on_a_schema_without_required_keys",
         ),
+        pytest.param(
+            {"type": "object", "properties": {"summary": {"type": "string"}}, "additionalProperties": {"type": "object"}},
+            {"user_1": {"summary": "likes tea", "visits": 3}},
+            id="undeclared_key_the_schema_allows",
+        ),
     ],
 )
 def test_streamed_json_mode_answer_that_cannot_be_an_envelope_streams_as_it_arrives(
@@ -2929,6 +2934,26 @@ def test_streamed_json_mode_accepted_answer_naming_the_tool_is_kept_whole():
     contents = _streamed_json_mode_contents((answer[:9], answer[9:40], answer[40:]), _STREAMED_BOOK_SCHEMA)
 
     assert json.loads("".join(contents)) == json.loads(answer)
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+@pytest.mark.parametrize(
+    "answer, schema",
+    [
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"title":"Dune","author":"Frank Herbert"}}',
+            _STREAMED_BOOK_SCHEMA,
+            id="answer_naming_the_tool",
+        ),
+        pytest.param('{"city":"café 東京","country":"France"}', _STREAMED_RISK_SCHEMA, id="string_labels_only"),
+    ],
+)
+def test_streamed_json_mode_held_answer_without_an_envelope_keeps_the_model_text(
+    answer: str, schema: dict[str, object]
+):
+    contents = _streamed_json_mode_contents((answer[:9], answer[9:30], answer[30:]), schema)
+
+    assert "".join(contents) == answer
     assert contents[:-2] == ("",) * (len(contents) - 2)
 
 

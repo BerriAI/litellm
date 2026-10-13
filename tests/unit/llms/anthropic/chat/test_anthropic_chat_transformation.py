@@ -7358,6 +7358,18 @@ _RECURSIVE_NODE_SCHEMA: Final = {
 }
 _CHILD_WITHOUT_TITLE: Final = {"id": "child-7", "parent": {"id": "root-1", "title": "Root", "parent": None}}
 _JSON_OBJECT_MODE_SCHEMA: Final = {"type": "object", "properties": {}, "additionalProperties": True}
+_SUMMARY_PROPERTIES: Final = {"summary": {"type": "string"}}
+_PER_USER_SCHEMA: Final = {
+    "type": "object",
+    "properties": _SUMMARY_PROPERTIES,
+    "additionalProperties": {"type": "object"},
+}
+_PER_USER_PATTERN_SCHEMA: Final = {
+    "type": "object",
+    "properties": _SUMMARY_PROPERTIES,
+    "patternProperties": {"^user_": {"type": "object"}},
+}
+_PER_USER_ANSWER: Final = {"user_1": {"summary": "likes tea", "visits": 3}}
 
 
 def _schema(document: dict[str, object]) -> ResponseFormatSchema:
@@ -7526,6 +7538,23 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
             _RISK_OBJECT,
             id="json_object_mode_tool_name_envelope",
+        ),
+        pytest.param(_PER_USER_SCHEMA, _PER_USER_ANSWER, _PER_USER_ANSWER, id="key_allowed_by_additional_properties"),
+        pytest.param(
+            _PER_USER_PATTERN_SCHEMA, _PER_USER_ANSWER, _PER_USER_ANSWER, id="key_allowed_by_pattern_properties"
+        ),
+        pytest.param(_OPEN_SCORE_SCHEMA, {"input": {"score": 7}}, {"input": {"score": 7}}, id="key_allowed_by_true"),
+        pytest.param(
+            {**_PER_USER_SCHEMA, "required": ["summary"]},
+            {"input": {"summary": "likes tea"}},
+            {"summary": "likes tea"},
+            id="allowed_key_on_a_schema_with_required_keys",
+        ),
+        pytest.param(
+            _PER_USER_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"summary": "likes tea"}},
+            {"summary": "likes tea"},
+            id="tool_name_envelope_on_a_schema_allowing_extra_keys",
         ),
     ],
 )

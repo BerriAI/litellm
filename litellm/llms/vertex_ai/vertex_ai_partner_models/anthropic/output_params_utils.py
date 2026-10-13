@@ -47,7 +47,7 @@ def _as_output_config(value: object) -> Mapping[str, object] | None:
 def _fold_output_format_into_output_config(
     output_config: Mapping[str, object] | None, output_format: object
 ) -> Mapping[str, object] | None:
-    if output_format is None or (output_config is not None and output_config.get("format") is not None):
+    if output_format is None:
         return output_config
     return {**(output_config or {}), "format": output_format}
 
@@ -66,8 +66,8 @@ def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
       * ``output_config`` left empty after filtering is removed so the request
         body has no empty dict.
       * ``output_format`` is moved into ``output_config.format``, because
-        Vertex AI Claude rejects the top-level field as deprecated. An explicit
-        ``output_config.format`` from the caller wins over it.
+        Vertex AI Claude rejects the top-level field as deprecated. When both
+        are set, ``output_format`` wins, as it does in the Anthropic adapter.
       * Non-dict values for ``output_config`` are dropped to avoid sending
         malformed payloads downstream.
     """
