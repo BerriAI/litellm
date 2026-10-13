@@ -669,16 +669,23 @@ def test_a_chat_pin_keeps_a_plain_gpt_5_4_chat_request_on_chat_completions() -> 
 
 @pytest.mark.parametrize(
     "model, custom_llm_provider",
-    [("gpt-5.1-codex", "azure"), ("o3-pro", "openai"), ("gpt-5.4-pro", "openai")],
+    [
+        ("gpt-5.1-codex", "azure"),
+        ("o3-pro", "openai"),
+        ("gpt-5.4-pro", "openai"),
+        ("eu/gpt-5-codex", "azure"),
+        ("us/gpt-5.4-pro", "azure"),
+        ("databricks-gpt-5-3-codex", "databricks"),
+    ],
 )
 def test_a_chat_pin_cannot_pull_a_responses_only_model_off_the_responses_api(
     model: str, custom_llm_provider: str
 ) -> None:
-    """These rows list only ``/v1/responses`` in ``supported_endpoints``, so a deployment pin to chat has
-    nowhere to send the request and the bridge keeps it."""
+    """These rows list only ``/v1/responses`` in ``supported_endpoints``, or are ``responses`` rows with no
+    endpoint list at all, so a deployment pin to chat has nowhere to send the request and the bridge keeps it."""
     cost_map: Final = cast(dict[str, dict[str, object]], litellm.model_cost)
     assert not backend_serves_chat_completions(
-        cost_map[f"{custom_llm_provider}/{model}" if custom_llm_provider == "azure" else model]
+        cost_map[model if custom_llm_provider == "openai" else f"{custom_llm_provider}/{model}"]
     )
     info, routed_model = responses_api_bridge_check(
         model=model,
@@ -693,6 +700,8 @@ def test_a_chat_pin_cannot_pull_a_responses_only_model_off_the_responses_api(
     "shared_model_info, expected",
     [
         ({}, True),
+        ({"mode": "chat"}, True),
+        ({"mode": "responses"}, False),
         ({"supported_endpoints": ["/v1/chat/completions", "/v1/responses"]}, True),
         ({"supported_endpoints": ["/v1/responses", "/v1/batch"]}, False),
         ({"supported_endpoints": "/v1/chat/completions"}, True),

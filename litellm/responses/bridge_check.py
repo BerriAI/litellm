@@ -64,10 +64,12 @@ def bridge_deployment_info(model_info: object) -> Mapping[str, object] | None:
 
 def backend_serves_chat_completions(shared_model_info: Mapping[str, object]) -> bool:
     """Whether the shared cost-map row lets a deployment pin ``mode: chat``. Responses-only backends
-    (``gpt-5.1-codex``, ``o3-pro``, ``gpt-5.4-pro``) list only ``/v1/responses`` and must stay bridged."""
+    (``gpt-5.1-codex``, ``o3-pro``, ``gpt-5.4-pro``) list only ``/v1/responses`` and must stay bridged, and
+    a ``responses`` row with no ``supported_endpoints`` (regional Azure codex and pro, Databricks codex) is
+    read the same way."""
     supported_endpoints: Final = shared_model_info.get("supported_endpoints")
     if not isinstance(supported_endpoints, Sequence) or isinstance(supported_endpoints, str):
-        return True
+        return shared_model_info.get("mode") != "responses"
     return "/v1/chat/completions" in supported_endpoints
 
 
