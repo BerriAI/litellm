@@ -1583,6 +1583,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         await ProxyStartupEvent.initialize_semantic_tool_filter(
             llm_router=llm_router,
             litellm_settings=_litellm_settings,
+            proxy_config=proxy_config,
         )
         verbose_proxy_logger.debug("After semantic tool filter initialization")
     except Exception as e:
@@ -10608,11 +10609,15 @@ class ProxyStartupEvent:
         cls,
         llm_router: Router | None,
         litellm_settings: dict[str, Any],
+        *,
+        proxy_config: "ProxyConfig",
     ):
         """Initialize MCP semantic tool filter if configured"""
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
         mcp_semantic_filter_config: Final = litellm_settings.get("mcp_semantic_tool_filter", None)
+        if isinstance(mcp_semantic_filter_config, Mapping):
+            proxy_config._last_semantic_filter_config = dict(mcp_semantic_filter_config)  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # ProxyStartupEvent records the config ProxyConfig's DB sync compares against; litellm_settings values are loosely typed
 
         # Only proceed if the feature is configured and enabled
         if not mcp_semantic_filter_config or not mcp_semantic_filter_config.get("enabled", False):
@@ -10625,7 +10630,7 @@ class ProxyStartupEvent:
             mcp_semantic_filter_config,
         )
         hook: Final = await SemanticToolFilterHook.initialize_from_config(
-            config=mcp_semantic_filter_config,
+            config=mcp_semantic_filter_config,  # pyright: ignore[reportArgumentType]  # litellm_settings values are loosely typed
             llm_router=llm_router,
             redis_cache=redis_usage_cache,
         )
