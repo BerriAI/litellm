@@ -769,6 +769,32 @@ describe("UsagePage", () => {
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
   });
 
+  it("should render one daily spend bar when the aggregated response repeats a date", async () => {
+    const repeatedDay = mockSpendData.results[0];
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      results: [repeatedDay, { ...repeatedDay, metrics: { ...repeatedDay.metrics } }],
+    });
+
+    const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const spendBars = () => {
+      const gatewayCard = container.querySelector('[data-testid="gateway-requests-by-endpoint"]');
+      return Array.from(container.querySelectorAll("path.recharts-rectangle")).filter(
+        (rect) => !gatewayCard?.contains(rect),
+      );
+    };
+
+    // The repeated date collapses into one day stacked as the top model over the remainder.
+    await waitFor(() => {
+      expect(spendBars()).toHaveLength(2);
+    });
+  });
+
   it("should switch between usage views correctly", async () => {
     renderWithProviders(<UsagePage {...defaultProps} />);
 
