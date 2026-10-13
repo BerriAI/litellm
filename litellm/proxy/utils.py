@@ -266,6 +266,7 @@ if TYPE_CHECKING:
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
+    from litellm.proxy.db.model_usage_rollup import ModelUsageTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
@@ -4400,6 +4401,8 @@ class PrismaClient:
     spend_log_write_lock = asyncio.Lock()
     tool_usage_transactions: list["ToolUsageTransaction"] = []
     _tool_usage_transactions_lock = asyncio.Lock()
+    model_usage_transactions: ClassVar[list["ModelUsageTransaction"]] = []
+    _model_usage_transactions_lock = asyncio.Lock()
     autorouter_turn_transactions: ClassVar[list["AutoRouterTurnTransaction"]] = []
     _autorouter_turn_transactions_lock = asyncio.Lock()
 
@@ -7508,6 +7511,8 @@ async def _total_queued_spend_transactions(prisma_client: PrismaClient) -> int:
         spend_queue_size: Final = len(prisma_client.spend_log_transactions)
     async with prisma_client._tool_usage_transactions_lock:
         tool_queue_size: Final = len(prisma_client.tool_usage_transactions)
+    async with prisma_client._model_usage_transactions_lock:
+        model_usage_queue_size: Final = len(prisma_client.model_usage_transactions)
     async with prisma_client._autorouter_turn_transactions_lock:
         autorouter_queue_size: Final = len(prisma_client.autorouter_turn_transactions)
     from litellm.proxy.db.shadow_eval_funnel import pending_shadow_eval_funnel_events
@@ -7517,6 +7522,7 @@ async def _total_queued_spend_transactions(prisma_client: PrismaClient) -> int:
     return (
         spend_queue_size
         + tool_queue_size
+        + model_usage_queue_size
         + autorouter_queue_size
         + baseline_queue_size
         + pending_shadow_eval_funnel_events()
@@ -7650,6 +7656,20 @@ async def _run_spend_logs_job(
             "Spend tracking - tool usage flush failed; %s tool usage transactions dropped: %s",
             len(tool_usage_to_process),
             tool_tracking_err,
+        )
+
+    async with prisma_client._model_usage_transactions_lock:
+        model_usage_to_process: Final = prisma_client.model_usage_transactions
+        prisma_client.model_usage_transactions = []
+    try:
+        from litellm.proxy.db.model_usage_rollup import flush_model_usage_transactions
+
+        await flush_model_usage_transactions(prisma_client=prisma_client, transactions=model_usage_to_process)
+    except Exception as model_usage_err:
+        verbose_proxy_logger.error(
+            "Spend tracking - model usage flush failed; %s model usage transactions dropped: %s",
+            len(model_usage_to_process),
+            model_usage_err,
         )
 
     await flush_baseline_accounting(prisma_client)
