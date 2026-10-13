@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -357,6 +358,61 @@ async def test_async_post_call_failure_hook_adds_guardrail_cost_to_recovered_str
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "snapshot_guardrail_information, expected_guardrail_names",
+    [
+        (None, ["detect-only-scanner"]),
+        ([], ["detect-only-scanner"]),
+        ([{"guardrail_name": "logged-before-the-failure", "guardrail_status": "success"}], ["logged-before-the-failure"]),
+    ],
+)
+async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_after_the_failure_was_logged(
+    snapshot_guardrail_information: list[dict[str, str]] | None, expected_guardrail_names: list[str]
+):
+    """
+    A provider that drops a live stream mid-flight gets the failure logged at once, and only then does the
+    post_call scan of the chunks the client already received record its verdict, so the failure row showed no
+    guardrail at all while billing the scan's cost
+    """
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    failure_snapshot: Final = {
+        "metadata": {},
+        "hidden_params": {},
+        "model_map_information": {},
+        "guardrail_information": snapshot_guardrail_information,
+    }
+
+    await logger.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-5.6-sol",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": {
+                "standard_logging_guardrail_information": [
+                    {"guardrail_name": "detect-only-scanner", "guardrail_status": "success"}
+                ]
+            },
+            "litellm_logging_obj": SimpleNamespace(
+                model_call_details={"standard_logging_object": failure_snapshot}, litellm_trace_id="trace-1"
+            ),
+        },
+        original_exception=Exception("provider dropped the stream"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    logged_guardrails: Final = json.loads(row["metadata"])["guardrail_information"]
+    assert [entry["guardrail_name"] for entry in logged_guardrails] == expected_guardrail_names
+    assert failure_snapshot["guardrail_information"] == snapshot_guardrail_information
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_non_llm_route():
     # Setup
     logger = ProxyDBLogger()
@@ -399,6 +455,35 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
         # Assert that update_database was NOT called for non-LLM routes
         mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "route", "written"),
+    [
+        ("litellm-dashboard", "/key/list", False),
+        ("litellm-dashboard", "/v2/user/info", False),
+        ("litellm-dashboard", "/chat/completions", True),
+        ("team-1", "/key/list", True),
+        (None, "/key/list", True),
+    ],
+)
+async def test_async_post_call_failure_hook_skips_dashboard_session_info_route_failures(  # test-quality-ok: update_database is the DB write boundary, so whether it is awaited is the observable outcome
+    team_id: str | None, route: str, written: bool
+) -> None:
+    """An expired Admin UI session key refetching dashboard info routes must not
+    write a failure SpendLog row, while its LLM calls and other keys' info calls still do."""
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data={},
+            original_exception=Exception("Authentication Error - Expired Key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-session", team_id=team_id, request_route=route),
+        )
+
+    assert mock_update_database.await_count == (1 if written else 0)
 
 
 @pytest.mark.asyncio

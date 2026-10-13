@@ -28,6 +28,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -40,33 +41,108 @@ from litellm.proxy.proxy_server import (
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
 )
-from litellm.tracing.config import trace_storage_config
+from litellm.tracing.config import is_lens_tracing_enabled
 
 from .conftest import normalize
+
+
+def _deployment(model_id: str, model_name: str = "gpt-3.5-turbo") -> Deployment:
+    return Deployment(
+        model_name=model_name,
+        litellm_params=LiteLLM_Params(model="openai/gpt-3.5-turbo"),
+        model_info={"id": model_id},
+    )
+
+
+def _db_model(model_id: str, model_name: str = "gpt-3.5-turbo") -> SimpleNamespace:
+    return SimpleNamespace(
+        model_id=model_id,
+        model_name=model_name,
+        model_info={"id": model_id},
+        litellm_params={"model": encrypt_value_helper("openai/gpt-3.5-turbo")},
+        blocked=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_adds_and_deletes_stale_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"model_list": []}')
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))
+    model = _db_model("db-deployment")
+
+    assert ProxyConfig()._add_deployment(db_models=[model]) == 1
+    assert router.get_model_ids() == ["db-deployment"]
+    assert router.get_deployment(model_id="db-deployment").litellm_params.model == "openai/gpt-3.5-turbo"
+    await ProxyConfig()._delete_deployment(db_models=[])
+    assert router.get_model_ids() == []
+
+
+def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[_deployment("existing-deployment").to_json(exclude_none=True)])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+
+    ProxyConfig()._add_deployment(db_models=[_db_model("existing-deployment")])
+    assert len(router.model_list) == 1
+    assert router.get_model_ids() == ["existing-deployment"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_preserves_models_when_config_read_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[_deployment("config-deployment").to_json(exclude_none=True)])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(tmp_path / "missing.json"))
+
+    assert await ProxyConfig()._delete_deployment(db_models=[]) is None
+    assert router.get_model_ids() == ["config-deployment"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(
+        model_list=[
+            _deployment("kept-deployment").to_json(exclude_none=True),
+            _deployment("stale-deployment", "stale-model").to_json(exclude_none=True),
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"model_list": []}')
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))
+
+    desired = await ProxyConfig()._delete_deployment(db_models=[_db_model("kept-deployment")])
+
+    assert desired == frozenset({"kept-deployment"})
+    assert router.get_model_ids() == ["kept-deployment"]
 from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
-async def test_proxy_config_loads_tracing_url_and_retention_from_yaml(tmp_path, monkeypatch) -> None:
+async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) -> None:
     config_file: Final = tmp_path / "tracing.yaml"
-    config_file.write_text(
-        "model_list: []\ngeneral_settings:\n  tracing:\n    store:\n"
-        "      type: clickhouse\n      url: os.environ/TRACING_TEST_URL\n"
-        "      database: analytics\n      retention_days: 7\n"
-    )
-    monkeypatch.setenv("TRACING_TEST_URL", "http://localhost:8123")
-    monkeypatch.setenv("CLICKHOUSE_URL", "http://unused:8123")
+    config_file.write_text("model_list: []\ngeneral_settings:\n  tracing:\n    store:\n      type: lens\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
-    tracing = trace_storage_config(settings["tracing"])
-    assert (tracing.url, tracing.database, tracing.retention_days) == (
-        "http://localhost:8123",
-        "analytics",
-        7,
-    )
+    assert is_lens_tracing_enabled(settings["tracing"], {}) is True
+
 
 
 @pytest.mark.asyncio
@@ -2244,7 +2320,7 @@ async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_c
     else:
         client_type: Final = pytest.importorskip("google.cloud.kms_v1").KeyManagementServiceClient
 
-    from litellm.rust_bridge.secret_manager import native_secret_manager_config
+    from litellm.rust_bridge.host.secret_manager import native_secret_manager_config
 
     credentials_file: Final = tmp_path / "credentials.json"
     credentials_file.write_text(

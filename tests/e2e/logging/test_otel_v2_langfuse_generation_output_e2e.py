@@ -57,7 +57,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.otel_v2]
 WEATHER_WAV: Final = (
     Path(__file__).resolve().parent.parent / "llm_translation" / "realtime" / "fixtures" / "weather_question_24k.wav"
 )
-DUMMY_PDF: Final = Path(__file__).resolve().parent.parent.parent / "llm_translation" / "fixtures" / "dummy.pdf"
+DUMMY_PDF: Final = Path(__file__).resolve().parents[2] / "fixtures" / "dummy.pdf"
 DUMMY_PDF_URL: Final = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
     "@d769e81c90d453240c61fc572cdb27fae06a89d0"
