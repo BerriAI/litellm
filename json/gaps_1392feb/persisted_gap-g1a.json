@@ -1,0 +1,22 @@
+{
+  "db_model": true,
+  "classifier_type": "llm",
+  "jev_classifier_config": null,
+  "classifier_llm_config": {
+    "model": "claude-fable-5-1",
+    "timeout_ms": 3000,
+    "classification_rubric": "agentic"
+  },
+  "classification_mode": "every_request",
+  "tiers": {
+    "MEDIUM": [],
+    "SIMPLE": [
+      "claude-haiku-4-5"
+    ],
+    "COMPLEX": [],
+    "REASONING": [
+      "gpt-6-astra"
+    ]
+  },
+  "custom_tier_set": null
+}

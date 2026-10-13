@@ -1,0 +1,570 @@
+{
+  "results": {},
+  "availability_responses": [
+    {
+      "t": "02:09:17",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:09:17",
+      "status": 200,
+      "req_classifier": "heuristic",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:09:20",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:09:22",
+      "status": 200,
+      "req_classifier": "llm",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:09:27",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:09:28",
+      "status": 200,
+      "req_classifier": "llm_v2",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:09:30",
+      "status": 200,
+      "req_classifier": "llm_v2",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:09:31",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:09:35",
+      "status": 200,
+      "req_classifier": "llm_v2",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:09:38",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:10:02",
+      "status": 200,
+      "req_classifier": "llm_v2",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 0,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": "Fuse v2 has no available allowance. Choose another option or free an existing allowance."
+      }
+    }
+  ],
+  "log": [
+    [
+      "g3 fuse draft",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "g3 available: back to llm",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "g3 exhausted: back to llm",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "g3 after forced fuse",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ]
+  ]
+}

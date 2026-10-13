@@ -1,0 +1,43 @@
+{
+  "model_name": "gap-g2-draft",
+  "litellm_params": {
+    "model": "auto_router/complexity_router",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": [
+          "claude-haiku-4-5"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-6-astra"
+        ],
+        "REASONING": [
+          "gpt-6-astra"
+        ]
+      },
+      "tier_model_configs": {
+        "REASONING": [
+          {
+            "model_name": "gpt-6-astra",
+            "litellm_params": {
+              "reasoning_effort": "max"
+            }
+          }
+        ]
+      },
+      "classifier_type": "heuristic_v2",
+      "classification_mode": "every_request",
+      "session_affinity": false,
+      "deployment_affinity": true,
+      "modality_routing": false,
+      "modality_pin_override": false,
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ]
+    },
+    "complexity_router_default_model": "gpt-5.6-terra"
+  },
+  "model_info": {}
+}

@@ -1,0 +1,7 @@
+source_root=/home/ubuntu/repos/litellm HEAD=1392feb197f52254643b9a543bcdc4fe1e23cb28 porcelain_lines=0
+ui/litellm-dashboard/.next removed before dashboard start
+proxy PID 3873 port 4000 cwd /home/ubuntu/repos/litellm started 2026-10-13T01:54:31Z cmd .venv/bin/litellm --config <disposable config> --port 4000 --num_workers 1
+dashboard next-server (v16.3.8) PID 4381 port 3000 cwd /home/ubuntu/repos/litellm/ui/litellm-dashboard started 2026-10-13T01:54:42Z (LENS_DEV_PROXY_URL=http://localhost:4000 npm run dev -- -p 3000)
+proxy env (from /proc/3873/environ): LITELLM_LICENSE= (explicitly empty; repo has no .env) STORE_MODEL_IN_DB=True LITELLM_LOCAL_AUTOROUTER_PRESETS=True
+database: fresh disposable litellm_qa_ar (created for this run, no auto routers before G1)
+free disk at start: 94G

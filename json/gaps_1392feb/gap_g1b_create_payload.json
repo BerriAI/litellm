@@ -1,0 +1,49 @@
+{
+  "model_name": "gap-g1b",
+  "litellm_params": {
+    "model": "auto_router/complexity_router",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": [
+          "claude-haiku-4-5"
+        ],
+        "REASONING": [
+          "gpt-6-astra"
+        ]
+      },
+      "tier_model_configs": {
+        "REASONING": [
+          {
+            "model_name": "gpt-6-astra",
+            "litellm_params": {
+              "reasoning_effort": "max"
+            }
+          }
+        ]
+      },
+      "classifier_type": "llm_v2",
+      "classifier_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000
+      },
+      "classifier_context_window_size": 3,
+      "classifier_context_budget_chars": 8000,
+      "llm_v2_config": {
+        "efficient_profile": "Short reasoning budget",
+        "capable_profile": "Larger reasoning budget",
+        "harness": "Shell and test runner, one attempt",
+        "max_quality_gap": 0.05
+      },
+      "adaptive": false,
+      "classification_mode": "every_request",
+      "session_affinity": false,
+      "deployment_affinity": true,
+      "modality_routing": false,
+      "modality_pin_override": false,
+      "escalation_keywords": [],
+      "enable_context_window_escalation": false
+    },
+    "complexity_router_default_model": "claude-haiku-4-5"
+  },
+  "model_info": {}
+}

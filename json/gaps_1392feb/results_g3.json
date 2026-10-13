@@ -1,0 +1,750 @@
+{
+  "results": {
+    "g3": {
+      "fuse_draft": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      },
+      "avail_before": {
+        "t": "02:12:26",
+        "key": "llm_v2",
+        "limit": 1,
+        "remaining": 1,
+        "used_by_this_router": false,
+        "available": true
+      },
+      "available_restore": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      },
+      "fuse_fields_after_available_restore": {
+        "Efficient solver profile": "Short reasoning budget",
+        "Capable solver profile": "Larger reasoning budget",
+        "Harness and budget": "Shell and test runner, one attempt",
+        "Maximum quality gap": "0.05"
+      },
+      "holder_type": "llm_v2",
+      "proxy_exhausted": {
+        "key": "llm_v2",
+        "limit": 1,
+        "remaining": 0,
+        "used_by_this_router": false,
+        "available": true
+      },
+      "avail_exhausted": {
+        "t": "02:12:34",
+        "req_classifier": "heuristic",
+        "key": "llm_v2",
+        "limit": 1,
+        "remaining": 0,
+        "used_by_this_router": false,
+        "available": true
+      },
+      "exhausted_restore": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "save_btn_exhausted": {
+        "disabled": false
+      },
+      "approach_menu_exhausted": [
+        "Complexity:",
+        "Capability:",
+        "Fuse v2:true"
+      ],
+      "after_forced_fuse": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "save_btn_before_submit": {
+        "disabled": false
+      },
+      "saved_type": "llm",
+      "saved_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000,
+        "classification_rubric": "agentic"
+      },
+      "saved_mode": "user_turn",
+      "saved_has_llm_v2_config": false,
+      "avail_after_holder_removed_api": [
+        {
+          "key": "llm_v2",
+          "limit": 1,
+          "remaining": 1,
+          "used_by_this_router": false,
+          "available": true
+        }
+      ]
+    }
+  },
+  "availability_responses": [
+    {
+      "t": "02:12:11",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:12",
+      "status": 200,
+      "req_classifier": "heuristic",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:13",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:15",
+      "status": 200,
+      "req_classifier": "llm",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:18",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:19",
+      "status": 200,
+      "req_classifier": "llm_v2",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:21",
+      "status": 200,
+      "req_classifier": "llm_v2",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:22",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:26",
+      "status": 200,
+      "req_classifier": "llm_v2",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:30",
+      "status": 200,
+      "req_classifier": null,
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:34",
+      "status": 200,
+      "req_classifier": "heuristic",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 0,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "t": "02:12:38",
+      "status": 200,
+      "req_classifier": "llm",
+      "body": {
+        "allowances": [
+          {
+            "key": "heuristic_v2",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "capability",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "llm_v2",
+            "limit": 1,
+            "remaining": 0,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "tier_or_classifier_prompt",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          },
+          {
+            "key": "heuristic_tuning",
+            "limit": 1,
+            "remaining": 1,
+            "used_by_this_router": false,
+            "available": true
+          }
+        ],
+        "error": null
+      }
+    }
+  ],
+  "log": [
+    [
+      "g3 fuse draft",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "g3 available: back to llm",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "g3 heuristics after template (valid away draft)",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "g3 exhausted: back to llm",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "g3 after forced fuse",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ]
+  ]
+}
