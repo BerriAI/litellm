@@ -840,6 +840,20 @@ def test_promptguard_keeps_a_masked_request_field_and_a_masked_turn_apart(rig: _
     assert sent["additionalModelRequestFields"] == {"system": f"billing card {_MASK}"}
 
 
+def test_promptguard_keeps_nested_request_fields_in_place(rig: _Rig) -> None:
+    fields: Final = {
+        "system": f"billing card {_CARD}",
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "anthropic_beta": ["interleaved-thinking-2025-05-14"],
+    }
+    body: Final = {"messages": [_user({"text": "Say hi."})], "additionalModelRequestFields": fields}
+
+    sent: Final = _forwarded(rig, _converse(rig, "promptguard", body))
+
+    assert sent["additionalModelRequestFields"] == {**fields, "system": f"billing card {_MASK}"}
+    assert sent["messages"] == [_user({"text": "Say hi."})]
+
+
 def test_akto_mask_reaches_tool_call_arguments_and_json_tool_results(rig: _Rig) -> None:
     body: Final = {
         "messages": [

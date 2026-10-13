@@ -25,6 +25,7 @@ from litellm.llms.bedrock.chat.converse_to_openai import (
     converse_rows,
     converse_tools,
     parse_converse_request,
+    request_field_slots,
 )
 from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits import (
     Edit,
@@ -133,6 +134,16 @@ def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
         holders.append((block, "text"))
 
 
+def _request_field_holders(body: Mapping[str, object], in_row_order: bool) -> tuple[_StringHolder, ...]:
+    fields: Final = body.get("additionalModelRequestFields")
+    if in_row_order:
+        holders: Final = (_holder(body, slot.path) for slot in request_field_slots(fields))
+        return tuple(holder for holder in holders if holder is not None)
+    collected: Final = list[_StringHolder]()
+    _collect_strings(fields, collected)
+    return tuple(collected)
+
+
 def _extract_converse_texts(
     body: dict,
     skip_system: bool,
@@ -166,8 +177,8 @@ def _extract_converse_texts(
     contract, while ``additionalModelRequestFields`` is free-form and defined by
     the target model, so what it carries cannot be classified without knowing
     that model. Scanning it stays the fail-closed default. Its strings come
-    last, or right after the system prompt with ``request_fields_first``,
-    where their row sits for guardrails that also get rows.
+    last, or with ``request_fields_first`` right after the system prompt and
+    in the order of their row, for guardrails that also get rows.
     """
     system_holders: Final = list[_StringHolder]()
     if not skip_system and not scan_only_tool_results:
@@ -175,9 +186,7 @@ def _extract_converse_texts(
             if isinstance(block, dict):
                 _collect_block_text(block, system_holders)
 
-    request_field_holders: Final = list[_StringHolder]()
-    if not scan_only_tool_results:
-        _collect_strings(body.get("additionalModelRequestFields"), request_field_holders)
+    request_field_holders: Final = () if scan_only_tool_results else _request_field_holders(body, request_fields_first)
 
     message_holders: Final = list[_StringHolder]()
     for message in body.get("messages") or []:

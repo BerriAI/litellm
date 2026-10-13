@@ -1009,6 +1009,30 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         assert result["data"]["additionalModelRequestFields"] == {"system": "billing card [CARD]"}
 
     @pytest.mark.asyncio
+    async def test_texts_rebuilt_from_user_rows_keep_nested_request_fields_in_place(self):
+        fields = {
+            "system": "billing card 4111 1111 1111 1111",
+            "thinking": {"type": "enabled"},
+            "anthropic_beta": ["interleaved-thinking-2025-05-14"],
+        }
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"text": "Say hi."}]}], "additionalModelRequestFields": fields},
+        }
+
+        def rebuild_texts_from_user_rows(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+            rows = json.loads(json.dumps(inputs["structured_messages"]).replace("4111 1111 1111 1111", "[CARD]"))
+            texts = [part["text"] for row in rows if row["role"] == "user" for part in row["content"]]
+            return {**inputs, "structured_messages": rows, "texts": texts}
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=copy.deepcopy(data), guardrail_to_apply=_ScriptedGuardrail(rebuild_texts_from_user_rows)
+        )
+
+        assert result["data"]["additionalModelRequestFields"] == {**fields, "system": "billing card [CARD]"}
+        assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "Say hi."}]}]
+
+    @pytest.mark.asyncio
     async def test_flat_text_guardrail_gets_request_field_texts_last_as_on_main(self, monkeypatch):
         guardrail = OpenAIModerationGuardrail(guardrail_name="moderation", api_key="sk-test")
         received: list[GenericGuardrailAPIInputs] = []
