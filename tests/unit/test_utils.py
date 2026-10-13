@@ -1425,6 +1425,25 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
     assert control["key"] == "eu.amazon.nova-pro-v1:0"
 
 
+@pytest.mark.parametrize("route", ["bedrock/", "bedrock/converse/", "bedrock/invoke/", "bedrock/eu-west-1/"])
+def test_get_model_info_bedrock_inference_profile_arn_keeps_regional_row(local_model_cost_map, route):
+    regional = litellm.model_cost["eu.amazon.nova-pro-v1:0"]
+    base = litellm.model_cost["amazon.nova-pro-v1:0"]
+    assert regional["input_cost_per_token"] > base["input_cost_per_token"]
+    arn_prefix = "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/"
+
+    info = litellm.get_model_info(model=f"{route}{arn_prefix}eu.amazon.nova-pro-v1:0")
+    assert info["key"] == "eu.amazon.nova-pro-v1:0"
+    assert info["input_cost_per_token"] == regional["input_cost_per_token"]
+    assert info["output_cost_per_token"] == regional["output_cost_per_token"]
+
+    bare = litellm.get_model_info(model=f"{route}{arn_prefix}amazon.nova-pro-v1:0")
+    assert bare["key"] == "amazon.nova-pro-v1:0"
+    assert bare["input_cost_per_token"] == base["input_cost_per_token"]
+
+
+
+
 @pytest.mark.parametrize(
     "bare_key",
     [

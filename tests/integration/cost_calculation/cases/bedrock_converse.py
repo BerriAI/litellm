@@ -16,7 +16,6 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 
-
 # anthropic.claude-sonnet-5-v1:0
 ANTHROPIC_CLAUDE_SONNET_5_V1_0_INPUT_TEXT: Final = CostTrackingTestCase(
     name="anthropic.claude-sonnet-5-v1:0-input_text",
@@ -1092,6 +1091,119 @@ BEDROCK_CONVERSE_APAC_BARE_FALLBACK: Final = CostTrackingTestCase(
     ),
     expected=ExactExpected(
         spend=0.01287, input_cost=0.006072, output_cost=0.006798, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+
+BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY: Final = CostTrackingTestCase(
+    name="bedrock-converse-profile-arn-regional-key",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="eu.anthropic.claude-sonnet-5-v1:0",
+    deployment=Deployment(
+        model="bedrock/converse/arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-5-v1:0"
+    ),
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "bedrock-converse-profile-arn-regional-key"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "output": {"message": {"role": "assistant", "content": [{"text": "scripted response"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1840, "outputTokens": 412, "totalTokens": 2252},
+            "metrics": {"latencyMs": 1},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.01326, input_cost=0.006256, output_cost=0.007004, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY_STREAM: Final = CostTrackingTestCase(
+    name="bedrock-converse-profile-arn-regional-key-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="eu.anthropic.claude-sonnet-5-v1:0",
+    deployment=Deployment(
+        model="bedrock/converse/arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-5-v1:0"
+    ),
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "bedrock-converse-profile-arn-regional-key-stream"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=EventStreamResponse(
+        content_type="application/vnd.amazon.eventstream",
+        events=(
+            EventStreamEvent(event_type="messageStart", payload={"role": "assistant"}),
+            EventStreamEvent(
+                event_type="contentBlockDelta", payload={"delta": {"text": "scripted response"}, "contentBlockIndex": 0}
+            ),
+            EventStreamEvent(event_type="contentBlockStop", payload={"contentBlockIndex": 0}),
+            EventStreamEvent(event_type="messageStop", payload={"stopReason": "end_turn"}),
+            EventStreamEvent(
+                event_type="metadata",
+                payload={
+                    "usage": {"inputTokens": 1840, "outputTokens": 412, "totalTokens": 2252},
+                    "metrics": {"latencyMs": 1},
+                },
+            ),
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.01326, input_cost=0.006256, output_cost=0.007004, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY_MESSAGES: Final = CostTrackingTestCase(
+    name="bedrock-converse-profile-arn-regional-key-messages",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="eu.anthropic.claude-sonnet-5-v1:0",
+    endpoint="/v1/messages",
+    deployment=Deployment(
+        model="bedrock/converse/arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-5-v1:0"
+    ),
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "bedrock-converse-profile-arn-regional-key-messages"}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "output": {"message": {"role": "assistant", "content": [{"text": "scripted response"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1840, "outputTokens": 412, "totalTokens": 2252},
+            "metrics": {"latencyMs": 1},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.01326, input_cost=0.006256, output_cost=0.007004, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY_RESPONSES: Final = CostTrackingTestCase(
+    name="bedrock-converse-profile-arn-regional-key-responses",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="eu.anthropic.claude-sonnet-5-v1:0",
+    endpoint="/v1/responses",
+    deployment=Deployment(
+        model="bedrock/converse/arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-5-v1:0"
+    ),
+    request={"model": "$MODEL", "input": "bedrock-converse-profile-arn-regional-key-responses"},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "output": {"message": {"role": "assistant", "content": [{"text": "scripted response"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1840, "outputTokens": 412, "totalTokens": 2252},
+            "metrics": {"latencyMs": 1},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.01326, input_cost=0.006256, output_cost=0.007004, prompt_tokens=1840, completion_tokens=412
     ),
 )
 
@@ -4798,6 +4910,10 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     BEDROCK_CONVERSE_PROFILE_BASE_MODEL,
     BEDROCK_CONVERSE_EU_REGIONAL_KEY,
     BEDROCK_CONVERSE_APAC_BARE_FALLBACK,
+    BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY,
+    BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY_STREAM,
+    BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY_MESSAGES,
+    BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY_RESPONSES,
     BEDROCK_CONVERSE_NOVA_2_PRO,
     BEDROCK_CONVERSE_MISTRAL_LARGE_3_STREAM,
     US_ANTHROPIC_CLAUDE_OPUS_5_5_INPUT_TEXT,
@@ -4838,6 +4954,9 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(
+        plain=BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY, streamed=BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY_STREAM
+    ),
     StreamParityTestCase(
         plain=ANTHROPIC_CLAUDE_SONNET_5_V1_0_TOOL_CALL, streamed=ANTHROPIC_CLAUDE_SONNET_5_V1_0_STREAM_TOOL_CALL
     ),
