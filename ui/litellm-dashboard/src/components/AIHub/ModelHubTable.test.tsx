@@ -30,7 +30,6 @@ vi.mock("@/components/networking", () => ({
 
 const GARDEN_COST_MAP = {
   "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
-  "typesafe/decisions/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
   "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
   "claude-opus-4-8": { litellm_provider: "anthropic", mode: "chat" },
 };
@@ -351,7 +350,6 @@ describe("ModelHubTable", () => {
       expect(garden).toHaveTextContent("2 decision models across 2 providers");
       expect(within(garden).getByTestId("decision-model-card-typesafe/jev-latest")).toHaveTextContent("TypeSafe");
       expect(within(garden).getByTestId("decision-model-card-cloudflare/clef")).toHaveTextContent("Cloudflare");
-      expect(within(garden).queryByTestId("decision-model-card-typesafe/decisions/jev-latest")).not.toBeInTheDocument();
       expect(within(garden).queryByText("claude-opus-4-8")).not.toBeInTheDocument();
     });
 

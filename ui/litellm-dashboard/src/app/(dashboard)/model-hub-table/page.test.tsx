@@ -3,11 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelHubTablePage from "./page";
 
 const mockUseAuthorized = vi.fn();
-const mockUseTeams = vi.fn();
 const hubProps = vi.fn();
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => mockUseAuthorized() }));
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => mockUseTeams() }));
 vi.mock("@/components/AIHub/ModelHubTable", () => ({
   default: (props: { canAddModels: boolean }) => {
     hubProps(props);
@@ -26,14 +24,9 @@ const session = (userRole: string, isViewOnly = false) => ({
   isViewOnly,
 });
 
-const teamAdminOf = (userId: string) => [
-  { team_id: "team-1", members_with_roles: [{ user_id: userId, role: "admin" }] },
-];
-
 describe("ModelHubTablePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseTeams.mockReturnValue({ data: [] });
   });
 
   it("lets a proxy admin add models from the garden", () => {
@@ -48,17 +41,11 @@ describe("ModelHubTablePage", () => {
     expect(hubProps).toHaveBeenCalledWith(expect.objectContaining({ canAddModels: false }));
   });
 
-  it("lets an org admin who administers a team add models, the way the Models page does", () => {
-    mockUseAuthorized.mockReturnValue(session("org_admin"));
-    mockUseTeams.mockReturnValue({ data: teamAdminOf("user-1") });
+  it("sends an org admin to the public hub under the role string a session carries", () => {
+    mockUseAuthorized.mockReturnValue(session("Org Admin"));
     render(<ModelHubTablePage />);
-    expect(hubProps).toHaveBeenCalledWith(expect.objectContaining({ canAddModels: true }));
-  });
-
-  it("keeps the garden read-only for an org admin with no team to add models to", () => {
-    mockUseAuthorized.mockReturnValue(session("org_admin"));
-    render(<ModelHubTablePage />);
-    expect(hubProps).toHaveBeenCalledWith(expect.objectContaining({ canAddModels: false }));
+    expect(screen.getByTestId("public-model-hub")).toBeInTheDocument();
+    expect(hubProps).not.toHaveBeenCalled();
   });
 
   it("sends a non-admin to the public hub", () => {

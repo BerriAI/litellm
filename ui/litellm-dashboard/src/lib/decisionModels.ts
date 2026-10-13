@@ -69,11 +69,9 @@ export interface DecisionGardenModel {
   readonly provider: string;
 }
 
-const isHiddenBillingRow = (key: string): boolean => key.includes("/decisions/");
-
 export const buildDecisionGarden = (costMap: unknown): readonly DecisionGardenModel[] =>
   parsedEntries(costMap)
-    .filter(([key, entry]) => isDecisionMode(entry.mode) && !isHiddenBillingRow(key))
+    .filter(([, entry]) => isDecisionMode(entry.mode))
     .map(([key, entry]) => ({ model: key, provider: entry.litellm_provider }))
     .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
 

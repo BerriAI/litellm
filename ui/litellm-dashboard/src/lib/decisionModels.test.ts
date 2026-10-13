@@ -12,7 +12,6 @@ import {
 const COST_MAP = {
   "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
   "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
-  "typesafe/decisions/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
   "cloudflare/clef": { litellm_provider: "cloudflare", mode: "decisions" },
   "gpt-6-luna": {
     litellm_provider: "openai",
@@ -67,10 +66,6 @@ describe("buildDecisionGarden", () => {
     ]);
   });
 
-  it("hides the <provider>/decisions/<model> billing rows", () => {
-    expect(garden.map((row) => row.model)).not.toContain("typesafe/decisions/jev-latest");
-  });
-
   it("leaves chat models out even when they serve a decision endpoint", () => {
     expect(garden.map((row) => row.model)).not.toContain("gpt-6-luna");
     expect(garden.map((row) => row.model)).not.toContain("systemone-only");
@@ -92,7 +87,6 @@ describe("buildDecisionCatalog", () => {
         "gpt-6-luna",
         "perplexity/pplx-decider-v1-27b",
         "systemone-only",
-        "typesafe/decisions/jev-latest",
         "typesafe/jev-latest",
         "typesafe/jev-preview",
       ].sort(),
