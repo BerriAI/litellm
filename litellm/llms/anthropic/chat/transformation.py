@@ -327,6 +327,23 @@ DROP_UNSUPPORTED_TOOL_SEARCH_WARNING: Final = (
 )
 
 
+def tools_without_unsupported_tool_search(
+    tools: Sequence[object], model: str, route: str, drop_params: bool
+) -> Sequence[object]:
+    if not any(_is_openai_tool_search_tool(tool) for tool in tools):
+        return tools
+    if not (litellm.drop_params or drop_params):
+        raise litellm.utils.UnsupportedParamsError(
+            message=(
+                f"{model} on {route} cannot run the OpenAI `tool_search` tool. To drop it "
+                "and the `defer_loading` of the other tools, set `litellm.drop_params = True`."
+            ),
+            status_code=400,
+        )
+    litellm.verbose_logger.warning(DROP_UNSUPPORTED_TOOL_SEARCH_WARNING, model, route)
+    return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -1045,16 +1062,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             model, self._resolved_provider
         ):
             return [anthropic_tool_search_chat_tool() if _is_openai_tool_search_tool(tool) else tool for tool in tools]
-        if not (litellm.drop_params or drop_params):
-            raise litellm.utils.UnsupportedParamsError(
-                message=(
-                    f"{model} on {self._resolved_provider} cannot run the OpenAI `tool_search` tool. To drop it "
-                    "and the `defer_loading` of the other tools, set `litellm.drop_params = True`."
-                ),
-                status_code=400,
-            )
-        litellm.verbose_logger.warning(DROP_UNSUPPORTED_TOOL_SEARCH_WARNING, model, self._resolved_provider)
-        return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
+        return tools_without_unsupported_tool_search(
+            tools=tools, model=model, route=self._resolved_provider, drop_params=drop_params
+        )
 
     def _map_tools(
         self,

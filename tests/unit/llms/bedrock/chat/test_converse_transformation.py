@@ -10145,3 +10145,47 @@ async def test_bedrock_user_file_element_becomes_document_block(sync_mode: bool)
     assert content[0] == {"text": "Summarize this report"}
     assert content[1]["document"]["source"] == {"bytes": base64.b64encode(pdf_bytes).decode()}
     assert content[1]["document"]["format"] == "pdf"
+
+
+def _openai_tool_search_with_deferred_functions() -> list[dict[str, object]]:
+    return [
+        {"type": "tool_search", "execution": "server"},
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            "defer_loading": True,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_price",
+                "parameters": {"type": "object", "properties": {}},
+                "defer_loading": True,
+            },
+        },
+    ]
+
+
+def test_map_openai_params_answers_400_for_the_openai_tool_search_tool_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        AmazonConverseConfig().map_openai_params(
+            non_default_params={"tools": _openai_tool_search_with_deferred_functions()},
+            optional_params={},
+            model="us.anthropic.claude-sonnet-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "tool_search" in str(raised.value)
+
+
+def test_map_openai_params_drops_the_openai_tool_search_tool_and_every_deferral_under_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = AmazonConverseConfig().map_openai_params(
+        non_default_params={"tools": _openai_tool_search_with_deferred_functions()},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-5-5",
+        drop_params=True,
+    )
+    assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather", "get_stock_price"]
+    assert all("defer_loading" not in tool and "defer_loading" not in tool["function"] for tool in mapped["tools"])

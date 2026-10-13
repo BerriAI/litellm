@@ -49,6 +49,7 @@ from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
+    tools_without_unsupported_tool_search,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -136,6 +137,7 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 
 
 _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_TOOLS_AS_RECEIVED: Final = TypeAdapter(list[object])
 
 
 def _tools_the_model_accepts(
@@ -1085,7 +1087,17 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["topP" if param == "top_p" else param] = value
             if param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
-                    tools=cast(list[OpenAIChatCompletionToolParam], value),
+                    tools=cast(
+                        list[OpenAIChatCompletionToolParam],
+                        list(
+                            tools_without_unsupported_tool_search(
+                                tools=_TOOLS_AS_RECEIVED.validate_python(value),
+                                model=model,
+                                route="bedrock converse",
+                                drop_params=drop_params,
+                            )
+                        ),
+                    ),
                     model=model,
                     non_default_params=non_default_params,
                     optional_params=optional_params,
