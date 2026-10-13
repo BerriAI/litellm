@@ -35,7 +35,9 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             endpoint_type="anthropic_messages",
             custom_endpoint=False,
             headers=headers,
+            custom_user_agent=self.configured_user_agent(litellm_params),
         )
+        workspace_api_base: Final = messages_api_base.removesuffix(DATABRICKS_ANTHROPIC_MESSAGES_PATH)
         normalized_headers: Final = {
             ("content-type" if key.lower() == "content-type" else key): value for key, value in auth_headers.items()
         }
@@ -44,7 +46,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             optional_params=optional_params,
             messages=messages,
         )
-        return finalized_headers, messages_api_base
+        return finalized_headers, workspace_api_base
 
     def get_complete_url(
         self,

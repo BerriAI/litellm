@@ -218,7 +218,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         ids were found without tool_result blocks immediately after") while
         consecutive user turns merge upstream.
         Billing-header system blocks are stripped from the top-level ``system``
-        field regardless of whether anything was hoisted.
+        field when ``should_strip_billing_metadata`` says so, regardless of
+        whether anything was hoisted.
 
         Subclasses whose upstream rejects the role opt in by calling this from
         their ``transform_anthropic_messages_request``; the first-party Anthropic
@@ -252,7 +253,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
             for block in as_system_content_blocks(source)
         ]
-        filtered_system: Final = self._filter_billing_headers_from_system(system_content)
+        filtered_system: Final = (
+            self._filter_billing_headers_from_system(system_content)
+            if self.should_strip_billing_metadata()
+            else system_content
+        )
         if filtered_system:
             anthropic_messages_request["system"] = filtered_system
         else:

@@ -12,6 +12,7 @@ Authentication priority:
 
 import os
 import re
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -143,6 +144,13 @@ class DatabricksBase:
                 redacted[key] = value
 
         return redacted
+
+    @staticmethod
+    def configured_user_agent(litellm_params: Mapping[str, object]) -> str | None:
+        configured: Final = (
+            litellm_params.get("user_agent") or os.getenv("LITELLM_USER_AGENT") or os.getenv("DATABRICKS_USER_AGENT")
+        )
+        return configured if isinstance(configured, str) else None
 
     @staticmethod
     def _build_user_agent(custom_user_agent: str | None = None) -> str:

@@ -5837,6 +5837,12 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
+            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation",
+            "AmazonAnthropicClaudeMessagesConfig",
+            True,
+        ),
+        ("litellm.llms.databricks.messages.transformation", "DatabricksAnthropicMessagesConfig", False),
+        (
             "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation",
             "VertexAIAnthropicConfig",
             True,

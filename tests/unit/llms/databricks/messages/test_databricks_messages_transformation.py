@@ -6,6 +6,7 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.databricks.chat.transformation import DatabricksConfig
 from litellm.llms.databricks.messages.transformation import DatabricksAnthropicMessagesConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager
@@ -58,7 +59,7 @@ def test_complete_url_targets_the_workspace_anthropic_messages_route(api_base: s
     assert url == MESSAGES_URL
 
 
-def test_validate_environment_signs_with_the_pat_and_returns_the_messages_route() -> None:
+def test_validate_environment_signs_with_the_pat_and_keeps_the_workspace_base() -> None:
     headers, api_base = DatabricksAnthropicMessagesConfig().validate_anthropic_messages_environment(
         headers={},
         model=CLAUDE_MODEL,
@@ -69,10 +70,59 @@ def test_validate_environment_signs_with_the_pat_and_returns_the_messages_route(
         api_base=DATABRICKS_API_BASE,
     )
 
-    assert api_base == MESSAGES_URL
+    assert api_base == DATABRICKS_API_BASE
     assert headers["Authorization"] == f"Bearer {DATABRICKS_API_KEY}"
     assert headers["anthropic-version"] == "2023-06-01"
     assert headers["content-type"] == "application/json"
+    assert headers["User-Agent"].startswith("litellm/")
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [DATABRICKS_API_BASE, f"{DATABRICKS_API_BASE}/", MESSAGES_URL],
+)
+def test_validation_then_url_building_appends_the_messages_route_once(api_base: str) -> None:
+    config: Final = DatabricksAnthropicMessagesConfig()
+    _, validated_api_base = config.validate_anthropic_messages_environment(
+        headers={},
+        model=CLAUDE_MODEL,
+        messages=USER_TURN,
+        optional_params={},
+        litellm_params={},
+        api_key=DATABRICKS_API_KEY,
+        api_base=api_base,
+    )
+
+    url: Final = config.get_complete_url(
+        api_base=validated_api_base, api_key=DATABRICKS_API_KEY, model=CLAUDE_MODEL, optional_params={}, litellm_params={}
+    )
+
+    assert url == MESSAGES_URL
+
+
+def test_partner_user_agent_matches_the_chat_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABRICKS_USER_AGENT", "partner/1.0")
+    messages_headers, _ = DatabricksAnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers={},
+        model=CLAUDE_MODEL,
+        messages=USER_TURN,
+        optional_params={},
+        litellm_params={},
+        api_key=DATABRICKS_API_KEY,
+        api_base=DATABRICKS_API_BASE,
+    )
+    chat_headers: Final = DatabricksConfig().validate_environment(
+        headers={},
+        model=CLAUDE_MODEL,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        api_key=DATABRICKS_API_KEY,
+        api_base=DATABRICKS_API_BASE,
+    )
+
+    assert messages_headers["User-Agent"].startswith("partner_litellm/")
+    assert messages_headers["User-Agent"] == chat_headers["User-Agent"]
 
 
 def test_request_transform_normalizes_system_turns_and_strips_cache_scope() -> None:
@@ -95,6 +145,22 @@ def test_request_transform_normalizes_system_turns_and_strips_cache_scope() -> N
     assert [message["role"] for message in request["messages"]] == ["user", "assistant", "user", "user"]
     assert "mid-turn instruction" in json.dumps(request["messages"][2]["content"])
     assert request["system"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_request_transform_keeps_the_billing_header_block() -> None:
+    billing_block: Final = {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.296; cc_entrypoint=cli"}
+    request: Final = DatabricksAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model=CLAUDE_MODEL,
+        messages=[{"role": "user", "content": "first"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 64,
+            "system": [billing_block, {"type": "text", "text": "be brief"}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["system"] == [billing_block, {"type": "text", "text": "be brief"}]
 
 
 def _reply(request: httpx.Request, body: dict[str, object]) -> httpx.Response:
