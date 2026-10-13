@@ -15,6 +15,7 @@ from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 async def _drain_tasks():
@@ -2914,27 +2915,21 @@ def _anthropic_sse_stream(stop_reason: str, stop_details: dict | None) -> list[s
             {
                 "type": "message_start",
                 "message": {
-                    "id": "msg_stop_details_test",
+                    "id": ANTHROPIC_DOCS_REFUSAL_MESSAGE["id"],
                     "type": "message",
                     "role": "assistant",
-                    "model": "claude-sonnet-5-5",
+                    "model": ANTHROPIC_DOCS_REFUSAL_MESSAGE["model"],
                     "content": [],
-                    "usage": {"input_tokens": 12, "output_tokens": 1},
+                    "usage": {"input_tokens": 412, "output_tokens": 0},
                 },
             },
         ),
-        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-        (
-            "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "I can't help with that."}},
-        ),
-        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         (
             "message_delta",
             {
                 "type": "message_delta",
                 "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details},
-                "usage": {"output_tokens": 9},
+                "usage": {"output_tokens": 0},
             },
         ),
         ("message_stop", {"type": "message_stop"}),
@@ -2943,7 +2938,7 @@ def _anthropic_sse_stream(stop_reason: str, stop_details: dict | None) -> list[s
 
 
 def test_streamed_messages_refusal_stop_details_on_the_logged_response(mock_logging_obj):
-    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
     logged: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
         all_chunks=_anthropic_sse_stream("refusal", stop_details),
         litellm_logging_obj=mock_logging_obj,
@@ -2953,7 +2948,7 @@ def test_streamed_messages_refusal_stop_details_on_the_logged_response(mock_logg
     assert logged.choices[0].finish_reason == "content_filter"
     provider_fields: Final = logged.choices[0].message.provider_specific_fields
     assert provider_fields["stop_reason"] == "refusal"
-    assert provider_fields["stop_details"]["category"] == stop_details["category"]
+    assert provider_fields["stop_details"] == stop_details
 
 
 def test_streamed_messages_end_turn_logs_no_stop_details(mock_logging_obj):

@@ -17,6 +17,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transfor
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -1692,18 +1693,7 @@ class TestBedrockAnthropicCombinedRegressions:
 
 
 def test_refusal_stop_details_kept_through_bedrock_invoke_transform():
-    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
-    body: Final = {
-        "id": "msg_stop_details_test",
-        "type": "message",
-        "role": "assistant",
-        "model": "anthropic.claude-sonnet-5-5-v1:0",
-        "content": [{"type": "text", "text": "I can't help with that request."}],
-        "stop_reason": "refusal",
-        "stop_sequence": None,
-        "stop_details": stop_details,
-        "usage": {"input_tokens": 12, "output_tokens": 9},
-    }
+    body: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE
     result: Final = AmazonAnthropicClaudeConfig().transform_response(
         model="anthropic.claude-sonnet-5-5-v1:0",
         raw_response=httpx.Response(status_code=200, headers={}, json=body),
@@ -1719,4 +1709,4 @@ def test_refusal_stop_details_kept_through_bedrock_invoke_transform():
     assert result.choices[0].finish_reason == "content_filter"
     provider_fields: Final = result.choices[0].message.provider_specific_fields
     assert provider_fields["stop_reason"] == "refusal"
-    assert provider_fields["stop_details"]["category"] == stop_details["category"]
+    assert provider_fields["stop_details"] == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]

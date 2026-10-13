@@ -21,6 +21,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
 from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 @pytest.mark.asyncio
@@ -2876,20 +2877,18 @@ def _message_stream_events(stop_reason: str, stop_details: dict | None) -> tuple
         {
             "type": "message_start",
             "message": {
-                "id": "msg_stop_details_test",
+                "id": ANTHROPIC_DOCS_REFUSAL_MESSAGE["id"],
                 "type": "message",
                 "role": "assistant",
+                "model": ANTHROPIC_DOCS_REFUSAL_MESSAGE["model"],
                 "content": [],
-                "usage": {"input_tokens": 12, "output_tokens": 1},
+                "usage": {"input_tokens": 412, "output_tokens": 0},
             },
         },
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "I can't help with that."}},
-        {"type": "content_block_stop", "index": 0},
         {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details},
-            "usage": {"output_tokens": 9},
+            "usage": {"output_tokens": 0},
         },
         {"type": "message_stop"},
     )
@@ -2902,13 +2901,13 @@ def _assemble_stream(events: tuple[dict, ...]) -> litellm.ModelResponse:
 
 
 def test_streamed_refusal_stop_details_reach_the_assembled_message():
-    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
     assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
 
     assert assembled.choices[0].finish_reason == "content_filter"
     provider_fields: Final = assembled.choices[0].message.provider_specific_fields
     assert provider_fields["stop_reason"] == "refusal"
-    assert provider_fields["stop_details"]["category"] == stop_details["category"]
+    assert provider_fields["stop_details"] == stop_details
 
 
 def test_streamed_end_turn_carries_no_stop_details():

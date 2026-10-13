@@ -37,6 +37,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, ServerToolUse, Usage
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 def test_response_format_transformation_unit_test():
@@ -8335,8 +8336,7 @@ def test_completion_surfaces_response_citations_in_provider_specific_fields(resp
 
 
 def _refusal_message_body(stop_reason: str, stop_details: dict | None) -> dict:
-    content: Final = [{"type": "text", "text": "I can't help with that request."}]
-    return {**_anthropic_message_body(content, stop_reason), "stop_details": stop_details}
+    return {**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "stop_reason": stop_reason, "stop_details": stop_details}
 
 
 def _transform_message_body(body: dict) -> litellm.ModelResponse:
@@ -8350,13 +8350,13 @@ def _transform_message_body(body: dict) -> litellm.ModelResponse:
 
 
 def test_refusal_stop_details_kept_in_provider_specific_fields():
-    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
-    result: Final = _transform_message_body(_refusal_message_body("refusal", stop_details))
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    result: Final = _transform_message_body(ANTHROPIC_DOCS_REFUSAL_MESSAGE)
 
     assert result.choices[0].finish_reason == "content_filter"
     provider_fields: Final = result.choices[0].message.provider_specific_fields
     assert provider_fields["stop_reason"] == "refusal"
-    assert provider_fields["stop_details"]["category"] == stop_details["category"]
+    assert provider_fields["stop_details"] == stop_details
     assert result._hidden_params["provider_specific_fields"]["stop_details"] == stop_details
 
 
