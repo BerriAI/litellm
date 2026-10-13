@@ -9515,6 +9515,39 @@ def test_vertex_ai_gemini_audio_ogg():
     print(response)
 
 
+def test_vertex_ai_cache_creation_kwarg_cannot_change_usage_or_cost() -> None:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+    }
+    client = HTTPHandler()
+    httpx_mock = MagicMock(return_value=mock_response)
+    with (
+        patch.object(client, "post", new=httpx_mock),
+        patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")),
+    ):
+        response = litellm.completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            vertex_project="fake-project",
+            vertex_location="us-central1",
+            vertex_ai_cache_creation_input_tokens=-1000000,
+            client=client,
+        )
+
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.cache_creation_input_tokens is None
+    assert response._hidden_params["response_cost"] > 0
+
+
 def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
     print("loading vertex ai credentials")
@@ -9637,10 +9670,9 @@ def test_calculate_usage_without_cache_creation_leaves_usage_unchanged():
 
 def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
-    from litellm.types.llms.vertex_ai import VERTEX_AI_CACHE_CREATION_TOKENS_KEY
 
     logging_obj = MagicMock()
-    logging_obj.model_call_details = {VERTEX_AI_CACHE_CREATION_TOKENS_KEY: 1280}
+    logging_obj.vertex_ai_cache_creation_input_tokens = 1280
     iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=logging_obj)
 
     chunk = iterator.chunk_parser(
