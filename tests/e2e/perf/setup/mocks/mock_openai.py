@@ -12,7 +12,7 @@ from typing import Final, cast
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from mock_common import Decision, RequestLog, mount_control, parse_json, sleep_for, sse
+from mock_common import KNOBS_HEADER, Decision, RequestLog, knobs_from_header, mount_control, parse_json, sleep_for, sse
 
 
 def str_field(body: object, key: str, default: str) -> str:
@@ -200,7 +200,13 @@ def build_app() -> FastAPI:
         body: Final = parse_json(await request.body())
         model: Final = str_field(body, "model", "unknown")
         stream: Final = bool_field(body, "stream")
-        decision: Final = log.decide(model=model, route="chat_completions", stream=stream, body=body)
+        decision: Final = log.decide(
+            model=model,
+            knobs=knobs_from_header(request.headers.get(KNOBS_HEADER)),
+            route="chat_completions",
+            stream=stream,
+            body=body,
+        )
         if decision.fail:
             return openai_error(decision)
         if stream:
@@ -214,7 +220,13 @@ def build_app() -> FastAPI:
         body: Final = parse_json(await request.body())
         model: Final = str_field(body, "model", "unknown")
         stream: Final = bool_field(body, "stream")
-        decision: Final = log.decide(model=model, route="responses", stream=stream, body=body)
+        decision: Final = log.decide(
+            model=model,
+            knobs=knobs_from_header(request.headers.get(KNOBS_HEADER)),
+            route="responses",
+            stream=stream,
+            body=body,
+        )
         if decision.fail:
             return openai_error(decision)
         if stream:

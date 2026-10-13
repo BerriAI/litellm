@@ -11,8 +11,8 @@ from typing import Final
 
 from e2e_http import NoBody, get_external, post_external, unwrap
 from memory_readings import RssCapture, RssReading, WorkerKey
-from performance_test_case import Limit, Metric, PerformanceTestCase
-from perf_wire import WireRecord
+from setup.performance_test_case import Limit, Metric, PerformanceTestCase
+from setup.wire import WireRecord
 from pydantic import BaseModel
 
 

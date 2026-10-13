@@ -1,7 +1,7 @@
 """The Bedrock-shaped perf mock: the bedrock-runtime routes litellm uses for chat, Converse and
 ConverseStream plus Invoke and InvokeWithResponseStream with Anthropic-native bodies. Streams are
 framed as application/vnd.amazon.eventstream, which the gateway decodes with botocore. SigV4
-headers are accepted without being checked; the model id in the path carries the knobs."""
+headers are accepted without being checked; the knobs arrive in the `x-mock-knobs` header."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from mock_anthropic import anthropic_events, anthropic_message
-from mock_common import Decision, RequestLog, mount_control, parse_json, sleep_for
+from mock_common import KNOBS_HEADER, Decision, RequestLog, knobs_from_header, mount_control, parse_json, sleep_for
 from mock_eventstream import encode_event
 
 EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
@@ -83,7 +83,13 @@ def build_app() -> FastAPI:
 
     async def converse(model_id: str, request: Request) -> Response:
         body: Final = parse_json(await request.body())
-        decision: Final = log.decide(model=model_id, route="converse", stream=False, body=body)
+        decision: Final = log.decide(
+            model=model_id,
+            knobs=knobs_from_header(request.headers.get(KNOBS_HEADER)),
+            route="converse",
+            stream=False,
+            body=body,
+        )
         if decision.fail:
             return bedrock_error(decision)
         await sleep_for(decision)
@@ -91,14 +97,26 @@ def build_app() -> FastAPI:
 
     async def converse_stream(model_id: str, request: Request) -> Response:
         body: Final = parse_json(await request.body())
-        decision: Final = log.decide(model=model_id, route="converse-stream", stream=True, body=body)
+        decision: Final = log.decide(
+            model=model_id,
+            knobs=knobs_from_header(request.headers.get(KNOBS_HEADER)),
+            route="converse-stream",
+            stream=True,
+            body=body,
+        )
         if decision.fail:
             return bedrock_error(decision)
         return StreamingResponse(_converse_stream(decision), media_type=EVENT_STREAM, headers=decision.headers)
 
     async def invoke(model_id: str, request: Request) -> Response:
         body: Final = parse_json(await request.body())
-        decision: Final = log.decide(model=model_id, route="invoke", stream=False, body=body)
+        decision: Final = log.decide(
+            model=model_id,
+            knobs=knobs_from_header(request.headers.get(KNOBS_HEADER)),
+            route="invoke",
+            stream=False,
+            body=body,
+        )
         if decision.fail:
             return bedrock_error(decision)
         await sleep_for(decision)
@@ -106,7 +124,13 @@ def build_app() -> FastAPI:
 
     async def invoke_with_response_stream(model_id: str, request: Request) -> Response:
         body: Final = parse_json(await request.body())
-        decision: Final = log.decide(model=model_id, route="invoke-with-response-stream", stream=True, body=body)
+        decision: Final = log.decide(
+            model=model_id,
+            knobs=knobs_from_header(request.headers.get(KNOBS_HEADER)),
+            route="invoke-with-response-stream",
+            stream=True,
+            body=body,
+        )
         if decision.fail:
             return bedrock_error(decision)
         return StreamingResponse(_invoke_stream(decision, model_id), media_type=EVENT_STREAM, headers=decision.headers)

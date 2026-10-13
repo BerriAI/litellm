@@ -1,18 +1,58 @@
 """The deterministic request plan of a `PerformanceTestCase`: every request the run sends, in order,
 drawn once from the case's seed so two runs of the same case send the same traffic. Each request
-carries a marker (`perfreq-000123-n`) that the mock providers and the mock guardrail read back, so
-the test can join what the client saw against what each mock received."""
+carries a marker (`perfreq-000123-n`) in its final user message that the mock providers and the
+mock guardrail read back, so the test can join what the client saw against what each mock received,
+and a `RequestShape` that sizes its system prompt, history, tools and output cap."""
 
 from __future__ import annotations
 
+import hashlib
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Literal, TypeVar
 
-from performance_test_case import Endpoint, PerformanceTestCase, Team
+from setup.mocks.mock_common import reply_for
+from setup.performance_test_case import Endpoint, PerformanceTestCase, RequestShape, Team
 
 Flag = Literal["n", "i", "b"]
 CallerKind = Literal["jwt", "key"]
+T = TypeVar("T")
+
+_WORDS: Final = (
+    "customer",
+    "order",
+    "invoice",
+    "shipment",
+    "returns",
+    "policy",
+    "account",
+    "balance",
+    "ticket",
+    "status",
+    "update",
+    "region",
+    "warehouse",
+    "support",
+    "agent",
+    "summary",
+    "quarter",
+    "report",
+    "renewal",
+    "contract",
+    "delivery",
+    "address",
+    "payment",
+    "refund",
+)
+_WORDS_PER_TOKEN: Final = 0.75
+
+
+def filler_text(seed: str, tokens: int) -> str:
+    """About `tokens` tokens of plain prose, the same text for the same seed on every run."""
+    count: Final = max(1, round(tokens * _WORDS_PER_TOKEN))
+    start: Final = int.from_bytes(hashlib.sha1(seed.encode()).digest()[:4], "big")
+    return " ".join(_WORDS[(start + index * 5) % len(_WORDS)] for index in range(count))
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,12 +74,19 @@ class PlannedRequest:
     model_group: str
     stream: bool
     flag: Flag
+    shape: RequestShape
+    system: str
+    history: tuple[str, ...]
     prompt: str
+
+    @property
+    def max_tokens(self) -> int:
+        return self.shape.output_tokens
 
     def expected_text(self, *, post_guardrail: bool) -> str:
         """What the client should read back: the mock's reply, plus the post-call rewrite when the
-        case registers a post guardrail and this request is in the rewrite slice."""
-        reply: Final = f"ack {self.marker}"
+        case has a post guardrail and this request is in the rewrite slice."""
+        reply: Final = reply_for(self.marker, self.max_tokens)
         return reply + " [post]" if self.flag == "i" and post_guardrail else reply
 
     @property
@@ -48,12 +95,11 @@ class PlannedRequest:
 
 
 def _allowed_models(case: PerformanceTestCase, team: Team | None, own: tuple[str, ...]) -> frozenset[str]:
-    everything: Final = frozenset(group.name for group in case.model_groups)
     if own:
         return frozenset(own)
     if team is not None and team.models:
         return frozenset(team.models)
-    return everything
+    return frozenset(case.model_groups)
 
 
 def _callers_by_group(case: PerformanceTestCase) -> dict[str, tuple[Caller, ...]]:
@@ -68,20 +114,21 @@ def _callers_by_group(case: PerformanceTestCase) -> dict[str, tuple[Caller, ...]
         reach.append((Caller("key", key.name), _allowed_models(case, key_team, key.models)))
     by_group: dict[str, tuple[Caller, ...]] = {}
     for group in case.model_groups:
-        by_group[group.name] = tuple(caller for caller, models in reach if group.name in models)
-        assert by_group[group.name], f"{case.name}: no caller may use model group {group.name}"
+        by_group[group] = tuple(caller for caller, models in reach if group in models)
+        assert by_group[group], f"{case.name}: no caller may use model group {group}"
     return by_group
 
 
-def _pick_endpoint(rng: random.Random, case: PerformanceTestCase) -> Endpoint:
+def _pick(rng: random.Random, shares: Mapping[T, float]) -> T:
     draw: Final = rng.random()
     cumulative = 0.0
-    chosen: Endpoint = "chat_completions"
-    for endpoint, share in case.traffic.endpoints.items():
+    chosen: T | None = None
+    for item, share in shares.items():
         cumulative += share
-        chosen = endpoint
+        chosen = item
         if draw < cumulative:
             break
+    assert chosen is not None, "empty shares"
     return chosen
 
 
@@ -96,18 +143,28 @@ def _pick_flag(rng: random.Random, case: PerformanceTestCase, *, stream: bool) -
     return "n"
 
 
+def _shaped(marker: str, shape: RequestShape) -> tuple[str, tuple[str, ...], str]:
+    system: Final = filler_text(f"{marker}:system", shape.system_tokens) if shape.system_tokens else ""
+    history: Final = tuple(
+        filler_text(f"{marker}:turn{index}", shape.turn_tokens) for index in range(2 * shape.history_turns)
+    )
+    prompt: Final = f"{marker} {filler_text(f'{marker}:user', shape.user_tokens)}"
+    return system, history, prompt
+
+
 def build_plan(case: PerformanceTestCase) -> tuple[PlannedRequest, ...]:
     case.validate()
     rng: Final = random.Random(case.traffic.seed)
     callers: Final = _callers_by_group(case)
-    groups: Final = tuple(group.name for group in case.model_groups)
     planned: list[PlannedRequest] = []
     for seq in range(1, case.traffic.total_requests + 1):
-        endpoint = _pick_endpoint(rng, case)
-        group = rng.choice(groups)
+        endpoint = _pick(rng, case.traffic.endpoints)
+        group = rng.choice(case.model_groups)
         stream = rng.random() < case.traffic.stream_share
         flag = _pick_flag(rng, case, stream=stream)
+        shape = _pick(rng, case.traffic.shapes)
         marker = f"perfreq-{seq:06d}-{flag}"
+        system, history, prompt = _shaped(marker, shape)
         planned.append(
             PlannedRequest(
                 seq=seq,
@@ -117,7 +174,10 @@ def build_plan(case: PerformanceTestCase) -> tuple[PlannedRequest, ...]:
                 model_group=group,
                 stream=stream,
                 flag=flag,
-                prompt=f"{marker} say hi, request {seq} of {case.traffic.total_requests}",
+                shape=shape,
+                system=system,
+                history=history,
+                prompt=prompt,
             )
         )
     return tuple(planned)

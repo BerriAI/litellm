@@ -1,6 +1,9 @@
-# Gateway config for the perf cases (tests/e2e/perf/test_perf_cases.py): one small gateway with
-# everything a customer runs turned on. Model groups, keys, teams and guardrails are created by
-# the case at run time, so the model list here is empty and store_model_in_db is on.
+# Gateway config for the perf cases (tests/e2e/perf/test_perf_cases.py), the local twin of the
+# proxy_config block in project-releaser's .buildkite/e2e-perf-gateway-values.yaml: the same model
+# groups over the mock providers, the same two guardrails, so a laptop run and the lane read the same
+# config. Each deployment's mock knobs travel in x-mock-knobs (l latency ms, j jitter ms, f flake
+# percent of first attempts, s flake status, t stream tokens per second). Teams, users and keys are
+# created by the case at run time.
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
@@ -36,4 +39,77 @@ router_settings:
   cooldown_time: 5
   routing_strategy: simple-shuffle
 
-model_list: []
+model_list:
+  - model_name: gpt-6-luna
+    litellm_params:
+      model: openai/gpt-6-luna
+      api_base: os.environ/E2E_PERF_MOCK_OPENAI_URL
+      api_key: perf-mock-not-checked
+      extra_headers:
+        x-mock-knobs: l600-j200-f0-s500-t50
+  - model_name: gpt-6-luna
+    litellm_params:
+      model: openai/gpt-6-luna
+      api_base: os.environ/E2E_PERF_MOCK_OPENAI_URL
+      api_key: perf-mock-not-checked
+      extra_headers:
+        x-mock-knobs: l900-j300-f0-s500-t50
+  - model_name: gpt-6-luna
+    litellm_params:
+      model: openai/gpt-6-luna
+      api_base: os.environ/E2E_PERF_MOCK_OPENAI_URL
+      api_key: perf-mock-not-checked
+      extra_headers:
+        x-mock-knobs: l500-j167-f30-s529-t50
+  - model_name: claude-sonnet-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_base: os.environ/E2E_PERF_MOCK_ANTHROPIC_URL
+      api_key: perf-mock-not-checked
+      extra_headers:
+        x-mock-knobs: l1000-j333-f0-s500-t50
+  - model_name: claude-sonnet-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_base: os.environ/E2E_PERF_MOCK_ANTHROPIC_URL
+      api_key: perf-mock-not-checked
+      extra_headers:
+        x-mock-knobs: l800-j267-f0-s500-t50
+  - model_name: claude-sonnet-5-bedrock
+    litellm_params:
+      model: bedrock/anthropic.claude-sonnet-5
+      aws_bedrock_runtime_endpoint: os.environ/E2E_PERF_MOCK_BEDROCK_URL
+      aws_region_name: us-east-1
+      aws_access_key_id: perf-mock-not-checked
+      aws_secret_access_key: perf-mock-not-checked
+      extra_headers:
+        x-mock-knobs: l1200-j400-f0-s500-t50
+  - model_name: claude-sonnet-5-bedrock
+    litellm_params:
+      model: bedrock/invoke/anthropic.claude-sonnet-5
+      aws_bedrock_runtime_endpoint: os.environ/E2E_PERF_MOCK_BEDROCK_URL
+      aws_region_name: us-east-1
+      aws_access_key_id: perf-mock-not-checked
+      aws_secret_access_key: perf-mock-not-checked
+      extra_headers:
+        x-mock-knobs: l1000-j333-f0-s500-t50
+
+guardrails:
+  - guardrail_name: perf-pre
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: pre_call
+      api_base: os.environ/E2E_PERF_MOCK_GUARDRAIL_URL
+      default_on: true
+      streaming_end_of_stream_only: true
+      additional_provider_specific_params:
+        latency_s: 0.05
+  - guardrail_name: perf-post
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: post_call
+      api_base: os.environ/E2E_PERF_MOCK_GUARDRAIL_URL
+      default_on: true
+      streaming_end_of_stream_only: true
+      additional_provider_specific_params:
+        latency_s: 0.05

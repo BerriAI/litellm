@@ -1,5 +1,5 @@
 """Sends a case's plan through the gateway from a separate process: the plan is written to disk as
-wire requests, Locust (`perf_locustfile.py`) replays it at the planned rate, and the records it
+wire requests, Locust (`locustfile.py`) replays it at the planned rate, and the records it
 wrote come back as `WireRecord`s."""
 
 from __future__ import annotations
@@ -13,17 +13,33 @@ from pathlib import Path
 from typing import Final
 
 from e2e_config import PROXY_BASE_URL
-from performance_test_case import PerformanceTestCase
-from perf_plan import PlannedRequest
-from perf_setup import CaseSetup
-from perf_wire import WireRecord, WireRequest
 from pydantic import TypeAdapter
+from setup.performance_test_case import PerformanceTestCase
+from setup.plan import PlannedRequest
+from setup.provision import CaseSetup
+from setup.wire import WireRecord, WireRequest
 
-_LOCUSTFILE: Final = Path(__file__).with_name("perf_locustfile.py")
+_LOCUSTFILE: Final = Path(__file__).with_name("locustfile.py")
+_PERF_DIR: Final = Path(__file__).resolve().parents[1]
 _PLAN_ADAPTER: Final = TypeAdapter(list[WireRequest])
 _RECORD_ADAPTER: Final = TypeAdapter(WireRecord)
 _PATHS: Final = {"chat_completions": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"}
-_MAX_TOKENS: Final = 64
+_TOOLS: Final[tuple[tuple[str, str, dict[str, object]], ...]] = (
+    (
+        "get_weather",
+        "Current weather for a city",
+        {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    ),
+    (
+        "search_orders",
+        "Find a customer's orders, optionally by status",
+        {
+            "type": "object",
+            "properties": {"customer_id": {"type": "string"}, "status": {"type": "string"}},
+            "required": ["customer_id"],
+        },
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,25 +57,72 @@ class RunOutcome:
         return last - first
 
 
-def wire_request(item: PlannedRequest, setup: CaseSetup, *, post_guardrail: bool) -> WireRequest:
-    model: Final = setup.model_names[item.model_group]
-    body: dict[str, object]
+def _openai_tools() -> list[dict[str, object]]:
+    return [
+        {"type": "function", "function": {"name": name, "description": description, "parameters": parameters}}
+        for name, description, parameters in _TOOLS
+    ]
+
+
+def _responses_tools() -> list[dict[str, object]]:
+    return [
+        {"type": "function", "name": name, "description": description, "parameters": parameters}
+        for name, description, parameters in _TOOLS
+    ]
+
+
+def _anthropic_tools() -> list[dict[str, object]]:
+    return [
+        {"name": name, "description": description, "input_schema": parameters}
+        for name, description, parameters in _TOOLS
+    ]
+
+
+def _turns(item: PlannedRequest) -> list[dict[str, object]]:
+    """The history as alternating user and assistant turns, then the final user message."""
+    earlier: Final[list[dict[str, object]]] = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": text} for index, text in enumerate(item.history)
+    ]
+    return [*earlier, {"role": "user", "content": item.prompt}]
+
+
+def request_body(item: PlannedRequest) -> dict[str, object]:
+    """The request in the endpoint's own wire format, sized by the planned `RequestShape`."""
     if item.endpoint == "responses":
-        body = {"model": model, "input": item.prompt, "max_output_tokens": _MAX_TOKENS, "stream": item.stream}
-    else:
-        body = {
-            "model": model,
-            "messages": [{"role": "user", "content": item.prompt}],
-            "max_tokens": _MAX_TOKENS,
+        return {
+            "model": item.model_group,
+            "input": _turns(item),
+            "max_output_tokens": item.max_tokens,
             "stream": item.stream,
+            **({"instructions": item.system} if item.system else {}),
+            **({"tools": _responses_tools()} if item.shape.tools else {}),
         }
+    if item.endpoint == "messages":
+        return {
+            "model": item.model_group,
+            "messages": _turns(item),
+            "max_tokens": item.max_tokens,
+            "stream": item.stream,
+            **({"system": item.system} if item.system else {}),
+            **({"tools": _anthropic_tools()} if item.shape.tools else {}),
+        }
+    return {
+        "model": item.model_group,
+        "messages": [*([{"role": "system", "content": item.system}] if item.system else []), *_turns(item)],
+        "max_tokens": item.max_tokens,
+        "stream": item.stream,
+        **({"tools": _openai_tools()} if item.shape.tools else {}),
+    }
+
+
+def wire_request(item: PlannedRequest, setup: CaseSetup, *, post_guardrail: bool) -> WireRequest:
     return WireRequest(
         seq=item.seq,
         marker=item.marker,
         caller=item.caller.label,
         endpoint=item.endpoint,
         path=_PATHS[item.endpoint],
-        body=body,
+        body=request_body(item),
         authorization=setup.authorization(item.caller),
         token_source=setup.token_source(item.caller),
         stream=item.stream,
@@ -81,6 +144,7 @@ def run_plan(case: PerformanceTestCase, plan: tuple[PlannedRequest, ...], setup:
         records_path.touch()
         env: Final = {
             **os.environ,
+            "PYTHONPATH": os.pathsep.join(filter(None, (str(_PERF_DIR), os.environ.get("PYTHONPATH")))),
             "PERF_PLAN_FILE": str(plan_path),
             "PERF_RECORDS_FILE": str(records_path),
             "PERF_RPS": str(case.traffic.rps),

@@ -1,5 +1,5 @@
-"""One perf run per `PerformanceTestCase` in `perf_cases.py`: build the case's teams, users, keys,
-model groups and guardrails on the gateway, replay its deterministic plan from a separate Locust
+"""One perf run per `PerformanceTestCase` in `cases/`: check the gateway was deployed with the case's
+model groups and guardrails, build its teams, users and keys, replay its deterministic plan from a separate Locust
 process against the out-of-process mock providers, then check every `Limit` against what the
 clients saw, what the mocks received and how the workers' memory moved."""
 
@@ -13,9 +13,8 @@ from idp import Keycloak
 from lifecycle import ResourceManager
 from memory_readings import read_rss_everywhere
 from models import SpendLogsParams
-from performance_test_case import PerformanceTestCase
-from perf_cases import CASES
-from perf_observe import (
+from cases import CASES
+from setup.observe import (
     Observation,
     evaluate,
     read_guardrail_calls,
@@ -23,9 +22,10 @@ from perf_observe import (
     render,
     reset_mock,
 )
-from perf_plan import build_plan
-from perf_run import run_plan
-from perf_setup import build_setup, guardrail_url, mock_url
+from setup.performance_test_case import PerformanceTestCase
+from setup.plan import build_plan
+from setup.provision import build_setup, guardrail_url, mock_url
+from setup.run import run_plan
 from proxy_client import ProxyClient
 
 pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]

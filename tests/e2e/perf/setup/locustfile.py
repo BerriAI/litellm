@@ -1,7 +1,7 @@
 """The Locust side of a perf case: simulated users take the next request off the pre-generated plan,
 send it at the planned rate, and write one record per request with what the client saw: status,
 time to headers, time to first byte, time to first token (streams), total time, the text read back
-and whether it matched. Runs in its own process (`perf_run.py` starts it), never in the gateway's.
+and whether it matched. Runs in its own process (`setup/run.py` starts it), never in the gateway's.
 
 Reads `PERF_PLAN_FILE` (JSON list of wire requests), writes `PERF_RECORDS_FILE` (one JSON object per
 line), paces to `PERF_RPS` over `PERF_USERS` users, and quits once the last request is recorded.
@@ -18,7 +18,7 @@ from typing import Final, cast
 import gevent
 from locust import FastHttpUser, constant_throughput, task
 from locust.contrib.fasthttp import FastResponse, ResponseContextManager
-from perf_wire import Endpoint, WireRecord, WireRequest
+from setup.wire import Endpoint, WireRecord, WireRequest
 from pydantic import TypeAdapter
 
 _PLAN_ADAPTER: Final = TypeAdapter(list[WireRequest])
