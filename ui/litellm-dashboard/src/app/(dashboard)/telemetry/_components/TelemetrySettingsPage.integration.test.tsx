@@ -12,8 +12,9 @@ vi.mock("@/lib/telemetry/uiEvents", async (original) => ({
   recordUiEvent: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("next/navigation", () => ({ usePathname: () => "/ui/telemetry" }));
+const auth = vi.hoisted(() => ({ premiumUser: false }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => ({ accessToken: "sk-test", userRole: "proxy_admin" }),
+  default: () => ({ accessToken: "sk-test", userRole: "proxy_admin", premiumUser: auth.premiumUser }),
 }));
 
 const SETTINGS = {
@@ -34,6 +35,11 @@ const SETTINGS = {
   ],
 } as unknown as TelemetrySettings;
 
+const OFF = {
+  ...SETTINGS,
+  groups: SETTINGS.groups.map((info) => ({ ...info, enabled: false })),
+} as TelemetrySettings;
+
 const renderPage = () =>
   render(
     <QueryClientProvider client={new QueryClient()}>
@@ -44,9 +50,12 @@ const renderPage = () =>
   );
 
 describe("TelemetrySettingsPage", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    auth.premiumUser = false;
+  });
 
-  it("says nothing is recorded until a destination is picked, then saves the picked one with the current groups", async () => {
+  it("says nothing is recorded without a destination and gates picking one behind the enterprise modal", async () => {
     const unchosen = { ...SETTINGS, destination: null, stored_destination: null };
     vi.spyOn(backgroundFetchClient, "GET").mockResolvedValue({ data: unchosen, response: new Response() } as never);
     const put = vi.spyOn(fetchClient, "PUT").mockReturnValue(new Promise(() => undefined) as never);
@@ -59,9 +68,53 @@ describe("TelemetrySettingsPage", () => {
     expect(screen.getByRole("radio", { name: /^HTTP/ })).toHaveAttribute("aria-disabled", "true");
     await user.click(screen.getByRole("radio", { name: /^Local table/ }));
 
-    expect(put).toHaveBeenCalledWith("/telemetry/settings", {
-      body: { groups: ["heartbeat", "request_success"], destination: "local_table" },
-    });
+    expect(await screen.findByRole("dialog", { name: "Telemetry is an enterprise-only feature" })).toBeVisible();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [false, "Telemetry is an enterprise-only feature"],
+    [true, "Contact your enterprise representative"],
+  ])("never turns telemetry on from the top switch (enterprise: %s)", async (premiumUser, title) => {
+    auth.premiumUser = premiumUser;
+    vi.spyOn(backgroundFetchClient, "GET").mockResolvedValue({ data: OFF, response: new Response() } as never);
+    const put = vi.spyOn(fetchClient, "PUT").mockReturnValue(new Promise(() => undefined) as never);
+    const user = userEvent.setup();
+    renderPage();
+
+    const telemetry = await screen.findByRole("switch", { name: "Telemetry" });
+    expect(telemetry).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Heartbeat" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("radio", { name: /^Local table/ })).toHaveAttribute("aria-disabled", "true");
+    await user.click(telemetry);
+
+    expect(await screen.findByRole("dialog", { name: title })).toBeVisible();
+    expect(put).not.toHaveBeenCalled();
+    expect(telemetry).not.toBeChecked();
+  });
+
+  it("turns every group off from the top switch and keeps the saved destination", async () => {
+    vi.spyOn(backgroundFetchClient, "GET").mockResolvedValue({ data: SETTINGS, response: new Response() } as never);
+    const put = vi.spyOn(fetchClient, "PUT").mockReturnValue(new Promise(() => undefined) as never);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("switch", { name: "Telemetry" }));
+
+    expect(put).toHaveBeenCalledWith("/telemetry/settings", { body: { groups: [], destination: "local_table" } });
+  });
+
+  it("gates turning another group on behind the enterprise modal while telemetry is on", async () => {
+    vi.spyOn(backgroundFetchClient, "GET").mockResolvedValue({ data: SETTINGS, response: new Response() } as never);
+    const put = vi.spyOn(fetchClient, "PUT").mockReturnValue(new Promise(() => undefined) as never);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("tab", { name: "Admin UI" }));
+    await user.click(await screen.findByRole("switch", { name: "Page navigation" }));
+
+    expect(await screen.findByRole("dialog", { name: "Telemetry is an enterprise-only feature" })).toBeVisible();
+    expect(put).not.toHaveBeenCalled();
   });
 
   it("keeps the saved destination when a group is switched", async () => {

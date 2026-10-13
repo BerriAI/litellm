@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import { FieldLabel } from "@/components/ui/field";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -7,6 +8,7 @@ import { Activity } from "lucide-react";
 import { Page, PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { useUrlTab } from "@/hooks/useUrlTab";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   type TelemetryDestination,
   type TelemetryGroup,
@@ -15,6 +17,7 @@ import {
   useUpdateTelemetrySettings,
 } from "@/app/(dashboard)/hooks/telemetry/useTelemetrySettings";
 import { GROUP_COPY, PROXY_GROUPS, UI_GROUPS, relativeDepths, toggleGroup, type Requires } from "./telemetryGroups";
+import { TelemetryEnterpriseDialog } from "./TelemetryEnterpriseDialog";
 
 const TABS = ["proxy", "ui"] as const;
 
@@ -40,11 +43,22 @@ type SettingsUpdate = ReturnType<typeof useUpdateTelemetrySettings>;
 const enabledGroups = (settings: TelemetrySettings): Set<TelemetryGroup> =>
   new Set(settings.groups.filter((info) => info.enabled).map((info) => info.group));
 
+const isOn = (settings: TelemetrySettings): boolean => enabledGroups(settings).size > 0;
+
 const savedDestination = (settings: TelemetrySettings): TelemetryDestination | null =>
   settings.destination_set_by_environment ? null : settings.stored_destination ?? null;
 
-function DestinationPicker({ settings, update }: { settings: TelemetrySettings; update: SettingsUpdate }) {
-  const locked = !settings.editable || settings.destination_set_by_environment || update.isPending;
+function DestinationPicker({
+  settings,
+  update,
+  requestEnable,
+}: {
+  settings: TelemetrySettings;
+  update: SettingsUpdate;
+  requestEnable: () => void;
+}) {
+  const unchangeable = !settings.editable || settings.destination_set_by_environment;
+  const locked = unchangeable || update.isPending || !isOn(settings);
   const missing = settings.destination === null && enabledGroups(settings).size > 0;
   return (
     <section className="space-y-2">
@@ -56,7 +70,9 @@ function DestinationPicker({ settings, update }: { settings: TelemetrySettings; 
         value={settings.destination ?? ""}
         disabled={locked}
         onValueChange={(value: unknown) =>
-          update.mutate({ groups: [...enabledGroups(settings)], destination: value as TelemetryDestination })
+          settings.destination === null
+            ? requestEnable()
+            : update.mutate({ groups: [...enabledGroups(settings)], destination: value as TelemetryDestination })
         }
       >
         {(Object.keys(DESTINATION_LABELS) as TelemetryDestination[]).map((destination) => (
@@ -81,22 +97,28 @@ function GroupList({
   groups,
   settings,
   update,
+  requestEnable,
 }: {
   groups: readonly TelemetryGroup[];
   settings: TelemetrySettings;
   update: SettingsUpdate;
+  requestEnable: () => void;
 }) {
   const requires: Requires = new Map(settings.groups.map((info) => [info.group, info.requires ?? null]));
   const enabled = enabledGroups(settings);
   const depths = relativeDepths(groups, requires);
   const onToggle = (group: TelemetryGroup, on: boolean) => {
+    if (on) {
+      requestEnable();
+      return;
+    }
     update.mutate({ groups: [...toggleGroup(group, on, enabled, requires)], destination: savedDestination(settings) });
   };
   return (
     <ul className="divide-y rounded-md border">
       {groups.map((group) => {
         const copy = GROUP_COPY[group];
-        const locked = !settings.editable || update.isPending;
+        const locked = !settings.editable || update.isPending || !isOn(settings);
         const depth = depths.get(group) ?? 0;
         return (
           <li
@@ -128,6 +150,31 @@ function GroupList({
   );
 }
 
+function TelemetrySwitch({
+  settings,
+  update,
+  requestEnable,
+}: {
+  settings: TelemetrySettings;
+  update: SettingsUpdate;
+  requestEnable: () => void;
+}) {
+  const on = isOn(settings);
+  return (
+    <div className="flex items-center gap-2 text-sm font-medium">
+      <Switch
+        aria-label="Telemetry"
+        checked={on}
+        disabled={!settings.editable || update.isPending}
+        onCheckedChange={(next) =>
+          next ? requestEnable() : update.mutate({ groups: [], destination: savedDestination(settings) })
+        }
+      />
+      <span aria-hidden>{on ? "On" : "Off"}</span>
+    </div>
+  );
+}
+
 function ReportPreview({ settings }: { settings: TelemetrySettings }) {
   return (
     <section className="space-y-1">
@@ -150,6 +197,9 @@ export default function TelemetrySettingsPage() {
   const [tab, setTab] = useUrlTab(TABS, "proxy");
   const { data: settings, isLoading, error } = useTelemetrySettings();
   const update = useUpdateTelemetrySettings();
+  const { premiumUser } = useAuthorized();
+  const [enableDialogOpen, setEnableDialogOpen] = useState(false);
+  const requestEnable = () => setEnableDialogOpen(true);
   if (isLoading) return <Page>Loading telemetry settings...</Page>;
   if (settings === undefined)
     return <Page className="text-destructive">Could not load telemetry settings: {error?.message}</Page>;
@@ -165,6 +215,7 @@ export default function TelemetrySettingsPage() {
             Choose what privacy-safe, aggregated usage data this proxy shares
           </PageHeaderDescription>
           <PageHeaderControls>
+            <TelemetrySwitch settings={settings} update={update} requestEnable={requestEnable} />
             <PageTabsList>
               <PageTabsTrigger value="proxy">Proxy requests</PageTabsTrigger>
               <PageTabsTrigger value="ui">Admin UI</PageTabsTrigger>
@@ -172,17 +223,17 @@ export default function TelemetrySettingsPage() {
           </PageHeaderControls>
         </PageHeader>
         <PageTabsContent value="proxy" className="gap-4">
-          <GroupList groups={PROXY_GROUPS} settings={settings} update={update} />
+          <GroupList groups={PROXY_GROUPS} settings={settings} update={update} requestEnable={requestEnable} />
         </PageTabsContent>
         <PageTabsContent value="ui" className="gap-4">
-          <GroupList groups={UI_GROUPS} settings={settings} update={update} />
+          <GroupList groups={UI_GROUPS} settings={settings} update={update} requestEnable={requestEnable} />
           <p className="text-xs text-muted-foreground">
             Sent only while Page navigation is on, to this proxy at POST /telemetry/ui_events, and counted into the same
             report as proxy traffic
           </p>
         </PageTabsContent>
       </PageTabs>
-      <DestinationPicker settings={settings} update={update} />
+      <DestinationPicker settings={settings} update={update} requestEnable={requestEnable} />
       <section className="space-y-1">
         <h3 className="font-medium">How and when it is sent</h3>
         <p className="text-xs text-muted-foreground">{destinationText(settings)}. Changes apply from the next window</p>
@@ -192,6 +243,11 @@ export default function TelemetrySettingsPage() {
         </p>
       </section>
       <ReportPreview settings={settings} />
+      <TelemetryEnterpriseDialog
+        open={enableDialogOpen}
+        onOpenChange={setEnableDialogOpen}
+        premiumUser={premiumUser === true}
+      />
     </Page>
   );
 }
