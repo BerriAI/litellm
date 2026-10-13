@@ -32,6 +32,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
+
 # Anchor sys.path to this file's location — not the working-directory-relative
 # pattern Greptile flagged on PR #23706. Resolves correctly regardless of
 # where pytest is invoked from.
@@ -263,3 +265,22 @@ async def test_messages_layer_converted_stream_flag_still_gets_a_message_back(co
     )
 
     assert response["content"][0]["text"] == "hi"
+
+
+@pytest.mark.parametrize("tool_choice", [{}, {"name": "get_weather"}, {"type": "web_search"}])
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_messages_rejects_invalid_tool_choice_before_provider_call(
+    tool_choice: dict[str, str], stream: bool
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.anthropic_messages(
+            model="hosted_vllm/test-model",
+            max_tokens=8,
+            messages=[{"role": "user", "content": "Hello"}],
+            tool_choice=tool_choice,
+            stream=stream,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "tool_choice" in exc_info.value.message

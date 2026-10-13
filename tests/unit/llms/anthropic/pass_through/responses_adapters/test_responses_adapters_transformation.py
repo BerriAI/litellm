@@ -5,12 +5,13 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-from typing import Any, Dict, List
+from functools import partial
+from typing import Any, Dict, Final, List, cast
 from unittest.mock import MagicMock
 
 import pytest
 
-
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -27,6 +28,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.transformation impor
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
+    AnthropicMessagesToolChoice,
 )
 from litellm.types.llms.openai import ResponseAPIUsage
 
@@ -2201,3 +2203,35 @@ class TestPromptCacheBreakpointToResponses:
             extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
         )
         assert kwargs["prompt_cache_options"] == {"mode": "explicit"}
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "message"),
+    [
+        ({}, "tool_choice.type: Field required"),
+        ({"name": "get_weather"}, "tool_choice.type: Field required"),
+        (
+            {"type": "web_search"},
+            "tool_choice: Input tag 'web_search' found using 'type' "
+            "does not match any of the expected tags: 'auto', 'any', 'tool', 'none'",
+        ),
+    ],
+)
+@pytest.mark.parametrize("through_request", [False, True])
+def test_invalid_tool_choice_is_bad_request(tool_choice: dict[str, str], message: str, through_request: bool) -> None:
+    request: Final = AnthropicMessagesRequest(
+        model="test-model",
+        max_tokens=128,
+        messages=[{"role": "user", "content": "Hello"}],
+        tool_choice=tool_choice,
+    )
+    translate: Final = (
+        partial(_ADAPTER.translate_request, request)
+        if through_request
+        else partial(_ADAPTER.translate_tool_choice_to_responses_api, cast(AnthropicMessagesToolChoice, tool_choice))
+    )
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        translate()
+
+    assert exc_info.value.status_code == 400
+    assert message in exc_info.value.message

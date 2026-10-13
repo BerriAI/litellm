@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     prompt_cache_key_from_user_id,
+    validate_anthropic_tool_choice,
 )
 
 # OpenAI has a 64-character limit for function/tool names
@@ -764,6 +765,7 @@ class LiteLLMAnthropicMessagesAdapter:
     def translate_anthropic_tool_choice_to_openai(
         self, tool_choice: AnthropicMessagesToolChoice
     ) -> ChatCompletionToolChoiceValues:
+        validate_anthropic_tool_choice(tool_choice)
         if tool_choice["type"] == "any":
             return "required"
         elif tool_choice["type"] == "auto":
@@ -1046,7 +1048,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if "tool_choice" not in anthropic_message_request:
             return
         tool_choice: Final = anthropic_message_request["tool_choice"]
-        if not tool_choice:
+        if tool_choice is None:
             return
         new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(
             tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)
