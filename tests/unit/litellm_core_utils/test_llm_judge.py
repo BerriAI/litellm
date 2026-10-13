@@ -292,3 +292,30 @@ async def test_team_routed_model_pins_the_team_deployment_the_router_picks(
         ]
     )
     assert await team_routed_model(router, model, team_id) in expected
+
+
+@pytest.mark.parametrize(
+    ("pin_team_deployment", "expected"),
+    [(True, {"owner-a", "owner-b"}), (False, {"team-judge"})],
+    ids=["pinned", "by-name"],
+)
+@pytest.mark.asyncio
+async def test_judge_acompletion_pins_the_team_deployment_only_when_asked(
+    pin_team_deployment: bool, expected: set[str]
+) -> None:
+    router = litellm.Router(
+        model_list=[
+            _team_deployment("owner-a", "openai/gpt-4o-mini", "team-judge"),
+            _team_deployment("owner-b", "openai/gpt-4o-mini", "team-judge"),
+        ]
+    )
+    dispatch = AsyncMock(return_value={"choices": [{"message": {"content": "{}"}}]})
+    router.acompletion = dispatch
+    await judge_acompletion(
+        router,
+        "team-judge",
+        [{"role": "user", "content": "hi"}],
+        team_id="owner",
+        pin_team_deployment=pin_team_deployment,
+    )
+    assert dispatch.call_args.kwargs["model"] in expected

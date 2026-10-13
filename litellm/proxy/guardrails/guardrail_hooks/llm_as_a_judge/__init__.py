@@ -253,6 +253,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             self.judge_model,
             judge_messages,
             team_id=team_id,
+            pin_team_deployment=True,
             response_format={"type": "json_object"},
             temperature=0,
             metadata=dict(_JUDGE_CALL_METADATA),
