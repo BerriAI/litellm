@@ -126,16 +126,20 @@ FLATTENED_TOOL_NAME_DIGEST_LENGTH: Final = 8
 def flatten_namespace_tool_name(namespace: str, tool_name: str) -> str:
     """Join a Responses namespace and tool name into one chat function name.
 
-    A name over the provider limit keeps a readable prefix and ends with a digest
-    of the full name. The result depends only on the inputs, so outbound tools,
-    replayed history, and the reverse map always agree.
+    A name over the provider limit keeps the tool name and shortens the
+    namespace to a prefix plus a digest of the full name, so the model can
+    still tell the tools apart. A tool name too long on its own is truncated
+    before the digest instead. The result depends only on the inputs, so
+    outbound tools, replayed history, and the reverse map always agree.
     """
     flattened: Final = f"{namespace}__{tool_name}"
     if len(flattened) <= MAX_FLATTENED_TOOL_NAME_LENGTH:
         return flattened
     digest: Final = hashlib.sha256(flattened.encode()).hexdigest()[:FLATTENED_TOOL_NAME_DIGEST_LENGTH]
-    prefix_length: Final = MAX_FLATTENED_TOOL_NAME_LENGTH - FLATTENED_TOOL_NAME_DIGEST_LENGTH - 1
-    return f"{flattened[:prefix_length]}_{digest}"
+    namespace_budget: Final = MAX_FLATTENED_TOOL_NAME_LENGTH - len(f"_{digest}__{tool_name}")
+    if namespace_budget > 0:
+        return f"{namespace[:namespace_budget]}_{digest}__{tool_name}"
+    return f"{tool_name[: MAX_FLATTENED_TOOL_NAME_LENGTH - FLATTENED_TOOL_NAME_DIGEST_LENGTH - 1]}_{digest}"
 
 
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
