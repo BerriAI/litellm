@@ -217,6 +217,11 @@ def test_unknown_exception_falls_back_to_status_then_unclassified() -> None:
     assert normalize_error(Exception("x"), "", "x") == "UNCLASSIFIED"
 
 
+def test_a_529_the_anthropic_routes_answered_is_an_overload() -> None:
+    paused = _proxy_exc("Model is paused", "service_unavailable_error", 529)
+    assert StandardLoggingPayloadSetup.get_error_information(paused)["normalized_error"] == "503_PROVIDER_OVERLOADED"
+
+
 def test_budget_exceeded_error_with_custom_wording_is_still_a_budget_error() -> None:
     exc = litellm.BudgetExceededError(current_cost=2.0, max_budget=1.0, message="Spending cap reached for key")
     assert StandardLoggingPayloadSetup.get_error_information(exc)["normalized_error"] == "429_BUDGET_EXCEEDED"

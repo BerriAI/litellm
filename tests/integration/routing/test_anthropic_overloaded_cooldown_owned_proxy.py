@@ -75,7 +75,7 @@ def _config(wire: Wire, directory: Path) -> Path:
     ]
     config["router_settings"] = {
         "num_retries": 0,
-        "allowed_fails_policy": {"ServiceUnavailableErrorAllowedFails": 0},
+        "allowed_fails_policy": {"InternalServerErrorAllowedFails": 0},
         "cooldown_time": 120,
         "redis_host": os.environ["REDIS_HOST"],
         "redis_port": int(os.environ["REDIS_PORT"]),
@@ -140,7 +140,7 @@ def _assert_overloaded_json(response: httpx.Response) -> None:
     assert object_value(payload["error"])["type"] == "overloaded_error", response.text
 
 
-def test_an_overloaded_deployment_is_cooled_down_by_the_service_unavailable_allowed_fails_policy(rig: _Rig) -> None:
+def test_an_overloaded_deployment_is_cooled_down_by_the_internal_server_error_allowed_fails_policy(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     first: Final = rig.messages("/v1/messages", _COOLDOWN_GROUP, marker, num_retries=0, disable_fallbacks=True)
     _assert_overloaded_json(first)

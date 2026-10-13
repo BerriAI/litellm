@@ -820,6 +820,7 @@ class BadGatewayError(openai.APIStatusError):
 class InternalServerError(openai.InternalServerError):
     response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
     request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
+    provider_status_code: int | None
 
     def __init__(
         self,
@@ -831,8 +832,10 @@ class InternalServerError(openai.InternalServerError):
         max_retries: int | None = None,
         num_retries: int | None = None,
         body: object | None = None,
+        provider_status_code: int | None = None,
     ):
         self.status_code = 500
+        self.provider_status_code = provider_status_code
         self.message = f"litellm.InternalServerError: {message}"
         self.llm_provider = llm_provider
         self.model = model

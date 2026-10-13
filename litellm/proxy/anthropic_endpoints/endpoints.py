@@ -2,7 +2,7 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
-from typing import Final, Protocol, runtime_checkable
+from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -21,12 +21,14 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_response_usage as _blocked_response_usage,
 )
 from litellm.proxy._types import *
+from litellm.proxy.anthropic_endpoints.answered_status import with_answered_status
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
     log_llm_api_exception,
     proxy_exception_from_http_exception,
+    proxy_exception_from_route_error,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
@@ -63,27 +65,6 @@ def _anthropic_error_detail(
         "litellm_call_id": call_id,
     }
     return with_call_id
-
-
-@runtime_checkable
-class _CarriesStatusCode(Protocol):
-    status_code: int
-
-
-def with_answered_status(exc: Exception) -> Exception:
-    """The same exception carrying the status the Anthropic routes answer with (a 503 answers as 529), so the
-    proxy-level recorders the failure hook runs (the spend log row, the OTel server span, the failed-request metric,
-    alerting) agree with the client. The deployment-level recorders (the deployment failure metric, cooldown) ran in
-    the litellm layer with the deployment's own status before the exception gets here."""
-    if isinstance(exc, ProxyException):
-        if exc.code.isdecimal():
-            answered_code: Final = str(AnthropicExceptionMapping.get_status_code(int(exc.code)))
-            exc.code = answered_code  # rebind-ok: the recorders key on this object's class and attributes, so the status moves on it, not on a copy
-        return exc
-    if isinstance(exc, _CarriesStatusCode):
-        answered_status: Final = AnthropicExceptionMapping.get_status_code(exc.status_code)
-        exc.status_code = answered_status  # rebind-ok: litellm exception classes bind their status in __init__, so no new instance can carry 529 under the same class
-    return exc
 
 
 def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
@@ -391,7 +372,7 @@ async def count_tokens(
         return _anthropic_error_json_response(e, request)
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)
-        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
+        return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
 
 
 @router.post(

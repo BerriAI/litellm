@@ -259,6 +259,17 @@ class TestAnthropicErrorSseFrame:
             "error": {"type": expected_error_type, "message": "upstream unavailable"},
         }
 
+    def test_a_503_envelope_frame_takes_the_overloaded_type_of_the_529_it_answers(self) -> None:
+        envelope: Final = json.dumps({"type": "error", "error": {"type": "api_error", "message": "Service unavailable"}})
+
+        frame: Final = anthropic_error_sse_frame(status_code=503, raw_message=envelope)
+
+        assert frame.status_code == 529
+        assert frame.json_body(call_id=None) == {
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": "Service unavailable"},
+        }
+
     def test_the_frame_remembers_the_status_anthropic_answers_with_and_the_body(self) -> None:
         frame: Final = anthropic_error_sse_frame(status_code=503, raw_message="upstream unavailable")
 

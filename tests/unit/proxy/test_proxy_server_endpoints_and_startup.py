@@ -1804,9 +1804,7 @@ async def test_proxy_startup_refuses_fips_mode_when_the_config_disables_tls_veri
 
     config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     config_path.write_text(
-        yaml.dump(
-            {"general_settings": {"master_key": "sk-a-safe-master-key"}, "litellm_settings": {"ssl_verify": False}}
-        )
+        yaml.dump({"general_settings": {"master_key": "sk-a-safe-master-key"}, "litellm_settings": {"ssl_verify": False}})
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.openssl_enforces_fips", lambda: True)
@@ -1892,7 +1890,9 @@ class _DatabaseWithOneStoredCredential:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)])
+@pytest.mark.parametrize(
+    "encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)]
+)
 async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values_under_the_unsafe_key(
     monkeypatch, tmp_path, encrypted_with, asks_to_migrate
 ):
@@ -1975,7 +1975,9 @@ async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monke
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
 
-    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY})
+    config_path, announced = _boot_with_general_settings(
+        monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY}
+    )
 
     with pytest.raises(UnsafeMasterKeyError):
         async with proxy_startup_event(FastAPI()):
@@ -4449,41 +4451,6 @@ async def test_async_data_generator_midstream_error():
     mock_proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_async_data_generator_error_frame_names_the_type_its_status_stands_for():
-    """OpenAI types `error.type` as a required string and `ServiceUnavailableError` carries none, so the error frame
-    names the type its status stands for instead of `null`."""
-    import litellm
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.proxy_server import async_data_generator
-    from litellm.proxy.utils import ProxyLogging
-
-    async def one_chunk(*args, **kwargs):
-        yield {"choices": [{"delta": {"content": "Hello"}}]}
-
-    overloaded = litellm.ServiceUnavailableError(
-        message="AnthropicError - Overloaded", llm_provider="anthropic", model="claude-opus-5-5"
-    )
-    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
-    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = one_chunk
-    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock(side_effect=overloaded)
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
-
-    with patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
-    ):  # test-quality-ok: module global imported at call time; no injection seam
-        frames = [
-            frame
-            async for frame in async_data_generator(
-                MagicMock(), MagicMock(spec=UserAPIKeyAuth), {"model": "claude-opus-5-5"}
-            )
-        ]
-
-    error_frame = next(frame for frame in frames if '"error"' in frame)
-    error = json.loads(error_frame.removeprefix("data: "))["error"]
-    assert (error["type"], error["code"], error["param"]) == ("internal_server_error", "503", None)
-
-
 def _has_nested_none_values(obj, path="root"):
     """
     Recursively check if an object contains nested None values.
@@ -6402,9 +6369,7 @@ async def test_tag_cache_update_multiple_tags():
 
             await asyncio.sleep(0.1)
 
-            mock_get_cache.assert_awaited_once_with(
-                keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False
-            )
+            mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False)
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -8351,18 +8316,10 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
     request.headers = {}
     request.query_params = {}
 
-    settings: Final = patch(
-        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
-    )  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch(
-        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
-    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch(
-        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
-    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch(
-        "litellm.proxy.proxy_server.master_key", MASTER_KEY
-    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", MASTER_KEY)  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 

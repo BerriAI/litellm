@@ -112,11 +112,11 @@ def _assert_overloaded(response: httpx.Response, *, message: str) -> None:
     assert "content_block_delta" not in response.text, response.text
 
 
-def _assert_service_unavailable(response: httpx.Response) -> None:
-    assert response.status_code == 503, response.text
+def _assert_internal_server_error(response: httpx.Response) -> None:
+    assert response.status_code == 500, response.text
     error: Final = _openai_error(response)
-    assert error["code"] == "503", response.text
-    assert "ServiceUnavailableError" in string_value(error["message"]), response.text
+    assert error["code"] == "500", response.text
+    assert "InternalServerError" in string_value(error["message"]), response.text
 
 
 def _one_post(wire: Wire, target: str) -> None:
@@ -136,11 +136,8 @@ def _failure_rows(model: str, expected: int) -> list[dict[str, JsonValue]]:
     )
 
 
-def _assert_logged_as_service_unavailable(model: str, *, rows: int, code: str = "529") -> None:
-    assert (
-        _failure_rows(model, rows)
-        == [{"status": "failure", "code": code, "error_class": "ServiceUnavailableError"}] * rows
-    )
+def _assert_logged_failure(model: str, *, rows: int, error_class: str, code: str = "529") -> None:
+    assert _failure_rows(model, rows) == [{"status": "failure", "code": code, "error_class": error_class}] * rows
 
 
 def test_messages_529_answers_overloaded_error_to_the_sync_sdk_and_logs_each_call_once(gateway: Gateway) -> None:
@@ -159,7 +156,7 @@ def test_messages_529_answers_overloaded_error_to_the_sync_sdk_and_logs_each_cal
             assert caught.value.status_code == 529, caught.value.response.text
             _assert_overloaded(caught.value.response, message="scripted 529")
         assert [unquote(request.target) for request in wire.drain()] == ["/v1/messages"] * 2
-        _assert_logged_as_service_unavailable(model, rows=2)
+        _assert_logged_failure(model, rows=2, error_class="InternalServerError")
 
 
 async def test_messages_529_answers_overloaded_error_to_the_async_sdk(gateway: Gateway) -> None:
@@ -177,16 +174,18 @@ async def test_messages_529_answers_overloaded_error_to_the_async_sdk(gateway: G
         _one_post(wire, "/v1/messages")
 
 
-@pytest.mark.parametrize("upstream_status", (529, 503))
+@pytest.mark.parametrize(
+    ("upstream_status", "error_class"), ((529, "InternalServerError"), (503, "ServiceUnavailableError"))
+)
 def test_messages_stream_rejected_before_its_first_byte_answers_529_json(
-    gateway: Gateway, upstream_status: int
+    gateway: Gateway, upstream_status: int, error_class: str
 ) -> None:
     with wire_server(_always(status_reply(upstream_status))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request("POST", "/v1/messages", _messages_body(model, _prompt(), stream=True))
         _assert_overloaded(response, message=f"scripted {upstream_status}")
         _one_post(wire, "/v1/messages")
-        _assert_logged_as_service_unavailable(model, rows=1)
+        _assert_logged_failure(model, rows=1, error_class=error_class)
 
 
 def test_messages_stream_529_raises_529_in_the_sync_sdk(gateway: Gateway) -> None:
@@ -213,7 +212,7 @@ def _error_frames(text: str) -> tuple[dict[str, JsonValue], ...]:
     )
 
 
-def test_messages_529_after_the_keepalive_opened_the_response_ends_with_a_503_error_frame(gateway: Gateway) -> None:
+def test_messages_529_after_the_keepalive_opened_the_response_ends_with_a_500_error_frame(gateway: Gateway) -> None:
     with (
         wire_server(_late(status_reply(529), _LATE_ANSWER_SECONDS)) as wire,
         gateway.scenario() as scenario,
@@ -227,11 +226,11 @@ def test_messages_529_after_the_keepalive_opened_the_response_ends_with_a_503_er
         assert "message_start" not in response.text, response.text
         (frame,) = _error_frames(response.text)
         error: Final = object_value(frame["error"])
-        assert error["code"] == "503", response.text
+        assert error["code"] == "500", response.text
         _one_post(wire, "/v1/messages")
 
 
-def test_chat_completions_overloaded_frame_after_content_ends_with_a_503_error_frame(gateway: Gateway) -> None:
+def test_chat_completions_overloaded_frame_after_content_ends_with_a_500_error_frame(gateway: Gateway) -> None:
     prompt: Final = _prompt()
     upstream: Final = (*message_stream(prompt, _MODEL, _TEXT)[:3], error_frame(529, "Overloaded"))
     with wire_server(_always(stream_reply(upstream))) as wire, gateway.scenario() as scenario:
@@ -245,24 +244,24 @@ def test_chat_completions_overloaded_frame_after_content_ends_with_a_503_error_f
         assert _TEXT in response.text, response.text
         (frame,) = _error_frames(response.text)
         error: Final = object_value(frame["error"])
-        assert (error["code"], error["type"], error["param"]) == ("503", "internal_server_error", None), response.text
+        assert error["code"] == "500", response.text
         _one_post(wire, "/v1/messages")
 
 
-def test_chat_completions_529_answers_503_to_the_sync_sdk(gateway: Gateway) -> None:
+def test_chat_completions_529_answers_500_to_the_sync_sdk(gateway: Gateway) -> None:
     with wire_server(_always(status_reply(529))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
         with pytest.raises(openai.APIStatusError) as caught:
             _openai_sdk(gateway).chat.completions.create(
                 model=model, messages=[{"role": "user", "content": _prompt()}], extra_body={"num_retries": 0}
             )
-        assert caught.value.status_code == 503, caught.value.response.text
-        _assert_service_unavailable(caught.value.response)
+        assert caught.value.status_code == 500, caught.value.response.text
+        _assert_internal_server_error(caught.value.response)
         _one_post(wire, "/v1/messages")
-        _assert_logged_as_service_unavailable(model, rows=1, code="503")
+        _assert_logged_failure(model, rows=1, error_class="InternalServerError", code="500")
 
 
-async def test_chat_completions_stream_529_answers_503_to_the_async_sdk(gateway: Gateway) -> None:
+async def test_chat_completions_stream_529_answers_500_to_the_async_sdk(gateway: Gateway) -> None:
     with wire_server(_always(status_reply(529))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
         with pytest.raises(openai.APIStatusError) as caught:
@@ -272,19 +271,19 @@ async def test_chat_completions_stream_529_answers_503_to_the_async_sdk(gateway:
                 stream=True,
                 extra_body={"num_retries": 0},
             )
-        assert caught.value.status_code == 503, caught.value.response.text
-        _assert_service_unavailable(caught.value.response)
+        assert caught.value.status_code == 500, caught.value.response.text
+        _assert_internal_server_error(caught.value.response)
         _one_post(wire, "/v1/messages")
 
 
 @pytest.mark.parametrize("shape", ("non-stream", "stream"))
-def test_responses_529_answers_503(gateway: Gateway, shape: Shape) -> None:
+def test_responses_529_answers_500(gateway: Gateway, shape: Shape) -> None:
     with wire_server(_always(status_reply(529))) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
             "POST", "/v1/responses", {"model": model, "input": _prompt(), "stream": shape == "stream", "num_retries": 0}
         )
-        _assert_service_unavailable(response)
+        _assert_internal_server_error(response)
         _one_post(wire, "/v1/messages")
 
 
@@ -300,7 +299,7 @@ def test_messages_bedrock_503_answers_529_overloaded_error(gateway: Gateway, sha
         _assert_overloaded(response, message="Bedrock is unable to process your request.")
         (request,) = wire.drain()
         assert unquote(request.target).startswith(f"/model/{_BEDROCK_MODEL}/"), request
-        _assert_logged_as_service_unavailable(model, rows=1)
+        _assert_logged_failure(model, rows=1, error_class="ServiceUnavailableError")
 
 
 @pytest.mark.parametrize("shape", ("non-stream", "stream"))
@@ -362,7 +361,7 @@ def test_messages_529_with_a_malformed_body_still_answers_overloaded_error_and_u
         assert object_value(json.loads(healthy.content))["id"] == f"msg_{prompt}", healthy.text
         assert [unquote(request.target) for request in wire.drain()] == ["/v1/messages"] * 2
         assert sorted(_failure_rows(model, 2), key=lambda row: str(row["status"])) == [
-            {"status": "failure", "code": "529", "error_class": "ServiceUnavailableError"},
+            {"status": "failure", "code": "529", "error_class": "InternalServerError"},
             {"status": "success", "code": None, "error_class": None},
         ]
 

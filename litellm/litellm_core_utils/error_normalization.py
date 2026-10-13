@@ -130,6 +130,7 @@ _STATUS_CODE_MAP: Final[Mapping[str, str]] = MappingProxyType(
         "502": PROVIDER_INTERNAL_ERROR,
         "503": PROVIDER_OVERLOADED,
         "504": UPSTREAM_TIMEOUT,
+        "529": PROVIDER_OVERLOADED,
     }
 )
 

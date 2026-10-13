@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -221,19 +222,36 @@ class TestProxyExceptionAnthropicEnvelope:
         assert json.loads(response.body)["error"]["type"] == "overloaded_error"
 
     @pytest.mark.asyncio
-    async def test_anthropic_response_hands_the_failure_hook_the_529_it_answers(self):
+    @pytest.mark.parametrize(
+        "unavailable",
+        [
+            pytest.param(
+                litellm.ServiceUnavailableError(
+                    message='BedrockException - {"message": "Bedrock is unable to process your request."}',
+                    llm_provider="bedrock",
+                    model="global.anthropic.claude-opus-5-5",
+                ),
+                id="bedrock-503",
+            ),
+            pytest.param(
+                litellm.InternalServerError(
+                    message='AnthropicError - {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+                    llm_provider="anthropic",
+                    model="claude-opus-5-5",
+                    provider_status_code=529,
+                ),
+                id="anthropic-529",
+            ),
+        ],
+    )
+    async def test_anthropic_response_hands_the_failure_hook_the_529_it_answers(self, unavailable):
         """The failure hook ends the OTel server span and counts the failed request from the exception's status
-        before the route answers, so the route hands it the 529 the client gets, not the deployment's 503."""
-        import litellm
+        before the route answers, so the route hands it the 529 the client gets, not the deployment's 503 or the
+        500 an Anthropic overload keeps on the OpenAI-shaped routes."""
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
 
-        unavailable = litellm.ServiceUnavailableError(
-            message='BedrockException - {"message": "Bedrock is unable to process your request."}',
-            llm_provider="bedrock",
-            model="global.anthropic.claude-opus-5-5",
-        )
         request = MagicMock()
         request.headers = {}
 
@@ -262,18 +280,6 @@ class TestProxyExceptionAnthropicEnvelope:
         assert recorded.status_code == 529
         assert response.status_code == 529
         assert json.loads(response.body)["error"]["type"] == "overloaded_error"
-
-    def test_with_answered_status_moves_a_proxy_exception_503_to_529_and_nothing_else(self):
-        import litellm.proxy.anthropic_endpoints.endpoints as ep
-        from litellm.proxy._types import ProxyException
-
-        closed = ProxyException(
-            message="budget service unavailable", type="service_unavailable_error", param=None, code=503
-        )
-        assert ep.with_answered_status(closed).code == "529"
-        rejected = ProxyException(message="bad request", type="invalid_request_error", param=None, code=400)
-        assert ep.with_answered_status(rejected).code == "400"
-        assert ep.with_answered_status(ValueError("no status")).args == ("no status",)
 
     @pytest.mark.asyncio
     async def test_count_tokens_answers_a_503_as_529_overloaded_error(self):
@@ -547,8 +553,6 @@ class TestErrorLogCarriesCallId:
 
     @pytest.mark.asyncio
     async def test_count_tokens_failure_log_carries_callers_call_id(self, caplog: pytest.LogCaptureFixture):
-        from fastapi import HTTPException
-
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
@@ -567,11 +571,11 @@ class TestErrorLogCarriesCallId:
                 proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))
             ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
-            pytest.raises(HTTPException) as raised,
         ):
-            await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
-        assert raised.value.status_code == 500
+        assert response.status_code == 500
+        assert json.loads(response.body)["error"]["type"] == "api_error"
         record = self._error_record(caplog)
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()

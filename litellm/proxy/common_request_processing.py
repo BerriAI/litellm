@@ -245,6 +245,7 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+from litellm.proxy.anthropic_endpoints.answered_status import with_answered_status
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
 )
@@ -4021,6 +4022,7 @@ class ProxyBaseLLMRequestProcessing:
         request: Request | None = None,
         flush_tail: Callable[[], bytes] | None = None,
         seal_open_frame: Callable[[bytes], str] | None = None,
+        answer_status: Callable[[Exception], Exception] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
@@ -4036,6 +4038,9 @@ class ProxyBaseLLMRequestProcessing:
         relays raw upstream bytes, so an upstream that hangs up mid-frame leaves the
         client inside an open frame, where an error frame would be swallowed or
         misparsed instead of raised.
+
+        ``answer_status`` gives a failure the status the route answers it with
+        before the failure hook records it.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -4130,7 +4135,7 @@ class ProxyBaseLLMRequestProcessing:
             )
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
-                original_exception=e,
+                original_exception=e if answer_status is None else answer_status(e),
                 request_data=request_data,
             )
             if transformed_exception is not None:
@@ -4199,6 +4204,7 @@ class ProxyBaseLLMRequestProcessing:
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
             seal_open_frame=seal_open_sse_frame,
+            answer_status=with_answered_status,
         )
 
     @overload

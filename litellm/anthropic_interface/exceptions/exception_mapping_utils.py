@@ -223,7 +223,8 @@ class AnthropicErrorSseFrame(str):
 
 
 def anthropic_error_sse_frame(status_code: int, raw_message: str) -> AnthropicErrorSseFrame:
+    answered_status: Final = AnthropicExceptionMapping.get_status_code(status_code)
     return AnthropicErrorSseFrame(
-        AnthropicExceptionMapping.get_status_code(status_code),
-        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=status_code, raw_message=raw_message),
+        answered_status,
+        AnthropicExceptionMapping.transform_to_anthropic_error(status_code=answered_status, raw_message=raw_message),
     )

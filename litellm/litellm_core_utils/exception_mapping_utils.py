@@ -573,10 +573,11 @@ def _map_anthropic_exception(
             llm_provider="anthropic",
         )
     elif "overloaded_error" in error_str or "Overloaded" in error_str:
-        raise litellm.ServiceUnavailableError(
+        raise InternalServerError(
             message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
+            provider_status_code=529,
         )
     if "Invalid API Key" in error_str:
         raise AuthenticationError(
@@ -635,12 +636,13 @@ def _map_anthropic_exception(
                 llm_provider="anthropic",
                 model=model,
             )
-        elif original_exception.status_code == 500:
+        elif original_exception.status_code == 500 or original_exception.status_code == 529:
             raise litellm.InternalServerError(
                 message=f"AnthropicException - {error_str}. Handle with `litellm.InternalServerError`.",
                 llm_provider="anthropic",
                 model=model,
                 response=getattr(original_exception, "response", None),
+                provider_status_code=original_exception.status_code,
             )
         elif original_exception.status_code == 502:
             raise BadGatewayError(
@@ -649,7 +651,7 @@ def _map_anthropic_exception(
                 model=model,
                 response=getattr(original_exception, "response", None),
             )
-        elif original_exception.status_code == 503 or original_exception.status_code == 529:
+        elif original_exception.status_code == 503:
             raise litellm.ServiceUnavailableError(
                 message=f"AnthropicException - {error_str}. Handle with `litellm.ServiceUnavailableError`.",
                 llm_provider="anthropic",

@@ -15466,8 +15466,8 @@ async def test_anthropic_messages_fallback_on_pre_first_chunk_error_event():
     """Regression for #24004: a retriable SSE `event: error` frame
     (overloaded_error/internal_server_error) that arrives before any real
     content must trigger the router's fallback chain instead of passing
-    through to the client silently. The frame carries the error a 529 answer maps to, a ServiceUnavailableError
-    (LIT-9450), so a failed fallback answers the status every other litellm path gives an overload."""
+    through to the client silently. The frame carries the error a 529 answer maps to, an InternalServerError,
+    so a failed fallback answers the status every other litellm path gives an overload."""
     router = _anthropic_messages_make_router()
     source = _AnthropicMessagesFakeByteStream([_anthropic_messages_overloaded_error_chunk()])
     fallback_stream = _AnthropicMessagesFallbackByteStream([_anthropic_messages_content_chunk("fallback answer")])
@@ -15487,8 +15487,8 @@ async def test_anthropic_messages_fallback_on_pre_first_chunk_error_event():
     mock_fallback.assert_awaited_once()
     raised = mock_fallback.await_args.kwargs["e"]
     assert isinstance(raised, MidStreamFallbackError)
-    assert isinstance(raised.original_exception, litellm.ServiceUnavailableError)
-    assert raised.status_code == 503
+    assert isinstance(raised.original_exception, litellm.InternalServerError)
+    assert raised.status_code == 500
     assert raised.is_pre_first_chunk is True
     assert source.closed is True
 
@@ -16291,7 +16291,7 @@ def _anthropic_messages_error_frame(error_type: str) -> bytes:
 
 _ANTHROPIC_MESSAGES_ERROR_FRAME_POLICIES: Final = (
     pytest.param("api_error", RetryPolicy(InternalServerErrorRetries=1), id="api_error-500-internal-server"),
-    pytest.param("overloaded_error", RetryPolicy(ServiceUnavailableErrorRetries=1), id="overloaded-service-unavailable"),
+    pytest.param("overloaded_error", RetryPolicy(InternalServerErrorRetries=1), id="overloaded-internal-server"),
     pytest.param("rate_limit_error", RetryPolicy(RateLimitErrorRetries=1), id="rate-limit-429"),
     pytest.param("timeout_error", RetryPolicy(TimeoutErrorRetries=1), id="timeout-504"),
 )
@@ -16305,7 +16305,7 @@ async def test_anthropic_messages_error_frame_is_retried_under_the_class_the_pre
     """An `event: error` frame before content carried a generic error, so a policy naming only error classes
     granted it no retry while the hold still counted the policy: one attempt, then an HTTP error with no
     bytes out. The frame now takes the class the pre-stream mapping raises for an answer carrying its body, so
-    an overloaded frame counts as the ServiceUnavailableError a 529 answer is (LIT-9450), not an InternalServerError."""
+    an overloaded frame counts as the InternalServerError a 529 answer is, not a ServiceUnavailableError."""
     router = _anthropic_messages_retry_router(num_retries=0, retry_policy=policy)
     provider = _AnthropicMessagesScriptedProvider(
         lambda: _AnthropicMessagesFakeByteStream(
