@@ -23,6 +23,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/end_user/",
     "/sso/",
     "/liteadmin/slack/connect/",
+    "/moyai/connect/",
     "/login",
     "/v2/login",
     "/v3/login",
@@ -85,13 +86,15 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/analytics/",
     "/lens/",
     "/v1/traces",
+    "/v1/logs",
     "/global/",
     "/user_agent",
     "/usage/",
     "/daily/",
-    # Deployment-wide gateway request counts. Scoped to the analytics read rather
+    # Deployment-wide gateway request and error counts. Scoped to the analytics reads rather
     # than all of /gateway/, which stays free for data-plane routes.
     "/gateway/daily/",
+    "/gateway/errors/",
     # CloudZero cost-export admin (init / settings / export / dry-run / delete)
     "/cloudzero/",
     # Caching admin

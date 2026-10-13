@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import ConfigDict, field_validator
 
 from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
@@ -22,6 +22,7 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
 )
 from litellm.responses.streaming_iterator import stream_error_status_and_message
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .transformation import (
     REASONING_SUMMARY_PART_SEPARATOR,
@@ -32,7 +33,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 
 
-class _UpstreamFailure(BaseModel):
+class _UpstreamFailure(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     status_code: int | None = None
@@ -56,13 +57,13 @@ class _UpstreamFailure(BaseModel):
         return value if isinstance(value, str) else None
 
 
-class _FailedResponse(BaseModel):
+class _FailedResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     error: object | None = None
 
 
-class _FailedResponseEvent(BaseModel):
+class _FailedResponseEvent(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     response: _FailedResponse | None = None

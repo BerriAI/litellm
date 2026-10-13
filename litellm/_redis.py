@@ -26,7 +26,7 @@ from litellm._redis_credential_provider import (
     AzureADCredentialProvider,
     ElastiCacheIAMCredentialProvider,
     GCPIAMCredentialProvider,
-    _generate_gcp_iam_access_token,
+    generate_gcp_iam_access_token,
 )
 from litellm.constants import (
     REDIS_CLUSTER_HEALTH_CHECK_INTERVAL,
@@ -36,6 +36,8 @@ from litellm.constants import (
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
+
+_generate_gcp_iam_access_token = generate_gcp_iam_access_token
 
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
 
@@ -341,7 +343,7 @@ def create_gcp_iam_redis_connect_func(
 
         self._parser.on_connect(self)
 
-        auth_args: Final = (_generate_gcp_iam_access_token(service_account),)
+        auth_args: Final = (generate_gcp_iam_access_token(service_account),)
         self.send_command("AUTH", *auth_args, check_health=False)
 
         try:
