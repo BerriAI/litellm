@@ -9,7 +9,7 @@ import sys
 import urllib.parse as urlparse
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # typed view of YAML settings
 
 import click
 import httpx
@@ -1449,7 +1449,11 @@ def run_server(
                 )
 
                 if should_update_prisma_schema(general_settings.get("disable_prisma_schema_update")) is False:
-                    check_prisma_schema_diff(db_url=None)
+                    settings_map: Final = cast(Mapping[str, object], general_settings)  # cast-ok: YAML str-keyed map
+                    check_prisma_schema_diff(
+                        db_url=None,
+                        use_spend_logs_partitioning=bool(settings_map.get("use_spend_logs_partitioning", False)),
+                    )
                 else:
                     use_v2_resolver: Final = resolve_v2_migration_resolver(
                         use_legacy_flag=use_legacy_migration_resolver,
