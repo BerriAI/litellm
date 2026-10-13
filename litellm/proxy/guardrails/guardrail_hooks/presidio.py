@@ -12,7 +12,7 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -1528,25 +1528,26 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return anthropic_sse_chunks_from_response(assembled)
 
     @staticmethod
-    def _replace_complete_tokens(text: str, pii_tokens: dict[str, str]) -> str:
+    def _replace_complete_tokens(text: str, pii_tokens: Mapping[str, str]) -> str:
         """
         Replace every complete occurrence of a PII token in *text* with its
         original value, leaving a token that only partially appears (e.g. cut
         off at the end by a streamed delta boundary) untouched.
         """
+        result = text  # rebind-ok: accumulates token replacements across the loop
         for token, original_text in pii_tokens.items():
-            if token in text:
-                text = text.replace(token, original_text)
-        return text
+            if token in result:
+                result = result.replace(token, original_text)
+        return result
 
     @staticmethod
-    def _longest_token_prefix_suffix(text: str, pii_tokens: dict[str, str]) -> str:
+    def _longest_token_prefix_suffix(text: str, pii_tokens: Mapping[str, str]) -> str:
         """
         The longest suffix of *text* that is a strict, non-empty prefix of a
         PII token, i.e. text that may still grow into a full token with more
         incoming stream data. Empty when no suffix qualifies.
         """
-        longest = ""
+        longest = ""  # rebind-ok: iterative best-match search across every token
         for token in pii_tokens:
             max_len = min(len(token) - 1, len(text))
             for suffix_len in range(max_len, len(longest), -1):
@@ -1556,7 +1557,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return longest
 
     @staticmethod
-    def _flush_pending_as_sse_text_delta(pending: str, pii_tokens: dict[str, str], index: int) -> str:
+    def _flush_pending_as_sse_text_delta(pending: str, pii_tokens: Mapping[str, str], index: int) -> str:
         """
         A synthetic ``content_block_delta`` SSE line carrying *pending* once no
         more stream data can arrive for it, so the truncated-token fallback in
@@ -1571,7 +1572,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return "data: " + json.dumps(event, ensure_ascii=False)
 
     @staticmethod
-    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str], carried_in: str) -> tuple[bytes, str]:
+    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: Mapping[str, str], carried_in: str) -> tuple[bytes, str]:
         """
         Unmask PII tokens in a raw Anthropic SSE bytes chunk, carrying over any
         trailing text that might be the start of a token split across multiple
@@ -1583,7 +1584,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except UnicodeDecodeError:
             return chunk, carried_in
 
-        pending = carried_in
+        pending = carried_in  # rebind-ok: grows/flushes per delta as the chunk's lines are scanned
         result_lines: Final[list[str]] = []
         for line in text.split("\n"):
             line = line.rstrip("\r")
@@ -1644,8 +1645,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def _finalize_non_sse_stream(
         self,
-        remaining_chunks: list[ModelResponseStream],
-        request_data: dict,
+        remaining_chunks: Sequence[ModelResponseStream],
+        request_data: dict,  # mutable-ok: forwarded verbatim to _process_response_for_pii, which requires dict
     ) -> AsyncGenerator[object, None]:
         """
         Reassemble buffered ``ModelResponseStream`` chunks (the ``/chat/completions``
@@ -1661,7 +1662,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return
 
         assembled_model_response: Final = stream_chunk_builder(
-            chunks=remaining_chunks, messages=request_data.get("messages")
+            chunks=list(remaining_chunks), messages=request_data.get("messages")
         )
 
         if not isinstance(assembled_model_response, ModelResponse):
@@ -1690,7 +1691,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         remaining_chunks: list[ModelResponseStream] = []
         saw_non_chat_chunk = False
-        pending_sse_text = ""
+        pending_sse_text = ""  # rebind-ok: carries a split token across SSE chunks
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
@@ -1720,7 +1721,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     yield chunk
 
             if pending_sse_text:
-                line = self._flush_pending_as_sse_text_delta(pending_sse_text, pii_tokens, 0)
+                line: Final = self._flush_pending_as_sse_text_delta(pending_sse_text, pii_tokens, 0)
                 yield (line + "\n\n").encode("utf-8")
 
             if not saw_non_chat_chunk:

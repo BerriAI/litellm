@@ -3619,6 +3619,69 @@ async def test_stream_pii_unmasking_passthrough_when_no_tokens(mock_user_api_key
     assert chunks == [raw_chunk]
 
 
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_reassembles_chat_completion_chunks(mock_user_api_key):
+    """Structured chat completion chunks (no Anthropic SSE bytes) are buffered,
+    assembled into one response, and the placeholder is restored on it."""
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    pii_tokens = {"<PERSON_1>": "Jane Smith"}
+    request_data = {
+        "messages": [{"role": "user", "content": "who is this"}],
+        "metadata": {"pii_tokens": pii_tokens},
+    }
+
+    async def mock_stream():
+        yield _chat_delta_chunk("Signature: <PERS")
+        yield _chat_delta_chunk("ON_1>, thanks")
+        yield _chat_delta_chunk("", finish_reason="stop")
+
+    chunks = []
+    async for chunk in guardrail._stream_pii_unmasking(mock_stream(), request_data):
+        chunks.append(chunk)
+
+    assert len(chunks) == 1
+    assert isinstance(chunks[0], ModelResponseStream)
+    assert chunks[0].choices[0].delta.content == "Signature: Jane Smith, thanks"
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_flushes_pending_at_stream_end_with_no_block_stop(mock_user_api_key):
+    """A stream that ends with no content_block_stop (e.g. a dropped connection)
+    still flushes whatever pending text it was carrying, rather than losing it."""
+    import json
+
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    pii_tokens = {"<PERSON_1>": "Jane Smith"}
+    request_data = {"metadata": {"pii_tokens": pii_tokens}}
+
+    def _make_sse_chunk(text: str) -> bytes:
+        event = {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": text},
+        }
+        return ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+    async def mock_stream():
+        yield _make_sse_chunk("Hi <PERSON")
+
+    chunks = []
+    async for chunk in guardrail._stream_pii_unmasking(mock_stream(), request_data):
+        chunks.append(chunk)
+
+    assert len(chunks) == 2
+    flushed_event = json.loads(chunks[1].decode("utf-8").split("data: ", 1)[1].strip())
+    assert flushed_event["delta"]["text"] == "Jane Smith"
+
+
 def test_new_entities_pass_through_analyze_payload():
     """
     Newly added upstream entities (e.g. German DE_*) must reach the analyzer
