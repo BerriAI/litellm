@@ -2385,6 +2385,21 @@ def _custom_metadata_router(*model_infos: dict[str, object]) -> Router:
             {"owner": "ml"},
         ),
         (({"custom_tags": "ptu", "custom_metadata": ["not", "a", "map"]},), None, None),
+        (
+            (
+                {
+                    "custom_metadata": {
+                        2027: "retirement",
+                        "nan": float("nan"),
+                        "inf": float("inf"),
+                        "neg_inf": float("-inf"),
+                        "max_tpm": 1.5,
+                    }
+                },
+            ),
+            None,
+            {"max_tpm": 1.5},
+        ),
     ],
 )
 def test_model_group_info_merges_custom_tags_and_metadata_across_deployments(

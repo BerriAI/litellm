@@ -1,6 +1,9 @@
+import math
 import uuid
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -195,12 +198,19 @@ def test_custom_tags_and_metadata_are_never_forwarded_to_the_provider(gateway: G
         assert "custom_tags" not in bodies[0] and "2027-03-01" not in bodies[0], bodies[0]
 
 
-def _yaml_config(directory: Path, upstream_url: str, model_name: str) -> Path:
+def _yaml_config(
+    directory: Path,
+    upstream_url: str,
+    model_name: str,
+    model_info: Mapping[str, object] = MappingProxyType(
+        {"custom_tags": ["deprecated", "ptu"], "custom_metadata": LIFECYCLE_METADATA}
+    ),
+) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     deployment: Final = {
         "model_name": model_name,
         "litellm_params": {"model": "openai/gpt-4o-mini", "api_base": f"{upstream_url}/v1", "api_key": "yaml-key"},
-        "model_info": {"custom_tags": ["deprecated", "ptu"], "custom_metadata": LIFECYCLE_METADATA},
+        "model_info": dict(model_info),
     }
     path: Final = directory / "custom_fields.yaml"
     path.write_text(yaml.safe_dump({**config, "model_list": [*config["model_list"], deployment]}))
@@ -217,3 +227,32 @@ def test_yaml_custom_fields_survive_a_killed_worker_on_every_worker(gateway: Gat
         with ThreadPoolExecutor(max_workers=8) as pool:
             groups: Final = tuple(pool.map(lambda _: _model_group(owned.gateway, model_name), range(24)))
         assert all(_custom_fields(group) == (["deprecated", "ptu"], LIFECYCLE_METADATA) for group in groups), groups
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+@pytest.mark.parametrize(
+    "unservable_metadata",
+    [
+        pytest.param({2027: "retirement"}, id="non-string-key"),
+        pytest.param({"nan": math.nan, "inf": math.inf, "neg_inf": -math.inf}, id="non-finite-number"),
+    ],
+)
+def test_yaml_custom_metadata_that_json_cannot_carry_is_dropped_without_breaking_completions_or_the_hub(
+    gateway: Gateway, tmp_path: Path, unservable_metadata: Mapping[object, object]
+) -> None:
+    model_name: Final = f"integration-yaml-{uuid.uuid4().hex}"
+    config: Final = _yaml_config(
+        tmp_path,
+        gateway.upstream_url,
+        model_name,
+        {"custom_tags": ["ptu"], "custom_metadata": {**unservable_metadata, "retirement_date": "2027-03-01"}},
+    )
+    with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
+        reply: Final = owned.gateway.request(
+            "POST", "/v1/chat/completions", {"model": model_name, "messages": [{"role": "user", "content": "hi"}]}
+        )
+        assert reply.status_code == 200, reply.text
+        every_group: Final = owned.gateway.request("GET", "/model_group/info")
+        assert every_group.status_code == 200, every_group.text
+        group: Final = _model_group(owned.gateway, model_name)
+        assert _custom_fields(group) == (["ptu"], {"retirement_date": "2027-03-01"}), group

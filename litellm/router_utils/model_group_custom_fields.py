@@ -1,14 +1,15 @@
 """Merge the admin-defined `custom_tags` and `custom_metadata` of a model group's deployments."""
 
+import math
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, TypeGuard
 
 from pydantic import TypeAdapter
 
 CustomMetadataValue: TypeAlias = str | int | float | bool
 
-_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 
@@ -17,12 +18,16 @@ def _string_tags(tags: object) -> Iterator[str]:
         yield from (tag for tag in _OBJECT_LIST_ADAPTER.validate_python(tags) if isinstance(tag, str))
 
 
+def _is_json_scalar(value: object) -> TypeGuard[CustomMetadataValue]:
+    return isinstance(value, (str, int, bool)) or (isinstance(value, float) and math.isfinite(value))
+
+
 def _scalar_metadata(metadata: object) -> Iterator[tuple[str, CustomMetadataValue]]:
     if isinstance(metadata, dict):
         yield from (
             (key, value)
             for key, value in _OBJECT_MAPPING_ADAPTER.validate_python(metadata).items()
-            if isinstance(value, (str, int, float, bool))
+            if isinstance(key, str) and _is_json_scalar(value)
         )
 
 
