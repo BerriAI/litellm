@@ -46,6 +46,14 @@ def guardrail_url() -> str:
     return os.environ.get(GUARDRAIL_URL_ENV, GUARDRAIL_URL_DEFAULT).rstrip("/")
 
 
+class PerfTeamNewBody(TeamNewBody):
+    """`/team/new` with the per-team settings a `Team` carries."""
+
+    max_budget: float | None = None
+    rpm_limit: int | None = None
+    tpm_limit: int | None = None
+
+
 class GenericGuardrailParams(BaseModel):
     """`litellm_params` of a `generic_guardrail_api` registration (POST /guardrails). `default_on`
     applies it to every request on this gateway, which the perf stack dedicates to the run;
@@ -154,7 +162,7 @@ def build_setup(
     for team in case.teams:
         team_id = f"perf-{team.name}-{marker}"
         team_ids[team.name] = proxy.create_team(
-            TeamNewBody(
+            PerfTeamNewBody(
                 team_alias=team_id,
                 team_id=team_id,
                 models=[f"{model}-{marker}" for model in team.models],
