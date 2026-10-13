@@ -76,7 +76,7 @@ mod tests {
     #[case::vertex_ai(BetaProvider::VertexAi, Some("tool-search-tool-2025-10-19"))]
     #[case::anthropic(BetaProvider::Anthropic, Some("advanced-tool-use-2025-11-20"))]
     #[case::azure_ai(BetaProvider::AzureAi, Some("advanced-tool-use-2025-11-20"))]
-    #[case::databricks(BetaProvider::Databricks, Some("advanced-tool-use-2025-11-20"))]
+    #[case::databricks(BetaProvider::Databricks, None)]
     #[case::bedrock_converse(BetaProvider::BedrockConverse, None)]
     fn filter_renames_per_host(
         #[case] provider: BetaProvider,
