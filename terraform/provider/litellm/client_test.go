@@ -1,6 +1,9 @@
 package litellm
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -67,5 +70,22 @@ func TestRedactSensitiveDataNonJSONFallback(t *testing.T) {
 	}
 	if !strings.Contains(got, "[REDACTED]") {
 		t.Errorf("fallback redaction did not redact: %s", got)
+	}
+}
+
+func TestGetKeyReturnsNilForDeletedStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"info":{"key_alias":"deleted-key-repro","status":"deleted","deleted_at":"2026-10-12T00:00:00Z"}}`)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "sk-test", false)
+	key, err := c.GetKey("sk-deleted")
+	if err != nil {
+		t.Fatalf("GetKey returned error: %v", err)
+	}
+	if key != nil {
+		t.Errorf("GetKey returned a key for status=deleted, want nil")
 	}
 }
