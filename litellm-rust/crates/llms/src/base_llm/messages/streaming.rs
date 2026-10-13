@@ -150,7 +150,6 @@ mod tests {
 
     #[rstest]
     #[case::json(b"data: {\n\n")]
-    #[case::unknown_event(b"data: {\"type\":\"future_event\"}\n\n")]
     #[case::malformed_tool(b"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":3}}\n\n")]
     #[case::utf8(b"data: \xff\n\n")]
     #[case::done_is_not_an_anthropic_frame(b"data: [DONE]\n\n")]
@@ -162,6 +161,22 @@ mod tests {
             streamed.last(),
             Some(Err(Error::InvalidResponse(_))) | None
         ));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unknown_event_types_reach_the_client_as_sent(#[values(1, 3, 4096)] size: usize) {
+        let frame = "event: future_event\ndata: {\"type\":\"future_event\",\"index\":2,\"payload\":{\"keep\":[1,null]}}\n\n";
+        let streamed = event_stream(in_pieces(frame.as_bytes(), size))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(streamed, decode(frame.as_bytes()).unwrap());
+        let [MessagesStreamEvent::Other(event)] = streamed.as_slice() else {
+            panic!("expected one unknown event, got {streamed:?}");
+        };
+        assert_eq!(event.event_type, "future_event");
+        assert_eq!(encode(&streamed[0]).unwrap(), Bytes::from(frame));
     }
 
     #[rstest]
