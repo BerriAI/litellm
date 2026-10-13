@@ -27,7 +27,7 @@ import pytest
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 WRITER_PROBE_SQL: Final = "SELECT current_setting('transaction_read_only') AS transaction_read_only"
-posix_only: Final = pytest.mark.skipif(sys.platform == "win32", reason="os.kill liveness path is POSIX-only")
+posix_only: Final = pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only process APIs")
 
 
 @pytest.fixture(autouse=True)
@@ -405,6 +405,7 @@ def test_try_waitpid_watch_returns_false_when_not_child(engine_client):
     assert engine_client._engine_wait_thread is None
 
 
+@posix_only
 def test_try_waitpid_watch_starts_thread_for_child(engine_client):
     """_try_waitpid_watch starts a daemon thread when PID is our child."""
     engine_client._engine_pid = 1234
@@ -421,6 +422,7 @@ def test_try_waitpid_watch_starts_thread_for_child(engine_client):
     assert engine_client._engine_wait_thread is mock_thread
 
 
+@posix_only
 @pytest.mark.asyncio
 async def test_try_waitpid_watch_handles_already_dead_engine(engine_client) -> None:
     """_try_waitpid_watch detects engine already dead at watch start."""

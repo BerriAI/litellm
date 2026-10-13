@@ -57,6 +57,8 @@ class TestMarkDeadWorkers:
             assert _livesum(tmp_path) == 5.0
 
             assert mark_dead_workers(str(tmp_path)) == (dead.pid,)
+            with pytest.raises(subprocess.TimeoutExpired):
+                alive.wait(timeout=1)
 
             assert not (tmp_path / f"gauge_livesum_{dead.pid}.db").exists()
             assert (tmp_path / f"gauge_livesum_{alive.pid}.db").exists()
@@ -73,10 +75,11 @@ class TestMarkDeadWorkers:
         assert sorted(p.name for p in tmp_path.glob("*.db")) == ["counter_424242.db", "histogram_424242.db"]
 
     def test_keeps_live_gauges_of_workers_it_may_not_signal(self, tmp_path: Path) -> None:
-        """Signal 0 to pid 1 raises PermissionError for an unprivileged proxy; that pid is alive, not dead."""
-        (tmp_path / "gauge_livesum_1.db").touch()
+        """An unprivileged proxy may not signal or open pid 1 (POSIX init) or pid 4 (Windows System), yet it is alive."""
+        protected_pid = 4 if sys.platform == "win32" else 1
+        (tmp_path / f"gauge_livesum_{protected_pid}.db").touch()
         assert mark_dead_workers(str(tmp_path)) == ()
-        assert (tmp_path / "gauge_livesum_1.db").exists()
+        assert (tmp_path / f"gauge_livesum_{protected_pid}.db").exists()
 
 
 class TestWipeDirectory:

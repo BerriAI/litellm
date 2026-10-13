@@ -16,6 +16,8 @@ import click
 import requests
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.process_liveness import pid_exists
+
 from ..up import UpError, secure_create
 
 AUTOROUTE_DIR: Final = Path.home() / ".litellm" / "autorouter"
@@ -139,13 +141,7 @@ def clear_pid_record(path: Path | None = None) -> None:
 
 
 def is_running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return pid_exists(pid)
 
 
 def terminate(pid: int, grace_period: float = 5.0) -> None:
@@ -159,7 +155,7 @@ def terminate(pid: int, grace_period: float = 5.0) -> None:
         time.sleep(0.2)
     if is_running(pid):
         with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
 
 
 def stream_log(log_path: Path, stop_event: threading.Event) -> None:
