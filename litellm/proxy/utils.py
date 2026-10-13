@@ -9357,11 +9357,15 @@ def model_dump_with_preserved_fields(
     )
     for choice_obj, choice_dict in zip(obj_choices, choices):
         for sub_object, field_name in _PRESERVED_NONE_FIELDS:
-            sub_dict = cast(dict[str, object] | None, choice_dict.get(sub_object))  # cast-ok: message and delta dump as dicts
+            sub_dict = cast(  # cast-ok: message and delta dump as dicts
+                dict[str, object] | None, choice_dict.get(sub_object)
+            )
             if sub_dict is None:
                 continue
             if field_name not in sub_dict:
-                sub_obj = cast(object | None, getattr(choice_obj, sub_object, None))  # cast-ok: getattr on a duck-typed choice
+                sub_obj = cast(  # cast-ok: getattr on a duck-typed choice
+                    object | None, getattr(choice_obj, sub_object, None)
+                )
                 if sub_obj is not None and hasattr(sub_obj, field_name):
                     sub_dict[field_name] = getattr(sub_obj, field_name)
 
