@@ -7,8 +7,11 @@ def get_formatted_prompt(
         "acompletion",
         "completion",
         "embedding",
+        "aembedding",
         "image_generation",
         "audio_transcription",
+        "atranscription",
+        "transcription",
         "moderation",
         "text_completion",
     ],
@@ -36,7 +39,7 @@ def get_formatted_prompt(
                         prompt += function_arguments
     elif call_type == "text_completion":
         prompt = data["prompt"]
-    elif call_type == "embedding" or call_type == "moderation":
+    elif call_type in ("embedding", "aembedding", "moderation"):
         if isinstance(data["input"], str):
             prompt = data["input"]
         elif isinstance(data["input"], list):
@@ -44,7 +47,7 @@ def get_formatted_prompt(
                 prompt += m
     elif call_type == "image_generation":
         prompt = data["prompt"]
-    elif call_type == "audio_transcription":
+    elif call_type in ("audio_transcription", "atranscription", "transcription"):
         if "prompt" in data:
             prompt = data["prompt"]
     return prompt
