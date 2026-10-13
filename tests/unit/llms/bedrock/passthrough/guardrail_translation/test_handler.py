@@ -1522,6 +1522,18 @@ class TestConverseStreamGuardrailRelay:
         assert relayed.endswith(b"".join(_card_stream()[3:]))
 
     @pytest.mark.asyncio
+    async def test_held_stream_ending_in_an_upstream_exception_frame_still_applies_masks(self, monkeypatch):
+        upstream_error = BedrockPassthroughGuardrailHandler.event_stream_error_item("Model stream error", 500)
+        stream = (*_card_stream()[:3], upstream_error)
+
+        relayed = await _relay_through_post_call_guardrail(
+            stream, _CardMaskingGuardrail(), monkeypatch, holds_until_moderated=True
+        )
+
+        assert TestDeAnonymizeConverseStream._deltas_by_block(relayed, "text") == {0: "Card: ****."}
+        assert relayed.endswith(upstream_error)
+
+    @pytest.mark.asyncio
     async def test_block_after_frames_were_relayed_ends_the_stream_with_an_exception_frame(self, monkeypatch):
         from fastapi import HTTPException
 

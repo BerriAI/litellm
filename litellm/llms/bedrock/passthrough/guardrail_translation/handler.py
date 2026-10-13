@@ -367,12 +367,14 @@ class ConverseStreamFrame:
     """One frame of a Converse event stream as the proxy relays it.
 
     ``payload`` is the parsed JSON of an event frame; exception frames and bytes that do not decode keep it None and
-    are relayed as received. ``guardrailed_payload`` is set when a guardrail rewrote the frame's text."""
+    are relayed as received. ``is_exception`` marks an exception frame, which ends the stream.
+    ``guardrailed_payload`` is set when a guardrail rewrote the frame's text."""
 
     raw: bytes
     event_type: str | None = None
     payload: Mapping[str, object] | None = None
     guardrailed_payload: Mapping[str, object] | None = None
+    is_exception: bool = False
 
     @property
     def block_index(self) -> int | None:
@@ -417,6 +419,8 @@ def _decode_converse_frame(raw: bytes) -> ConverseStreamFrame:
     # botocore-stubs types EventStreamMessage.headers as int; at runtime it is the decoded header dict.
     headers: Final = _JSON_OBJECT.validate_python(message.headers)
     event_type: Final = headers.get(":event-type")
+    if headers.get(":message-type") == "exception":
+        return ConverseStreamFrame(raw=raw, is_exception=True)
     if headers.get(":message-type") != "event" or not isinstance(event_type, str):
         return ConverseStreamFrame(raw=raw)
     try:
@@ -751,7 +755,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         )
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
-        return any(frame.event_type == "messageStop" for frame in _converse_frames(responses_so_far))
+        return any(
+            frame.event_type == "messageStop" or frame.is_exception for frame in _converse_frames(responses_so_far)
+        )
 
     def build_block_sse_chunks(
         self,

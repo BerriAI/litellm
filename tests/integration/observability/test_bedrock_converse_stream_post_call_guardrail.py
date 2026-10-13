@@ -348,6 +348,26 @@ def test_buffered_stream_applies_masks_per_content_block(rig: Rig) -> None:
     assert rig.scans(BUFFERED, marker) == ((f"{marker} {MASKED_WORD} is big", f"I like {MASKED_WORD}"),)
 
 
+def test_buffered_stream_ending_in_an_upstream_exception_still_applies_masks(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    upstream_error: Final = aws_event_stream_frame(
+        {
+            ":exception-type": "modelStreamErrorException",
+            ":content-type": "application/json",
+            ":message-type": "exception",
+        },
+        json.dumps({"message": "Model stream error"}).encode(),
+    )
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=(*converse_frames((f"{marker} ", MASKED_WORD))[:3], upstream_error)
+    )
+    status, content_type, body = _stream(rig, BUFFERED, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    frames: Final = decode(body)
+    assert block_texts(frames) == {0: f"{marker} {MASK}"}, frames
+    assert frames[-1] == Frame("exception", "modelStreamErrorException", {"message": "Model stream error"}), frames
+
+
 def test_buffered_stream_block_returns_an_error_before_any_frame(rig: Rig) -> None:
     marker: Final = f"relay-{uuid.uuid4().hex}"
     rig.scripts[marker] = Reply(
