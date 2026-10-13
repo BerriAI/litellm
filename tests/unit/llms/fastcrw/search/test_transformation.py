@@ -1,9 +1,12 @@
 import os
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
+from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
 
 
@@ -180,3 +183,102 @@ def test_transform_search_response_non_list_data():
         _resp({"success": True, "data": {"unexpected": "shape"}}), logging_obj=Mock()
     )
     assert resp.results == []
+
+
+def _transform(payload: object) -> SearchResponse:
+    return _config().transform_search_response(
+        raw_response=httpx.Response(200, json=payload), logging_obj=None
+    )
+
+
+def _entry(index: int) -> dict[str, str]:
+    return {
+        "title": f"Title {index}",
+        "url": f"https://example.com/{index}",
+        "description": f"Description {index}",
+    }
+
+
+def test_transform_search_response_keeps_provider_order_and_snippet_fallbacks():
+    response = _transform(
+        {
+            "success": True,
+            "warning": None,
+            "data": [
+                {**_entry(1), "markdown": "# Page 1", "metadata": {"statusCode": 200}},
+                {**_entry(2), "markdown": ""},
+                {**_entry(3), "markdown": None},
+                {"title": "Title 4", "url": "https://example.com/4"},
+                {"metadata": {"statusCode": 200}},
+            ],
+        }
+    )
+
+    assert response.object == "search"
+    assert response.results == [
+        SearchResult(title="Title 1", url="https://example.com/1", snippet="# Page 1"),
+        SearchResult(
+            title="Title 2", url="https://example.com/2", snippet="Description 2"
+        ),
+        SearchResult(
+            title="Title 3", url="https://example.com/3", snippet="Description 3"
+        ),
+        SearchResult(title="Title 4", url="https://example.com/4", snippet=""),
+        SearchResult(title="", url="", snippet="", date=None, last_updated=None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"success": False, "error": "rate limit"},
+        {"success": True, "data": None},
+        {"success": True, "data": "rate limit"},
+        {"success": True, "data": 429},
+    ],
+)
+def test_transform_search_response_without_a_data_list_is_empty(payload):
+    assert _transform(payload).results == []
+
+
+@pytest.mark.parametrize("payload", [[_entry(1)], "upstream unavailable", True, 429])
+def test_transform_search_response_rejects_a_body_that_is_not_an_object(payload):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(payload)
+
+    assert [error["type"] for error in exc_info.value.errors()] == ["dict_type"]
+    assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("position", [0, 1, 403])
+@pytest.mark.parametrize("entry", ["rate limit", None, 429, [_entry(1)]])
+def test_transform_search_response_rejects_an_entry_that_is_not_an_object(
+    position, entry
+):
+    entries = [_entry(index) for index in range(position)] + [entry]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"success": True, "data": entries})
+
+    assert [(error["type"], error["loc"]) for error in exc_info.value.errors()] == [
+        ("dict_type", ())
+    ]
+    assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("position", [0, 403])
+def test_transform_search_response_reports_every_field_of_wrong_type(position):
+    entries = [_entry(index) for index in range(position)] + [
+        {"title": 7, "url": None, "markdown": ["Request timed out"]}
+    ]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"success": True, "data": entries})
+
+    assert [(error["loc"], error["input"]) for error in exc_info.value.errors()] == [
+        (("title",), 7),
+        (("url",), None),
+        (("snippet",), ["Request timed out"]),
+    ]
+    assert "Request timed out" in str(exc_info.value)

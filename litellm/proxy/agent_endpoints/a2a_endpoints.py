@@ -303,7 +303,7 @@ async def _a2a_sse_event_source(
             error_body: Final = await resp.aread()
             error_event: Mapping[str, object] | None = None
             try:
-                parsed: Final = json.loads(error_body)
+                parsed: Final = _DECODED_JSON.validate_python(json.loads(error_body))
                 if isinstance(parsed, dict) and "error" in parsed:
                     error_event = normalize_a2a_jsonrpc_response(parsed, request_id=request_id)
             except Exception:

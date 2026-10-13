@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 from fastapi import Request
 
@@ -22,7 +22,7 @@ def _get_proxy_general_settings() -> dict[str, object]:
 
 
 def get_trusted_proxy_cidrs(
-    general_settings: dict[str, Any] | None = None,
+    general_settings: dict[str, object] | None = None,
 ) -> list[str]:
     """Operator-configured trusted reverse-proxy CIDRs, normalized to strings.
 
@@ -48,7 +48,7 @@ def _get_direct_client_ip(request: Request) -> str | None:
 def require_trusted_proxy_request(
     *,
     request: Request,
-    general_settings: dict[str, Any] | None = None,
+    general_settings: dict[str, object] | None = None,
     feature_name: str,
     setting_name: str = TRUSTED_PROXY_RANGES_KEY,
 ) -> None:

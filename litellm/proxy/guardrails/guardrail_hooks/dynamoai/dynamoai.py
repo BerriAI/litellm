@@ -8,7 +8,7 @@
 import os
 from collections.abc import AsyncGenerator, AsyncIterable
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -86,7 +86,7 @@ class DynamoAIGuardrails(CustomGuardrail):
 
     async def _call_dynamoai_guardrails(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         event_type: GuardrailEventHooks,
         text_type: str = "input",
         request_data: dict | None = None,
@@ -405,7 +405,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         # to avoid sending empty content to DynamoAI (e.g., during tool calls)
         if isinstance(response, litellm.ModelResponse):
             has_text_content = False
-            dynamoai_messages: Final[list[dict[str, str]]] = []
+            dynamoai_messages: Final[list[dict[str, object]]] = []
 
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):

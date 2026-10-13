@@ -86,7 +86,7 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
 
 
-def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
+def _strip_total_tokens_from_anthropic_response(response: object) -> None:
     """Remove the OpenAI-flavored `usage.total_tokens` field that LiteLLM
     injects into Anthropic /v1/messages responses.
 

@@ -1347,7 +1347,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         choices: list[Choices],
         tool_name_mapping: dict[str, str] | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         new_content: Final[list[dict[str, Any]]] = []
         for choice, compaction_blocks in (
             (choice, _compaction_blocks(_optional_attr(choice.message, "provider_specific_fields")))

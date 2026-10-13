@@ -1,9 +1,11 @@
 import asyncio
 import json
 import time
+from collections.abc import Mapping
 from typing import Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.constants import (
     OPEN_SANDBOX_API_BASE_ENV_VAR,
@@ -36,6 +38,9 @@ DEFAULT_SANDBOX_TIMEOUT: Final = OPEN_SANDBOX_DEFAULT_TIMEOUT
 DEFAULT_READY_TIMEOUT: Final = OPEN_SANDBOX_READY_TIMEOUT
 DEFAULT_POLL_INTERVAL: Final = OPEN_SANDBOX_POLL_INTERVAL
 MAX_OUTPUT_BYTES: Final = SANDBOX_MAX_OUTPUT_BYTES
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 class OpenSandboxSandboxConfig(BaseSandboxConfig):
@@ -92,7 +97,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             headers=self._lifecycle_headers(key),
             json=body,
         )
-        data: Final = response.json()
+        data: Final = _JSON_OBJECT.validate_python(response.json())
         sandbox_id: Final = str(data["id"])
 
         if self._sandbox_state(data) != "Running":
@@ -256,7 +261,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
                 url=f"{api_base}/sandboxes/{sandbox_id}",
                 headers=headers,
             )
-            data = response.json()
+            data = _JSON_VALUE.validate_python(response.json())
             state = self._sandbox_state(data)
             if state == "Running":
                 return

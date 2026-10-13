@@ -1,6 +1,8 @@
+from collections.abc import Iterable, Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
@@ -9,6 +11,9 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ProviderSpecificModelInfo
 
 USD_TICKS_PER_DOLLAR: Final = 10_000_000_000
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
+_MODEL_ID: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 def xai_reported_cost_in_usd(cost_in_usd_ticks: object) -> float | None:
@@ -97,11 +102,11 @@ class XAIModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from XAI. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        models: Final = response.json()["data"]
+        models: Final = _JSON_VALUES.validate_python(_JSON_OBJECT.validate_python(response.json())["data"])
 
         litellm_model_names: Final = []
         for model in models:
-            stripped_model_name = model["id"]
+            stripped_model_name = _MODEL_ID.validate_python(_JSON_OBJECT.validate_python(model)["id"])
             litellm_model_name = "xai/" + stripped_model_name
             litellm_model_names.append(litellm_model_name)
         return litellm_model_names

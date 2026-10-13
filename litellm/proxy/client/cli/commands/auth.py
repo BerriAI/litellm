@@ -3,7 +3,7 @@ import sys
 import time
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final, TypeVar
+from typing import Any, Final, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import click
@@ -94,6 +94,24 @@ class CliContextObj(TypedDict):
     secret_vault: NotRequired[ReadOnly[SecretVault]]
     api_key: ReadOnly[NotRequired[str | None]]
     api_key_from_token_file: ReadOnly[NotRequired[bool]]
+
+
+class _CliContextObjView(Protocol):
+    @property
+    def obj(self) -> CliContextObj: ...
+
+
+class _OptionalCliContextObjView(Protocol):
+    @property
+    def obj(self) -> CliContextObj | None: ...
+
+
+def _cli_context_obj(view: _CliContextObjView) -> CliContextObj:
+    return view.obj
+
+
+def _optional_cli_context_obj(view: _OptionalCliContextObjView) -> CliContextObj | None:
+    return view.obj
 
 
 class CliPollData(TypedDict, total=False):
@@ -197,7 +215,7 @@ def keychain_unreadable_notice(vault: SecretVault) -> str:
 
 def context_secret_vault(ctx: click.Context) -> SecretVault:
     """Where this invocation reads and writes secret material; injectable through ctx.obj for tests"""
-    ctx_obj: Final[CliContextObj | None] = ctx.obj
+    ctx_obj: Final = _optional_cli_context_obj(ctx)
     if ctx_obj is None:
         return SYSTEM_KEYRING
     return ctx_obj.get("secret_vault") or SYSTEM_KEYRING
@@ -880,7 +898,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = _cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     if config_claude:
         settings_path: Final = claude_settings_path(os.environ)
@@ -1030,7 +1048,7 @@ def print_token(ctx: click.Context):
     # explicitly pointed us at a server, trust whichever one `lite login`
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = _cli_context_obj(ctx)
     issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
     if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
         click.echo("Not authenticated for this server. Run 'lite login'.", err=True)

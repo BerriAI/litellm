@@ -14,7 +14,7 @@ Anthropic Files API endpoints:
 
 import calendar
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Final, cast
 
 import httpx
@@ -49,6 +49,7 @@ ANTHROPIC_FILES_BETA_HEADER: Final = "files-api-2025-04-14"
 ANTHROPIC_MESSAGE_BATCH_ID_PREFIX: Final = "msgbatch_"
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_ITEMS: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class AnthropicFilesConfig(BaseFilesConfig):
@@ -284,9 +285,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
             "last_id": "..."
         }
         """
-        response_json: Final = raw_response.json()
-        files_data: Final = response_json.get("data", [])
-        return [self._parse_anthropic_file(f) for f in files_data]
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        files_data: Final = _JSON_ITEMS.validate_python(response_json.get("data", []))
+        return [self._parse_anthropic_file(_JSON_OBJECT.validate_python(f)) for f in files_data]
 
     def transform_file_content_request(
         self,

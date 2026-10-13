@@ -113,7 +113,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
                 for index, reference_image in enumerate(images, start=1)
             }
         )
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "prompt": prompt,
             "model": model,
             **reference_images,

@@ -3,8 +3,9 @@ Response Polling Handler for Background Responses with Cache
 """
 
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Final
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -44,7 +45,7 @@ class ResponsePollingHandler:
     async def create_initial_state(
         self,
         polling_id: str,
-        request_data: dict[str, Any],
+        request_data: Mapping[str, object],
     ) -> ResponsesAPIResponse:
         """
         Create initial state in Redis for a polling request
@@ -62,14 +63,16 @@ class ResponsePollingHandler:
         created_timestamp: Final = int(datetime.now(timezone.utc).timestamp())
 
         # Create OpenAI-compliant response object
-        response: Final = ResponsesAPIResponse(
-            id=polling_id,
-            object="response",
-            status="queued",  # OpenAI native status
-            created_at=created_timestamp,
-            output=[],
-            metadata=request_data.get("metadata", {}),
-            usage=None,
+        response: Final = ResponsesAPIResponse.model_validate(
+            {
+                "id": polling_id,
+                "object": "response",
+                "status": "queued",  # OpenAI native status
+                "created_at": created_timestamp,
+                "output": [],
+                "metadata": request_data.get("metadata", {}),
+                "usage": None,
+            }
         )
 
         cache_key: Final = self.get_cache_key(polling_id)
@@ -218,7 +221,7 @@ class ResponsePollingHandler:
         )
 
     @with_service_target(_RESPONSE_POLLING_TARGET)
-    async def get_state(self, polling_id: str) -> dict[str, Any] | None:
+    async def get_state(self, polling_id: str) -> Mapping[str, object] | None:
         """Get current polling state from Redis"""
         if not self.redis_cache:
             return None
