@@ -51,6 +51,7 @@ from litellm.llms.oci.common_utils import (
 )
 from litellm.types.llms.oci import (
     CohereChatRequest,
+    CohereToolMessage,
     OCIChatRequestPayload,
     OCICompletionPayload,
     OCIServingMode,
@@ -567,11 +568,32 @@ class OCIChatConfig(BaseConfig):
                 if preamble:
                     preamble_override = preamble
 
+            chat_history = adapt_messages_to_cohere_standard([m for m in messages if m.get("role") != "system"])
+
+            # In multi-turn tool calling, when the conversation ends with tool results,
+            # OCI Cohere requires trailing tool results to be passed in top-level `toolResults`
+            # and `message` must be empty (""). Leaving tool messages at the end of chatHistory
+            # while providing `message` causes OCI to reject with:
+            # "invalid request: cannot specify message if the last entry in chat history contains tool results".
+            tool_results = None
+            non_system_messages: Final = [m for m in messages if m.get("role") != "system"]
+            if non_system_messages and non_system_messages[-1].get("role") == "tool":
+                popped_results = []
+                while chat_history and isinstance(chat_history[-1], CohereToolMessage):
+                    tool_msg = chat_history.pop()
+                    popped_results = tool_msg.toolResults + popped_results
+                if popped_results:
+                    tool_results = popped_results
+                request_message = ""
+            else:
+                request_message = extract_text_content(user_messages[-1]["content"])
+
             chat_request: Final = CohereChatRequest(
                 apiFormat="COHERE",
-                message=extract_text_content(user_messages[-1]["content"]),
-                chatHistory=adapt_messages_to_cohere_standard([m for m in messages if m.get("role") != "system"]),
+                message=request_message,
+                chatHistory=chat_history,
                 preambleOverride=preamble_override,
+                toolResults=tool_results,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
             )
             data = OCICompletionPayload(
