@@ -30,6 +30,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioPerRequestConfig,
     OPTIONAL_PresidioPIIMasking,
+    _AnthropicSSEUnmasker,
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
@@ -3366,7 +3367,12 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
     assert pii_tokens.get("<PHONE_NUMBER_3>") == "555-867-5309"
 
 
-def test_unmask_sse_bytes_chunk_replaces_text_delta():
+def _unmask_sse(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:
+    unmasker = _AnthropicSSEUnmasker(pii_tokens)
+    return unmasker.feed(chunk) + unmasker.flush()
+
+
+def test_anthropic_sse_unmasker_replaces_text_delta():
     import json
 
     pii_tokens = {"<PERSON_1>": "Bobby"}
@@ -3377,14 +3383,14 @@ def test_unmask_sse_bytes_chunk_replaces_text_delta():
     }
     chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
 
-    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+    result = _unmask_sse(chunk, pii_tokens)
 
     decoded = result.decode("utf-8")
     parsed = json.loads(decoded.split("data: ", 1)[1].strip())
     assert parsed["delta"]["text"] == "Hello Bobby, how are you?"
 
 
-def test_unmask_sse_bytes_chunk_ignores_non_text_delta():
+def test_anthropic_sse_unmasker_ignores_non_text_delta():
     import json
 
     pii_tokens = {"<PERSON_1>": "Bobby"}
@@ -3392,7 +3398,7 @@ def test_unmask_sse_bytes_chunk_ignores_non_text_delta():
     # message_start event — no delta
     event = {"type": "message_start", "message": {"id": "msg_01", "role": "assistant"}}
     chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
-    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+    result = _unmask_sse(chunk, pii_tokens)
     assert result == chunk
 
     # input_json_delta — should not be touched
@@ -3402,23 +3408,23 @@ def test_unmask_sse_bytes_chunk_ignores_non_text_delta():
         "delta": {"type": "input_json_delta", "partial_json": '{"name": "<PERSON_1>"}'},
     }
     chunk2 = ("data: " + json.dumps(event2) + "\n\n").encode("utf-8")
-    result2 = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk2, pii_tokens)
+    result2 = _unmask_sse(chunk2, pii_tokens)
     assert result2 == chunk2
 
 
-def test_unmask_sse_bytes_chunk_handles_malformed_json():
+def test_anthropic_sse_unmasker_handles_malformed_json():
     chunk = b"data: {not valid json}\n\n"
-    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
+    result = _unmask_sse(chunk, {"<PERSON_1>": "Bobby"})
     assert result == chunk
 
 
-def test_unmask_sse_bytes_chunk_handles_unicode_decode_error():
+def test_anthropic_sse_unmasker_handles_unicode_decode_error():
     chunk = b"\xff\xfe invalid utf-8"
-    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})
+    result = _unmask_sse(chunk, {"<PERSON_1>": "Bobby"})
     assert result == chunk
 
 
-def test_unmask_sse_bytes_chunk_non_ascii_pii_not_escaped():
+def test_anthropic_sse_unmasker_non_ascii_pii_not_escaped():
     import json
 
     pii_tokens = {"<PERSON_1>": "José"}
@@ -3429,7 +3435,7 @@ def test_unmask_sse_bytes_chunk_non_ascii_pii_not_escaped():
     }
     chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
 
-    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+    result = _unmask_sse(chunk, pii_tokens)
 
     decoded = result.decode("utf-8")
     assert "Jos\\u" not in decoded
@@ -3437,7 +3443,7 @@ def test_unmask_sse_bytes_chunk_non_ascii_pii_not_escaped():
     assert parsed["delta"]["text"] == "Hello José!"
 
 
-def test_unmask_sse_bytes_chunk_handles_crlf_line_endings():
+def test_anthropic_sse_unmasker_handles_crlf_line_endings():
     import json
 
     pii_tokens = {"<PERSON_1>": "Bobby"}
@@ -3448,7 +3454,7 @@ def test_unmask_sse_bytes_chunk_handles_crlf_line_endings():
     }
     crlf_chunk = ("data: " + json.dumps(event) + "\r\ndata: [DONE]\r\n").encode("utf-8")
 
-    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(crlf_chunk, pii_tokens)
+    result = _unmask_sse(crlf_chunk, pii_tokens)
 
     decoded = result.decode("utf-8")
     parsed = json.loads(decoded.split("data: ", 1)[1].split("\n")[0].strip())
@@ -4830,3 +4836,75 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+
+def _sse_text_events(index: int, parts: list[str]) -> bytes:
+    return b"".join(
+        (
+            "event: content_block_delta\ndata: "
+            + json.dumps({"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": t}})
+            + "\n\n"
+        ).encode()
+        for t in parts
+    ) + (
+        f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': index})}\n\n"
+    ).encode()
+
+
+def _sse_text(out: bytes) -> str:
+    return "".join(
+        json.loads(line[6:])["delta"]["text"]
+        for line in out.decode().split("\n")
+        if line.startswith("data: ") and '"text_delta"' in line
+    )
+
+
+_SPLIT_TOKENS = {"<LOCATION_2>": "Boston", "<LOCATION_22>": "New York", "<PERSON_1>": "Bobby"}
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_token_split_across_text_deltas():
+    """The model streams a token over several deltas; per-chunk unmasking left
+    `<LOCATION_2` replaced by the first matching value and leaked `2>`."""
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    body = _sse_text_events(0, ["From <LOCATION_2", "2> to <LOC", "ATION_2>, <", "PERSON_1>."])
+
+    async def stream():
+        yield body
+
+    out = b"".join([c async for c in guardrail._stream_pii_unmasking(stream(), {"metadata": {"pii_tokens": _SPLIT_TOKENS}})])
+    assert _sse_text(out) == "From New York to Boston, Bobby."
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_sse_line_split_across_byte_chunks():
+    """Byte chunks do not respect SSE line boundaries; a split line used to pass through masked."""
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    body = _sse_text_events(0, ["Hi <PERSON_1> from <LOCATION_22>!"])
+
+    async def stream():
+        for i in range(0, len(body), 7):
+            yield body[i : i + 7]
+
+    out = b"".join([c async for c in guardrail._stream_pii_unmasking(stream(), {"metadata": {"pii_tokens": _SPLIT_TOKENS}})])
+    assert _sse_text(out) == "Hi Bobby from New York!"
+
+
+@pytest.mark.asyncio
+async def test_stream_pii_unmasking_flushes_held_text_when_upstream_fails():
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    body = _sse_text_events(0, ["ok <PERSON_1>, a < b"]).split(b"event: content_block_stop")[0]
+
+    async def stream():
+        yield body
+        raise RuntimeError("upstream died")
+
+    out = b"".join([c async for c in guardrail._stream_pii_unmasking(stream(), {"metadata": {"pii_tokens": _SPLIT_TOKENS}})])
+    assert _sse_text(out) == "ok Bobby, a < b"
+
+
+def test_unmask_pii_text_does_not_guess_ambiguous_truncated_token():
+    tokens = {"<PERSON_1>": "Bobby", "<PERSON_2>": "Alice"}
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text("Hi <PERSON_", tokens) == "Hi <PERSON_"
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text("Hi <PERSON_2", tokens) == "Hi Alice"

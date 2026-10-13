@@ -177,6 +177,76 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
         yield chunk
 
 
+class _AnthropicSSEUnmasker:
+    """
+    Unmasks ``text_delta`` events of a raw Anthropic SSE byte stream.
+
+    Byte chunks split anywhere (mid-line, mid-UTF-8 character) and the model
+    streams a token like ``<LOCATION_22>`` across several deltas. Unmasking
+    each chunk on its own leaked fragments (``New York3>``) and raw
+    tokens, so whole events are buffered and a trailing ``<...`` that may still
+    become a token is held back until the next delta or the block's end.
+    """
+
+    def __init__(self, pii_tokens: dict[str, str]):
+        self.pii_tokens = pii_tokens
+        self.buf = b""
+        self.held: dict[Any, str] = {}
+
+    def feed(self, chunk: bytes) -> bytes:
+        self.buf = (self.buf + chunk).replace(b"\r\n", b"\n")
+        *events, self.buf = self.buf.split(b"\n\n")
+        return b"".join(self._event(e) for e in events)
+
+    def flush(self) -> bytes:
+        out = b"".join(self._delta_event(i, self._unmask(t)) for i, t in self.held.items())
+        self.held.clear()
+        tail, self.buf = self.buf, b""
+        return out + (self._event(tail).rstrip(b"\n") if tail.strip() else tail)
+
+    def _unmask(self, text: str) -> str:
+        return _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, self.pii_tokens)
+
+    @staticmethod
+    def _delta_event(index: Any, text: str) -> bytes:
+        event = {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}}
+        return f"event: content_block_delta\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
+    def _event(self, raw: bytes) -> bytes:
+        try:
+            lines = raw.decode("utf-8").split("\n")
+        except UnicodeDecodeError:
+            return raw + b"\n\n"
+        prefix = b""
+        for i, line in enumerate(lines):
+            if not line.startswith("data: "):
+                continue
+            try:
+                event = json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            index = event.get("index")
+            delta = event.get("delta")
+            if (
+                event.get("type") == "content_block_delta"
+                and isinstance(delta, dict)
+                and delta.get("type") == "text_delta"
+                and isinstance(delta.get("text"), str)
+            ):
+                text = self.held.pop(index, "") + delta["text"]
+                start = text.rfind("<")
+                if start != -1 and any(t.startswith(text[start:]) for t in self.pii_tokens):
+                    self.held[index] = text[start:]
+                    text = text[:start]
+                delta["text"] = self._unmask(text)
+                lines[i] = "data: " + json.dumps(event, ensure_ascii=False)
+            elif event.get("type") == "content_block_stop" and index in self.held:
+                prefix += self._delta_event(index, self._unmask(self.held.pop(index)))
+        return prefix + "\n".join(lines).encode() + b"\n\n"
+
+
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
@@ -1269,7 +1339,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 for i in range(max(0, len(text) - len(token)), len(text)):
                     sub = text[i:]
                     if token.startswith(sub) and len(sub) >= min_overlap:
-                        text = text[:i] + original_text
+                        # Ambiguous prefix (`<PERSON_` of two people): leave it rather than guess.
+                        if sum(t.startswith(sub) for t in pii_tokens) == 1:
+                            text = text[:i] + original_text
                         break
         return text
 
@@ -1525,37 +1597,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             return chunks
         return anthropic_sse_chunks_from_response(assembled)
 
-    @staticmethod
-    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:
-        try:
-            text: Final = chunk.decode("utf-8")
-        except UnicodeDecodeError:
-            return chunk
-
-        result_lines: Final[list[str]] = []
-        for line in text.split("\n"):
-            line = line.rstrip("\r")
-            if line.startswith("data: ") and line != "data: [DONE]":
-                raw_json = line[6:]
-                try:
-                    event = json.loads(raw_json)
-                    delta = event.get("delta") if isinstance(event, dict) else None
-                    if (
-                        isinstance(delta, dict)
-                        and event.get("type") == "content_block_delta"
-                        and delta.get("type") == "text_delta"
-                        and isinstance(delta.get("text"), str)
-                    ):
-                        unmasked = OPTIONAL_PresidioPIIMasking._unmask_pii_text(delta["text"], pii_tokens)
-                        if unmasked != delta["text"]:
-                            event["delta"]["text"] = unmasked
-                            line = "data: " + json.dumps(event, ensure_ascii=False)
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    pass
-            result_lines.append(line)
-
-        return "\n".join(result_lines).encode("utf-8")
-
     def _unmask_responses_api_completed_chunk(self, chunk: object, pii_tokens: dict[str, str]) -> None:
         """
         Unmask PII tokens in-place for a ``response.completed`` / ``response.incomplete`` Responses API event.
@@ -1596,6 +1637,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         remaining_chunks: list[ModelResponseStream] = []
         saw_non_chat_chunk = False
+        sse_unmasker: Final = _AnthropicSSEUnmasker(pii_tokens) if pii_tokens else None
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
@@ -1604,8 +1646,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     else:
                         remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    if pii_tokens:
-                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)
+                    if sse_unmasker:
+                        if unmasked := sse_unmasker.feed(chunk):
+                            yield unmasked
                     else:
                         yield chunk
                     continue
@@ -1622,6 +1665,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
                     saw_non_chat_chunk = True
                     yield chunk
+
+            if sse_unmasker and (tail := sse_unmasker.flush()):
+                yield tail
 
             if saw_non_chat_chunk:
                 return
@@ -1651,6 +1697,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         except Exception as e:
             verbose_proxy_logger.error("Error in PII streaming processing: %s", e)
+            if sse_unmasker and (tail := sse_unmasker.flush()):
+                yield tail
             for chunk in remaining_chunks:
                 yield chunk
 
