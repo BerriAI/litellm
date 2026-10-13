@@ -8534,6 +8534,10 @@ class ProxyConfig:
         db_values: Final = self._prepared_db_settings_values("litellm_settings", raw_settings)
         self._apply_litellm_settings_db_values(db_values)
 
+    def record_semantic_filter_config(self, mcp_semantic_filter_config: Mapping[str, object]) -> None:
+        """Record the config a startup or DB sync applied so the next sync can tell whether it changed."""
+        self._last_semantic_filter_config = dict(mcp_semantic_filter_config)
+
     def _semantic_filter_settings_unchanged(self, mcp_semantic_filter_config: object, hook_type: type) -> bool:
         """True when the stored settings match the in-memory ones and a live hook already covers them."""
         import litellm
@@ -10617,7 +10621,7 @@ class ProxyStartupEvent:
 
         mcp_semantic_filter_config: Final = litellm_settings.get("mcp_semantic_tool_filter", None)
         if isinstance(mcp_semantic_filter_config, Mapping):
-            proxy_config._last_semantic_filter_config = dict(mcp_semantic_filter_config)  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # ProxyStartupEvent records the config ProxyConfig's DB sync compares against; litellm_settings values are loosely typed
+            proxy_config.record_semantic_filter_config(mcp_semantic_filter_config)
 
         # Only proceed if the feature is configured and enabled
         if not mcp_semantic_filter_config or not mcp_semantic_filter_config.get("enabled", False):
