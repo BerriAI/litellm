@@ -5,20 +5,25 @@ usage/spend data by querying the aggregated daily activity endpoints.
 
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import aclosing
 from datetime import date
 from typing import Final, Literal, NamedTuple, Protocol, cast, overload
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+    stream_chunk_builder,  # pyright: ignore[reportUnknownVariableType]  # Existing stream assembler has untyped optional parameters
+)
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.utils import ChatCompletionMessageToolCall
+from litellm.utils import ModelResponse, ModelResponseStream
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -511,7 +516,7 @@ async def _process_tool_call(
 ) -> AsyncIterator[str]:
     """Execute a single tool call, yielding SSE events for status."""
     fn_name: Final = tc.function.name
-    fn_args: Final[Mapping[str, str]] = json.loads(tc.function.arguments)
+    fn_args: Final = TypeAdapter(dict[str, str]).validate_json(tc.function.arguments)
 
     allowed_names: Final = {t["function"]["name"] for t in get_tools_for_role(is_admin)}
     handler: Final = TOOL_HANDLERS.get(fn_name) if fn_name is not None else None
@@ -545,20 +550,56 @@ async def _process_tool_call(
     chat_messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
 
 
-async def _stream_final_response(model: str, chat_messages: list[Mapping[str, object]]) -> AsyncIterator[str]:
+class UsageChatCompletion(Protocol):
+    async def complete(
+        self, model: str, messages: Sequence[Mapping[str, object]], tools: Sequence[_ToolDef]
+    ) -> ModelResponse: ...
+
+    def stream(
+        self, model: str, messages: Sequence[Mapping[str, object]]
+    ) -> AsyncGenerator[ModelResponseStream, None]: ...
+
+
+async def _stream_final_response(
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    completion: UsageChatCompletion,
+    user_id: str | None = None,
+    is_admin: bool = False,
+    remaining_tool_rounds: int = 3,
+) -> AsyncGenerator[str, None]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response: Final = await litellm.acompletion(
-        model=model,
-        messages=chat_messages,
-        stream=True,
-        temperature=USAGE_AI_TEMPERATURE,
-    )
-    async for chunk in response:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield _sse({"type": "chunk", "content": delta})
+    chat_messages: Final = list(messages)
+    response: Final = completion.stream(model, chat_messages)
+    chunks: Final[list[ModelResponseStream]] = []  # mutable-ok: incremental streaming chunk assembly
+    async with aclosing(response):
+        async for chunk in response:
+            chunks.append(chunk)
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield _sse({"type": "chunk", "content": chunk.choices[0].delta.content})
+    result: Final = TypeAdapter(ModelResponse).validate_python(stream_chunk_builder(chunks, messages=chat_messages))
+    message: Final = result.choices[0].message
+    if message.tool_calls:
+        if remaining_tool_rounds <= 0:
+            raise HTTPException(status_code=502, detail="Usage AI exceeded its tool-call limit")
+        chat_messages.append(message.model_dump())
+        for tool_call in message.tool_calls:
+            async for event in _process_tool_call(
+                TypeAdapter(ChatCompletionMessageToolCall).validate_python(tool_call),
+                chat_messages,
+                user_id,
+                is_admin,
+            ):
+                yield event
+        async with aclosing(
+            _stream_final_response(model, chat_messages, completion, user_id, is_admin, remaining_tool_rounds - 1)
+        ) as stream:
+            async for event in stream:
+                yield event
+    elif not message.content:
+        raise HTTPException(status_code=502, detail="Usage AI returned an empty answer")
 
 
 async def stream_usage_ai_chat(
@@ -566,6 +607,8 @@ async def stream_usage_ai_chat(
     model: str | None = None,
     user_id: str | None = None,
     is_admin: bool = False,
+    *,
+    completion: UsageChatCompletion,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model: Final = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
@@ -578,26 +621,27 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools: Final = get_tools_for_role(is_admin)
-        response: Final = await litellm.acompletion(
-            model=resolved_model,
-            messages=chat_messages,
-            tools=tools,
-            temperature=USAGE_AI_TEMPERATURE,
-        )
+        response: Final = await completion.complete(resolved_model, chat_messages, tools)
         choice: Final = response.choices[0]
 
         if not choice.message.tool_calls:
-            if choice.message.content:
-                yield _sse({"type": "chunk", "content": choice.message.content})
+            if not choice.message.content:
+                raise HTTPException(status_code=502, detail="Usage AI returned an empty answer")
+            yield _sse({"type": "chunk", "content": choice.message.content})
             yield _sse({"type": "done"})
             return
 
         chat_messages.append(choice.message.model_dump())
         for tc in choice.message.tool_calls:
-            async for event in _process_tool_call(tc, chat_messages, user_id, is_admin):
+            async for event in _process_tool_call(
+                TypeAdapter(ChatCompletionMessageToolCall).validate_python(tc), chat_messages, user_id, is_admin
+            ):
                 yield event
-        async for event in _stream_final_response(resolved_model, chat_messages):
-            yield event
+        async with aclosing(
+            _stream_final_response(resolved_model, chat_messages, completion, user_id, is_admin)
+        ) as stream:
+            async for event in stream:
+                yield event
         yield _sse({"type": "done"})
 
     except Exception as e:
