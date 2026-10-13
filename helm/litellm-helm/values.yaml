@@ -440,10 +440,10 @@ db:
 # Prefer the native /health/drain preStop hook over a fixed `sleep`: it marks
 # the pod NotReady and blocks only until in-flight requests actually finish
 # (bounded by GRACEFUL_SHUTDOWN_TIMEOUT, default 30s), instead of always
-# waiting the worst-case duration. The drain runs once (the preStop hook and
-# the SIGTERM handler share it), so set terminationGracePeriodSeconds a few
-# seconds above GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before
-# SIGKILL.
+# waiting the worst-case duration. After SIGTERM the server waits up to
+# GRACEFUL_SHUTDOWN_TIMEOUT again for connections still open and then cancels
+# them, so set terminationGracePeriodSeconds a few seconds above twice
+# GRACEFUL_SHUTDOWN_TIMEOUT to leave room for teardown before SIGKILL.
 #
 # /health/drain is off by default; enable it with
 # general_settings.enable_drain_endpoint: true. The kubelet calls preStop

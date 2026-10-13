@@ -1,4 +1,5 @@
 import inspect
+import logging
 import os
 from contextlib import nullcontext
 from pathlib import Path
@@ -22,8 +23,10 @@ import yaml
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
+from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
+from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
 
 
 @pytest.fixture(autouse=True)
@@ -152,6 +155,22 @@ class TestProxyInitializationHelpers:
                 "localhost", 8000, timeout_worker_healthcheck=15
             )
             assert args["timeout_worker_healthcheck"] == 15
+
+    @pytest.mark.parametrize(
+        ("raw_timeout", "expected"),
+        [("7.5", 7.5), ("0", 0.0), (None, DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT)],
+    )
+    def test_uvicorn_graceful_shutdown_is_bounded_by_graceful_shutdown_timeout(
+        self, monkeypatch, raw_timeout, expected
+    ):
+        if raw_timeout is None:
+            monkeypatch.delenv("GRACEFUL_SHUTDOWN_TIMEOUT", raising=False)
+        else:
+            monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", raw_timeout)
+
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert uvicorn.Config(**args).timeout_graceful_shutdown == expected
 
     @staticmethod
     def _uvicorn_access_info_enabled(args: dict) -> bool:
@@ -2049,6 +2068,49 @@ class TestProxyInitializationHelpers:
 
         assert captured["options"]["max_requests"] == 1000
         assert captured["options"]["max_requests_jitter"] == 50
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_workers_bound_graceful_shutdown_by_graceful_shutdown_timeout(self, monkeypatch):
+        pytest.importorskip("gunicorn")
+        import gunicorn.config
+        import gunicorn.glogging
+        from uvicorn.workers import UvicornWorker
+
+        monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "7.5")
+        captured: dict = {}
+
+        def capture_run(self):
+            captured["options"] = dict(self.options)
+
+        with (
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4011,
+                app=MagicMock(),
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+            )
+
+        for name in ("uvicorn.error", "uvicorn.access"):
+            uvicorn_logger = logging.getLogger(name)
+            for attr in ("handlers", "level", "propagate"):
+                monkeypatch.setattr(uvicorn_logger, attr, getattr(uvicorn_logger, attr))
+        gunicorn_cfg = gunicorn.config.Config()
+        worker = captured["options"]["worker_class"](
+            0, os.getpid(), [], MagicMock(), 30, gunicorn_cfg, gunicorn.glogging.Logger(gunicorn_cfg)
+        )
+
+        assert isinstance(worker, UvicornWorker)
+        assert worker.config.timeout_graceful_shutdown == 7.5
+        assert worker.config.loop == UvicornWorker.CONFIG_KWARGS["loop"]
+        assert worker.config.http == UvicornWorker.CONFIG_KWARGS["http"]
+        assert captured["options"]["graceful_timeout"] == 8 + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     def test_gunicorn_master_is_reserved_for_forking_before_it_runs(self, fork_reservation):
