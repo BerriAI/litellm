@@ -201,6 +201,7 @@ describe("provider_info_helpers", () => {
         Providers.CLARIFAI,
         Providers.Cognition,
         Providers.COMPACTIFAI,
+        Providers.CORALBRICKS,
         Providers.DATAROBOT,
         Providers.DOCKER_MODEL_RUNNER,
         Providers.DOTPROMPT,
@@ -361,6 +362,10 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.Tencent)).toBe("tencent/deepseek-v4-pro");
     });
 
+    it("should return a coralbricks/ placeholder for the CoralBricks provider", () => {
+      expect(getPlaceholder(Providers.CORALBRICKS)).toBe("coralbricks/glm-5.3-fast");
+    });
+
     it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {
       expect(getPlaceholder("TypeSafe")).toBe("typesafe/jev-latest");
       expect(getPlaceholder("StrandsDecider")).toBe("strands_decider/strands-decider-2B-hobson-v19");
@@ -506,9 +511,9 @@ describe("provider_info_helpers", () => {
     it("should list only typesafe decision models for the 'TypeSafe' provider key, not the OpenRouter-hosted one", () => {
       const modelMap = {
         "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
-        "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
+        "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "decisions" },
         "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
-        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "evaluation" },
+        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "decisions" },
       };
       expect(getProviderModels("TypeSafe" as Providers, modelMap)).toEqual([
         "typesafe/jev-latest",
@@ -518,7 +523,7 @@ describe("provider_info_helpers", () => {
 
     it("should list only strands_decider models for the 'StrandsDecider' provider key", () => {
       const modelMap = {
-        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "evaluation" },
+        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "decisions" },
         "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
         "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
       };

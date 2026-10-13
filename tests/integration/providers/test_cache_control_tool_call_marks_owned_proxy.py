@@ -1,7 +1,5 @@
 import asyncio
-import os
 import re
-import signal
 import socket
 import threading
 from collections import Counter
@@ -209,10 +207,12 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_capped_reques
                         {pid: _held_upstream_connections(pid, wire.url) for pid in workers}
                     )
                     victim: Final = max(workers, key=held_by.__getitem__)
-                    os.kill(victim, signal.SIGKILL)
+                    with owned.replacing_worker(victim) as kill:
+                        await asyncio.to_thread(kill)
+                        release.set()
+                        served: Final = await burst
                 finally:
                     release.set()
-                served: Final = await burst
             during: Final = wire.drain()
             after: Final = await _fire(owned_url, owned.gateway.key)
             after_received: Final = wire.drain()
@@ -277,7 +277,7 @@ async def test_proxy_restart_mid_burst_serves_capped_requests_after_the_reboot(
             )
             try:
                 await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= _BURST, 90)
-                first.process.terminate()
+                first.begin_shutdown()
             finally:
                 release.set()
             served: Final = await burst
