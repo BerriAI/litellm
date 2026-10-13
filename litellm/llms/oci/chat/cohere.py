@@ -176,6 +176,28 @@ def _resolved_oci_parameter_schema(raw_parameters: dict[str, JsonValue]) -> Json
     return sanitize_oci_schema(resolve_oci_schema_anyof(resolve_oci_schema_refs(raw_parameters)))
 
 
+def split_trailing_tool_results(
+    chat_history: list[CohereMessage],
+) -> tuple[list[CohereMessage], list[CohereToolResult]]:
+    """Hoist trailing TOOL-role history entries into a top-level ``toolResults`` list.
+
+    OCI's Cohere API rejects a request whose last ``chatHistory`` entry is a
+    TOOL result while a non-empty top-level ``message`` is also set ("cannot
+    specify message if the last entry in chat history contains tool results").
+    The accepted shape for a tool-result turn is the trailing results moved to
+    the request's top-level ``toolResults`` and ``message`` sent empty, matching
+    Cohere's own contract.
+
+    Returns ``(remaining_history, trailing_results)``; when the last entry is
+    not a TOOL message, ``trailing_results`` is empty and the history is
+    returned unchanged.
+    """
+    trailing: Final[list[CohereToolResult]] = []
+    while chat_history and isinstance(chat_history[-1], CohereToolMessage):
+        trailing = chat_history.pop().toolResults + trailing
+    return chat_history, trailing
+
+
 def _cohere_parameter_definition(param_schema: dict[str, JsonValue], is_required: bool) -> CohereParameterDefinition:
     json_type: Final = _json_str(param_schema.get("type")) or "string"
     return CohereParameterDefinition(

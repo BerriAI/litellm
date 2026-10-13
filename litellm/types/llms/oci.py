@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import SerializeAsAny
+from pydantic import AliasChoices, ConfigDict, Field, SerializeAsAny
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -304,6 +304,10 @@ class CohereChatRequest(LiteLLMBaseModel):
     # Without it, Pydantic v2 would serialize each element using the declared
     # ``CohereMessage`` schema and silently drop subclass fields.
     chatHistory: list[SerializeAsAny[CohereMessage]] | None = None
+    # Tool results for a tool-result turn. OCI's Cohere API refuses a non-empty
+    # top-level ``message`` when the last ``chatHistory`` entry is a TOOL result,
+    # and requires the trailing results to be hoisted here instead.
+    toolResults: list[CohereToolResult] | None = None
     maxTokens: int | None = None
     temperature: float | None = None
     topP: float | None = None
@@ -349,12 +353,22 @@ class CohereUsage(LiteLLMBaseModel):
 
 
 class CohereCitation(LiteLLMBaseModel):
-    """Citation in Cohere response."""
+    """Citation in Cohere response.
+
+    OCI writes citation document references in camelCase (``documentIds``), like
+    the rest of the OCI payload, so accept both the camelCase wire name and the
+    snake_case field name.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, protected_namespaces=())
 
     start: int
     end: int
     text: str
-    document_ids: list[str]
+    document_ids: list[str] = Field(
+        validation_alias=AliasChoices("documentIds", "document_ids"),
+        serialization_alias="documentIds",
+    )
 
 
 class CohereSearchQuery(LiteLLMBaseModel):

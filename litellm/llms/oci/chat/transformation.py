@@ -33,6 +33,7 @@ from litellm.llms.oci.chat.cohere import (
     extract_text_content,
     handle_cohere_response,
     handle_cohere_stream_chunk,
+    split_trailing_tool_results,
 )
 from litellm.llms.oci.chat.generic import (
     adapt_messages_to_generic_oci_standard,
@@ -567,10 +568,32 @@ class OCIChatConfig(BaseConfig):
                 if preamble:
                     preamble_override = preamble
 
+            cohere_history: Final = adapt_messages_to_cohere_standard(
+                [m for m in messages if m.get("role") != "system"]
+            )
+            # OCI's Cohere API rejects a non-empty top-level ``message`` when the
+            # last ``chatHistory`` entry is a TOOL result ("cannot specify message
+            # if the last entry in chat history contains tool results"). For a
+            # tool-result turn (agent loop continuation — the OpenAI-format
+            # message array ends with a ``tool`` message), hoist the trailing TOOL
+            # entries into the top-level ``toolResults`` and send an empty
+            # ``message`` — the shape Cohere itself specifies for that turn.
+            # When a user message follows the tool results, the turn is a normal
+            # one and the request keeps the previous shape (tool results stay in
+            # ``chatHistory``).
+            is_tool_result_turn: Final = bool(messages) and messages[-1].get("role") == "tool"
+            if is_tool_result_turn:
+                remaining_history, trailing_tool_results = split_trailing_tool_results(cohere_history)
+                chat_message: Final = ""
+            else:
+                remaining_history, trailing_tool_results = cohere_history, []
+                chat_message = extract_text_content(user_messages[-1]["content"])
+
             chat_request: Final = CohereChatRequest(
                 apiFormat="COHERE",
-                message=extract_text_content(user_messages[-1]["content"]),
-                chatHistory=adapt_messages_to_cohere_standard([m for m in messages if m.get("role") != "system"]),
+                message=chat_message,
+                chatHistory=remaining_history or None,
+                toolResults=trailing_tool_results or None,
                 preambleOverride=preamble_override,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
             )
