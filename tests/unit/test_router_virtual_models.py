@@ -1049,7 +1049,7 @@ def test_is_recognized_model_recognizes_virtual_model_names():
 
 
 def test_virtual_model_has_alternatives_contract():
-    """virtual_model_has_alternatives is True only for members of multi-member virtual models."""
+    """virtual_model_has_alternatives is True only for members of multi-member virtual models when requested through that virtual model."""
     multi = f"{VIRTUAL_MODEL_PREFIX}multi"
     solo = f"{VIRTUAL_MODEL_PREFIX}solo"
     router = Router(
@@ -1079,10 +1079,11 @@ def test_virtual_model_has_alternatives_contract():
         }
     )
 
-    assert router.virtual_model_has_alternatives("dep1") is True
-    assert router.virtual_model_has_alternatives("dep2") is True
-    assert router.virtual_model_has_alternatives("dep3") is False
-    assert router.virtual_model_has_alternatives("no-such-dep") is False
+    assert router.virtual_model_has_alternatives("dep1", multi) is True
+    assert router.virtual_model_has_alternatives("dep2", multi) is True
+    assert router.virtual_model_has_alternatives("dep3", solo) is False
+    assert router.virtual_model_has_alternatives("no-such-dep", multi) is False
+    assert router.virtual_model_has_alternatives("dep1", "dep1-model") is False
 
 
 @pytest.mark.asyncio
@@ -2926,3 +2927,311 @@ def test_virtual_model_rows_do_not_inherit_member_access_groups():
 
     model_ids = {deployment["model_info"]["id"] for deployment in vm_list}
     assert model_ids == {"member-1", "member-2"}
+
+
+@pytest.mark.asyncio
+async def test_429_cooldown_scoped_to_requested_model_group():
+    """
+    Bug 1 regression: 429 cooldown guard must be scoped to the requested model group.
+
+    A deployment that is a member of a multi-member virtual model, when called DIRECTLY
+    by its own single-deployment model_name, returns 429 -> NOT benched (today's
+    conservative guard preserved for direct traffic).
+
+    The SAME member, called through the virtual model name, returns 429 -> benched
+    per the virtual-aware guard (existing feature behavior preserved).
+    """
+    vm_name = f"{VIRTUAL_MODEL_PREFIX}test-model"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key1",
+                },
+                "model_info": {"id": "dep1"},
+            },
+            {
+                "model_name": "dep2-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "success from dep2",
+                },
+                "model_info": {"id": "dep2"},
+            },
+        ],
+        num_retries=0,
+        allowed_fails=0,
+        cooldown_time=60,
+    )
+
+    router.set_virtual_models(
+        {
+            vm_name: VirtualModelRouterState(
+                members={"dep1": 1, "dep2": 2},
+            )
+        }
+    )
+
+    exception = litellm.RateLimitError(
+        message="Rate limit exceeded",
+        model="gpt-4o",
+        llm_provider="openai",
+    )
+
+    router.deployment_callback_on_failure(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_params": {
+                "metadata": {
+                    "deployment": "dep1-model",
+                    "model_group": "dep1-model",
+                },
+                "model_info": {"id": "dep1"},
+            },
+            "exception": exception,
+        },
+        completion_response=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    active_cooldowns = router.cooldown_cache.get_active_cooldowns(model_ids=["dep1"], parent_otel_span=None)
+    assert len(active_cooldowns) == 0, "dep1 called directly should NOT be benched on 429 (single-deployment group)"
+
+    router.deployment_callback_on_failure(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_params": {
+                "metadata": {
+                    "deployment": "dep1-model",
+                    "model_group": vm_name,
+                },
+                "model_info": {"id": "dep1"},
+            },
+            "exception": exception,
+        },
+        completion_response=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    active_cooldowns = router.cooldown_cache.get_active_cooldowns(model_ids=["dep1"], parent_otel_span=None)
+    assert len(active_cooldowns) == 1, "dep1 called through virtual model SHOULD be benched on 429"
+    assert active_cooldowns[0][0] == "dep1"
+
+
+@pytest.mark.asyncio
+async def test_virtual_model_retry_uses_priority_2_without_order_fallback():
+    """
+    Bug 2 regression: priority filtering must run AFTER failed-member exclusion for virtual models.
+
+    Virtual model with priorities 1 and 2, priority-1 fails with 500, retries enabled,
+    cooldown disabled, max_fallbacks=0: the retry is served by priority-2 INSIDE the
+    retry loop (no order-fallback escalation).
+    """
+    vm_name = f"{VIRTUAL_MODEL_PREFIX}test-model"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key1",
+                },
+                "model_info": {"id": "priority-1-dep"},
+            },
+            {
+                "model_name": "dep2-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key2",
+                },
+                "model_info": {"id": "priority-2-dep"},
+            },
+        ],
+        num_retries=1,
+        max_fallbacks=0,
+        allowed_fails=1000,
+    )
+
+    router.set_virtual_models(
+        {
+            vm_name: VirtualModelRouterState(
+                members={"priority-1-dep": 1, "priority-2-dep": 2},
+                num_retries=1,
+            )
+        }
+    )
+
+    attempt_sequence = []
+
+    async def mock_acompletion(*args, **kwargs):
+        model_id = kwargs.get("api_key")
+        if model_id == "key1":
+            attempt_sequence.append("priority-1-dep")
+            raise litellm.InternalServerError(message="Mock error", model="gpt-4o", llm_provider="openai")
+        else:
+            attempt_sequence.append("priority-2-dep")
+            return litellm.ModelResponse(id="test", choices=[{"message": {"content": "success from priority-2"}}])
+
+    with patch("litellm.acompletion", side_effect=mock_acompletion):
+        response = await router.acompletion(
+            model=vm_name,
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+    assert response._hidden_params["model_id"] == "priority-2-dep"
+    assert attempt_sequence == ["priority-1-dep", "priority-2-dep"], (
+        f"Expected [priority-1-dep, priority-2-dep], got {attempt_sequence}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_plain_group_priority_ordering_unchanged():
+    """
+    Bug 2 safety invariant: plain ordered two-level model group under identical conditions
+    has unchanged behavior (priority-1 re-picked for each retry, no walk).
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key1",
+                    "order": 1,
+                },
+                "model_info": {"id": "order-1-dep"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key2",
+                    "order": 2,
+                },
+                "model_info": {"id": "order-2-dep"},
+            },
+        ],
+        num_retries=1,
+        max_fallbacks=0,
+    )
+
+    attempt_sequence = []
+
+    async def mock_acompletion(*args, **kwargs):
+        model_id = kwargs.get("api_key")
+        if model_id == "key1":
+            attempt_sequence.append("order-1-dep")
+            raise litellm.InternalServerError(message="Mock error", model="gpt-4o", llm_provider="openai")
+        else:
+            attempt_sequence.append("order-2-dep")
+            return litellm.ModelResponse(id="test", choices=[{"message": {"content": "success"}}])
+
+    with patch("litellm.acompletion", side_effect=mock_acompletion):
+        try:
+            await router.acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "test"}],
+            )
+        except litellm.InternalServerError:
+            pass
+
+    assert attempt_sequence == ["order-1-dep", "order-1-dep"], (
+        f"Plain group should retry same deployment, got {attempt_sequence}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_alias_to_virtual_model_applies_vm_strategy():
+    """
+    Bug 3 regression: alias resolution must happen before virtual-model strategy check.
+
+    model_group_alias mapping an alias to a virtual model configured with a non-default
+    strategy: a request using the alias must apply the virtual model's configured strategy.
+    """
+    vm_name = f"{VIRTUAL_MODEL_PREFIX}test-model"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key1",
+                    "mock_response": "from dep1",
+                },
+                "model_info": {"id": "dep1"},
+            },
+            {
+                "model_name": "dep2-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "from dep2",
+                },
+                "model_info": {"id": "dep2"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        model_group_alias={"public-alias": vm_name},
+    )
+
+    router.set_virtual_models(
+        {
+            vm_name: VirtualModelRouterState(
+                members={"dep1": 1, "dep2": 2},
+                routing_strategy="least-busy",
+            )
+        }
+    )
+
+    strategy, selector = router._get_routing_context(model="public-alias")
+
+    assert strategy == "least-busy", f"Expected 'least-busy' strategy from virtual model, got {strategy}"
+
+
+@pytest.mark.asyncio
+async def test_no_alias_behavior_unchanged():
+    """
+    Bug 3 no-alias regression test: behavior unchanged when no alias is configured.
+    """
+    vm_name = f"{VIRTUAL_MODEL_PREFIX}test-model"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key1",
+                    "mock_response": "from dep1",
+                },
+                "model_info": {"id": "dep1"},
+            },
+            {
+                "model_name": "dep2-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "from dep2",
+                },
+                "model_info": {"id": "dep2"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    router.set_virtual_models(
+        {
+            vm_name: VirtualModelRouterState(
+                members={"dep1": 1, "dep2": 2},
+                routing_strategy="least-busy",
+            )
+        }
+    )
+
+    strategy, selector = router._get_routing_context(model=vm_name)
+
+    assert strategy == "least-busy", f"Expected 'least-busy' strategy from virtual model, got {strategy}"

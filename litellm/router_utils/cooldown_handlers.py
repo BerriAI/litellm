@@ -381,7 +381,7 @@ def _should_cooldown_deployment(
     exception_status: str | int,
     original_exception: Exception,
     requested_model_group: str | None = None,
-    virtual_model_has_alternatives_fn: Callable[[str], bool] | None = None,
+    virtual_model_has_alternatives_fn: Callable[[str, str | None], bool] | None = None,
     allowed_fails_override: int | None = None,
     cooldown_time_override: float | None = None,
 ) -> bool:
@@ -408,7 +408,11 @@ def _should_cooldown_deployment(
         not (
             litellm_router_instance.routing_group_has_alternatives(requested_model_group)
             or litellm_router_instance.team_model_has_alternatives(deployment)
-            or (virtual_model_has_alternatives_fn(deployment) if virtual_model_has_alternatives_fn else False)
+            or (
+                virtual_model_has_alternatives_fn(deployment, requested_model_group)
+                if virtual_model_has_alternatives_fn
+                else False
+            )
         )
         if model_group is not None and len(model_group) == 1
         else False
@@ -486,6 +490,12 @@ def _should_cooldown_deployment(
 
         return False
     else:
+        if (
+            exception_status_int == 429
+            and is_single_deployment_model_group
+            and litellm_router_instance.deployment_in_multi_member_virtual_model(deployment)
+        ):
+            return False
         return should_cooldown_based_on_allowed_fails_policy(
             litellm_router_instance=litellm_router_instance,
             deployment=deployment,

@@ -477,6 +477,31 @@ class TestRoutingGroupCooldownAlternatives:
         )
 
 
+def test_never_virtual_single_deployment_group_429_still_benches_under_allowed_fails_policy():
+    from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "plain-solo",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "plain-dep-1"},
+            }
+        ],
+        allowed_fails=0,
+    )
+    assert (
+        _should_cooldown_deployment(
+            litellm_router_instance=router,
+            deployment="plain-dep-1",
+            exception_status=429,
+            original_exception=Exception("rate limited"),
+            requested_model_group="plain-solo",
+        )
+        is True
+    )
+
+
 class TestTeamModelCooldownAlternatives:
     def _router(self, team_deployments: int, blocked_ids: frozenset[str] = frozenset()) -> litellm.Router:
         return litellm.Router(
@@ -2939,9 +2964,7 @@ async def test_allowed_fails_cools_a_single_deployment(
         side_effect=httpx.ReadTimeout("upstream timeout")
     )
     policy_kwargs: Final = (
-        {"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}
-        if use_policy
-        else {"allowed_fails": 1}
+        {"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)} if use_policy else {"allowed_fails": 1}
     )
     router: Final = Router(
         model_list=[
