@@ -1157,13 +1157,12 @@ _BUDGET_NUMERIC_KEYS = frozenset(
 )
 
 
-def _key_expiration_error(data: GenerateKeyRequest | UpdateKeyRequest, *, now: datetime | None) -> str | None:
+def _key_expiration_error(
+    data: GenerateKeyRequest | UpdateKeyRequest, *, max_duration: str | None, now: datetime | None
+) -> str | None:
     if data.expires is not None and data.expires.utcoffset() is None:
         return "expires must include a timezone"
 
-    max_duration: Final = (
-        litellm.upperbound_key_generate_params.duration if litellm.upperbound_key_generate_params is not None else None
-    )
     if max_duration is None:
         return None
     if data.expires is None:
@@ -1208,7 +1207,15 @@ def _enforce_upperbound_key_params(
                 detail={"error": f"{key} must be a finite number. Received: {value}"},
             )
 
-    expiration_error: Final = _key_expiration_error(data, now=now)
+    expiration_error: Final = _key_expiration_error(
+        data,
+        max_duration=(
+            litellm.upperbound_key_generate_params.duration
+            if litellm.upperbound_key_generate_params is not None
+            else None
+        ),
+        now=now,
+    )
     if expiration_error is not None:
         raise HTTPException(status_code=400, detail={"error": expiration_error})
 
@@ -1258,6 +1265,8 @@ async def _common_key_generation_helper(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
     team_table: LiteLLM_TeamTableCachedObj | None,
+    *,
+    now: datetime | None = None,
 ) -> GenerateKeyResponse:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
@@ -1346,7 +1355,8 @@ async def _common_key_generation_helper(
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
     # check if user set upperbound key/generate params on config.yaml
-    _enforce_upperbound_key_params(data, fill_defaults=True)
+    generation_time: Final = now if now is not None else datetime.now(timezone.utc)
+    _enforce_upperbound_key_params(data, fill_defaults=True, now=generation_time)
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
@@ -1423,12 +1433,21 @@ async def _common_key_generation_helper(
             "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - %s", e
         )
 
+    team_key_duration: Final = TypeAdapter(str | None).validate_python(
+        team_table.metadata.get("team_member_key_duration")
+        if team_table is not None and team_table.metadata is not None and data.user_id is not None
+        else None
+    )
+    team_expiration_error: Final = _key_expiration_error(data, max_duration=team_key_duration, now=generation_time)
+    if team_expiration_error is not None:
+        raise HTTPException(status_code=400, detail={"error": team_expiration_error})
+
     await _enforce_custom_key_policy(
         hook=_custom_key_policy_hook(proxy_server),
         build_policy_request=lambda: CustomKeyPolicyRequest(
             operation="generate",
             existing_key=None,
-            effective_key=_effective_key_for_generate(data=data, now=datetime.now(timezone.utc)),
+            effective_key=_effective_key_for_generate(data=data, now=generation_time),
             request=data,
         ),
     )
