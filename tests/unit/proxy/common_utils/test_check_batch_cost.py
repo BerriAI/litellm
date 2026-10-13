@@ -3323,7 +3323,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize", "lines"]
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize", "read file-input-1", "lines"]
         (payload,) = logger.payloads
         assert payload["batch_id"] == _CLAIM_UNIFIED_BATCH_ID
         assert payload["finished_at"] == 2
@@ -3364,7 +3364,8 @@ class TestBatchLineItemsFromThePoller:
         import litellm
 
         journal: list = []
-        _, instance = self._setup(journal)
+        row, instance = self._setup(journal)
+        row.api_key = "hash-of-a-deleted-key"
         logger = self._recording_logger(journal)
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
 
@@ -3441,7 +3442,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == ["finalize", "read file-err-1", "lines"]
+        assert journal == ["finalize", "read file-err-1", "read file-input-1", "lines"]
         (payload,) = logger.payloads
         assert [(line["custom_id"], line["status"], line["response_cost"]) for line in payload["lines"]] == [
             ("ok-1", "failure", 0.0)
@@ -3502,7 +3503,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == ["read file-out-deleted", "finalize", "read file-err-1", "lines"]
+        assert journal == ["read file-out-deleted", "finalize", "read file-err-1", "read file-input-1", "lines"]
         (payload,) = logger.payloads
         assert [(line["custom_id"], line["status"]) for line in payload["lines"]] == [("ok-1", "failure")]
         assert row.batch_processed is True
@@ -3551,7 +3552,7 @@ class TestBatchLineItemsFromThePoller:
         assert billed_while_hung == (
             True,
             "complete",
-            [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize", "lines started"],
+            [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize", "read file-input-1", "lines started"],
         )
         assert journal[-1] == "lines"
 
@@ -3700,11 +3701,11 @@ class TestCreatorTurnedOffMessageLogging:
     @pytest.mark.parametrize(
         ("job_fields", "key_row", "team_row"),
         [
-            ({"api_key": None}, None, None),
             ({}, None, None),
             ({"team_id": "team-gone"}, "present", None),
+            ({"api_key": None, "team_id": "team-gone"}, None, None),
         ],
-        ids=["legacy-row-without-key", "deleted-key", "deleted-team"],
+        ids=["deleted-key", "deleted-team", "deleted-team-of-a-batch-created-without-a-key"],
     )
     async def test_a_creator_that_is_gone_counts_as_turned_off(self, monkeypatch, job_fields, key_row, team_row):
         from types import SimpleNamespace
@@ -3715,6 +3716,26 @@ class TestCreatorTurnedOffMessageLogging:
         instance = self._instance(key_row=SimpleNamespace(metadata={}) if key_row else None, team_row=team_row)
 
         assert await instance._creator_turned_off_message_logging(self._job(**job_fields)) is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("team_value", "proxy_wide", "expected"),
+        [(None, False, False), (None, True, True), ("true", False, True), ("false", True, False)],
+    )
+    async def test_a_batch_created_without_a_key_follows_its_team_and_the_proxy_setting(
+        self, monkeypatch, team_value, proxy_wide, expected
+    ):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", proxy_wide)
+        team_row = SimpleNamespace(metadata=self._logging(team_value)) if team_value is not None else None
+        instance = self._instance(team_row=team_row)
+        job = self._job(api_key=None, team_id="team-alpha" if team_row is not None else None, created_by="jwt-alice")
+
+        assert await instance._creator_turned_off_message_logging(job) is expected
+        instance.prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_a_failed_lookup_counts_as_turned_off(self, monkeypatch):

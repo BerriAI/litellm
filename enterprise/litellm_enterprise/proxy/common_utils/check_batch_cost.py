@@ -1100,7 +1100,8 @@ class CheckBatchCost:
 
     async def _creator_turned_off_message_logging(self, job: "_ManagedObjectRow") -> bool:
         """Whether the creating key's or team's logging settings turn off message logging, falling back to the
-        proxy-wide setting. A key or team that can no longer be read counts as turned off."""
+        proxy-wide setting. A batch created without a virtual key, such as under JWT auth or with the master key, has
+        only its team's and the proxy's settings. A key or team that can no longer be read counts as turned off."""
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
         from litellm.proxy.proxy_server import proxy_config
@@ -1125,7 +1126,7 @@ class CheckBatchCost:
                 f"so its line items are stored without request and response: {error}"
             )
             return True
-        if api_key is None or (has_key_row and key_row is None) or (team_id and team_row is None):
+        if (has_key_row and key_row is None) or (team_id and team_row is None):
             return True
         settings: Final = get_dynamic_logging_metadata(
             UserAPIKeyAuth(metadata=_row_metadata(key_row), team_metadata=_row_metadata(team_row), team_id=team_id),

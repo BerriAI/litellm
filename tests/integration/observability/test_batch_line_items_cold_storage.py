@@ -2,12 +2,13 @@
 
 An owned two-worker proxy lists ``s3_v2`` and ``gcs_bucket`` under ``batch_line_item_callbacks``. Once the batch-cost
 poller logs a finished batch, each sink gets one NDJSON object for the batch holding one record per line. The proxy runs
-on its own database so the shared rig's pollers never claim these batches first. Two more owned proxies list an
-unsupported name next to ``s3_v2`` and a null list
+on its own database so the shared rig's pollers never claim these batches first, and accepts JWTs signed by a local key
+next to virtual keys. Two more owned proxies list an unsupported name next to ``s3_v2`` and a null list
 """
 
 import json
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -19,8 +20,10 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs, unquote, urlsplit
 
+import jwt
 import pytest
 import yaml
+from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment, held, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.forward_proxy import tunnelling_forward_proxy
@@ -30,6 +33,7 @@ from integration._support.upstream import ScenarioHandle, delete_scenario, regis
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
+from jwt.algorithms import RSAAlgorithm
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(420)
@@ -42,6 +46,7 @@ LINE_DATE: Final = datetime.fromtimestamp(COMPLETED_AT, tz=timezone.utc).strftim
 PROMPT_TOKENS: Final = 100
 COMPLETION_TOKENS: Final = 50
 POLLER_SECONDS: Final = 150
+JWT_KEY_ID: Final = "batch-line-items-signing-key"
 
 
 @dataclass(slots=True)
@@ -121,12 +126,38 @@ class Rig:
     database_url: str
     s3: ObjectSink
     gcs: ObjectSink
+    signing_key: rsa.RSAPrivateKey
+
+
+def _jwks_peer(signing_key: rsa.RSAPrivateKey) -> Callable[[Request], Reply]:
+    public_jwk: Final = json.loads(RSAAlgorithm.to_jwk(signing_key.public_key()))
+    jwks: Final = json.dumps({"keys": [{**public_jwk, "kid": JWT_KEY_ID}]}).encode()
+
+    def respond(_request: Request) -> Reply:
+        return Reply(body=jwks)
+
+    return respond
+
+
+def _signed_token(signing_key: rsa.RSAPrivateKey, subject: str) -> str:
+    now: Final = int(time.time())
+    return jwt.encode(
+        {"sub": subject, "iat": now, "exp": now + 300, "jti": uuid.uuid4().hex},
+        signing_key,
+        algorithm="RS256",
+        headers={"kid": JWT_KEY_ID},
+    )
 
 
 def _config(directory: Path, s3_url: str, line_item_callbacks: JsonValue) -> Path:
     shipped: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration: Final = {
         **shipped,
+        "general_settings": {
+            **shipped["general_settings"],
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {"user_id_jwt_field": "sub", "user_id_upsert": True},
+        },
         "litellm_settings": {
             **shipped["litellm_settings"],
             "callbacks": ["s3_v2"],
@@ -153,7 +184,9 @@ def _owned_rig(tmp_path_factory: pytest.TempPathFactory, name: str, line_item_ca
     certificate, key = write_self_signed_cert(directory, names=("storage.googleapis.com",))
     s3: Final = ObjectSink(reject=b"sink-down-", hang=b"sink-hang-")
     gcs: Final = ObjectSink()
+    signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     with (
+        wire_server(_jwks_peer(signing_key)) as jwks_wire,
         gateway_from_environment() as environment,
         scratch_database(name.replace("-", "_")) as database_url,
         wire_server(s3_peer(s3)) as s3_wire,
@@ -171,6 +204,7 @@ def _owned_rig(tmp_path_factory: pytest.TempPathFactory, name: str, line_item_ca
                 "GCS_BUCKET_NAME": GCS_BUCKET,
                 "GCS_PATH_SERVICE_ACCOUNT": str(service_account),
                 "GCS_FLUSH_INTERVAL": "1",
+                "JWT_PUBLIC_KEY_URL": jwks_wire.url,
                 "HTTPS_PROXY": tunnel.url,
                 "https_proxy": tunnel.url,
                 "SSL_CERT_FILE": str(certificate),
@@ -181,7 +215,7 @@ def _owned_rig(tmp_path_factory: pytest.TempPathFactory, name: str, line_item_ca
             remove_environment=("DATABASE_URL_READ_REPLICA",),
             workers=2,
         ) as candidate:
-            yield Rig(candidate, database_url, s3, gcs)
+            yield Rig(candidate, database_url, s3, gcs, signing_key)
 
 
 @pytest.fixture(scope="module")
@@ -333,7 +367,9 @@ class SubmittedBatch:
     handle: ScenarioHandle
 
 
-def _submit(rig: Rig, lines: Lines, key_fields: Mapping[str, JsonValue], *, finished: bool = True) -> SubmittedBatch:
+def _submit(
+    rig: Rig, lines: Lines, key_fields: Mapping[str, JsonValue], *, finished: bool = True, token: str | None = None
+) -> SubmittedBatch:
     handle: Final = register_scenario(f"batch-line-items-{uuid.uuid4().hex}", _routes(lines, finished=finished))
     model: Final = string_value(
         rig.gateway.post(
@@ -350,7 +386,11 @@ def _submit(rig: Rig, lines: Lines, key_fields: Mapping[str, JsonValue], *, fini
             },
         )["model_name"]
     )
-    key: Final = string_value(rig.gateway.post("/key/generate", {"models": [model], **key_fields})["key"])
+    key: Final = (
+        token
+        if token is not None
+        else string_value(rig.gateway.post("/key/generate", {"models": [model], **key_fields})["key"])
+    )
     uploaded: Final = rig.gateway.request_multipart(
         "/v1/files",
         {"purpose": "batch", "target_model_names": model},
@@ -533,6 +573,27 @@ def test_a_batch_whose_creating_key_was_deleted_gets_its_lines_without_request_o
     ]
     assert records[0]["response_cost"] == pytest.approx(spend)
     assert b"asked before the key was deleted" not in rig.s3.objects()[name]
+
+
+def test_a_batch_created_with_a_jwt_and_no_key_gets_its_lines_with_request_and_response(rig: Rig) -> None:
+    subject: Final = f"jwt-{uuid.uuid4().hex[:12]}"
+    lines: Final = Lines(
+        inputs=(_input_line("jwt-1", "asked with a signed token"),), outputs=(_success_line("jwt-1"),), errors=()
+    )
+    batch: Final = _submit(rig, lines, {}, token=_signed_token(rig.signing_key, subject))
+    try:
+        records: Final = _written(rig.s3, _object_name(f"{S3_PREFIX}/", batch.batch_id))
+    finally:
+        delete_scenario(batch.handle)
+
+    assert read_rows(
+        'SELECT api_key, created_by FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id = %s',
+        (batch.batch_id,),
+        database_url=rig.database_url,
+    ) == [{"api_key": None, "created_by": subject}]
+    assert [(record["custom_id"], record["request"], record["response"]) for record in records] == [
+        ("jwt-1", lines.inputs[0], lines.outputs[0])
+    ]
 
 
 def test_a_batch_where_every_line_failed_still_writes_its_error_lines(rig: Rig) -> None:
