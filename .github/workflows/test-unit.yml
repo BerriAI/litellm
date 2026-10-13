@@ -694,6 +694,7 @@ jobs:
               tests/unit/responses/test_metadata_codex_callback.py
               tests/unit/responses/test_no_duplicate_spend_logs.py
               tests/unit/responses/test_null_test_fix.py
+              tests/unit/responses/test_regression_issue_28553.py
               tests/unit/responses/test_responses_api_bridge_flag.py
               tests/unit/responses/test_responses_api_lifecycle.py
               tests/unit/responses/test_responses_api_request_body.py
