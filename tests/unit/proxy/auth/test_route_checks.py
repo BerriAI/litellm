@@ -4893,11 +4893,14 @@ def test_every_dashboard_role_can_send_telemetry_ui_events(
     request: Final = MagicMock(spec=Request)
     request.method = method
     request.query_params = {}
-    RouteChecks.non_proxy_admin_allowed_routes_check(
-        user_obj=LiteLLM_UserTable(user_id="u", user_role=user_role.value),
-        _user_role=user_role,
-        route=route,
-        request=request,
-        valid_token=UserAPIKeyAuth(user_id="u", user_role=user_role),
-        request_data={},
-    )
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="u", user_role=user_role.value),
+            _user_role=user_role,
+            route=route,
+            request=request,
+            valid_token=UserAPIKeyAuth(user_id="u", user_role=user_role),
+            request_data={},
+        )
+    except HTTPException as exc:
+        pytest.fail(f"{user_role.value} was denied {method} {route}: {exc.detail}")
