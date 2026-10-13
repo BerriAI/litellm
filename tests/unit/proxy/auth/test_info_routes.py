@@ -173,7 +173,7 @@ def test_internal_user_viewer_allowed_health_license():
     request.query_params = {}
 
     # Must not raise — license metadata is non-sensitive and the dashboard polls it.
-    RouteChecks.non_proxy_admin_allowed_routes_check(
+    result = RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=user_obj,
         _user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
         route="/health/license",
@@ -181,4 +181,5 @@ def test_internal_user_viewer_allowed_health_license():
         valid_token=valid_token,
         request_data={},
     )
+    assert result is None
 
