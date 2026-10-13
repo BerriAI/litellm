@@ -9,7 +9,11 @@
 
 
 import asyncio
+import hashlib
+import hmac
 import json
+import os
+import secrets
 import re
 import threading
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
@@ -175,6 +179,37 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
     yield pending
     async for chunk in stream:
         yield chunk
+
+
+# Server-side key: a provider seeing <PERSON_3f9a1c> cannot brute-force the value
+# from a list of candidate names or phone numbers. A subkey is derived so token/
+# value pairs in logs never become an offline oracle for the key itself. With a
+# key in the env, tokens are stable across replicas and restarts; without one
+# they are stable per process only.
+_PII_TOKEN_SECRET: Final = os.environ.get("LITELLM_SALT_KEY") or os.environ.get("LITELLM_MASTER_KEY")
+_PII_TOKEN_KEY: Final = hmac.new(
+    (_PII_TOKEN_SECRET or secrets.token_hex(32)).encode(), b"presidio-pii-token", hashlib.sha256
+).digest()
+
+
+def _pii_token(entity_type: str, original: str, pii_tokens: dict[str, str], scope: str) -> str:
+    """
+    Token derived from the value, not from a counter.
+
+    Each message / content part is masked by a separate concurrent call that
+    shares one per-request ``pii_tokens`` dict. Numbering from 1 in every call
+    made ``<PERSON_1>`` of a later part overwrite ``<PERSON_1>`` of an earlier
+    one, so unmasking restored the wrong value. A shared counter would instead
+    depend on which Presidio call finishes first and rewrite the masked history
+    differently on every turn. Same value -> same token, in any order.
+    ``scope`` (API key + end user) keeps one value in different callers'
+    traffic from sharing a token, so masked logs cannot link them.
+    """
+    digest: Final = hmac.new(_PII_TOKEN_KEY, f"{scope}\0{entity_type}\0{original}".encode(), hashlib.sha256).hexdigest()
+    token = f"<{entity_type}_{digest[:6]}>"
+    if pii_tokens.get(token, original) != original:  # 24-bit collision between two values
+        token = f"<{entity_type}_{digest}>"
+    return token
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -801,8 +836,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         request_data: dict | None,
         masked_entity_count: dict[str, int],
     ) -> str:
-        # output_parse_pii is True — we need sequentially numbered
-        # tokens and a pii_tokens mapping for later unmasking.
+        # output_parse_pii is True — we need unique replacement tokens
+        # and a pii_tokens mapping for later unmasking.
         # Use analyze_results positions (which reference the ORIGINAL
         # text) instead of anonymizer items (which reference the output).
         new_text = text
@@ -819,26 +854,25 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens: Final = request_data["metadata"]["pii_tokens"]
 
-        # Assign sequence numbers in forward (left-to-right) order so
-        # that <PERSON_1> is the first entity in the text, etc.
-        sorted_forward: Final = sorted(analyze_results, key=lambda x: x["start"])
-        seq_map: Final = {}
-        for idx, ar in enumerate(sorted_forward, start=1):
-            seq_map[(ar["start"], ar["end"])] = idx
+        # /v1/messages keeps litellm's own metadata in `litellm_metadata`;
+        # `metadata` there is Anthropic's ({"user_id": ...}).
+        metadata: Final = {**request_data["metadata"], **(request_data.get("litellm_metadata") or {})}
+        scope: Final = "\0".join(
+            str(v or "")
+            for v in (
+                metadata.get("user_api_key_hash"),
+                request_data.get("user") or metadata.get("user_api_key_end_user_id") or metadata.get("user_id"),
+            )
+        )
 
         # Apply replacements in reverse order by start position so
         # that replacing later spans first does not shift earlier
         # coordinates in the original text.
-        for ar in reversed(sorted_forward):
+        for ar in sorted(analyze_results, key=lambda x: x["start"], reverse=True):
             start = ar["start"]
             end = ar["end"]
             entity_type = ar["entity_type"]
-            replacement = f"<{entity_type}>"
-            seq = seq_map[(start, end)]
-            if replacement.endswith(">"):
-                replacement = f"{replacement[:-1]}_{seq}>"
-            else:
-                replacement = f"{replacement}_{seq}"
+            replacement = _pii_token(entity_type, text[start:end], pii_tokens, scope)
             pii_tokens[replacement] = text[start:end]
             new_text = new_text[:start] + replacement + new_text[end:]
             masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
