@@ -3,7 +3,7 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
-from litellm.proxy.control_plane.settings import ControlPlaneSettings
+from litellm.proxy.control_plane.settings import ControlPlaneSettings, load_settings
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
 MASTER_KEY: Final = "01234567890123456789012345678901"
@@ -51,3 +51,12 @@ def test_credentials_at_the_bound_are_accepted() -> None:
         }
     )
     assert settings.ui_username is not None and len(settings.ui_username) == USERNAME_MAX_LENGTH
+
+
+def test_dataplanes_environment_and_file_cannot_both_be_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_MASTER_KEY", MASTER_KEY)
+    monkeypatch.setenv("CONTROL_PLANE_DATAPLANES", "{}")
+    monkeypatch.setenv("CONTROL_PLANE_DATAPLANES_FILE", "dataplanes.yaml")
+
+    with pytest.raises(ValueError, match="CONTROL_PLANE_DATAPLANES and CONTROL_PLANE_DATAPLANES_FILE"):
+        load_settings()
