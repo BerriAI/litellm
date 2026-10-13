@@ -5,7 +5,6 @@ import React from "react";
 import { describe, it, expect, vi, type Mock } from "vitest";
 import ComplexityRouterConfigView, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
-import { buildUpdatedComplexityRouterConfig } from "../edit_auto_router/edit_auto_router_modal";
 const ComplexityRouterConfig = (props: React.ComponentProps<typeof ComplexityRouterConfigView>) => (
   <AutoRouterClassifierTabs value={props.value} onChange={props.onChange}>
     <ComplexityRouterConfigView {...props} />
@@ -235,7 +234,7 @@ describe("ComplexityRouterConfig", () => {
       classifier_context_window_size: 3,
       classifier_context_budget_chars: 8000,
     };
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining(expectedValue));
+    expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
 
   it("selects heuristic v2 without requiring a classifier model or showing weighted scoring", async () => {
@@ -797,8 +796,8 @@ describe("ComplexityRouterConfig classifier fallback", () => {
     expect(screen.queryByText("How Classification Works")).not.toBeInTheDocument();
   });
 
-  it("retains the fallback draft without saving it for the heuristic classifier", async () => {
-    const onChange = vi.fn<(next: ComplexityRouterConfigValue) => void>();
+  it("clears a stored fallback when switching back to the heuristic classifier", async () => {
+    const onChange = vi.fn();
     renderWithProviders(
       <ComplexityRouterConfig
         modelInfo={mockModelInfo}
@@ -808,9 +807,7 @@ describe("ComplexityRouterConfig classifier fallback", () => {
     );
     openAutoRouterAdvanced("Classification Method");
     fireEvent.click(screen.getByRole("radio", { name: /^Heuristics$/ }));
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classifier_fallback: "default_model" }));
-    const updated = onChange.mock.calls[0][0];
-    expect(buildUpdatedComplexityRouterConfig({}, updated).classifier_fallback).toBeUndefined();
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classifier_fallback: undefined }));
   });
 });
 

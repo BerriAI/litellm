@@ -257,31 +257,6 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByRole("radio", { name: "Heuristics" })).toBeChecked();
   });
 
-  it("restores decision and judge selections across classifier switches", async () => {
-    mockFetchAvailableModels.mockResolvedValue([
-      ...ALL_FAMILY_MODELS,
-      { model_group: "my-decision", mode: "evaluation" },
-      { model_group: "my-judge", mode: "chat" },
-    ]);
-    renderWithProviders(<Harness />);
-    await waitForAutomaticTiers();
-    await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
-    await selectAutoRouterOption("Decision model", "my-decision");
-    await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
-    await selectAutoRouterOption("Judge model", "my-judge");
-    await userEvent.click(screen.getByRole("radio", { name: "Heuristics" }));
-    await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
-    expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("my-decision");
-    await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
-    expect(screen.getByRole("combobox", { name: "Judge model" })).toHaveValue("my-judge");
-    openTemplateDropdown();
-    await selectTemplate("Start from scratch");
-    await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
-    expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("");
-    await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
-    expect(screen.getByRole("combobox", { name: "Judge model" })).toHaveValue("");
-  });
-
   it("shows Jev essentials before tiers and saves tuning from its own disclosure", async () => {
     mockFetchAvailableModels.mockResolvedValue([
       ...ALL_FAMILY_MODELS,
@@ -668,7 +643,6 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
     await selectAutoRouterApproach("Capability");
-    await user.click(await screen.findByRole("button", { name: "Change method" }));
     expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
     await selectAutoRouterApproach("Complexity");
     expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();

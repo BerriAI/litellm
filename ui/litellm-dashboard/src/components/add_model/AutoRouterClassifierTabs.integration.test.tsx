@@ -48,8 +48,6 @@ function Form({
     >
       <AutoRouterClassifierTabs value={value} onChange={setValue}>
         <output aria-label="Classifier type">{value.classifier_type}</output>
-        <output aria-label="Tier models">{Object.values(value.tiers).flat().join(", ")}</output>
-        <output aria-label="Custom tiers">{value.custom_tier_set?.tiers.map((tier) => tier.name).join(", ")}</output>
       </AutoRouterClassifierTabs>
     </AutoRouterAvailabilityContext.Provider>
   );
@@ -298,73 +296,3 @@ describe("Gated routing contact action", () => {
     expect(within(screen.getByRole("alert")).getByRole("link", { name: "Talk to our team" })).toBeVisible();
   });
 });
-
-it.each(["heuristic_v2", "hybrid"] as const)(
-  "restores the selected %s method after a family round trip",
-  (classifier_type) => {
-    renderWithProviders(<Form initialValue={{ ...initial, classifier_type }} />);
-    fireEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
-    fireEvent.click(screen.getByRole("radio", { name: classifier_type === "heuristic_v2" ? "Heuristics" : "LLM" }));
-    expect(screen.getByLabelText("Classifier type")).toHaveTextContent(classifier_type);
-  },
-);
-
-it.each(["Capability", "Fuse v2"])("requires confirmation before %s removes configured tier models", async (method) => {
-  renderWithProviders(<Form initialValue={{ ...initial, tiers: { ...initial.tiers, MEDIUM: ["middle"] } }} />);
-  await selectAutoRouterOption("Routing approach", method);
-  expect(await screen.findByRole("alertdialog")).toHaveTextContent("remove models from incompatible tiers");
-  fireEvent.click(screen.getByRole("button", { name: "Keep current settings" }));
-  expect(screen.getByLabelText("Classifier type")).toHaveTextContent("llm");
-  expect(screen.getByLabelText("Tier models")).toHaveTextContent("middle");
-  await selectAutoRouterOption("Routing approach", method);
-  fireEvent.click(screen.getByRole("button", { name: "Change method" }));
-  expect(screen.getByLabelText("Classifier type")).toHaveTextContent(method === "Capability" ? "capability" : "llm_v2");
-  expect(screen.getByLabelText("Tier models")).not.toHaveTextContent("middle");
-});
-
-it("asks before disabling adaptive routing even when solver models do not change", async () => {
-  renderWithProviders(<Form initialValue={{ ...initial, adaptive: true }} />);
-  await selectAutoRouterOption("Routing approach", "Fuse v2");
-  expect(await screen.findByRole("alertdialog")).toHaveTextContent("disable adaptive routing");
-  fireEvent.click(screen.getByRole("button", { name: "Keep current settings" }));
-  expect(screen.getByLabelText("Classifier type")).toHaveTextContent("llm");
-});
-
-it.each(["capability", "llm_v2", "hybrid", "heuristic_first"] as const)(
-  "keeps custom tiers when returning to an LLM family previously using %s",
-  (previous) => {
-    renderWithProviders(
-      <Form
-        initialValue={{
-          ...initial,
-          classifier_type: "jev",
-          previous_classifier_types: [previous],
-          custom_tier_set: {
-            tiers: [{ id: "review", name: "REVIEW", definition: "Code reviews", models: ["capable"] }],
-            fallback_tier_id: "review",
-          },
-        }}
-      />,
-    );
-    fireEvent.click(screen.getByRole("radio", { name: "LLM" }));
-    expect(screen.getByLabelText("Classifier type")).toHaveTextContent(/^llm$/);
-    expect(screen.getByLabelText("Custom tiers")).toHaveTextContent("REVIEW");
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-  },
-);
-
-it.each(["heuristic_v2", "capability", "llm_v2"] as const)(
-  "does not restore unavailable %s through a family switch",
-  (previous) => {
-    renderWithProviders(
-      <Form
-        remaining={0}
-        initialValue={{ ...initial, classifier_type: "jev", previous_classifier_types: [previous] }}
-      />,
-    );
-    fireEvent.click(screen.getByRole("radio", { name: previous === "heuristic_v2" ? "Heuristics" : "LLM" }));
-    expect(screen.getByLabelText("Classifier type")).toHaveTextContent(
-      previous === "heuristic_v2" ? /^heuristic$/ : /^llm$/,
-    );
-  },
-);

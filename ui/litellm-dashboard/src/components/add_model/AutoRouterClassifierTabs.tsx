@@ -1,15 +1,5 @@
-import React, { useContext, useId, useState } from "react";
+import React, { useContext, useId } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogCancel,
-  AlertDialogAction,
-} from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -148,7 +138,6 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
   decisionModel,
 }) => {
   const id = useId();
-  const [pendingClassifier, setPendingClassifier] = useState<ClassifierType | null>(null);
   const availability = useContext(AutoRouterAvailabilityContext);
   const classifierType = effectiveClassifierType(value);
   const familyByType: Record<ClassifierType, string> = {
@@ -165,32 +154,11 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
   const family = familyByType[classifierType];
   const hasCustomTiers = Boolean(value.custom_tier_set);
   const changeType = (next: ClassifierType) => {
-    if (next === classifierType) return;
-    const updated = transitionClassifierType(value, next);
-    const removesModels = Object.entries(value.tiers).some(([tier, models]) =>
-      models.some((model) => !updated.tiers[tier as keyof typeof updated.tiers]?.includes(model)),
-    );
-    if (removesModels || (value.adaptive === true && updated.adaptive === false)) {
-      setPendingClassifier(next);
-      return;
-    }
-    onChange(updated);
-  };
-
-  const confirmChange = () => {
-    if (pendingClassifier === null) return;
-    onChange(transitionClassifierType(value, pendingClassifier));
-    setPendingClassifier(null);
+    if (next !== classifierType) onChange(transitionClassifierType(value, next));
   };
 
   const changeFamily = (next: unknown) => {
     if (next === family) return;
-    const previous = value.previous_classifier_types?.find((type) => {
-      if (familyByType[type] !== next) return false;
-      if (hasCustomTiers && type !== "llm" && type !== "jev") return false;
-      return !isAllowanceExhausted(availability.data?.allowances.find((entry) => entry.key === type));
-    });
-    if (previous) return changeType(previous);
     if (next === "heuristics") changeType("heuristic");
     if (next === "llm") changeType("llm");
     if (next === "jev") changeType("jev");
@@ -381,26 +349,6 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
           </button>
         </p>
       )}
-      <AlertDialog
-        open={pendingClassifier !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingClassifier(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Change classification method?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This change may remove models from incompatible tiers or disable adaptive routing. Your classifier
-              settings will remain available when you switch back, but removed tier models will not.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep current settings</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmChange}>Change method</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
       {children}
     </div>
   );
