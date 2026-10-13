@@ -87,6 +87,8 @@ TRIGGER_LEADING_SILENCE: Final = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND // 2)
 TRIGGER_TRAILING_SILENCE: Final = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND * 3)
 TRIGGER_AUDIO_CHUNK_SIZE: Final = 1024
 
+DEFAULT_SYSTEM_PROMPT: Final = "You are a helpful assistant."
+
 
 class BedrockRealtimeConfig(BaseRealtimeConfig):
     """Configuration for Bedrock Nova Sonic realtime transformations."""
@@ -284,6 +286,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if "input_sample_rate_hertz" in session_config:
             self.input_sample_rate_hertz = session_config["input_sample_rate_hertz"]
 
+        if self.prompt_started:
+            return messages
+
         # Send session start
         session_start: Final = {
             "event": {
@@ -323,48 +328,47 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         messages.append(json.dumps(prompt_start))
         self.prompt_started = True
 
-        # Send system prompt if provided
-        instructions: Final = session_config.get("instructions")
-        if instructions:
-            text_content_name: Final = str(uuid_lib.uuid4())
+        # Bedrock requires the first content block in a prompt to be SYSTEM role
+        instructions: Final = str(session_config.get("instructions") or DEFAULT_SYSTEM_PROMPT)
+        text_content_name: Final = str(uuid_lib.uuid4())
 
-            # Content start
-            text_content_start: Final = {
-                "event": {
-                    "contentStart": {
-                        "promptName": self.prompt_name,
-                        "contentName": text_content_name,
-                        "type": "TEXT",
-                        "interactive": False,
-                        "role": "SYSTEM",
-                        "textInputConfiguration": {"mediaType": self.text_media_type},
-                    }
+        # Content start
+        text_content_start: Final = {
+            "event": {
+                "contentStart": {
+                    "promptName": self.prompt_name,
+                    "contentName": text_content_name,
+                    "type": "TEXT",
+                    "interactive": False,
+                    "role": "SYSTEM",
+                    "textInputConfiguration": {"mediaType": self.text_media_type},
                 }
             }
-            messages.append(json.dumps(text_content_start))
+        }
+        messages.append(json.dumps(text_content_start))
 
-            # Text input
-            text_input: Final = {
-                "event": {
-                    "textInput": {
-                        "promptName": self.prompt_name,
-                        "contentName": text_content_name,
-                        "content": instructions,
-                    }
+        # Text input
+        text_input: Final = {
+            "event": {
+                "textInput": {
+                    "promptName": self.prompt_name,
+                    "contentName": text_content_name,
+                    "content": instructions,
                 }
             }
-            messages.append(json.dumps(text_input))
+        }
+        messages.append(json.dumps(text_input))
 
-            # Content end
-            text_content_end: Final = {
-                "event": {
-                    "contentEnd": {
-                        "promptName": self.prompt_name,
-                        "contentName": text_content_name,
-                    }
+        # Content end
+        text_content_end: Final = {
+            "event": {
+                "contentEnd": {
+                    "promptName": self.prompt_name,
+                    "contentName": text_content_name,
                 }
             }
-            messages.append(json.dumps(text_content_end))
+        }
+        messages.append(json.dumps(text_content_end))
 
         return messages
 

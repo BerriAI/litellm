@@ -193,6 +193,51 @@ class TestBedrockRealtimeConfig:
         session_start = json.loads(messages[0])
         assert session_start["event"]["sessionStart"]["inferenceConfiguration"]["temperature"] == 0.9
 
+    def test_session_update_without_instructions_sends_default_system_prompt(self):
+        from litellm.llms.bedrock.realtime.transformation import DEFAULT_SYSTEM_PROMPT
+
+        config = BedrockRealtimeConfig()
+        session_update = {
+            "type": "session.update",
+            "session": {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get current weather",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ]
+            },
+        }
+
+        messages = config.transform_session_update_event(session_update)
+        event_names = [next(iter(json.loads(message)["event"])) for message in messages]
+        assert event_names[:3] == ["sessionStart", "promptStart", "contentStart"]
+        system_content_start = json.loads(messages[2])["event"]["contentStart"]
+        assert system_content_start["role"] == "SYSTEM"
+        text_input = json.loads(messages[3])["event"]["textInput"]
+        assert text_input["content"] == DEFAULT_SYSTEM_PROMPT
+        assert json.loads(messages[4])["event"]["contentEnd"]["contentName"] == system_content_start["contentName"]
+
+    def test_session_update_instructions_override_default_system_prompt(self):
+        config = BedrockRealtimeConfig()
+        session_update = {"type": "session.update", "session": {"instructions": "Answer tersely."}}
+
+        messages = config.transform_session_update_event(session_update)
+        text_input = json.loads(messages[3])["event"]["textInput"]
+        assert text_input["content"] == "Answer tersely."
+
+    def test_second_session_update_sends_no_duplicate_prompt_start(self):
+        config = BedrockRealtimeConfig()
+        session_update = {"type": "session.update", "session": {"instructions": "You are helpful."}}
+
+        first = config.transform_session_update_event(session_update)
+        assert any("promptStart" in message for message in first)
+        assert config.transform_session_update_event(session_update) == []
+
     def test_transform_session_update_with_tools(self):
         """Test session.update with tools"""
         config = BedrockRealtimeConfig()
