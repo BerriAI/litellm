@@ -2143,7 +2143,10 @@ class TestConverseRewriteRegressions:
             call["function"]["arguments"] = '{"card":"masked","tags":["a","b"]}'
         calls = [] if change == "dropped_call" else [call]
         guard = _replying(
-            {"texts": ["masked"], "structured_messages": [{"role": "assistant", "content": None, "tool_calls": calls}]}
+            {
+                "texts": ["masked", "a"],
+                "structured_messages": [{"role": "assistant", "content": None, "tool_calls": calls}],
+            }
         )
         with pytest.raises(UnappliableRequestRewrite):
             await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
@@ -2408,7 +2411,7 @@ class TestConverseRewriteRegressions:
         original = copy.deepcopy(data["data"])
         guard = _replying(
             {
-                "texts": ["hello", "hi", "[CARD]"],
+                "texts": ["hello", "hi", "4111"],
                 "structured_messages": [
                     {"role": "user", "content": [{"type": "text", "text": "hello"}]},
                     {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
