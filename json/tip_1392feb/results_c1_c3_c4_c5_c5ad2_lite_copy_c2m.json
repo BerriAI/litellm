@@ -1,0 +1,3262 @@
+{
+  "results": {
+    "c5ao_fus": {
+      "before": {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      },
+      "confirm": "Change classification method?\n\nThis change may remove models from incompatible tiers or disable adaptive routing. Your classifier settings will remain available when you switch back, but removed tier models will not.\n\nKeep current settings\nChange method",
+      "cancelled": {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      },
+      "applied": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 3,
+        "adaptive": "<none>",
+        "ui_tiers": {}
+      },
+      "back_confirm": null,
+      "back": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7,
+        "adaptive": "false",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      }
+    },
+    "c5ao_cap": {
+      "before": {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      },
+      "confirm": null,
+      "applied": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 3,
+        "adaptive": "<none>",
+        "ui_tiers": {}
+      },
+      "back_confirm": null,
+      "back": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      }
+    },
+    "template_options": [
+      "1M Context | Routes across models with 1M-token context windows: GPT-6 Luna for simple queries, GPT-5.6 Terra for medium, GPT-6 Sol for complex, Opus 5.5 at high thinking for reasoning. | Replaces tier models and their parameters",
+      "Anthropic Family | Routes across the Claude model family: Haiku for simple queries, Sonnet for medium, Opus 5.5 for complex, Fable 5.1 at high thinking for reasoning. | Replaces tier models and their parameters",
+      "Gemini Family | Routes across the Gemini model family: Flash Lite 3.5 for simple queries, Flash 3.8 for medium and complex queries, Pro 3.1 for reasoning-heavy requests. | Replaces tier models and their parameters",
+      "Lite | Cost-optimized routing across providers: DeepSeek V4 Flash for simple queries, Muse Spark 1.3 at xhigh for medium, Kimi K3 at max for complex, Claude Opus 5.5 for reasoning. | Replaces tier models and their parameters",
+      "OpenAI Family | Routes across the GPT model family: GPT-6 Luna for simple queries, GPT-5.6 Terra for medium, GPT-6 Sol for complex, GPT-6 Astra at xhigh thinking for reasoning. | Replaces tier models and their parameters",
+      "Start from scratch | Clears tier models, switches to Heuristics, and resets routing settings"
+    ],
+    "lite_visible_desc": [],
+    "c2m_jev_1m": {
+      "before": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "1M Context",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "gpt-6-luna"
+        ],
+        "medium": [
+          "gpt-5.6-terra"
+        ],
+        "complex": [
+          "gpt-6-sol"
+        ],
+        "reasoning": [
+          "claude-opus-5-5"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for gpt-6-luna in the Simple tier": "Default",
+        "Reasoning effort for gpt-5.6-terra in the Medium tier": "Default",
+        "Reasoning effort for gpt-6-sol in the Complex tier": "Default",
+        "Reasoning effort for claude-opus-5-5 in the Reasoning tier": "high"
+      },
+      "payload_nontier": {
+        "classifier_type": "oss_classifier",
+        "opensource_classifier_config": {
+          "deployment_name": "jev-decider",
+          "provider": "jev",
+          "model": "jev-latest",
+          "timeout_ms": 3000
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "gpt-6-luna"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-6-sol"
+        ],
+        "REASONING": [
+          "claude-opus-5-5"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "oss_classifier",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "gpt-5.6-terra"
+          ],
+          "SIMPLE": [
+            "gpt-6-luna"
+          ],
+          "COMPLEX": [
+            "gpt-6-sol"
+          ],
+          "REASONING": [
+            "claude-opus-5-5"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_jev_anthropic": {
+      "before": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Anthropic Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "claude-haiku-4-5"
+        ],
+        "medium": [
+          "claude-sonnet-5"
+        ],
+        "complex": [
+          "claude-opus-5-5"
+        ],
+        "reasoning": [
+          "claude-fable-5-1"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for claude-haiku-4-5 in the Simple tier": "Default",
+        "Reasoning effort for claude-sonnet-5 in the Medium tier": "Default",
+        "Reasoning effort for claude-opus-5-5 in the Complex tier": "Default",
+        "Reasoning effort for claude-fable-5-1 in the Reasoning tier": "high"
+      },
+      "payload_nontier": {
+        "classifier_type": "oss_classifier",
+        "opensource_classifier_config": {
+          "deployment_name": "jev-decider",
+          "provider": "jev",
+          "model": "jev-latest",
+          "timeout_ms": 3000
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "claude-haiku-4-5"
+        ],
+        "MEDIUM": [
+          "claude-sonnet-5"
+        ],
+        "COMPLEX": [
+          "claude-opus-5-5"
+        ],
+        "REASONING": [
+          "claude-fable-5-1"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "oss_classifier",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "claude-sonnet-5"
+          ],
+          "SIMPLE": [
+            "claude-haiku-4-5"
+          ],
+          "COMPLEX": [
+            "claude-opus-5-5"
+          ],
+          "REASONING": [
+            "claude-fable-5-1"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_jev_gemini": {
+      "before": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "gemini-3.5-flash-lite"
+        ],
+        "medium": [
+          "gemini-3.8-flash"
+        ],
+        "complex": [
+          "gemini-3.8-flash"
+        ],
+        "reasoning": [
+          "gemini-3.1-pro-preview"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for gemini-3.5-flash-lite in the Simple tier": "Default",
+        "Reasoning effort for gemini-3.8-flash in the Medium tier": "Default",
+        "Reasoning effort for gemini-3.8-flash in the Complex tier": "Default",
+        "Reasoning effort for gemini-3.1-pro-preview in the Reasoning tier": "Default"
+      },
+      "payload_nontier": {
+        "classifier_type": "oss_classifier",
+        "opensource_classifier_config": {
+          "deployment_name": "jev-decider",
+          "provider": "jev",
+          "model": "jev-latest",
+          "timeout_ms": 3000
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "gemini-3.5-flash-lite"
+        ],
+        "MEDIUM": [
+          "gemini-3.8-flash"
+        ],
+        "COMPLEX": [
+          "gemini-3.8-flash"
+        ],
+        "REASONING": [
+          "gemini-3.1-pro-preview"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "oss_classifier",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "gemini-3.8-flash"
+          ],
+          "SIMPLE": [
+            "gemini-3.5-flash-lite"
+          ],
+          "COMPLEX": [
+            "gemini-3.8-flash"
+          ],
+          "REASONING": [
+            "gemini-3.1-pro-preview"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_jev_lite": {
+      "before": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Lite",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8
+      },
+      "ui_tiers": {
+        "simple": [
+          "deepseek-v4-flash"
+        ],
+        "medium": [
+          "muse-spark-1.3"
+        ],
+        "complex": [
+          "kimi-k3"
+        ],
+        "reasoning": [
+          "claude-opus-5-5"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for muse-spark-1.3 in the Medium tier": "xhigh",
+        "Reasoning effort for kimi-k3 in the Complex tier": "max",
+        "Reasoning effort for claude-opus-5-5 in the Reasoning tier": "Default"
+      },
+      "payload_nontier": {
+        "classifier_type": "oss_classifier",
+        "opensource_classifier_config": {
+          "deployment_name": "jev-decider",
+          "provider": "jev",
+          "model": "jev-latest",
+          "timeout_ms": 3000
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "deepseek-v4-flash"
+        ],
+        "MEDIUM": [
+          "muse-spark-1.3"
+        ],
+        "COMPLEX": [
+          "kimi-k3"
+        ],
+        "REASONING": [
+          "claude-opus-5-5"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "oss_classifier",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "muse-spark-1.3"
+          ],
+          "SIMPLE": [
+            "deepseek-v4-flash"
+          ],
+          "COMPLEX": [
+            "kimi-k3"
+          ],
+          "REASONING": [
+            "claude-opus-5-5"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_jev_openai": {
+      "before": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "gpt-6-luna"
+        ],
+        "medium": [
+          "gpt-5.6-terra"
+        ],
+        "complex": [
+          "gpt-6-sol"
+        ],
+        "reasoning": [
+          "gpt-6-astra"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for gpt-6-luna in the Simple tier": "Default",
+        "Reasoning effort for gpt-5.6-terra in the Medium tier": "Default",
+        "Reasoning effort for gpt-6-sol in the Complex tier": "Default",
+        "Reasoning effort for gpt-6-astra in the Reasoning tier": "xhigh"
+      },
+      "payload_nontier": {
+        "classifier_type": "oss_classifier",
+        "opensource_classifier_config": {
+          "deployment_name": "jev-decider",
+          "provider": "jev",
+          "model": "jev-latest",
+          "timeout_ms": 3000
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "gpt-6-luna"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-6-sol"
+        ],
+        "REASONING": [
+          "gpt-6-astra"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "oss_classifier",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "gpt-5.6-terra"
+          ],
+          "SIMPLE": [
+            "gpt-6-luna"
+          ],
+          "COMPLEX": [
+            "gpt-6-sol"
+          ],
+          "REASONING": [
+            "gpt-6-astra"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2r_jev": {
+      "payload_nontier": {
+        "classifier_type": "oss_classifier",
+        "opensource_classifier_config": {
+          "deployment_name": "jev-decider",
+          "provider": "jev",
+          "model": "jev-latest",
+          "timeout_ms": 3000
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "oss_classifier",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "claude-sonnet-5"
+          ],
+          "SIMPLE": [
+            "claude-haiku-4-5"
+          ],
+          "COMPLEX": [
+            "claude-opus-5-5"
+          ],
+          "REASONING": [
+            "claude-fable-5-1"
+          ]
+        },
+        "custom_tier_set": null
+      }
+    },
+    "c2m_heur_1m": {
+      "before": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "1M Context",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "gpt-6-luna"
+        ],
+        "medium": [
+          "gpt-5.6-terra"
+        ],
+        "complex": [
+          "gpt-6-sol"
+        ],
+        "reasoning": [
+          "claude-opus-5-5"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for gpt-6-luna in the Simple tier": "Default",
+        "Reasoning effort for gpt-5.6-terra in the Medium tier": "Default",
+        "Reasoning effort for gpt-6-sol in the Complex tier": "Default",
+        "Reasoning effort for claude-opus-5-5 in the Reasoning tier": "high"
+      },
+      "payload_nontier": {
+        "classifier_type": "heuristic",
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "gpt-6-luna"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-6-sol"
+        ],
+        "REASONING": [
+          "claude-opus-5-5"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "heuristic",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "gpt-5.6-terra"
+          ],
+          "SIMPLE": [
+            "gpt-6-luna"
+          ],
+          "COMPLEX": [
+            "gpt-6-sol"
+          ],
+          "REASONING": [
+            "claude-opus-5-5"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_heur_anthropic": {
+      "before": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Anthropic Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "claude-haiku-4-5"
+        ],
+        "medium": [
+          "claude-sonnet-5"
+        ],
+        "complex": [
+          "claude-opus-5-5"
+        ],
+        "reasoning": [
+          "claude-fable-5-1"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for claude-haiku-4-5 in the Simple tier": "Default",
+        "Reasoning effort for claude-sonnet-5 in the Medium tier": "Default",
+        "Reasoning effort for claude-opus-5-5 in the Complex tier": "Default",
+        "Reasoning effort for claude-fable-5-1 in the Reasoning tier": "high"
+      },
+      "payload_nontier": {
+        "classifier_type": "heuristic",
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "claude-haiku-4-5"
+        ],
+        "MEDIUM": [
+          "claude-sonnet-5"
+        ],
+        "COMPLEX": [
+          "claude-opus-5-5"
+        ],
+        "REASONING": [
+          "claude-fable-5-1"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "heuristic",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "claude-sonnet-5"
+          ],
+          "SIMPLE": [
+            "claude-haiku-4-5"
+          ],
+          "COMPLEX": [
+            "claude-opus-5-5"
+          ],
+          "REASONING": [
+            "claude-fable-5-1"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_heur_gemini": {
+      "before": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "gemini-3.5-flash-lite"
+        ],
+        "medium": [
+          "gemini-3.8-flash"
+        ],
+        "complex": [
+          "gemini-3.8-flash"
+        ],
+        "reasoning": [
+          "gemini-3.1-pro-preview"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for gemini-3.5-flash-lite in the Simple tier": "Default",
+        "Reasoning effort for gemini-3.8-flash in the Medium tier": "Default",
+        "Reasoning effort for gemini-3.8-flash in the Complex tier": "Default",
+        "Reasoning effort for gemini-3.1-pro-preview in the Reasoning tier": "Default"
+      },
+      "payload_nontier": {
+        "classifier_type": "heuristic",
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "gemini-3.5-flash-lite"
+        ],
+        "MEDIUM": [
+          "gemini-3.8-flash"
+        ],
+        "COMPLEX": [
+          "gemini-3.8-flash"
+        ],
+        "REASONING": [
+          "gemini-3.1-pro-preview"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "heuristic",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "gemini-3.8-flash"
+          ],
+          "SIMPLE": [
+            "gemini-3.5-flash-lite"
+          ],
+          "COMPLEX": [
+            "gemini-3.8-flash"
+          ],
+          "REASONING": [
+            "gemini-3.1-pro-preview"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_heur_lite": {
+      "before": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Lite",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8
+      },
+      "ui_tiers": {
+        "simple": [
+          "deepseek-v4-flash"
+        ],
+        "medium": [
+          "muse-spark-1.3"
+        ],
+        "complex": [
+          "kimi-k3"
+        ],
+        "reasoning": [
+          "claude-opus-5-5"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for muse-spark-1.3 in the Medium tier": "xhigh",
+        "Reasoning effort for kimi-k3 in the Complex tier": "max",
+        "Reasoning effort for claude-opus-5-5 in the Reasoning tier": "Default"
+      },
+      "payload_nontier": {
+        "classifier_type": "heuristic",
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "deepseek-v4-flash"
+        ],
+        "MEDIUM": [
+          "muse-spark-1.3"
+        ],
+        "COMPLEX": [
+          "kimi-k3"
+        ],
+        "REASONING": [
+          "claude-opus-5-5"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "heuristic",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "muse-spark-1.3"
+          ],
+          "SIMPLE": [
+            "deepseek-v4-flash"
+          ],
+          "COMPLEX": [
+            "kimi-k3"
+          ],
+          "REASONING": [
+            "claude-opus-5-5"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_heur_openai": {
+      "before": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "gpt-6-luna"
+        ],
+        "medium": [
+          "gpt-5.6-terra"
+        ],
+        "complex": [
+          "gpt-6-sol"
+        ],
+        "reasoning": [
+          "gpt-6-astra"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for gpt-6-luna in the Simple tier": "Default",
+        "Reasoning effort for gpt-5.6-terra in the Medium tier": "Default",
+        "Reasoning effort for gpt-6-sol in the Complex tier": "Default",
+        "Reasoning effort for gpt-6-astra in the Reasoning tier": "xhigh"
+      },
+      "payload_nontier": {
+        "classifier_type": "heuristic",
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "gpt-6-luna"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-6-sol"
+        ],
+        "REASONING": [
+          "gpt-6-astra"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "heuristic",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "gpt-5.6-terra"
+          ],
+          "SIMPLE": [
+            "gpt-6-luna"
+          ],
+          "COMPLEX": [
+            "gpt-6-sol"
+          ],
+          "REASONING": [
+            "gpt-6-astra"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2r_heur": {
+      "payload_nontier": {
+        "classifier_type": "heuristic",
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "heuristic",
+        "jev_classifier_config": null,
+        "classifier_llm_config": null,
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "claude-sonnet-5"
+          ],
+          "SIMPLE": [
+            "claude-haiku-4-5"
+          ],
+          "COMPLEX": [
+            "claude-opus-5-5"
+          ],
+          "REASONING": [
+            "claude-fable-5-1"
+          ]
+        },
+        "custom_tier_set": null
+      }
+    },
+    "c2m_llm_1m": {
+      "before": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "1M Context",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "gpt-6-luna"
+        ],
+        "medium": [
+          "gpt-5.6-terra"
+        ],
+        "complex": [
+          "gpt-6-sol"
+        ],
+        "reasoning": [
+          "claude-opus-5-5"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for gpt-6-luna in the Simple tier": "Default",
+        "Reasoning effort for gpt-5.6-terra in the Medium tier": "Default",
+        "Reasoning effort for gpt-6-sol in the Complex tier": "Default",
+        "Reasoning effort for claude-opus-5-5 in the Reasoning tier": "high"
+      },
+      "payload_nontier": {
+        "classifier_type": "llm",
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "gpt-6-luna"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-6-sol"
+        ],
+        "REASONING": [
+          "claude-opus-5-5"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "llm",
+        "jev_classifier_config": null,
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "gpt-5.6-terra"
+          ],
+          "SIMPLE": [
+            "gpt-6-luna"
+          ],
+          "COMPLEX": [
+            "gpt-6-sol"
+          ],
+          "REASONING": [
+            "claude-opus-5-5"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_llm_anthropic": {
+      "before": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Anthropic Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "claude-haiku-4-5"
+        ],
+        "medium": [
+          "claude-sonnet-5"
+        ],
+        "complex": [
+          "claude-opus-5-5"
+        ],
+        "reasoning": [
+          "claude-fable-5-1"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for claude-haiku-4-5 in the Simple tier": "Default",
+        "Reasoning effort for claude-sonnet-5 in the Medium tier": "Default",
+        "Reasoning effort for claude-opus-5-5 in the Complex tier": "Default",
+        "Reasoning effort for claude-fable-5-1 in the Reasoning tier": "high"
+      },
+      "payload_nontier": {
+        "classifier_type": "llm",
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "claude-haiku-4-5"
+        ],
+        "MEDIUM": [
+          "claude-sonnet-5"
+        ],
+        "COMPLEX": [
+          "claude-opus-5-5"
+        ],
+        "REASONING": [
+          "claude-fable-5-1"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "llm",
+        "jev_classifier_config": null,
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "claude-sonnet-5"
+          ],
+          "SIMPLE": [
+            "claude-haiku-4-5"
+          ],
+          "COMPLEX": [
+            "claude-opus-5-5"
+          ],
+          "REASONING": [
+            "claude-fable-5-1"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_llm_gemini": {
+      "before": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "gemini-3.5-flash-lite"
+        ],
+        "medium": [
+          "gemini-3.8-flash"
+        ],
+        "complex": [
+          "gemini-3.8-flash"
+        ],
+        "reasoning": [
+          "gemini-3.1-pro-preview"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for gemini-3.5-flash-lite in the Simple tier": "Default",
+        "Reasoning effort for gemini-3.8-flash in the Medium tier": "Default",
+        "Reasoning effort for gemini-3.8-flash in the Complex tier": "Default",
+        "Reasoning effort for gemini-3.1-pro-preview in the Reasoning tier": "Default"
+      },
+      "payload_nontier": {
+        "classifier_type": "llm",
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "gemini-3.5-flash-lite"
+        ],
+        "MEDIUM": [
+          "gemini-3.8-flash"
+        ],
+        "COMPLEX": [
+          "gemini-3.8-flash"
+        ],
+        "REASONING": [
+          "gemini-3.1-pro-preview"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "llm",
+        "jev_classifier_config": null,
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "gemini-3.8-flash"
+          ],
+          "SIMPLE": [
+            "gemini-3.5-flash-lite"
+          ],
+          "COMPLEX": [
+            "gemini-3.8-flash"
+          ],
+          "REASONING": [
+            "gemini-3.1-pro-preview"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_llm_lite": {
+      "before": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Lite",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8
+      },
+      "ui_tiers": {
+        "simple": [
+          "deepseek-v4-flash"
+        ],
+        "medium": [
+          "muse-spark-1.3"
+        ],
+        "complex": [
+          "kimi-k3"
+        ],
+        "reasoning": [
+          "claude-opus-5-5"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for muse-spark-1.3 in the Medium tier": "xhigh",
+        "Reasoning effort for kimi-k3 in the Complex tier": "max",
+        "Reasoning effort for claude-opus-5-5 in the Reasoning tier": "Default"
+      },
+      "payload_nontier": {
+        "classifier_type": "llm",
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "deepseek-v4-flash"
+        ],
+        "MEDIUM": [
+          "muse-spark-1.3"
+        ],
+        "COMPLEX": [
+          "kimi-k3"
+        ],
+        "REASONING": [
+          "claude-opus-5-5"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "llm",
+        "jev_classifier_config": null,
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "muse-spark-1.3"
+          ],
+          "SIMPLE": [
+            "deepseek-v4-flash"
+          ],
+          "COMPLEX": [
+            "kimi-k3"
+          ],
+          "REASONING": [
+            "claude-opus-5-5"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2m_llm_openai": {
+      "before": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "after": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      },
+      "ui_tiers": {
+        "simple": [
+          "gpt-6-luna"
+        ],
+        "medium": [
+          "gpt-5.6-terra"
+        ],
+        "complex": [
+          "gpt-6-sol"
+        ],
+        "reasoning": [
+          "gpt-6-astra"
+        ]
+      },
+      "ui_efforts": {
+        "Reasoning effort for gpt-6-luna in the Simple tier": "Default",
+        "Reasoning effort for gpt-5.6-terra in the Medium tier": "Default",
+        "Reasoning effort for gpt-6-sol in the Complex tier": "Default",
+        "Reasoning effort for gpt-6-astra in the Reasoning tier": "xhigh"
+      },
+      "payload_nontier": {
+        "classifier_type": "llm",
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "payload_tiers": {
+        "SIMPLE": [
+          "gpt-6-luna"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-6-sol"
+        ],
+        "REASONING": [
+          "gpt-6-astra"
+        ]
+      },
+      "payload_tier_model_params": null,
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "llm",
+        "jev_classifier_config": null,
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "gpt-5.6-terra"
+          ],
+          "SIMPLE": [
+            "gpt-6-luna"
+          ],
+          "COMPLEX": [
+            "gpt-6-sol"
+          ],
+          "REASONING": [
+            "gpt-6-astra"
+          ]
+        },
+        "custom_tier_set": null
+      },
+      "ui_unchanged_nontier": {
+        "family": true,
+        "heur": true,
+        "decision": true,
+        "judge": true,
+        "freq": true
+      }
+    },
+    "c2r_llm": {
+      "payload_nontier": {
+        "classifier_type": "llm",
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classifier_context_window_size": 3,
+        "classifier_context_budget_chars": 8000,
+        "classification_mode": "user_turn",
+        "session_affinity": false,
+        "deployment_affinity": true,
+        "modality_routing": false,
+        "modality_pin_override": false,
+        "escalation_keywords": [
+          "LITELLM ESCALATE"
+        ]
+      },
+      "persisted": {
+        "db_model": true,
+        "classifier_type": "llm",
+        "jev_classifier_config": null,
+        "classifier_llm_config": {
+          "model": "claude-fable-5-1",
+          "timeout_ms": 3000,
+          "classification_rubric": "agentic"
+        },
+        "classification_mode": "user_turn",
+        "tiers": {
+          "MEDIUM": [
+            "claude-sonnet-5"
+          ],
+          "SIMPLE": [
+            "claude-haiku-4-5"
+          ],
+          "COMPLEX": [
+            "claude-opus-5-5"
+          ],
+          "REASONING": [
+            "claude-fable-5-1"
+          ]
+        },
+        "custom_tier_set": null
+      }
+    }
+  },
+  "log": [
+    [
+      "C1 before",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C1 after-openai",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C1 reopened",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C3 set all",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Heuristic v2",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C3 back jev",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C3 back llm",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C3 back heur",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Heuristic v2",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C3 heur+openai",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Heuristic v2",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C4 custom",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 20
+      }
+    ],
+    [
+      "C4 after template attempt",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 20
+      }
+    ],
+    [
+      "C4 restored",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING"
+        ],
+        "tier_models": 17
+      }
+    ],
+    [
+      "C4 restored+gemini",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING"
+        ],
+        "tier_models": 17
+      }
+    ],
+    [
+      "C4 scratch",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "Start from scratch",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 5
+      }
+    ],
+    [
+      "C5 Capability before",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C5 Capability after-select",
+      {
+        "family": [
+          ""
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "",
+        "template": "",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C5 Capability cancelled",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C5 Capability applied",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "C5 Capability back-complexity",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7
+      }
+    ],
+    [
+      "C5 Fuse v2 before",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C5 Fuse v2 after-select",
+      {
+        "family": [
+          ""
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "",
+        "template": "",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C5 Fuse v2 cancelled",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "C5 Fuse v2 applied",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "C5 Fuse v2 back-complexity",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7
+      }
+    ],
+    [
+      "c5ao_fus before",
+      {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      }
+    ],
+    [
+      "c5ao_fus cancelled",
+      {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      }
+    ],
+    [
+      "c5ao_fus applied",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 3,
+        "adaptive": "<none>",
+        "ui_tiers": {}
+      }
+    ],
+    [
+      "c5ao_fus back",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7,
+        "adaptive": "false",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      }
+    ],
+    [
+      "c5ao_cap before",
+      {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      }
+    ],
+    [
+      "c5ao_cap applied",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 3,
+        "adaptive": "<none>",
+        "ui_tiers": {}
+      }
+    ],
+    [
+      "c5ao_cap back",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      }
+    ],
+    [
+      "c2m_jev_1m before",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_jev_1m after",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "1M Context",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_jev_anthropic before",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_jev_anthropic after",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Anthropic Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_jev_gemini before",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_jev_gemini after",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_jev_lite before",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_jev_lite after",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Lite",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8
+      }
+    ],
+    [
+      "c2m_jev_openai before",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_jev_openai after",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_jev before",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_jev after OpenAI Family",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_jev after Gemini Family",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_jev after Anthropic Family",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Anthropic Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_heur_1m before",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_heur_1m after",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "1M Context",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_heur_anthropic before",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_heur_anthropic after",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Anthropic Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_heur_gemini before",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_heur_gemini after",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_heur_lite before",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_heur_lite after",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Lite",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8
+      }
+    ],
+    [
+      "c2m_heur_openai before",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_heur_openai after",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_heur before",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_heur after OpenAI Family",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_heur after Gemini Family",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_heur after Anthropic Family",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every new user message",
+        "template": "Anthropic Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_llm_1m before",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_llm_1m after",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "1M Context",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_llm_anthropic before",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_llm_anthropic after",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Anthropic Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_llm_gemini before",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_llm_gemini after",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_llm_lite before",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_llm_lite after",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Lite",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 8
+      }
+    ],
+    [
+      "c2m_llm_openai before",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2m_llm_openai after",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_llm before",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_llm after OpenAI Family",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "OpenAI Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_llm after Gemini Family",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Gemini Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ],
+    [
+      "c2r_llm after Anthropic Family",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Anthropic Family",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 9
+      }
+    ]
+  ]
+}

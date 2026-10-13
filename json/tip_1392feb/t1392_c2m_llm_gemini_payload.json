@@ -1,0 +1,40 @@
+{
+  "model_name": "t1392-c2m-llm-gemini",
+  "litellm_params": {
+    "model": "auto_router/complexity_router",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": [
+          "gemini-3.5-flash-lite"
+        ],
+        "MEDIUM": [
+          "gemini-3.8-flash"
+        ],
+        "COMPLEX": [
+          "gemini-3.8-flash"
+        ],
+        "REASONING": [
+          "gemini-3.1-pro-preview"
+        ]
+      },
+      "classifier_type": "llm",
+      "classifier_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000,
+        "classification_rubric": "agentic"
+      },
+      "classifier_context_window_size": 3,
+      "classifier_context_budget_chars": 8000,
+      "classification_mode": "user_turn",
+      "session_affinity": false,
+      "deployment_affinity": true,
+      "modality_routing": false,
+      "modality_pin_override": false,
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ]
+    },
+    "complexity_router_default_model": "gemini-3.8-flash"
+  },
+  "model_info": {}
+}

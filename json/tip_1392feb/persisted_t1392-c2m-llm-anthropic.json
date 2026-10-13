@@ -1,0 +1,26 @@
+{
+  "db_model": true,
+  "classifier_type": "llm",
+  "jev_classifier_config": null,
+  "classifier_llm_config": {
+    "model": "claude-fable-5-1",
+    "timeout_ms": 3000,
+    "classification_rubric": "agentic"
+  },
+  "classification_mode": "user_turn",
+  "tiers": {
+    "MEDIUM": [
+      "claude-sonnet-5"
+    ],
+    "SIMPLE": [
+      "claude-haiku-4-5"
+    ],
+    "COMPLEX": [
+      "claude-opus-5-5"
+    ],
+    "REASONING": [
+      "claude-fable-5-1"
+    ]
+  },
+  "custom_tier_set": null
+}

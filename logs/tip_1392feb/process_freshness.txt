@@ -1,0 +1,8 @@
+source_root=/home/ubuntu/repos/litellm head=1392feb197f52254643b9a543bcdc4fe1e23cb28 dirty_files=0
+port=4000 pid=21209 cwd=/home/ubuntu/repos/litellm started=2026-10-13T00:19:08Z cmd=/home/ubuntu/repos/litellm/.venv/bin/python /home/ubuntu/repos/litellm/.venv/bin/litellm --config /home/ubuntu/qa_ar/con
+port=3000 pid= cwd= started= cmd=
+proxy_env_set=STORE_MODEL_IN_DB,LITELLM_CORS_ORIGINS,LITELLM_CORS_ALLOW_CREDENTIALS,LITELLM_LOCAL_AUTOROUTER_PRESETS,DATABASE_URL(disposable litellm_qa_ar)
+dashboard_next_dir_removed_before_start=yes
+proxy sha=1392feb197f52254643b9a543bcdc4fe1e23cb28 start=2026-10-13T00:19:08Z config_fix=typesafe/jev-latest db=recreated
+ui sha=1392feb197f52254643b9a543bcdc4fe1e23cb28 start=2026-10-13T00:04:46Z next_cache=ls: cannot access '.next': No such file or directory
+/dev/vda1       124G   31G   94G  25% /

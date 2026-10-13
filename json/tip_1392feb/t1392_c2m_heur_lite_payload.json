@@ -1,0 +1,51 @@
+{
+  "model_name": "t1392-c2m-heur-lite",
+  "litellm_params": {
+    "model": "auto_router/complexity_router",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": [
+          "deepseek-v4-flash"
+        ],
+        "MEDIUM": [
+          "muse-spark-1.3"
+        ],
+        "COMPLEX": [
+          "kimi-k3"
+        ],
+        "REASONING": [
+          "claude-opus-5-5"
+        ]
+      },
+      "tier_model_configs": {
+        "MEDIUM": [
+          {
+            "model_name": "muse-spark-1.3",
+            "litellm_params": {
+              "reasoning_effort": "xhigh"
+            }
+          }
+        ],
+        "COMPLEX": [
+          {
+            "model_name": "kimi-k3",
+            "litellm_params": {
+              "reasoning_effort": "max"
+            }
+          }
+        ]
+      },
+      "classifier_type": "heuristic",
+      "classification_mode": "user_turn",
+      "session_affinity": false,
+      "deployment_affinity": true,
+      "modality_routing": false,
+      "modality_pin_override": false,
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ]
+    },
+    "complexity_router_default_model": "muse-spark-1.3"
+  },
+  "model_info": {}
+}

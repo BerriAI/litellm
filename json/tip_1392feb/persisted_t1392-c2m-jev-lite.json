@@ -1,0 +1,22 @@
+{
+  "db_model": true,
+  "classifier_type": "oss_classifier",
+  "jev_classifier_config": null,
+  "classifier_llm_config": null,
+  "classification_mode": "user_turn",
+  "tiers": {
+    "MEDIUM": [
+      "muse-spark-1.3"
+    ],
+    "SIMPLE": [
+      "deepseek-v4-flash"
+    ],
+    "COMPLEX": [
+      "kimi-k3"
+    ],
+    "REASONING": [
+      "claude-opus-5-5"
+    ]
+  },
+  "custom_tier_set": null
+}

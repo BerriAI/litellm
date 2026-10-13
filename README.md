@@ -44,3 +44,37 @@ With default settings the proxy serves templates from `LITELLM_AUTOROUTER_PRESET
 The full persisted C1 config, including opensource_classifier_config with deployment_name jev-decider, is in json/tip_68abe95/persisted_full_tip-c1-jev-openai.json (read from GET /v2/model/info, no browser rerun).
 
 Layout: screenshots/{baseline_2717b5f,tip_68abe95}, json/ (sanitized request payloads, readback, results_*.json with the per-cell assertions), scripts/ (replay helpers), logs/
+
+## tip_1392feb: candidate 1392feb197f52254643b9a543bcdc4fe1e23cb28 (PR 46108)
+
+Source root /home/ubuntu/repos/litellm, detached at 1392feb with a clean tree. The `.next` directory was removed before the dashboard started. Proxy PID 21209 (cwd repo root, started 2026-10-13T00:19:08Z) and dashboard next-server PID 15818 (cwd ui/litellm-dashboard, started 2026-10-13T00:04:46Z) are recorded in logs/tip_1392feb/process_freshness.txt. Setup and env are the same as above, except the disposable Jev placeholder is `typesafe/jev-latest`. Every save is a real POST /model/new or edit, read back with GET /v2/model/info (`db_model: true`). Placeholder models only, no inference
+
+```
+uv run --no-sync python -u scripts/tip_1392feb/run_tip.py c1 c3 c4 c5 c5ad2 lite_copy c2m   # logs/tip_1392feb/run_A.log
+uv run --no-sync python -u scripts/tip_1392feb/run_B.py r1 r3                               # logs/tip_1392feb/run_B_r1_r3.log
+uv run --no-sync python -u scripts/tip_1392feb/run_B.py r1h                                 # same log, r1d
+uv run --no-sync python -u scripts/tip_1392feb/run_B.py r2                                  # logs/tip_1392feb/run_B_r2.log
+```
+
+| Case | Result at 1392feb | Evidence |
+|---|---|---|
+| C1 Decisions Model + jev-decider + Every new user message, then OpenAI Family, save, readback, reopen | Pass. UI unchanged after the template. Saved as `oss_classifier`, `user_turn`, with `opensource_classifier_config.deployment_name` jev-decider. Reopen shows the same | screenshots t1392_c1a/b/c, json t1392_c1_payload, persisted_t1392-c1-jev-openai |
+| C2 15 cells (5 templates x Decisions Model/Heuristics/LLM), plus OpenAI then Gemini then Anthropic per classifier | Pass, 15/15 plus 3/3 repeats. `ui_nontier_same` true for every cell. Only tiers differ. Payload and DB readback agree | t1392_c2m_*, t1392_c2r_*, results_c1_..._c2m.json |
+| C3 Jev, LLM, Heuristic v2 away and back | Pass. Deployment, judge and Heuristic v2 come back. Payload holds the active engine only | t1392_c3a/b/c, t1392_c3_payload |
+| C4 custom tier LEGAL, then template, restore, Start from scratch | Pass. All 5 templates disabled and the click is blocked. State and LEGAL unchanged. Restore re-enables them, Gemini applies, Start from scratch resets | t1392_c4a..d |
+| C5 Capability/Fuse v2 confirm, cancel, accept, back | Pass. Dialog shown, cancel keeps the full state, accept applies, back to Complexity keeps judge and frequency | t1392_c5_Cap_*, t1392_c5_Fus_* |
+| C5 adaptive only | Pass. Fuse v2 confirms, cancel keeps adaptive on, accept turns it off. Capability needs no confirmation and keeps adaptive | t1392_c5ao_* |
+| Lite copy | Pass (bundled presets) | t1392_lite_copy_* |
+| R1 first Complexity LLM selection from a saved and reloaded Capability: direct (r1a), via Decisions Model (r1c), via Heuristics (r1d) | Pass. Saved with `classification_rubric` omitted, reloaded in Edit, switched to Complexity, saved. Readback is `llm` with `classification_rubric: "agentic"` in all three. Via Decisions Model and Heuristics, LLM restores the remembered Capability first | t1392_r1a/c/d_*, json t1392_r1*_payload, results_r1_r3.json, results_r1h.json |
+| R2 saved Complexity LLM with the rubric omitted, then Capability, then back, then save | Pass. Readback still omits `classification_rubric` | t1392_r2_implicit_roundtrip, results_r2.json |
+| R3 Decisions Model with Fuse v2 history plus custom tier LEGAL, then LLM, then forced clicks on disabled Heuristics and Fuse v2 | Pass. Heuristics radio is disabled, Capability and Fuse v2 items are disabled. LLM comes back as Complexity, not the remembered Fuse v2. Forced clicks change nothing, LEGAL kept. UI state only: not saved, because the empty LEGAL tier correctly blocks Save | t1392_r3a, t1392_r3b, results_r1_r3.json |
+
+### Bugbot 4253429194 (saved Capability/Fuse reloaded, then Complexity, pins the omitted rubric to agentic)
+
+Observed in R1: a reloaded Capability router whose saved `classifier_llm_config` has no rubric gets `"agentic"` when switched to Complexity and saved. Classification: unchanged baseline behavior, not a regression. At 2717b5f, `classifier_type_transition.ts:21-23` sets `startsLlmRubric` whenever the transition leaves a forecast classifier for a non-forecast one, so baseline also writes agentic. At 1392feb (`:21-26`) it initializes only when no Complexity draft exists in the current form state. A reloaded forecast router has no persisted Complexity draft because only the active config is saved, which is the approved scope. The in-form case where a Complexity draft exists keeps the omission (R2). Per the reviewer's scope ruling the baseline browser rerun was not done. This comparison is code only
+
+### Gaps (labeled, not run live)
+
+- Fuse v2 saved and reloaded, then Complexity: not run. The harness cannot produce a savable Fuse v2 config, which needs solver profiles, a harness and a quality gap. In-form Fuse v2 to Complexity is covered by C5
+- Exhausted allowances (Bugbot 4253359172) not restored: not run live, because a licensed proxy reports unlimited allowances. The author reports seven failing-before/passing-after eligibility regressions in the local and CI suite. Those were not run independently here
+- No baseline browser rerun at this tip. The baseline_2717b5f evidence above is reused

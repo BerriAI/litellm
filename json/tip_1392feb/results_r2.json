@@ -1,0 +1,15 @@
+{
+  "note": "first B run; only r2 completed there, r1/r3 rerun in results_r1_r3.json and results_r1h.json, r4/r5 descoped",
+  "r2": {
+    "created_type": "llm",
+    "created_llm_config": {
+      "model": "claude-fable-5-1",
+      "timeout_ms": 3000
+    },
+    "saved_type": "llm",
+    "saved_llm_config": {
+      "model": "claude-fable-5-1",
+      "timeout_ms": 3000
+    }
+  }
+}

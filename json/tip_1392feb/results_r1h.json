@@ -1,0 +1,119 @@
+{
+  "results": {
+    "r1d": {
+      "created_type": "capability",
+      "created_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000
+      },
+      "reopened": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      },
+      "approach_after_llm_again": "Capability",
+      "saved_type": "llm",
+      "saved_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000,
+        "classification_rubric": "agentic"
+      }
+    }
+  },
+  "log": [
+    [
+      "r1d created Capability",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "r1d reopened",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "r1d via Heuristics",
+      {
+        "family": [
+          "Heuristics"
+        ],
+        "heur": "Rule-based",
+        "approach": "<none>",
+        "decision": "<none>",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 7
+      }
+    ],
+    [
+      "r1d llm again",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "r1d complexity",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 7
+      }
+    ]
+  ]
+}

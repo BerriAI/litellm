@@ -1,0 +1,418 @@
+{
+  "results": {
+    "r1a": {
+      "created_type": "capability",
+      "created_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000
+      },
+      "reopened": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      },
+      "approach_after_llm_again": null,
+      "saved_type": "llm",
+      "saved_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000,
+        "classification_rubric": "agentic"
+      }
+    },
+    "r1c": {
+      "created_type": "capability",
+      "created_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000
+      },
+      "reopened": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      },
+      "approach_after_llm_again": "Capability",
+      "saved_type": "llm",
+      "saved_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000,
+        "classification_rubric": "agentic"
+      }
+    },
+    "r3": {
+      "jev_custom": {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 18
+      },
+      "dialog_on_llm": null,
+      "llm_again": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 18
+      },
+      "radios": [
+        "Heuristics:true",
+        "LLM:false",
+        "Decisions Model:false"
+      ],
+      "after_forced_heur": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 18
+      },
+      "approach_items": [
+        "Complexity:",
+        "Capability:true",
+        "Fuse v2:true"
+      ],
+      "after_forced_fuse": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 18
+      },
+      "save_note": "not submitted: LEGAL tier has no model, Save correctly blocked by custom tier validation; UI-state evidence only"
+    }
+  },
+  "log": [
+    [
+      "r1a created Capability",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "r1a reopened",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "r1a complexity",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 7
+      }
+    ],
+    [
+      "r1b created Fuse v2",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "r1c created Capability",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "r1c reopened",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "r1c via Decisions Model",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "Jev",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 7
+      }
+    ],
+    [
+      "r1c llm again",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 2
+      }
+    ],
+    [
+      "r1c complexity",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 7
+      }
+    ],
+    [
+      "r3 jev after fuse",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7
+      }
+    ],
+    [
+      "r3 jev custom",
+      {
+        "family": [
+          "Decisions Model"
+        ],
+        "heur": "<none>",
+        "approach": "<none>",
+        "decision": "jev-decider",
+        "judge": "<none>",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 18
+      }
+    ],
+    [
+      "r3 llm again",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 18
+      }
+    ],
+    [
+      "r3 after forced heuristics",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 18
+      }
+    ],
+    [
+      "r3 after forced fuse",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every request",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [
+          "SIMPLE",
+          "MEDIUM",
+          "COMPLEX",
+          "REASONING",
+          "LEGAL"
+        ],
+        "tier_models": 18
+      }
+    ]
+  ]
+}
