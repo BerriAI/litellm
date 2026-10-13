@@ -469,10 +469,14 @@ def cost_per_token(
         if _pt_details is not None:
             _cache_read_tokens = float(getattr(_pt_details, "cached_tokens", 0) or 0)
             # OpenAI-compatible providers report cache-write tokens under
-            # either `cache_write_tokens` (kimi-k2) or `cache_creation_tokens`.
+            # `cache_write_tokens` (kimi-k2), `cache_creation_tokens`, or
+            # `created_cache_tokens` (vLLM >= v0.26.0).
             # Mirror db_spend_update_writer to stay symmetric.
             _cache_creation_tokens = float(
-                getattr(_pt_details, "cache_write_tokens", 0) or getattr(_pt_details, "cache_creation_tokens", 0) or 0
+                getattr(_pt_details, "cache_write_tokens", 0)
+                or getattr(_pt_details, "cache_creation_tokens", 0)
+                or getattr(_pt_details, "created_cache_tokens", 0)
+                or 0
             )
 
         _anthropic_read: Final[int | None] = getattr(usage_object, "cache_read_input_tokens", None)

@@ -3127,6 +3127,48 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens
     assert completion_cost == pytest.approx(expected_completion)
 
 
+def test_custom_pricing_applies_cache_creation_input_cost_via_created_cache_tokens_alias():
+    """
+    vLLM >= v0.26.0 emits prefix-cache write tokens as
+    `prompt_tokens_details.created_cache_tokens`. cost_per_token must accept it
+    as the last-resort cache-write candidate — otherwise vLLM writes are billed
+    at the full input rate. Mirrors the cache_write_tokens alias test above.
+    """
+    from types import SimpleNamespace
+
+    from litellm.cost_calculator import cost_per_token
+
+    pt_details = SimpleNamespace(cached_tokens=1000, created_cache_tokens=500)
+    usage_stub = SimpleNamespace(
+        prompt_tokens=4000,
+        completion_tokens=100,
+        total_tokens=4100,
+        prompt_tokens_details=pt_details,
+        cache_read_input_tokens=None,
+        cache_creation_input_tokens=None,
+    )
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="vllm/llama-3-70b",
+        prompt_tokens=4000,
+        completion_tokens=100,
+        custom_llm_provider="openai",
+        usage_object=usage_stub,
+        custom_cost_per_token={
+            "input_cost_per_token": 0.0000025,
+            "output_cost_per_token": 0.000015,
+            "cache_read_input_token_cost": 0.00000025,
+            "cache_creation_input_token_cost": 0.000003125,
+        },
+    )
+
+    expected_prompt = (4000 - 1000 - 500) * 0.0000025 + 1000 * 0.00000025 + 500 * 0.000003125
+    expected_completion = 100 * 0.000015
+
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(expected_completion)
+
+
 # ---------------------------------------------------------------------------
 # Bug 2 — db_spend_update_writer cache token extraction helpers.
 # ---------------------------------------------------------------------------
@@ -3203,6 +3245,45 @@ def test_extract_cache_creation_tokens_zero_when_missing():
     assert _extract_cache_creation_tokens({}) == 0
     assert _extract_cache_creation_tokens({"cache_creation_input_tokens": None}) == 0
     assert _extract_cache_creation_tokens({"prompt_tokens_details": {"cache_write_tokens": None}}) == 0
+
+
+def test_extract_cache_creation_tokens_vllm_created_cache_tokens():
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
+
+    # vLLM >= v0.26.0 emits created_cache_tokens (APC prefix-cache writes).
+    usage_obj = {
+        "prompt_tokens": 1000,
+        "prompt_tokens_details": {"cached_tokens": 500, "created_cache_tokens": 450},
+    }
+    assert _extract_cache_creation_tokens(usage_obj) == 450
+
+
+def test_extract_cache_creation_tokens_created_cache_tokens_precedence():
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
+
+    # created_cache_tokens is the last-resort candidate: the existing fields win.
+    usage_obj = {
+        "prompt_tokens": 1000,
+        "prompt_tokens_details": {"cache_write_tokens": 200, "created_cache_tokens": 450},
+    }
+    assert _extract_cache_creation_tokens(usage_obj) == 200
+
+    usage_obj = {
+        "prompt_tokens": 1000,
+        "prompt_tokens_details": {"cache_creation_tokens": 300, "created_cache_tokens": 450},
+    }
+    assert _extract_cache_creation_tokens(usage_obj) == 300
+
+
+def test_extract_cache_creation_tokens_created_cache_tokens_null():
+    from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens as _extract_cache_creation_tokens
+
+    # vLLM sends created_cache_tokens: null when the request created no cache entries.
+    usage_obj = {
+        "prompt_tokens": 1000,
+        "prompt_tokens_details": {"cached_tokens": 500, "created_cache_tokens": None},
+    }
+    assert _extract_cache_creation_tokens(usage_obj) == 0
 
 
 def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():

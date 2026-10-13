@@ -367,6 +367,22 @@ def test_get_logging_payload_maps_openai_cache_write_tokens_to_cache_creation_in
     assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 800
 
 
+def test_get_logging_payload_maps_vllm_created_cache_tokens_to_cache_creation_input_tokens():
+    """vLLM >= v0.26.0 reports prefix-cache writes as created_cache_tokens;
+    the spend-log backfill must pick it up as the last-resort candidate."""
+    additional_usage_values = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=1000,
+            completion_tokens=2,
+            total_tokens=1002,
+            prompt_tokens_details={"cached_tokens": 500, "created_cache_tokens": 450},
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 450
+    assert additional_usage_values["prompt_tokens_details"]["created_cache_tokens"] == 450
+
+
 def test_get_logging_payload_maps_nested_cache_creation_input_tokens():
     """
     Regression (LIT-5757): DashScope nests cache_creation_input_tokens inside
