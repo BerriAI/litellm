@@ -14,6 +14,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountRates,
     SseResponse,
 )
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
@@ -6656,7 +6657,61 @@ CLAUDE_OPUS_5_5_INPUT_TEXT_ROLLUPS: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_SONNET_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-sonnet-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-sonnet-5-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-haiku-5-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_FABLE_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-fable-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON: Final = CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-fable-5-1-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "claude-opus-5-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_HAIKU_4_5_INPUT_TEXT,
     CLAUDE_HAIKU_4_5_CACHE_READ,
     CLAUDE_HAIKU_4_5_CACHE_WRITE_5M,
@@ -6797,4 +6852,23 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=CLAUDE_FABLE_5_INPUT_TEXT, streamed=CLAUDE_FABLE_5_STREAM),
     StreamParityTestCase(plain=CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=CLAUDE_FABLE_5_1_STREAM),
     StreamParityTestCase(plain=CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=CLAUDE_OPUS_5_5_STREAM),
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    BridgeCostParityTestCase(
+        native=CLAUDE_SONNET_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(native=CLAUDE_FABLE_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON),
+    BridgeCostParityTestCase(
+        native=CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT, bridged=CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, bridged=CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON
+    ),
 )
