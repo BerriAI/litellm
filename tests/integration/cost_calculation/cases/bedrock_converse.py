@@ -16,6 +16,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     RecountRates,
 )
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 
 # anthropic.claude-sonnet-5-v1:0
@@ -5924,7 +5925,70 @@ US_ANTHROPIC_CLAUDE_OPUS_5_5_INPUT_TEXT_ROLLUPS: Final = CostTrackingTestCase(
     ),
 )
 
+US_ANTHROPIC_CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUDE_SONNET_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "us.anthropic.claude-sonnet-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUDE_SONNET_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "us.anthropic.claude-sonnet-5-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+US_ANTHROPIC_CLAUDE_OPUS_5_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUDE_OPUS_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "us.anthropic.claude-opus-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUDE_OPUS_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "us.anthropic.claude-opus-5-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "us.anthropic.claude-haiku-5-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+US_ANTHROPIC_CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUDE_FABLE_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "us.anthropic.claude-fable-5-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
+US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT.model_copy(
+    update={
+        "name": "us.anthropic.claude-fable-5-1-responses_bridged_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    US_ANTHROPIC_CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_OPUS_5_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
     ANTHROPIC_CLAUDE_SONNET_5_V1_0_INPUT_TEXT,
     ANTHROPIC_CLAUDE_SONNET_5_V1_0_CACHE_READ,
     ANTHROPIC_CLAUDE_SONNET_5_V1_0_CACHE_WRITE_5M,
@@ -6059,4 +6123,28 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM),
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_FABLE_5_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_FABLE_5_STREAM),
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM),
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_SONNET_5_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_SONNET_5_5_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_OPUS_5_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_OPUS_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_OPUS_5_5_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_FABLE_5_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON
+    ),
 )
