@@ -2385,6 +2385,152 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_alias", "expected_keys"),
+    [
+        ("team-alias", ("team_id:team-refresh", "team_alias:team-alias")),
+        (None, ("team_id:team-refresh",)),
+    ],
+)
+async def test_refresh_cached_team_broadcasts_team_and_alias_invalidations(
+    monkeypatch, team_alias: str | None, expected_keys: tuple[str, ...]
+) -> None:
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    published: Final = MagicMock()
+
+    async def record_cache_team_object(**_kwargs: object) -> None:
+        return None
+
+    async def record_publish(cache_key: str) -> None:
+        published(cache_key)
+
+    monkeypatch.setattr(team_endpoints, "cache_team_object", record_cache_team_object)
+    monkeypatch.setattr(team_endpoints, "publish_auth_cache_invalidation", record_publish)
+
+    await team_endpoints.refresh_cached_team(
+        team_row=LiteLLM_TeamTable(team_id="team-refresh", team_alias=team_alias),
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert tuple(call.args[0] for call in published.call_args_list) == expected_keys
+
+
+@pytest.mark.asyncio
+async def test_refresh_cached_team_flushes_redis_set_before_broadcast(monkeypatch) -> None:
+    from datetime import timedelta
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.caching.redis_batch import request_redis_batch_scope
+    from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    events: Final = MagicMock()
+
+    class RecordingPipeline:
+        def __init__(self, calls: MagicMock) -> None:
+            self.calls: Final = MagicMock()
+            self.events: Final = calls
+
+        async def __aenter__(self) -> "RecordingPipeline":
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        def set(self, key: str, _value: str, ex: timedelta | None = None) -> None:
+            self.calls("SET", key)
+
+        def delete(self, *keys: str) -> None:
+            for key in keys:
+                self.calls("DEL", key)
+
+        async def execute(self, raise_on_error: bool = True) -> list[object]:
+            assert raise_on_error is False
+            for command in self.calls.call_args_list:
+                self.events(*command.args)
+            return [True for _ in self.calls.call_args_list]
+
+    class RecordingRedisClient:
+        def __init__(self, calls: MagicMock) -> None:
+            self.events: Final = calls
+
+        def pipeline(self, transaction: bool = True) -> RecordingPipeline:
+            assert transaction is False
+            return RecordingPipeline(self.events)
+
+    class RecordingRedisCache(RedisCache):
+        def __init__(self) -> None:
+            self.redis_kwargs: Final[dict[str, object]] = {}
+            self.namespace: Final[str | None] = None
+            self.client: Final = RecordingRedisClient(events)
+            self._circuit_breaker: Final = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
+            self.service_logger_obj: Final = SimpleNamespace(
+                async_service_success_hook=AsyncMock(), async_service_failure_hook=AsyncMock()
+            )
+            self.default_ttl: Final[int | None] = None
+
+        def init_async_client(
+            self,
+        ) -> RecordingRedisClient:  # pyright: ignore[reportIncompatibleMethodOverride]  # in-memory Redis client
+            return self.client
+
+    async def record_publish(cache_key: str) -> None:
+        events("PUBLISH", cache_key)
+
+    redis_cache: Final = RecordingRedisCache()
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.internal_usage_cache.dual_cache = None
+    monkeypatch.setattr(team_endpoints, "publish_auth_cache_invalidation", record_publish)
+
+    with request_redis_batch_scope():
+        await team_endpoints.refresh_cached_team(
+            team_row=LiteLLM_TeamTable(team_id="team-order", team_alias=None),
+            user_api_key_cache=cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert [(call.args[0], call.args[1]) for call in events.call_args_list] == [
+        ("SET", "team_id:team-order"),
+        ("PUBLISH", "team_id:team-order"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_cache_miss_does_not_broadcast_invalidation(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team_id: Final = "team-read-cache-miss"
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id=team_id, models=["model-a"])
+    )
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache())
+    publish: Final = AsyncMock()
+    monkeypatch.setattr(auth_checks, "publish_auth_cache_invalidation", publish)
+
+    team: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert team.team_id == team_id
+    assert await cache.async_get_cache(key=f"team_id:{team_id}", model_type=LiteLLM_TeamTableCachedObj) is not None
+    publish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint_name", ["team_model_add", "team_model_delete"])
 async def test_team_model_add_delete_keep_model_aliases_in_team_cache(endpoint_name, monkeypatch):
     """LIT-5858: Prisma only returns `litellm_model_table` when the `update` asks for it, so the refreshed
