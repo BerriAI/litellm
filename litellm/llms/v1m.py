@@ -1,5 +1,4 @@
-from typing import Final
-
+import httpx
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -9,9 +8,9 @@ class V1MError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: object = None,
+        headers: dict | httpx.Headers | None = None,  # mutable-ok: matches BaseLLMException signature
     ) -> None:
-        super().__init__(status_code=status_code, message=message, headers=headers)
+        super().__init__(status_code=status_code, message=message, headers=headers3)
 
 
 class V1MConfig(OpenAIGPTConfig):
@@ -26,10 +25,9 @@ class V1MConfig(OpenAIGPTConfig):
         max_tokens: int | None = None,
         stream: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
-        return super().get_supported_openai_params(model)
+        if temperature is not None:
+            self.temperature = temperature
+        if max_tokens is not None:
+            self.max_tokens = max_tokens
+        if stream is not None:
+            self.stream = stream
