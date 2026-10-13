@@ -354,20 +354,25 @@ _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body
 _STR_DICT_ADAPTER: Final = TypeAdapter(dict[str, str])
 
 
-def _first_non_ascii_extra_header(data: Mapping[str, object]) -> str | None:
-    """Name the first non-ASCII ``extra_headers`` entry, or None if the offending
-    value came from elsewhere (e.g. the api_key or organization id)."""
-    raw: Final = data.get("extra_headers")
-    if raw is None:
-        return None
+def _extra_headers_or_none(data: dict) -> Mapping[str, str] | None:
+    """This request's `extra_headers`, validated to a str-to-str mapping, or None
+    if absent or malshaped."""
     try:
-        extra_headers: Final = _STR_DICT_ADAPTER.validate_python(raw)
-    except ValidationError:
+        return _STR_DICT_ADAPTER.validate_python(data["extra_headers"])
+    except (KeyError, ValidationError):
+        return None
+
+
+def _first_non_ascii_header(extra_headers: Mapping[str, str] | None) -> str | None:
+    """Name the first non-ASCII entry in `extra_headers`, or None if there isn't one."""
+    if extra_headers is None:
         return None
     return next((k for k, v in extra_headers.items() if not v.isascii()), None)
 
 
-def _non_ascii_header_error(data: Mapping[str, object], original_error: UnicodeEncodeError) -> OpenAIError:
+def _non_ascii_header_error(
+    extra_headers: Mapping[str, str] | None, original_error: UnicodeEncodeError
+) -> OpenAIError:
     """Re-raise a bare httpx ``UnicodeEncodeError`` (``'ascii' codec can't encode
     character ...``) naming the offending header when it is one litellm set.
 
@@ -375,7 +380,7 @@ def _non_ascii_header_error(data: Mapping[str, object], original_error: UnicodeE
     credential (e.g. a configured ``x-api-key``), and this becomes a customer-
     facing error message.
     """
-    offending: Final = _first_non_ascii_extra_header(data)
+    offending: Final = _first_non_ascii_header(extra_headers)
     message: Final = (
         f"extra_headers['{offending}'] contains a non-ASCII character and cannot be sent as an HTTP header value."
         if offending is not None
@@ -575,7 +580,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise
             return build_output_token_limit_response(e=e, data=data, is_async=True)
         except UnicodeEncodeError as e:
-            raise _non_ascii_header_error(data=data, original_error=e) from e
+            raise _non_ascii_header_error(_extra_headers_or_none(data), original_error=e) from e
         except Exception as e:
             raise e
 
@@ -614,7 +619,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise
             return build_output_token_limit_response(e=e, data=data, is_async=False)
         except UnicodeEncodeError as e:
-            raise _non_ascii_header_error(data=data, original_error=e) from e
+            raise _non_ascii_header_error(_extra_headers_or_none(data), original_error=e) from e
         except Exception as e:
             if raw_response is not None:
                 raise Exception(
