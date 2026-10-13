@@ -24,7 +24,6 @@ const defaultProps = {
 function makeKey(overrides: Partial<KeyResponse> = {}): KeyResponse {
   return {
     token: "tok-abc123",
-    token_id: "tid-abc123",
     key_name: "sk-...abc",
     key_alias: "Test Key",
     spend: 0,
@@ -115,15 +114,26 @@ describe("ProjectKeysTable", () => {
     expect(within(row).queryByRole("link", { name: "My API Key" })).not.toBeInTheDocument();
   });
 
-  it("falls back to the token ID in the accessible row name when the alias is empty", () => {
+  it("falls back to the key name in the accessible row name when the alias is empty", () => {
     renderWithProviders(
       <ProjectKeysTable
         {...defaultProps}
-        keys={[makeKey({ token: "tok-empty-alias", token_id: "tid-empty-alias", key_alias: "" })]}
+        keys={[makeKey({ token: "tok-empty-alias", key_name: "name-empty-alias", key_alias: "" })]}
       />,
     );
 
-    expect(screen.getByRole("row", { name: "Open key tid-empty-alias" })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: "Open key name-empty-alias" })).toBeInTheDocument();
+  });
+
+  it("falls back to the token when the alias and key name are empty", () => {
+    renderWithProviders(
+      <ProjectKeysTable
+        {...defaultProps}
+        keys={[makeKey({ token: "tok-empty-name", key_name: "", key_alias: "" })]}
+      />,
+    );
+
+    expect(screen.getByRole("row", { name: "Open key tok-empty-name" })).toBeInTheDocument();
   });
 
   it("navigates to key details when plain row content is clicked", async () => {
@@ -136,18 +146,18 @@ describe("ProjectKeysTable", () => {
     expect(push).toHaveBeenCalledWith("/ui/api-keys?key=tok-abc123");
   });
 
-  it("opens a focused row with Enter and labels an alias-less key with its ID", async () => {
+  it("opens a focused row with Enter and labels an alias-less key with its key name", async () => {
     const user = userEvent.setup();
     push.mockClear();
     const aliasLessKeyInput = {
       token: "tok-no-alias",
-      token_id: "tid-no-alias",
+      key_name: "name-no-alias",
       key_alias: null as any,
       user_id: "owner-1",
     };
     const aliasLessKey = makeKey(aliasLessKeyInput);
     renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[aliasLessKey]} />);
-    const row = screen.getByRole("row", { name: "Open key tid-no-alias" });
+    const row = screen.getByRole("row", { name: "Open key name-no-alias" });
     row.focus();
     expect(row).toHaveFocus();
     await user.keyboard("{Enter}");

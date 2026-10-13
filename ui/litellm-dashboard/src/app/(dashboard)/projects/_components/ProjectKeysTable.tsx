@@ -62,7 +62,7 @@ export function ProjectKeysTable({
       onRowClick={(key) => {
         if (key.token) router.push(keyDetailHref(key.token));
       }}
-      getRowLabel={(key) => `Open key ${key.key_alias || key.token_id}`}
+      getRowLabel={(key) => `Open key ${key.key_alias || key.key_name || key.token}`}
     />
   );
 }

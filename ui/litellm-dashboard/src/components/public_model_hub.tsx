@@ -629,7 +629,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       columns={mcpColumns}
                       getRowId={(server, index) => server.server_id || String(index)}
                       onRowClick={showMcpModal}
-                      getRowLabel={(server) => `Open MCP server ${server.server_name}`}
+                      getRowLabel={(server) => `Open MCP server ${server.server_name || server.alias || server.server_id}`}
                       sortingMode="client"
                       sorting={mcpSorting}
                       onSortingChange={setMcpSorting}

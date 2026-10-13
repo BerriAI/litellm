@@ -521,6 +521,24 @@ describe("publicMCPHubColumns", () => {
 });
 
 describe("public hub MCP details modal", () => {
+  it("uses the alias in the accessible label when the server name is empty", async () => {
+    const networkingModule = await import("./networking");
+    const serverWithoutName = {
+      ...mockMcpServer,
+      server_id: "server-fallback-id",
+      server_name: "",
+      alias: "server-fallback-alias",
+    };
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValueOnce([serverWithoutName]);
+
+    renderHub();
+
+    await userEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    expect(
+      await screen.findByRole("row", { name: "Open MCP server server-fallback-alias" }),
+    ).toBeInTheDocument();
+  });
+
   it("does not show the upstream url when a server is opened", async () => {
     const user = userEvent.setup();
     const networkingModule = await import("./networking");
