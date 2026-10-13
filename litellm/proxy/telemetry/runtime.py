@@ -52,6 +52,7 @@ class TelemetryRuntime:
         self.sink: ConsentGatedSink | None = None
         self.settings: TelemetrySettings = TelemetrySettings.model_construct()
         self.policy: EnvPolicy | None = None
+        self._attach_logger: Callable[[], None] | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._flushing: asyncio.Future[None] | None = None
         self._pending: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep finalizers alive
@@ -81,7 +82,7 @@ class TelemetryRuntime:
             return
         exporter: Final = HttpExporter(http_client(), str(settings.endpoint))
         instance: Final = InstanceInfo(instance_id=uuid.uuid4().hex, litellm_version=litellm_version)
-        register(
+        self._attach_logger = lambda: register(
             TelemetryAttemptLogger(
                 lambda: self.sink, deployment_hasher(hash_secret()), blocks_enabled=self._counts_blocks
             )
@@ -109,7 +110,16 @@ class TelemetryRuntime:
             return
         gated: Final = ConsentGatedSink(AggregatingSink(exporter), consent)
         gated.set_instance(instance)
+        self._attach_logger_once()
         self.sink = gated
+
+    def _attach_logger_once(self) -> None:
+        """Registers the attempt logger the first time a group is on, so a proxy that never opts in carries no callback.
+        It stays registered after groups are turned off, returning early, since removing it could skip in-flight calls"""
+        attach: Final = self._attach_logger
+        self._attach_logger = None
+        if attach is not None:
+            attach()
 
     async def _flush_every(
         self, policy: EnvPolicy, stored: StoredConsent, exporter: Exporter, instance: InstanceInfo, interval_s: float

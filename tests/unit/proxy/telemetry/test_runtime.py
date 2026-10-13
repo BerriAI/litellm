@@ -105,6 +105,35 @@ async def test_a_failing_settings_store_leaves_telemetry_off_instead_of_crashing
     await runtime.stop()
 
 
+@pytest.mark.asyncio
+async def test_the_attempt_logger_is_registered_only_once_a_group_is_turned_on() -> None:
+    registered: Final[list[TelemetryAttemptLogger]] = []  # mutable-ok: captures the register callback
+    stored: list[TelemetryConsent | None] = [None]  # mutable-ok: the stored groups the admin changes between windows
+
+    async def _stored() -> TelemetryConsent | None:
+        return stored[0]
+
+    runtime: Final = TelemetryRuntime()
+    await runtime.start(
+        litellm_version="1.0.0",
+        settings=TelemetrySettings(endpoint=_ENDPOINT),
+        flush_interval_s=0.01,
+        register=registered.append,
+        http_client=_offline,
+        stored=_stored,
+    )
+    await asyncio.sleep(0.05)
+    assert runtime.sink is None
+    assert registered == []
+
+    for consent in (_HEARTBEAT, None, _HEARTBEAT):
+        stored[0] = consent
+        await asyncio.sleep(0.05)
+        assert (runtime.sink is not None) is (consent is not None)
+    assert len(registered) == 1
+    await runtime.stop()
+
+
 def test_deployment_hashes_are_stable_per_install_and_differ_across_installs() -> None:
     assert deployment_hasher(b"secret-a")("model-1") == deployment_hasher(b"secret-a")("model-1")
     assert deployment_hasher(b"secret-a")("model-1") != deployment_hasher(b"secret-b")("model-1")
