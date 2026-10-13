@@ -301,10 +301,6 @@ fn sent_betas(request: &wiremock::Request) -> BetaSet {
     json!({"tools": [{"type": "advisor_20260301", "name": "advisor", "model": MODEL}]}),
     &[AnthropicBeta::AdvisorTool20260301]
 )]
-#[case::safeguards(
-    json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}]}),
-    &[AnthropicBeta::DangerousToolUse20260903]
-)]
 #[case::several_features_at_once(
     json!({"speed": "fast", "output_format": {"type": "json_schema"}}),
     &[AnthropicBeta::StructuredOutputs20251113, AnthropicBeta::FastMode20260201]
@@ -345,6 +341,44 @@ async fn feature_betas_join_the_callers_betas_in_one_sorted_header(
         .chain([AnthropicBeta::Other("caller-beta-2025-01-01".to_string())])
         .collect();
     assert_eq!(sent, expected);
+}
+
+#[rstest]
+#[case::anthropic("anthropic", &[AnthropicBeta::DangerousToolUse20260903])]
+#[case::deepseek("deepseek", &[])]
+#[case::minimax("minimax", &[])]
+#[tokio::test]
+async fn safeguards_add_the_dangerous_tool_use_beta_only_where_the_beta_map_has_a_column(
+    call: MessagesCall,
+    #[case] provider: &str,
+    #[case] derived: &[AnthropicBeta],
+) {
+    let upstream = upstream([message_response()]).await;
+    let safeguards = json!([{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}]);
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Anthropic-Beta", "caller-beta-2025-01-01")]),
+            ..call
+        },
+        json!({"safeguards": safeguards}),
+    ))
+    .await;
+
+    let request = only_request(&upstream).await;
+    let expected: BetaSet = derived
+        .iter()
+        .cloned()
+        .chain([AnthropicBeta::Other("caller-beta-2025-01-01".to_string())])
+        .collect();
+    assert_eq!(sent_betas(&request), expected);
+    assert_eq!(
+        request.body_json::<Value>().unwrap()["safeguards"],
+        safeguards
+    );
 }
 
 #[rstest]

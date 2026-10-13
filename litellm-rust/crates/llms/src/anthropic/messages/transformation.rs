@@ -109,7 +109,10 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        update_headers_with_anthropic_beta(headers, request)
+        merge_beta_headers(
+            headers,
+            provider_feature_betas(request, BetaProvider::Anthropic),
+        )
     }
 }
 
@@ -149,12 +152,21 @@ pub(crate) fn update_headers_with_anthropic_beta(
     merge_beta_headers(headers, feature_betas(request))
 }
 
-/// The betas a request needs on a host other than the first-party API: the Anthropic set
-/// filtered and renamed through the host's `BetaProvider` policy.
+/// The betas a request needs on a host with a column in the beta map, filtered and renamed
+/// through that column. A host without one gets `feature_betas` alone, so `safeguards` reaches
+/// it as sent.
 pub(crate) fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
     feature_betas(request)
+        .union(mapped_host_betas(&request.params))
         .iter()
         .filter_map(|beta| beta.on(provider))
+        .collect()
+}
+
+fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
+    carries_safeguards(params)
+        .then_some(AnthropicBeta::DangerousToolUse20260903)
+        .into_iter()
         .collect()
 }
 
@@ -171,7 +183,6 @@ fn feature_betas(request: &MessagesRequest) -> BetaSet {
             .then_some(AnthropicBeta::PerTurnControl20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
-        carries_safeguards(params).then_some(AnthropicBeta::DangerousToolUse20260903),
     ]
     .into_iter()
     .flatten()
@@ -1035,11 +1046,41 @@ mod tests {
     )]
     #[case::safeguards(
         json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]}),
-        &["dangerous-tool-use-2026-09-03"]
+        &[]
     )]
-    #[case::null_safeguards(json!({"safeguards": null}), &[])]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
+    }
+
+    #[rstest]
+    #[case::anthropic(BetaProvider::Anthropic, json!([{"type": "dangerous_tool_use"}]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::vertex_ai(BetaProvider::VertexAi, json!([{"type": "dangerous_tool_use"}]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::empty_list(BetaProvider::Anthropic, json!([]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::not_a_list(BetaProvider::Anthropic, json!(1), &["dangerous-tool-use-2026-09-03"])]
+    #[case::null(BetaProvider::Anthropic, Value::Null, &[])]
+    #[case::bedrock_converse_has_a_null_cell(BetaProvider::BedrockConverse, json!([{"type": "dangerous_tool_use"}]), &[])]
+    #[case::databricks_has_a_null_cell(BetaProvider::Databricks, json!([{"type": "dangerous_tool_use"}]), &[])]
+    fn safeguards_add_the_dangerous_tool_use_beta_where_the_beta_map_has_a_cell(
+        #[case] provider: BetaProvider,
+        #[case] safeguards: Value,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(
+            provider_feature_betas(&request(json!({"safeguards": safeguards})), provider),
+            betas(expected)
+        );
+    }
+
+    #[test]
+    fn hosts_without_a_beta_map_column_get_safeguards_without_a_derived_beta() {
+        let client = headers(&[("anthropic-beta", "claude-code-20250219")]);
+        assert_eq!(
+            update_headers_with_anthropic_beta(
+                client.clone(),
+                &request(json!({"safeguards": [{"type": "dangerous_tool_use"}]}))
+            ),
+            client
+        );
     }
 
     #[rstest]
@@ -1080,7 +1121,7 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]}),
         &[("anthropic-beta", "claude-code-20250219,context-management-2025-06-27,effort-2025-11-24,interleaved-thinking-2025-05-14,per-turn-control-2026-07-01")],
     )]
-    #[case::safeguards_join_the_client_betas_without_the_dangerous_tool_use_beta(
+    #[case::safeguards_add_the_dangerous_tool_use_beta_to_the_client_betas(
         &[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14")],
         json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
         &[("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14")],
