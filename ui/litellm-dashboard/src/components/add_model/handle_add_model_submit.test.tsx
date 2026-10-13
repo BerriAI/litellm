@@ -192,4 +192,20 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj).not.toHaveProperty("weight");
     expect(deployment.litellmParamsObj).not.toHaveProperty("order");
   });
+
+  it("omits weight and order when the mounted fields registered as undefined", async () => {
+    const formValues = {
+      model_mappings: [{ public_name: "Public Model", litellm_model: "litellm/public" }],
+      model_name: "custom-model-name",
+      weight: undefined,
+      order: undefined,
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.litellmParamsObj).not.toHaveProperty("weight");
+    expect(deployment.litellmParamsObj).not.toHaveProperty("order");
+  });
 });
