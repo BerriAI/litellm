@@ -186,6 +186,47 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+@pytest.mark.parametrize(
+    ("input_cost_per_token", "output_cost_per_token", "expected_cost"),
+    ((0.0, 0.0, 0.0), (0.001, 0.002, 10 * 0.001 + 253 * 0.002)),
+)
+def test_response_cost_calculator_custom_pricing_ignores_upstream_response_cost_header(
+    monkeypatch: pytest.MonkeyPatch,
+    input_cost_per_token: float,
+    output_cost_per_token: float,
+    expected_cost: float,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-custom-priced-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": output_cost_per_token,
+            }
+        }
+    )
+    response: Final = ModelResponse(
+        model="cc-custom-priced-chat",
+        choices=[Choices(message=Message(content="ok"))],
+        usage=Usage(prompt_tokens=10, completion_tokens=253, total_tokens=263),
+    )
+    response._hidden_params = {"additional_headers": {"llm_provider-x-litellm-response-cost": 0.000413}}
+
+    cost: Final = response_cost_calculator(
+        response_object=response,
+        model="cc-custom-priced-chat",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        custom_pricing=True,
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
 def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
     class MockResponse(BaseModel):
         pass
