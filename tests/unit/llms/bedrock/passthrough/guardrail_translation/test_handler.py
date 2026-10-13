@@ -1509,6 +1509,20 @@ class TestConverseStreamFrames:
 
         assert frames[0].payload == delta
 
+    @pytest.mark.asyncio
+    async def test_a_payload_that_is_not_utf8_is_relayed_as_received(self):
+        frame = _build_frame(
+            {":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+            b'{"contentBlockIndex":0,"delta":{"text":"\xff"}}',
+        )
+
+        frames = [frame async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(_chunks(frame))]
+
+        assert [(item.raw, item.event_type, item.payload) for item in frames] == [
+            (frame, "contentBlockDelta", None),
+            (b"", None, None),
+        ]
+
 
 class TestConverseStreamGuardrailRelay:
     @pytest.mark.asyncio

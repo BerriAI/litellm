@@ -422,7 +422,7 @@ def _decode_converse_frame(raw: bytes) -> ConverseStreamFrame:
         return ConverseStreamFrame(raw=raw)
     try:
         payload: Final = _JSON_OBJECT.validate_python(json.loads(message.payload))
-    except (json.JSONDecodeError, ValidationError):
+    except (json.JSONDecodeError, UnicodeDecodeError, ValidationError):
         return ConverseStreamFrame(raw=raw, event_type=event_type)
     return ConverseStreamFrame(raw=raw, event_type=event_type, payload=payload)
 
