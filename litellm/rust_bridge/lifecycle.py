@@ -16,16 +16,17 @@ class Complete:
 
 
 @dataclass(frozen=True, slots=True)
-class Open:
-    value: object
+class StreamOpen:
+    head: object
 
 
 @dataclass(frozen=True, slots=True)
-class Yield:
-    value: object
+class StreamChunk:
+    chunk: object
 
 
-Settled = Complete | Open | Yield
+StreamStep = StreamOpen | StreamChunk
+Settled = Complete | StreamStep
 Step = Await | Settled
 
 
@@ -35,6 +36,9 @@ class Execution(Protocol):
     def throw(self, error: BaseException) -> Step: ...
 
     def close(self) -> None: ...
+
+
+_REOPENED: Final = "execution opened a stream twice"
 
 
 class StreamClosed(Exception):
@@ -63,13 +67,16 @@ def _settled(step: Step) -> Settled:
 async def drive(execution: Execution, stream_factory: Callable[[Execution, object], object] | None = None) -> object:
     handed_off = False  # rebind-ok: set once the execution belongs to the returned stream
     try:
-        step: Final = await _settle(execution, execution.send(None))
-        if isinstance(step, Open):
-            factory: Final = Stream if stream_factory is None else stream_factory
-            stream: Final = factory(execution, step.value)
-            handed_off = True
-            return stream
-        return step.value
+        match await _settle(execution, execution.send(None)):
+            case Complete(value):
+                return value
+            case StreamOpen(head):
+                factory: Final = Stream if stream_factory is None else stream_factory
+                stream: Final = factory(execution, head)
+                handed_off = True
+                return stream
+            case StreamChunk():
+                raise RuntimeError("execution yielded a chunk before opening a stream")
     finally:
         if not handed_off:
             execution.close()
@@ -94,10 +101,15 @@ class Stream(AsyncIterator[object]):
         except BaseException:
             self._finish()
             raise
-        if isinstance(step, Yield):
-            return step.value
-        self._finish()
-        raise StopAsyncIteration
+        match step:
+            case StreamChunk(chunk):
+                return chunk
+            case Complete():
+                self._finish()
+                raise StopAsyncIteration
+            case StreamOpen():
+                self._finish()
+                raise RuntimeError(_REOPENED)
 
     async def aclose(self) -> None:
         if self._done:
@@ -131,10 +143,15 @@ class SyncStream(Iterator[object]):
         except BaseException:
             self._finish()
             raise
-        if isinstance(step, Yield):
-            return step.value
-        self._finish()
-        raise StopIteration
+        match step:
+            case StreamChunk(chunk):
+                return chunk
+            case Complete():
+                self._finish()
+                raise StopIteration
+            case StreamOpen():
+                self._finish()
+                raise RuntimeError(_REOPENED)
 
     def close(self) -> None:
         if self._done:

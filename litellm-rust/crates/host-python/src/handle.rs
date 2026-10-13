@@ -13,8 +13,8 @@ pub enum Suspension {
     Await(Py<PyAny>),
     /// The call streams: the caller gets a stream over this execution carrying this head,
     /// and the execution stays suspended until the stream asks for a chunk.
-    Open(Py<PyAny>),
-    Yield(Py<PyAny>),
+    StreamOpen(Py<PyAny>),
+    StreamChunk(Py<PyAny>),
 }
 
 enum Resume {
@@ -110,8 +110,12 @@ impl Execution {
             let step = body.resume(result)?;
             let (tag, value, suspended) = match step {
                 ExecutionStep::Suspended(Suspension::Await(value)) => ("Await", value, true),
-                ExecutionStep::Suspended(Suspension::Open(head)) => ("Open", head, true),
-                ExecutionStep::Suspended(Suspension::Yield(value)) => ("Yield", value, true),
+                ExecutionStep::Suspended(Suspension::StreamOpen(head)) => {
+                    ("StreamOpen", head, true)
+                }
+                ExecutionStep::Suspended(Suspension::StreamChunk(chunk)) => {
+                    ("StreamChunk", chunk, true)
+                }
                 ExecutionStep::Return(value) => ("Complete", value, false),
             };
             let step = lifecycle(py)?.getattr(tag)?.call1((value,))?.unbind();
