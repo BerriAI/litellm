@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Generic, Literal, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Generic, Literal, Optional, TypeVar
 
 from fastapi import HTTPException
 from pydantic import ConfigDict, ValidationError
@@ -14,13 +14,14 @@ from litellm._logging import verbose_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.llm_judge import (
+    attached_auth,
+    caller_team_for,
     default_router_provider,
     extract_text_from_content,
     judge_acompletion,
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import get_last_user_message
-from litellm.router_utils.common_utils import get_request_team_id
 from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN, GenericGuardrailAPIInputs, GuardrailStatus
@@ -254,7 +255,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             team_id=team_id,
             response_format={"type": "json_object"},
             temperature=0,
-            metadata={**_JUDGE_CALL_METADATA, "user_api_key_team_id": team_id},
+            metadata=dict(_JUDGE_CALL_METADATA)
+            if team_id is None
+            else {**_JUDGE_CALL_METADATA, "user_api_key_team_id": team_id},
         )
         raw: Final = response.choices[0].message.content or "{}"
         return _parse_judge_verdict(raw)
@@ -284,7 +287,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                     messages,
                     text_under_review,
                     input_type,
-                    get_request_team_id(cast(Mapping[str, object], request_data)),
+                    caller_team_for(self._router_provider(), self.judge_model, attached_auth(request_data)),  # pyright: ignore[reportUnknownArgumentType]  # base signature types request_data as a bare dict
                 )
             except Exception as judge_err:
                 verbose_logger.warning(

@@ -12,6 +12,8 @@ import pytest
 import respx
 from fastapi import HTTPException
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.guardrails.guardrail_hooks.decision_model import (
     DecisionModelGuardrail,
     initialize_guardrail,
@@ -27,6 +29,7 @@ from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 from litellm import Router
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
     DecisionModelCheck,
 )
@@ -36,10 +39,23 @@ PROMPT_INJECTION_CHECK: Final = DecisionModelCheck(
 )
 
 
-@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    ("request_data", "expected_status", "expected_calls"),
+    [
+        ({"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}, 400, 1),
+        ({"litellm_metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}, 400, 1),
+        ({"metadata": {"user_api_key_team_id": "owner"}}, 502, 0),
+        ({"metadata": {"user_api_key_auth": {"team_id": "owner"}}}, 502, 0),
+        ({"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="other")}}, 502, 0),
+    ],
+    ids=["auth-in-metadata", "auth-in-litellm-metadata", "forged-team-id", "forged-auth-dict", "other-team"],
+)
 @pytest.mark.asyncio
-async def test_team_decision_model_blocks_with_authenticated_team_context(
-    bucket: str, monkeypatch: pytest.MonkeyPatch
+async def test_team_decision_model_runs_only_for_the_authenticated_owner(
+    request_data: dict[str, object],
+    expected_status: int,
+    expected_calls: int,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     router: Final = Router(
@@ -69,11 +85,107 @@ async def test_team_decision_model_blocks_with_authenticated_team_context(
             )
         )
         with pytest.raises(HTTPException) as blocked:
-            await guardrail.apply_guardrail(
-                {"texts": ["unsafe"]}, {bucket: {"user_api_key_team_id": "owner"}}, "request"
-            )
-        assert blocked.value.status_code == 400
-        assert upstream.call_count == 1
+            await guardrail.apply_guardrail({"texts": ["unsafe"]}, request_data, "request")
+        assert blocked.value.status_code == expected_status
+        assert upstream.call_count == expected_calls
+
+
+class _LoggedDecisionCalls(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model_groups_and_teams: list[tuple[object, object]] = []  # mutable-ok: success callback sink
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        litellm_params: Final = kwargs.get("litellm_params")
+        metadata: Final = litellm_params.get("metadata") if isinstance(litellm_params, dict) else None
+        logged: Final = metadata if isinstance(metadata, dict) else {}
+        self.model_groups_and_teams.append((logged.get("model_group"), logged.get("user_api_key_team_id")))
+
+
+_PROXY_WIDE_TEAM_DECISION: Final = {
+    "model_name": "team-decision",
+    "litellm_params": {
+        "model": "typesafe/jev-latest",
+        "api_base": "https://shared.example",
+        "api_key": "synthetic-test-key",
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("decision_model", "extra_deployments", "expected_host", "expected_logged"),
+    [
+        ("team-decision", (), "team.example", ("team-decision", "owner")),
+        (
+            "team-decision",
+            ({"model_name": "*", "litellm_params": {"model": "*"}},),
+            "team.example",
+            ("team-decision", "owner"),
+        ),
+        ("team-decision", (_PROXY_WIDE_TEAM_DECISION,), "team.example", ("team-decision", "owner")),
+        ("shared-decision", (), "shared.example", ("shared-decision", None)),
+    ],
+    ids=["team-model", "catch-all-wildcard", "team-name-shadows-proxy-wide-name", "proxy-wide-model"],
+)
+@pytest.mark.asyncio
+async def test_decision_call_goes_to_the_owner_team_deployment_and_keeps_its_model_group(
+    decision_model: str,
+    extra_deployments: tuple[dict[str, object], ...],
+    expected_host: str,
+    expected_logged: tuple[str, str | None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    logged: Final = _LoggedDecisionCalls()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "private-decision",
+                "litellm_params": {
+                    "model": "typesafe/jev-latest",
+                    "api_base": "https://team.example",
+                    "api_key": "synthetic-test-key",
+                },
+                "model_info": {"team_id": "owner", "team_public_model_name": "team-decision"},
+            },
+            {
+                "model_name": "shared-decision",
+                "litellm_params": {
+                    "model": "typesafe/jev-latest",
+                    "api_base": "https://shared.example",
+                    "api_key": "synthetic-test-key",
+                },
+            },
+            *(dict(deployment) for deployment in extra_deployments),
+        ]
+    )
+    guardrail: Final = DecisionModelGuardrail(
+        guardrail_name="team-guard",
+        decision_model=decision_model,
+        checks=(PROMPT_INJECTION_CHECK,),
+        router_provider=lambda: router,
+    )
+    answer: Final = {"model": "jev-latest", "answers": {"prompt_injection": {"type": "noul", "noul": 0.01}}}
+    with respx.mock:
+        team: Final = respx.post("https://team.example/v1/systemone").mock(
+            return_value=httpx.Response(200, json=answer)
+        )
+        shared: Final = respx.post("https://shared.example/v1/systemone").mock(
+            return_value=httpx.Response(200, json=answer)
+        )
+        request_data: Final[dict[str, object]] = {"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}
+        assert await guardrail.apply_guardrail({"texts": ["fine"]}, request_data, "request") == {"texts": ["fine"]}
+    for _ in range(100):
+        if logged.model_groups_and_teams:
+            break
+        await asyncio.sleep(0.05)
+    called_hosts: Final = tuple(
+        host for host, route in (("team.example", team), ("shared.example", shared)) if route.call_count
+    )
+    assert (called_hosts, logged.model_groups_and_teams) == ((expected_host,), [expected_logged])
 
 
 CUSTOM_CHECK: Final = DecisionModelCheck(name="invoice_policy", instructions="Is this about invoices?")

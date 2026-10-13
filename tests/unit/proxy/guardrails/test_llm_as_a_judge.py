@@ -19,6 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     initialize_guardrail,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.utils import LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN
 
 # ---------------------------------------------------------------------------
@@ -596,9 +597,21 @@ async def test_apply_guardrail_judge_error_fails_open(mock_completion):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize(
+    ("request_data", "blocks", "expected_calls"),
+    [
+        ({"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}, True, 1),
+        ({"litellm_metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}, True, 1),
+        ({"metadata": {"user_api_key_team_id": "owner"}}, False, 0),
+        ({"metadata": {"user_api_key_auth": {"team_id": "owner"}}}, False, 0),
+        ({"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="other")}}, False, 0),
+    ],
+    ids=["auth-in-metadata", "auth-in-litellm-metadata", "forged-team-id", "forged-auth-dict", "other-team"],
+)
 @pytest.mark.asyncio
-async def test_team_judge_blocks_with_authenticated_team_context(bucket: str, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_team_judge_runs_only_for_the_authenticated_owner(
+    request_data: dict[str, object], blocks: bool, expected_calls: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     router: Final = litellm.Router(
         model_list=[
@@ -633,12 +646,15 @@ async def test_team_judge_blocks_with_authenticated_team_context(bucket: str, mo
                 },
             )
         )
-        with pytest.raises(HTTPException) as blocked:
-            await guardrail.apply_guardrail(
-                {"texts": ["unsafe"]}, {bucket: {"user_api_key_team_id": "owner"}}, "request"
-            )
-        assert blocked.value.status_code == 422
-        assert upstream.call_count == 1
+        if blocks:
+            with pytest.raises(HTTPException) as blocked:
+                await guardrail.apply_guardrail({"texts": ["unsafe"]}, request_data, "request")
+            assert blocked.value.status_code == 422
+        else:
+            assert await guardrail.apply_guardrail({"texts": ["unsafe"]}, request_data, "request") == {
+                "texts": ["unsafe"]
+            }
+        assert upstream.call_count == expected_calls
 
 
 def _judge_response_mock() -> MagicMock:

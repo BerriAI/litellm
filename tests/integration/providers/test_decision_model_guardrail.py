@@ -8,12 +8,14 @@ Requests opt into each guardrail through metadata.guardrails.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, object_value, string_value
-from integration._support.upstream import delete_scenario, register_scenario
+from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, held, object_value, string_value
+from integration._support.database import read_rows
+from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from pydantic import JsonValue
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse
 
@@ -36,7 +38,7 @@ def _chat_completion() -> JsonResponse:
     return JsonResponse(
         content_type="application/json",
         body={
-            "id": "chatcmpl-integration",
+            "id": f"chatcmpl-{uuid.uuid4().hex}",
             "object": "chat.completion",
             "created": 1,
             "model": "gpt-4o-mini",
@@ -85,6 +87,49 @@ def _add_guardrail(gateway: Gateway, name: str, decision_model: str, mode: str =
         },
     )
 
+    return string_value(created["guardrail_id"])
+
+
+def _judge_reply(score: int) -> JsonResponse:
+    return JsonResponse(
+        content_type="application/json",
+        body={
+            "id": f"chatcmpl-judge-{uuid.uuid4().hex}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "integration-judge",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": f'{{"overall_score": {score}, "reasoning": "verdict"}}',
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        },
+    )
+
+
+def _add_judge_guardrail(gateway: Gateway, name: str, judge_model: str, mode: str = "pre_call") -> str:
+    created: Final = gateway.post(
+        "/guardrails",
+        {
+            "guardrail": {
+                "guardrail_name": name,
+                "litellm_params": {
+                    "guardrail": "llm_as_a_judge",
+                    "mode": mode,
+                    "judge_model": judge_model,
+                    "criteria": [{"name": "Safety", "weight": 100, "description": "Is the prompt safe?"}],
+                    "overall_threshold": 80,
+                    "on_failure": "block",
+                },
+            }
+        },
+    )
     return string_value(created["guardrail_id"])
 
 
@@ -202,27 +247,129 @@ def test_decision_guardrail_resolves_the_callers_team_model(
             assert all(not str(object_value(call)["path"]).endswith("/v1/systemone") for call in requests), observed
 
 
+def _guarded_body(path: str, model: str, guardrail: str) -> dict[str, JsonValue]:
+    if path == "/v1/responses":
+        return {"model": model, "input": "test prompt", "guardrails": [guardrail]}
+    return {
+        "model": model,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "test prompt"}],
+        "guardrails": [guardrail],
+    }
+
+
+@pytest.mark.parametrize(
+    ("caller", "expected_status", "decision_calls"),
+    [("owner", 400, 1), ("other-team", 502, 0), ("other-team-forging-owner", 502, 0)],
+)
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v1/responses", "/v1/messages"])
+def test_team_decision_model_follows_the_authenticated_caller_on_every_endpoint(
+    gateway: Gateway, path: str, caller: str, expected_status: int, decision_calls: int
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = register_scenario(f"dm-endpoint-{uuid.uuid4().hex}", _upstream(_PROBABILITY_ABOVE))
+        scenario.cleanups.callback(delete_scenario, handle)
+        chat: Final = scenario.model(api_base=f"{handle.api_base()}/v1", api_key=handle.scenario_id)
+        owner: Final = scenario.team(models=[chat])
+        decision: Final = scenario.model(
+            model="typesafe/jev-latest",
+            api_base=handle.api_base(),
+            api_key=handle.scenario_id,
+            model_info={"team_id": owner},
+        )
+        key: Final = scenario.key(team_id=owner if caller == "owner" else scenario.team(models=[chat]))
+        guardrail: Final = f"dm-endpoint-guard-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(_delete_guardrail, gateway, _add_guardrail(gateway, guardrail, decision))
+        forged: Final[dict[str, JsonValue]] = {"user_api_key_team_id": owner, "user_api_key_auth": {"team_id": owner}}
+        body: Final[dict[str, JsonValue]] = {
+            **_guarded_body(path, chat, guardrail),
+            **({"metadata": forged, "litellm_metadata": forged} if caller == "other-team-forging-owner" else {}),
+        }
+        with httpx.Client(timeout=10, trust_env=False) as client:
+            client.get(f"{gateway.upstream_url}/__observations").raise_for_status()
+            response: Final = gateway.request("POST", path, body, key=key)
+            observed: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
+        requests: Final = observed["requests"]
+        assert isinstance(requests, list)
+        decision_paths: Final = [
+            path_value
+            for path_value in (str(object_value(call)["path"]) for call in requests)
+            if path_value.endswith("/v1/systemone")
+        ]
+        assert (response.status_code, len(decision_paths)) == (expected_status, decision_calls), response.text
+
+
+def _add_model_named(
+    gateway: Gateway, scenario: Scenario, name: str, model: str, handle: ScenarioHandle, team: str | None
+) -> None:
+    created: Final = gateway.post(
+        "/model/new",
+        {
+            "model_name": name,
+            "litellm_params": {"model": model, "api_base": handle.api_base(), "api_key": handle.scenario_id},
+            "model_info": {} if team is None else {"team_id": team},
+        },
+    )
+    scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
+
+
+def _decision_scenarios(requests: JsonValue, handles: Sequence[ScenarioHandle]) -> list[str]:
+    assert isinstance(requests, list)
+    paths: Final = [str(object_value(call)["path"]) for call in requests]
+    return [
+        handle.scenario_id
+        for path in paths
+        if path.endswith("/v1/systemone")
+        for handle in handles
+        if f"/{handle.scenario_id}/" in path
+    ]
+
+
+@pytest.mark.parametrize(
+    ("caller", "expected_status", "answered_by"), [("owner", 400, "team"), ("other-team", 200, "shared")]
+)
+@pytest.mark.parametrize("shared", ["same-name", "wildcard"])
+def test_team_decision_model_wins_over_a_shared_name_only_for_the_owner(
+    gateway: Gateway, shared: str, caller: str, expected_status: int, answered_by: str
+) -> None:
+    with gateway.scenario() as scenario:
+        team_handle: Final = register_scenario(f"dm-own-{uuid.uuid4().hex}", _upstream(_PROBABILITY_ABOVE))
+        scenario.cleanups.callback(delete_scenario, team_handle)
+        shared_handle: Final = register_scenario(f"dm-shared-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW))
+        scenario.cleanups.callback(delete_scenario, shared_handle)
+        chat: Final = scenario.model(api_base=f"{shared_handle.api_base()}/v1", api_key=shared_handle.scenario_id)
+        owner: Final = scenario.team(models=[chat])
+        prefix: Final = f"integration-{uuid.uuid4().hex}"
+        decision: Final = f"{prefix}/jev-latest"
+        _add_model_named(
+            gateway,
+            scenario,
+            decision if shared == "same-name" else f"{prefix}/*",
+            "typesafe/jev-latest" if shared == "same-name" else "typesafe/*",
+            shared_handle,
+            None,
+        )
+        _add_model_named(gateway, scenario, decision, "typesafe/jev-latest", team_handle, owner)
+        key: Final = scenario.key(team_id=owner if caller == "owner" else scenario.team(models=[chat]))
+        guardrail: Final = f"dm-shadow-guard-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(_delete_guardrail, gateway, _add_guardrail(gateway, guardrail, decision))
+        with httpx.Client(timeout=10, trust_env=False) as client:
+            client.get(f"{gateway.upstream_url}/__observations").raise_for_status()
+            response: Final = gateway.request(
+                "POST", "/v1/chat/completions", _guarded_body("/v1/chat/completions", chat, guardrail), key=key
+            )
+            observed: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
+        expected_scenario: Final = (team_handle if answered_by == "team" else shared_handle).scenario_id
+        assert (response.status_code, _decision_scenarios(observed["requests"], (team_handle, shared_handle))) == (
+            expected_status,
+            [expected_scenario],
+        ), response.text
+
+
 @pytest.mark.parametrize("mode", ["pre_call", "post_call", "during_call"])
 def test_judge_guardrail_blocks_using_the_callers_team_model(gateway: Gateway, mode: str) -> None:
     with gateway.scenario() as scenario:
-        judge_response: Final = JsonResponse(
-            content_type="application/json",
-            body={
-                "id": "chatcmpl-team-judge",
-                "object": "chat.completion",
-                "created": 1,
-                "model": "integration-judge",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": '{"overall_score": 0, "reasoning": "unsafe"}'},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-            },
-        )
-        handle: Final = register_scenario(f"judge-team-{uuid.uuid4().hex}", judge_response)
+        handle: Final = register_scenario(f"judge-team-{uuid.uuid4().hex}", _judge_reply(0))
         scenario.cleanups.callback(delete_scenario, handle)
         chat: Final = scenario.model()
         team: Final = scenario.team(models=[chat])
@@ -233,23 +380,7 @@ def test_judge_guardrail_blocks_using_the_callers_team_model(gateway: Gateway, m
         )
         key: Final = scenario.key(team_id=team)
         guardrail: Final = f"judge-team-guard-{uuid.uuid4().hex}"
-        created: Final = gateway.post(
-            "/guardrails",
-            {
-                "guardrail": {
-                    "guardrail_name": guardrail,
-                    "litellm_params": {
-                        "guardrail": "llm_as_a_judge",
-                        "mode": mode,
-                        "judge_model": judge,
-                        "criteria": [{"name": "Safety", "weight": 100, "description": "Is the prompt safe?"}],
-                        "overall_threshold": 80,
-                        "on_failure": "block",
-                    },
-                }
-            },
-        )
-        scenario.cleanups.callback(_delete_guardrail, gateway, string_value(created["guardrail_id"]))
+        scenario.cleanups.callback(_delete_guardrail, gateway, _add_judge_guardrail(gateway, guardrail, judge, mode))
         guarded: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -284,32 +415,107 @@ def test_judge_guardrail_blocks_using_the_callers_team_model(gateway: Gateway, m
 
 @pytest.mark.parametrize("explicit_access", [False, True])
 @pytest.mark.parametrize("route", ["/apply_guardrail", "/guardrails/apply_guardrail"])
-def test_standalone_guardrail_rejects_a_forged_team(
-    gateway: Gateway, route: str, explicit_access: bool
+@pytest.mark.parametrize(("kind", "forwarded_status"), [("decision_model", 502), ("llm_as_a_judge", 200)])
+def test_standalone_guardrail_ignores_a_forged_team(
+    gateway: Gateway, route: str, explicit_access: bool, kind: str, forwarded_status: int
 ) -> None:
     with gateway.scenario() as scenario:
-        handle: Final = register_scenario(f"dm-forged-{uuid.uuid4().hex}", _upstream(_PROBABILITY_ABOVE))
+        is_decision: Final = kind == "decision_model"
+        handle: Final = register_scenario(
+            f"{kind}-forged-{uuid.uuid4().hex}", _upstream(_PROBABILITY_ABOVE) if is_decision else _judge_reply(0)
+        )
         scenario.cleanups.callback(delete_scenario, handle)
         owner: Final = scenario.team(models=[])
         foreign: Final = scenario.team(models=[])
-        decision: Final = scenario.model(
-            model="typesafe/jev-latest",
-            api_base=handle.api_base(),
-            api_key=handle.scenario_id,
-            model_info={"team_id": owner},
+        guarded_model: Final = (
+            scenario.model(
+                model="typesafe/jev-latest",
+                api_base=handle.api_base(),
+                api_key=handle.scenario_id,
+                model_info={"team_id": owner},
+            )
+            if is_decision
+            else scenario.model(
+                api_base=f"{handle.api_base()}/v1", api_key=handle.scenario_id, model_info={"team_id": owner}
+            )
         )
         key: Final = scenario.key(team_id=foreign, **({"allowed_routes": [route]} if explicit_access else {}))
-        guardrail: Final = f"dm-forged-guard-{uuid.uuid4().hex}"
-        identity: Final = _add_guardrail(gateway, guardrail, decision)
+        guardrail: Final = f"{kind}-forged-guard-{uuid.uuid4().hex}"
+        identity: Final = (
+            _add_guardrail(gateway, guardrail, guarded_model)
+            if is_decision
+            else _add_judge_guardrail(gateway, guardrail, guarded_model)
+        )
         scenario.cleanups.callback(_delete_guardrail, gateway, identity)
         with httpx.Client(timeout=10, trust_env=False) as client:
             client.get(f"{gateway.upstream_url}/__observations").raise_for_status()
             response: Final = gateway.request(
                 "POST",
                 route,
-                {"guardrail_name": guardrail, "text": "unsafe", "metadata": {"user_api_key_team_id": owner}},
+                {
+                    "guardrail_name": guardrail,
+                    "text": "unsafe",
+                    "metadata": {"user_api_key_team_id": owner, "user_api_key_auth": {"team_id": owner}},
+                },
                 key=key,
             )
             observed: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
             assert observed["requests"] == [], observed
-            assert response.status_code == (502 if explicit_access else 401), response.text
+            assert response.status_code == (forwarded_status if explicit_access else 401), response.text
+
+
+def _spend_teams_by_request(request_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT team_id FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,))
+
+
+def _spend_teams_by_model_group(model_group: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT team_id FROM "LiteLLM_SpendLogs" WHERE model_group = %s', (model_group,))
+
+
+@pytest.mark.parametrize("kind", ["decision_model", "llm_as_a_judge"])
+def test_proxy_wide_guardrail_model_spend_is_not_charged_to_the_team_caller(gateway: Gateway, kind: str) -> None:
+    with gateway.scenario() as scenario:
+        is_decision: Final = kind == "decision_model"
+        chat_handle: Final = register_scenario(f"{kind}-chat-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW))
+        scenario.cleanups.callback(delete_scenario, chat_handle)
+        guard_handle: Final = register_scenario(
+            f"{kind}-shared-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW) if is_decision else _judge_reply(100)
+        )
+        scenario.cleanups.callback(delete_scenario, guard_handle)
+        chat: Final = scenario.model(api_base=f"{chat_handle.api_base()}/v1", api_key=chat_handle.scenario_id)
+        team: Final = scenario.team(models=[chat])
+        key: Final = scenario.key(team_id=team)
+        guard_model: Final = (
+            scenario.model(
+                model="typesafe/jev-latest", api_base=guard_handle.api_base(), api_key=guard_handle.scenario_id
+            )
+            if is_decision
+            else scenario.model(api_base=f"{guard_handle.api_base()}/v1", api_key=guard_handle.scenario_id)
+        )
+        guardrail: Final = f"{kind}-shared-guard-{uuid.uuid4().hex}"
+        identity: Final = (
+            _add_guardrail(gateway, guardrail, guard_model)
+            if is_decision
+            else _add_judge_guardrail(gateway, guardrail, guard_model)
+        )
+        scenario.cleanups.callback(_delete_guardrail, gateway, identity)
+        with httpx.Client(timeout=10, trust_env=False) as client:
+            client.get(f"{gateway.upstream_url}/__observations").raise_for_status()
+            guarded: Final = gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": chat,
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "metadata": {"guardrails": [guardrail]},
+                },
+                key=key,
+            )
+            assert guarded.status_code == 200, guarded.text
+            observed: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
+            requests: Final = observed["requests"]
+            assert isinstance(requests, list)
+            assert any(guard_handle.scenario_id in str(object_value(call)["path"]) for call in requests), observed
+        response_id: Final = string_value(JSON_OBJECT.validate_python(guarded.json())["id"])
+        assert eventually(lambda: _spend_teams_by_request(response_id), bool, seconds=70) == [{"team_id": team}]
+        held(lambda: _spend_teams_by_model_group(guard_model), lambda rows: rows == [], holding=3)

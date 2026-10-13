@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final, Literal
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -16,6 +20,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponse
 
 JSON_FENCE_RE: Final = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def default_router_provider() -> Router | None:
@@ -107,6 +112,53 @@ def judge_target(router: Router | None, model: str, team_id: str | None = None) 
         return JudgeTarget("router", frozenset(_provider_qualified(m) or m for m in served))
     qualified: Final = _provider_qualified(model)
     return JudgeTarget("sdk", frozenset({qualified})) if qualified is not None else JudgeTarget("nothing", frozenset())
+
+
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT_MAPPING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _bucket_auth(request_data: Mapping[str, object], bucket_name: str) -> UserAPIKeyAuth | None:
+    bucket: Final = _object_mapping(request_data.get(bucket_name))
+    auth: Final = bucket.get("user_api_key_auth") if bucket is not None else None
+    return auth if isinstance(auth, UserAPIKeyAuth) else None
+
+
+def attached_auth(request_data: object) -> UserAPIKeyAuth | None:
+    """The `UserAPIKeyAuth` the proxy attached to `request_data`'s metadata, or None.
+
+    Only an instance counts. A `user_api_key_auth` dict or a plain `user_api_key_team_id`
+    in the request is JSON the caller wrote, so neither is read.
+    """
+    data: Final = _object_mapping(request_data)
+    if data is None:
+        return None
+    return next(
+        (
+            auth
+            for bucket_name in ("metadata", "litellm_metadata")
+            if (auth := _bucket_auth(data, bucket_name)) is not None
+        ),
+        None,
+    )
+
+
+def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | None) -> str | None:
+    """The team a guardrail call for the caller behind `auth` resolves `model` under, or None.
+
+    It is the caller's team only when the router's route to `model` for that team reaches a
+    deployment a caller without a team cannot reach, which means the team has its own
+    deployment behind the name. Names every caller shares keep resolving, and billing,
+    exactly as they do without a team.
+    """
+    team_id: Final = auth.team_id if auth is not None else None
+    if team_id is None or router is None:
+        return None
+    team_route: Final = router.get_candidate_model_ids_for_route(model, team_id)
+    return None if team_route <= router.get_candidate_model_ids_for_route(model) else team_id
 
 
 async def judge_acompletion(
