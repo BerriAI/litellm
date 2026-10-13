@@ -5716,6 +5716,7 @@ class TestVertexAILiveWebsocketPassthrough:
             "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
         )
         assert passthrough_kwargs["custom_headers"]["Authorization"] == "Bearer token-abc"
+        assert passthrough_kwargs["endpoint"] == "/vertex_ai/live"
         rewriter = passthrough_kwargs["setup_model_rewriter"]
         assert rewriter("gemini-live") == (
             "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"

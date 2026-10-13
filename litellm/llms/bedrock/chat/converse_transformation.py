@@ -52,6 +52,7 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -105,11 +106,12 @@ from ..common_utils import (
     bedrock_converse_supports_parallel_tool_use_config,
     bedrock_model_accepts_cache_points,
     bedrock_reasoning_effort_disabled,
+    bedrock_rejects_stop_sequences,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
-    is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
+    supports_bedrock_prompt_cache_ttl,
 )
 
 if TYPE_CHECKING:
@@ -1054,7 +1056,7 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if param == "stream":
                 optional_params["stream"] = value
-            if param == "stop":
+            if param == "stop" and not bedrock_rejects_stop_sequences(model):
                 if isinstance(value, str):
                     if len(value) == 0:  # converse raises error for empty strings
                         continue
@@ -1383,7 +1385,7 @@ class AmazonConverseConfig(BaseConfig):
         cache_point: Final = CachePointBlock(type="default")
         if isinstance(control, dict) and "ttl" in control:
             ttl: Final = control["ttl"]
-            if ttl in ["5m", "1h"] and model is not None and is_claude_4_5_on_bedrock(model):
+            if ttl in ["5m", "1h"] and model is not None and supports_bedrock_prompt_cache_ttl(model):
                 cache_point["ttl"] = ttl
         return cache_point
 
@@ -2036,11 +2038,16 @@ class AmazonConverseConfig(BaseConfig):
             litellm_params=litellm_params,
         )
 
-        bedrock_messages: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
+        bedrock_messages: Final = list(
+            place_tool_result_images(
+                await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                    messages=messages,
+                    model=model,
+                    llm_provider="bedrock_converse",
+                    user_continue_message=litellm_params.pop("user_continue_message", None),
+                ),
+                model,
+            )
         )
 
         request_metadata: Final = resolve_bedrock_request_metadata(
@@ -2099,11 +2106,16 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         ## TRANSFORMATION ##
-        bedrock_messages: Final[list[MessageBlock]] = _bedrock_converse_messages_pt(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
+        bedrock_messages: Final[list[MessageBlock]] = list(
+            place_tool_result_images(
+                _bedrock_converse_messages_pt(
+                    messages=messages,
+                    model=model,
+                    llm_provider="bedrock_converse",
+                    user_continue_message=litellm_params.pop("user_continue_message", None),
+                ),
+                model,
+            )
         )
 
         request_metadata: Final = resolve_bedrock_request_metadata(

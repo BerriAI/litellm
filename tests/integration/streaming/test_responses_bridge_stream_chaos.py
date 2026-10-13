@@ -1,6 +1,5 @@
 import asyncio
 import re
-import signal
 import socket
 import threading
 import uuid
@@ -322,18 +321,18 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_the_bridged
         held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
         assert sum(held_by.values()) == 20, held_by
         victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-        victim: Final = psutil.Process(victim_pid)
-        victim.suspend()
-        victim.send_signal(signal.SIGKILL)
-        held.release.set()
-        served: Final = await burst
-        assert held_by[survivor_pid] >= 10, held_by
-        assert len(served) == held_by[survivor_pid], (held_by, len(served))
-        for item in served:
-            _assert_answered_in_its_own_shape(item)
-        follow_up: Final = _Call("chat_healthy", uuid.uuid4().hex)
-        (answered,) = await _burst(rig.gateway, (follow_up,))
-        _assert_answered_in_its_own_shape(answered)
+        with rig.proxy.replacing_worker(victim_pid) as kill:
+            kill.freeze()
+            await asyncio.to_thread(kill)
+            held.release.set()
+            served: Final = await burst
+            assert held_by[survivor_pid] >= 10, held_by
+            assert len(served) == held_by[survivor_pid], (held_by, len(served))
+            for item in served:
+                _assert_answered_in_its_own_shape(item)
+            follow_up: Final = _Call("chat_healthy", uuid.uuid4().hex)
+            (answered,) = await _burst(rig.gateway, (follow_up,))
+            _assert_answered_in_its_own_shape(answered)
         _assert_forwarded(wire.drain(), (*calls, follow_up))
     _assert_each_lands_once((*served, answered))
 
@@ -349,7 +348,7 @@ async def test_proxy_sigterm_mid_burst_drains_the_spend_log_queue_and_the_restar
     with wire_server(held.respond, port=port) as wire:
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
             burst: Final = await _held_burst(owned.gateway, calls, held)
-            owned.process.terminate()
+            owned.begin_shutdown()
             held.release.set()
             served: Final = await burst
             await asyncio.to_thread(
