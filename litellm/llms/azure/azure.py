@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Coroutine
-from typing import Final
+from typing import Final, cast
 
 import httpx
 from openai import (
@@ -13,6 +13,7 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
+from openai.types.audio.speech_create_params import SpeechCreateParams
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
@@ -1380,6 +1381,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         aspeech: bool | None = None,
         client=None,
         litellm_params: dict | None = None,
+        stream: bool = False,
     ) -> HttpxBinaryResponseContent:
         max_retries = optional_params.pop("max_retries", 2)
 
@@ -1399,6 +1401,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 logging_obj=logging_obj,
                 client=client,
                 litellm_params=litellm_params,
+                stream=stream,
             )
 
         azure_client: Final[AzureOpenAI] = self.get_azure_openai_client(
@@ -1420,13 +1423,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
 
-        response: Final = azure_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = cast(  # cast-ok: the provider-mapped body is this SDK call's own params shape
+            SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
         )
-        return HttpxBinaryResponseContent(response=response.response)
+        raw_response: Final = (
+            azure_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
+            if stream
+            else azure_client.audio.speech.create(**params).response
+        )
+        return HttpxBinaryResponseContent(response=raw_response)
 
     async def async_audio_speech(
         self,
@@ -1444,6 +1449,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         client=None,
         litellm_params: dict | None = None,
+        stream: bool = False,
     ) -> HttpxBinaryResponseContent:
         azure_client: Final[AsyncAzureOpenAI] = self.get_azure_openai_client(
             api_base=api_base,
@@ -1464,14 +1470,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
 
-        azure_response: Final = await azure_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = cast(  # cast-ok: the provider-mapped body is this SDK call's own params shape
+            SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
         )
-
-        return HttpxBinaryResponseContent(response=azure_response.response)
+        raw_response: Final = (
+            (await azure_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
+            if stream
+            else (await azure_client.audio.speech.create(**params)).response
+        )
+        return HttpxBinaryResponseContent(response=raw_response)
 
     def get_headers(
         self,

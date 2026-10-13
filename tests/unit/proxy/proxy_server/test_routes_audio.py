@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+from litellm.constants import AUDIO_SPEECH_CHUNK_SIZE
 from litellm.proxy import proxy_server
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 
@@ -254,3 +255,52 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
         response = client.post(path, files=files, data=data)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+class _RecordingAudioStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes], produced: list[bytes]):
+        self._chunks = chunks
+        self._produced = produced
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            self._produced.append(chunk)
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_chunk_generator_forwards_an_unread_upstream_stream():
+    """A streaming upstream response reaches the client chunk by chunk, not buffered whole."""
+    produced: list[bytes] = []
+    first, second = b"a" * AUDIO_SPEECH_CHUNK_SIZE, b"b" * AUDIO_SPEECH_CHUNK_SIZE
+    stream = _RecordingAudioStream([first, second], produced)
+    response = HttpxBinaryResponseContent(
+        httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
+    )
+
+    chunks = proxy_server._audio_speech_chunk_generator(response)
+
+    assert await anext(chunks) == first
+    assert produced == [first]
+    assert b"".join([chunk async for chunk in chunks]) == second
+    assert stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_chunk_generator_closes_a_stream_abandoned_midway():
+    """An abandoned stream still releases its connection, a client disconnect cannot leak one."""
+    first = b"a" * AUDIO_SPEECH_CHUNK_SIZE
+    stream = _RecordingAudioStream([first, b"b" * AUDIO_SPEECH_CHUNK_SIZE], [])
+    response = HttpxBinaryResponseContent(
+        httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
+    )
+
+    chunks = proxy_server._audio_speech_chunk_generator(response)
+    assert await anext(chunks) == first
+    await chunks.aclose()
+
+    assert stream.closed is True

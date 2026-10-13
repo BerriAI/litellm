@@ -37,6 +37,8 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
     Reference: https://elevenlabs.io/docs/api-reference/text-to-speech/convert
     """
 
+    supports_streaming = True
+
     TTS_BASE_URL = "https://api.elevenlabs.io"
     TTS_ENDPOINT_PATH = "/v1/text-to-speech"
     DEFAULT_OUTPUT_FORMAT = "pcm_44100"

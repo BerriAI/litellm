@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, TypedDict
 
 import httpx
 
@@ -35,6 +35,8 @@ class TextToSpeechRequestData(TypedDict, total=False):
 
 
 class BaseTextToSpeechConfig(ABC):
+    supports_streaming: ClassVar[bool] = False
+
     def __init__(self):
         pass
 

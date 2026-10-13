@@ -17,6 +17,7 @@ from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import RequestOptions
 from openai.types import CreateEmbeddingResponse
+from openai.types.audio.speech_create_params import SpeechCreateParams
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, TypeAdapter
@@ -1618,6 +1619,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         aspeech: bool | None = None,
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        stream: bool = False,
     ) -> HttpxBinaryResponseContent:
         if aspeech is not None and aspeech is True:
             return self.async_audio_speech(
@@ -1634,6 +1636,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 logging_obj=logging_obj,
                 client=client,
                 shared_session=shared_session,
+                stream=stream,
             )
 
         openai_client: Final = self._get_openai_client(
@@ -1656,14 +1659,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        response: Final = sync_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = cast(  # cast-ok: the provider-mapped body is this SDK call's own params shape
+            SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
-        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        raw_response: Final = (
+            sync_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
+            if stream
+            else sync_client.audio.speech.create(**params).response
+        )
+        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
     async def async_audio_speech(
@@ -1681,6 +1686,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
         client=None,
         shared_session: Optional["ClientSession"] = None,
+        stream: bool = False,
     ) -> HttpxBinaryResponseContent:
         openai_client: Final = cast(
             AsyncOpenAI,
@@ -1704,14 +1710,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        response: Final = await openai_client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=input,
-            **optional_params,
+        params: Final = cast(  # cast-ok: the provider-mapped body is this SDK call's own params shape
+            SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
         )
-        speech_response: Final = HttpxBinaryResponseContent(response=response.response)
-        set_provider_response_headers_in_hidden_params(speech_response, response.response.headers)
+        raw_response: Final = (
+            (await openai_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
+            if stream
+            else (await openai_client.audio.speech.create(**params)).response
+        )
+        speech_response: Final = HttpxBinaryResponseContent(response=raw_response)
+        set_provider_response_headers_in_hidden_params(speech_response, raw_response.headers)
         return speech_response
 
 

@@ -3642,6 +3642,10 @@ class TestIsStreamingRequest:
     def test_non_streaming_call_type_enum(self):
         assert _is_streaming_request(kwargs={}, call_type=CallTypes.acompletion) is False
 
+    @pytest.mark.parametrize("call_type", [CallTypes.aspeech, CallTypes.aspeech.value, CallTypes.speech])
+    def test_speech_with_stream_true_is_not_a_streaming_request(self, call_type):
+        assert _is_streaming_request(kwargs={"stream": True}, call_type=call_type) is False
+
     def test_stream_true_overrides_non_streaming_call_type(self):
         assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True
 

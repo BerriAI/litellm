@@ -8273,6 +8273,7 @@ def speech(
     headers: dict | None = None,
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
+    stream: bool = False,
     base_url: str | None = None,
     **kwargs,
 ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
@@ -8410,6 +8411,7 @@ def speech(
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
+            stream=stream,
         )
     elif custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         # Check if this is Azure Speech Service (Cognitive Services TTS)
@@ -8442,6 +8444,7 @@ def speech(
                 aspeech=aspeech or False,
                 api_base=api_base,
                 api_key=api_key,
+                stream=stream,
                 **kwargs,
             )
         else:
@@ -8489,6 +8492,7 @@ def speech(
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 aspeech=aspeech,
                 litellm_params=litellm_params_dict,
+                stream=stream,
             )
     elif custom_llm_provider == "elevenlabs":
         from litellm.llms.elevenlabs.text_to_speech.transformation import (
@@ -8533,6 +8537,7 @@ def speech(
             extra_headers=extra_headers,
             client=client,
             _is_async=aspeech or False,
+            stream=stream,
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
@@ -8731,6 +8736,7 @@ def speech(
             aspeech=aspeech or False,
             api_base=api_base,
             api_key=api_key,
+            stream=stream,
             **kwargs,
         )
 

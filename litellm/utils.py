@@ -2376,6 +2376,16 @@ _STREAMING_CALL_TYPES: Final = frozenset(
 )
 
 
+_SPEECH_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.speech,
+        CallTypes.aspeech,
+        CallTypes.speech.value,
+        CallTypes.aspeech.value,
+    }
+)
+
+
 def _is_streaming_request(
     kwargs: dict[str, object],
     call_type: CallTypes | str,
@@ -2385,7 +2395,13 @@ def _is_streaming_request(
     Returns True if:
         - if "stream=True" in kwargs  (litellm chat completion, litellm text completion, litellm messages)
         - if call_type is generate_content_stream or agenerate_content_stream (litellm google genai)
+
+    Speech is excluded: "stream=True" there asks for the audio bytes to be forwarded as they
+    arrive, the return value is still a single response object, so it is logged like any other
+    non-streaming call.
     """
+    if call_type in _SPEECH_CALL_TYPES:
+        return False
     if "stream" in kwargs and kwargs["stream"] is True:
         return True
     return call_type in _STREAMING_CALL_TYPES

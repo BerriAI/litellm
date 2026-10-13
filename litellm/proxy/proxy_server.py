@@ -12834,8 +12834,11 @@ async def _audio_speech_chunk_generator(
     # too large: latency is low, but memory usage is high
     # 8192 is a good compromise
     _generator: Final = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
-    async for chunk in _generator:
-        yield chunk
+    try:
+        async for chunk in _generator:
+            yield chunk
+    finally:
+        await _response.aclose()
 
 
 @router.post(
