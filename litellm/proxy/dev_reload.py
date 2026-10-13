@@ -1,3 +1,4 @@
+import importlib
 import logging
 import sys
 from collections.abc import Callable, Sequence
@@ -48,7 +49,9 @@ def multi_worker_reload_supported() -> bool:
 
 
 def load_app_or_exit(import_path: str) -> Callable[..., object]:
+    module_name: Final = import_path.partition(":")[0]
     try:
+        importlib.import_module(module_name)
         return ASGI_APP.validate_python(import_path)
     except Exception:
         LOGGER.exception("Error loading ASGI app %s", import_path)

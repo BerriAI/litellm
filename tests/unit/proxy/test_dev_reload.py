@@ -1,5 +1,7 @@
 import contextlib
 import importlib
+import logging
+import logging.handlers
 import os
 import re
 import signal
@@ -7,6 +9,7 @@ import socket
 import subprocess
 import sys
 import time
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
@@ -82,6 +85,33 @@ def test_a_broken_app_exits_the_worker_as_a_startup_failure(
     with pytest.raises(SystemExit) as exit_info:
         pool_config(_options(f"{module}:app"), workers=2).load()
     assert exit_info.value.code == uvicorn_config.STARTUP_FAILURE
+
+
+@pytest.mark.parametrize(
+    ("module", "source"),
+    (
+        ("reload_import_error_app", "import os\nfrom os import missing_name\n"),
+        ("reload_value_error_app", "import os\nraise ValueError('broken edit')\n"),
+    ),
+)
+def test_a_broken_import_logs_the_line_that_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module: str, source: str
+) -> None:
+    app_file: Final = tmp_path / f"{module}.py"
+    app_file.write_text(source)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    uvicorn_logger: Final = logging.getLogger("uvicorn.error")
+    captured: Final = logging.handlers.BufferingHandler(capacity=POOL_WORKERS)
+    uvicorn_logger.addHandler(captured)
+    try:
+        with pytest.raises(SystemExit):
+            load_app_or_exit(f"{module}:app")
+    finally:
+        uvicorn_logger.removeHandler(captured)
+    (record,) = captured.buffer
+    assert record.exc_info is not None
+    raised_at: Final = frozenset((frame.filename, frame.lineno) for frame in traceback.extract_tb(record.exc_info[2]))
+    assert (str(app_file), 2) in raised_at, record.exc_text
 
 
 def test_a_working_app_loads_as_the_module_defines_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
