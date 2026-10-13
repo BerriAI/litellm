@@ -19,7 +19,7 @@ from openai._types import RequestOptions
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -351,22 +351,33 @@ _NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 
 
-def _first_non_ascii_extra_header(data: Mapping[str, object]) -> tuple[str, str] | None:
+_STR_DICT_ADAPTER: Final = TypeAdapter(dict[str, str])
+
+
+def _first_non_ascii_extra_header(data: Mapping[str, object]) -> str | None:
     """Name the first non-ASCII ``extra_headers`` entry, or None if the offending
     value came from elsewhere (e.g. the api_key or organization id)."""
-    extra_headers: Final = data.get("extra_headers")
-    if not isinstance(extra_headers, Mapping):
+    raw: Final = data.get("extra_headers")
+    if raw is None:
         return None
-    return next(((k, v) for k, v in extra_headers.items() if isinstance(v, str) and not v.isascii()), None)
+    try:
+        extra_headers: Final = _STR_DICT_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return None
+    return next((k for k, v in extra_headers.items() if not v.isascii()), None)
 
 
 def _non_ascii_header_error(data: Mapping[str, object], original_error: UnicodeEncodeError) -> OpenAIError:
     """Re-raise a bare httpx ``UnicodeEncodeError`` (``'ascii' codec can't encode
-    character ...``) naming the offending header when it is one litellm set."""
+    character ...``) naming the offending header when it is one litellm set.
+
+    Names only the header, never its value: the header may itself be a
+    credential (e.g. a configured ``x-api-key``), and this becomes a customer-
+    facing error message.
+    """
     offending: Final = _first_non_ascii_extra_header(data)
     message: Final = (
-        f"extra_headers['{offending[0]}'] contains a non-ASCII character and cannot be sent "
-        f"as an HTTP header value: {offending[1]!r}"
+        f"extra_headers['{offending}'] contains a non-ASCII character and cannot be sent as an HTTP header value."
         if offending is not None
         else (
             "A request header contains a non-ASCII character and cannot be sent as an HTTP header value. "

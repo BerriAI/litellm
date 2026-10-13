@@ -156,7 +156,7 @@ class TestNonAsciiHeaderHandling:
             )
 
         assert "extra_headers['x-trace-locale']" in str(exc_info.value)
-        assert "café" in str(exc_info.value)
+        assert "café" not in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_async_non_ascii_extra_header_names_the_header(self):
@@ -179,7 +179,29 @@ class TestNonAsciiHeaderHandling:
             )
 
         assert "extra_headers['x-trace-locale']" in str(exc_info.value)
-        assert "café" in str(exc_info.value)
+        assert "café" not in str(exc_info.value)
+
+    def test_sync_non_ascii_extra_header_does_not_leak_a_credential_header_value(self):
+        """A configured header such as x-api-key may itself be the credential;
+        naming it is fine, but the error must never echo its value back."""
+        openai_chat = OpenAIChatCompletion()
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.with_raw_response.create.side_effect = _as_unicode_encode_error()
+
+        with pytest.raises(OpenAIError) as exc_info:
+            openai_chat.make_sync_openai_chat_completion_request(
+                openai_client=mock_client,
+                data={
+                    "messages": [{"role": "user", "content": "test"}],
+                    "extra_headers": {"x-api-key": "sk-live-secret-café"},
+                },
+                timeout=30,
+                logging_obj=MagicMock(),
+            )
+
+        assert "extra_headers['x-api-key']" in str(exc_info.value)
+        assert "sk-live-secret" not in str(exc_info.value)
 
     def test_sync_non_ascii_header_outside_extra_headers_names_no_header(self):
         """When none of this request's own extra_headers are at fault (e.g. the
