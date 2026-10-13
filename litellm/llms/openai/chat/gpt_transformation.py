@@ -492,8 +492,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         return system_messages_first(messages)
 
     def _normalized_messages(
-        self, messages: list[AllMessageValues], litellm_params: Mapping[str, object]
-    ) -> list[AllMessageValues]:
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+        litellm_params: Mapping[str, object],
+    ) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
         ordered: Final = self._prompt_cache_ordered_messages(messages, litellm_params)
         if not litellm_params.get("merge_system_message"):
             return ordered

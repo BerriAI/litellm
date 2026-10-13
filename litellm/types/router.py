@@ -702,7 +702,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     drop_params: bool | None
     ## RESPONSES API → CHAT COMPLETIONS BRIDGE ##
     use_chat_completions_api: bool | None
-    merge_system_message: bool | None
+    merge_system_message: bool | None  # writable-ok: deployment param, updated via the model management API
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
     litellm_credential_name: str | None
