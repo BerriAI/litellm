@@ -11,7 +11,7 @@ from io import BytesIO
 from typing import Any, Final
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_SkillsTable
+from litellm.models.skills import LiteLLM_SkillsTable
 
 
 class SkillPromptInjectionHandler:

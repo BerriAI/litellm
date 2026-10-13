@@ -170,6 +170,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "focus",
     "mavvrik",
     "vantage",
+    "ternary",
     "posthog",
     "levo",
     "compression_interception",
@@ -440,6 +441,7 @@ autorouter_presets_url: str = os.getenv(
     "LITELLM_AUTOROUTER_PRESETS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/public_endpoints/autorouter_presets.json",
 )
+whats_new_url: str | None = os.getenv("LITELLM_WHATS_NEW_URL")
 suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
@@ -476,6 +478,7 @@ max_end_user_budget_id: Optional[str] = None
 # pass through unchanged.
 validate_end_user_id_in_db: bool = False
 block_requests_for_models_without_pricing: bool = False
+personal_key_model_access_from_teams: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -674,6 +677,7 @@ nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
 soniox_models: Set = set()
 sambanova_models: Set = set()
+scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry through existing references.
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
 assemblyai_models: Set = set()
@@ -719,6 +723,7 @@ aws_polly_models: Set = set()
 transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+coralbricks_models: Set[str] = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -756,7 +761,7 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def _populate_provider_model_sets(model_cost_map: Dict) -> None:
+def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     for key, value in model_cost_map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
@@ -918,6 +923,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             soniox_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.add(key)
+        elif value.get("litellm_provider") == "scaledown":
+            scaledown_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
             sambanova_embedding_models.add(key)
         elif value.get("litellm_provider") == "novita":
@@ -1008,6 +1015,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "coralbricks":
+            coralbricks_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1106,6 +1115,7 @@ model_list = list(
     | nvidia_riva_models
     | soniox_models
     | sambanova_models
+    | scaledown_models
     | azure_text_models
     | novita_models
     | assemblyai_models
@@ -1141,6 +1151,7 @@ model_list = list(
     | docker_model_runner_models
     | reducto_models
     | bedrock_mantle_models
+    | coralbricks_models
     | set(clarifai_models)
 )
 
@@ -1215,6 +1226,7 @@ def _build_models_by_provider() -> dict:
         "nvidia_riva": nvidia_riva_models,
         "soniox": soniox_models,
         "sambanova": sambanova_models | sambanova_embedding_models,
+        "scaledown": scaledown_models,
         "novita": novita_models,
         "nebius": nebius_models | nebius_embedding_models,
         "aiml": aiml_models,
@@ -1259,6 +1271,7 @@ def _build_models_by_provider() -> dict:
         "transcribe": transcribe_models,
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
+        "coralbricks": coralbricks_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
@@ -1485,6 +1498,7 @@ from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
 from .decisions.main import *
+from .systemone.main import *
 from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
@@ -1681,6 +1695,9 @@ if TYPE_CHECKING:
     )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
+    )
+    from .llms.fireworks_ai.decisions.transformation import (
+        FireworksAIDecisionsConfig as FireworksAIDecisionsConfig,
     )
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
@@ -2054,6 +2071,9 @@ if TYPE_CHECKING:
     from .llms.featherless_ai.chat.transformation import (
         FeatherlessAIConfig as FeatherlessAIConfig,
     )
+    from .llms.scaledown.chat.transformation import (
+        ScaleDownChatConfig as ScaleDownChatConfig,
+    )
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
     from .llms.nadir.chat.transformation import NadirConfig as NadirConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
@@ -2267,6 +2287,7 @@ if TYPE_CHECKING:
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
     supports_audio_input: Callable[..., bool]
+    supports_video_input: Callable[..., bool]
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]
@@ -2385,6 +2406,11 @@ def __getattr__(name: str) -> Any:
     if name in registry:
         handler_func: Final = registry[name]
         return handler_func(name)
+
+    if name == "proxy":
+        import importlib
+
+        return importlib.import_module("litellm.proxy")
 
     if name == "harness" or name in _AGENT_EXPORTS:
         import importlib

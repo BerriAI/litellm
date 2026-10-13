@@ -3,6 +3,7 @@ import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { invalidateTeamQueries } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { teamMemberBudgetQueryKey } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
@@ -147,6 +148,7 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "guardrails",
   "opted_out_global_guardrails",
   "disable_global_guardrails",
+  "require_trace_id",
 ]);
 
 const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
@@ -285,7 +287,7 @@ export interface TeamMembership {
     max_parallel_requests: number | null;
     tpm_limit: number | null;
     rpm_limit: number | null;
-    model_max_budget: Record<string, number> | null;
+    model_max_budget: StoredModelMaxBudget | null;
     budget_duration: string | null;
     budget_reset_at: string | null;
     allowed_models?: string[] | null;
@@ -338,6 +340,7 @@ export interface TeamData {
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
+      model_max_budget?: StoredModelMaxBudget | null;
     } | null;
   };
   keys: any[];
@@ -419,6 +422,7 @@ const teamUpdateFieldsSchema = z.object({
     .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message),
   guardrails: z.array(z.string()).optional(),
   disable_global_guardrails: z.boolean().optional(),
+  require_trace_id: z.boolean().optional(),
   policies: z.array(z.string()).optional(),
   access_group_ids: z.array(z.string()).optional(),
   vector_stores: z.array(z.string()).optional(),
@@ -477,6 +481,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   default_estimated_output_tokens_per_model: "",
   guardrails: [],
   disable_global_guardrails: false,
+  require_trace_id: false,
   policies: [],
   access_group_ids: [],
   vector_stores: [],
@@ -539,6 +544,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     : "",
   guardrails: effectiveGuardrails,
   disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
+  require_trace_id: info.metadata?.require_trace_id === true,
   policies: info.policies || [],
   access_group_ids: info.access_group_ids || [],
   vector_stores: info.object_permission?.vector_stores || [],
@@ -627,13 +633,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [teamModelAliases, setTeamModelAliases] = useState<Record<string, string>>({});
   const [teamModelMaxBudget, setTeamModelMaxBudget] = useState<ModelMaxBudget>({});
+  const [teamMemberModelMaxBudget, setTeamMemberModelMaxBudget] = useState<ModelMaxBudget>({});
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
-  const { userRole } = useAuthorized();
+  const { userRole, isViewOnly } = useAuthorized();
   const accessGroupNames = useModelAccessGroupNames();
   const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
   const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
   const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
+  const canEditAsProxyAdmin = is_proxy_admin && !isViewOnly;
   const canEditTeamEstimates = isProxyAdminRole(userRole);
   const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
   const { data: userOrganizations = [] } = useOrganizations();
@@ -656,12 +664,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       ] as const
     ).find(([failed]) => failed)?.[1] ?? null;
   const availableRateLimitModels = useMemo(() => {
-    const selected = watchedModels ?? teamData?.team_info?.models ?? [];
+    const selected = (isEditing ? watchedModels : undefined) ?? teamData?.team_info?.models ?? [];
     if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
       return userModels;
     }
     return unfurlWildcardModelsInList(selected, userModels);
-  }, [watchedModels, teamData, userModels]);
+  }, [isEditing, watchedModels, teamData, userModels]);
+  const availableModelBudgetModels = useMemo(() => {
+    const selected = (isEditing ? watchedModels : undefined) ?? teamData?.team_info?.models ?? [];
+    if (selected.length === 0 || selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
+      return userModels;
+    }
+    const granted = [...selected, ...(teamData?.team_info?.access_group_models ?? [])];
+    return unfurlWildcardModelsInList(Array.from(new Set(granted)), userModels);
+  }, [isEditing, watchedModels, teamData, userModels]);
 
   const teamEditAccess = useMemo(() => parseTeamEditAccess(teamData?.team_info?.caller_edit_access), [teamData]);
   const canEditTeam = is_team_admin || is_proxy_admin || teamEditAccess.kind !== "none";
@@ -679,6 +695,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const startEditing = () => {
     form.reset(teamFormValues());
     setTeamModelMaxBudget((teamData?.team_info?.model_max_budget ?? {}) as ModelMaxBudget);
+    setTeamMemberModelMaxBudget(
+      (teamData?.team_info?.team_member_budget_table?.model_max_budget ?? {}) as ModelMaxBudget,
+    );
     setTeamMemberSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setIsEditing(true);
@@ -730,6 +749,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       setTeamData(await teamInfoCall(accessToken, teamId));
     } catch {
       toast.fromError("Failed to load team information");
+    } finally {
+      void queryClient.invalidateQueries({ queryKey: teamMemberBudgetQueryKey(teamId) });
     }
   };
 
@@ -816,6 +837,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       };
 
       await teamMemberAddCall(accessToken, teamId, member);
+      void queryClient.invalidateQueries({ queryKey: teamMemberBudgetQueryKey(teamId) });
 
       toast.success("Team member added successfully");
       setIsAddMemberModalVisible(false);
@@ -858,10 +880,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         allowed_models: values.allowed_models,
         temp_budget_increase: values.temp_budget_increase,
         temp_budget_expiry: values.temp_budget_expiry,
+        model_max_budget: modelMaxBudgetUpdate(values.model_max_budget ?? {}, selectedEditMember?.model_max_budget),
       };
       toast.dismiss(); // Remove all existing toasts
 
       await teamMemberUpdateCall(accessToken, teamId, member);
+      void queryClient.invalidateQueries({ queryKey: teamMemberBudgetQueryKey(teamId) });
 
       toast.success("Team member updated successfully");
       setIsEditMemberModalVisible(false);
@@ -899,6 +923,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     setIsDeleting(true);
     try {
       await teamMemberDeleteCall(accessToken, teamId, memberToDelete);
+      void queryClient.invalidateQueries({ queryKey: teamMemberBudgetQueryKey(teamId) });
 
       toast.success("Team member removed successfully");
 
@@ -1034,6 +1059,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         memberBudgetAlertEmails !== undefined && Object.keys(memberBudgetAlertEmails).length > 0
           ? { [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberBudgetAlertEmails }
           : {};
+      const storedRequireTraceIdMetadata =
+        info.metadata && Object.prototype.hasOwnProperty.call(info.metadata, "require_trace_id")
+          ? { require_trace_id: info.metadata.require_trace_id }
+          : {};
+      const requireTraceIdMetadata =
+        canEditAsProxyAdmin && values.require_trace_id !== (info.metadata?.require_trace_id === true)
+          ? { require_trace_id: values.require_trace_id === true }
+          : storedRequireTraceIdMetadata;
 
       const updateData: any = {
         team_id: teamId,
@@ -1054,6 +1087,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
           disable_global_guardrails: killSwitchOnAtSave,
+          ...requireTraceIdMetadata,
           ...(estimatedOutputTokens !== null ? { default_estimated_output_tokens: estimatedOutputTokens } : {}),
           ...(estimatedOutputTokensPerModel !== undefined
             ? { default_estimated_output_tokens_per_model: estimatedOutputTokensPerModel }
@@ -1204,6 +1238,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.model_max_budget = modelBudgets;
       }
 
+      const teamMemberModelBudgets = modelMaxBudgetUpdate(
+        teamMemberModelMaxBudget,
+        info.team_member_budget_table?.model_max_budget,
+      );
+      if (teamMemberModelBudgets !== undefined) {
+        updateData.team_member_model_max_budget = teamMemberModelBudgets;
+      }
+
       // Handle router_settings - read fresh values from DOM at save time.
       const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
@@ -1352,6 +1394,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   ? JSON.stringify(info.metadata.default_estimated_output_tokens_per_model)
                   : "Default"}
               </p>
+            </div>
+          </Card>
+
+          <Card className="block p-6">
+            <p>Request Settings</p>
+            <div className="mt-2">
+              <p>Require Trace ID: {info.metadata?.require_trace_id === true ? "Enabled" : "Disabled"}</p>
             </div>
           </Card>
 
@@ -1632,6 +1681,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             />
                           )}
                         </FormField>
+                        <ModelMaxBudgetField
+                          label="Default Per-Model Budget"
+                          premiumUser={premiumUser}
+                          value={teamMemberModelMaxBudget}
+                          onChange={setTeamMemberModelMaxBudget}
+                          availableModels={availableModelBudgetModels}
+                          hint="Set a default per-model spend cap for each team member, with an independent reset window."
+                        />
                         <FormField
                           control={form.control}
                           name="team_member_key_duration"
@@ -1961,6 +2018,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                             applyKillSwitchToGuardrails(checked);
                           }}
                         />
+                      )}
+                    </FormField>
+                  )}
+
+                  {canEditAsProxyAdmin && (
+                    <FormField
+                      control={form.control}
+                      name="require_trace_id"
+                      label={labelWithHint(
+                        "Require Trace ID",
+                        "Reject LLM, MCP and agent requests from this team that do not send a trace ID (x-litellm-trace-id header, LLM requests can also use traceparent or metadata.trace_id)",
+                      )}
+                    >
+                      {({ id, value, onChange }) => (
+                        <Switch id={id} checked={value === true} onCheckedChange={onChange} />
                       )}
                     </FormField>
                   )}
@@ -2308,6 +2380,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </p>
                 <div>Max Budget: {info.team_member_budget_table?.max_budget ?? "No Limit"}</div>
                 <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
+                {modelMaxBudgetToEntries(
+                  info.team_member_budget_table?.model_max_budget as ModelMaxBudget | null | undefined,
+                ).map(({ model, budgetLimit, timePeriod }) => (
+                  <div key={model}>
+                    Default Per-Model Budget ({model}):{" "}
+                    {budgetLimit !== null ? `$${formatNumberWithCommas(budgetLimit, 4)}` : "No Limit"} per {timePeriod}
+                  </div>
+                ))}
                 <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
                 <div>TPM Limit: {info.team_member_budget_table?.tpm_limit ?? "No Limit"}</div>
                 <div>RPM Limit: {info.team_member_budget_table?.rpm_limit ?? "No Limit"}</div>
@@ -2526,6 +2606,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </span>
               ),
               type: "utc-datetime" as const,
+            },
+            {
+              name: "model_max_budget",
+              label: (
+                <span>
+                  Per-Model Budgets{" "}
+                  <SimpleTooltip content="Spend cap per model for this member, each with its own reset period. Starts from the team's default per-model budget; saving a change stores a per-model budget for this member only.">
+                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                  </SimpleTooltip>
+                </span>
+              ),
+              type: "model-max-budget" as const,
+              availableModels: availableModelBudgetModels,
+              premiumUser,
             },
             {
               name: "tpm_limit",
