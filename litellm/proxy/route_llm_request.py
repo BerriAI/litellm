@@ -514,6 +514,42 @@ def mock_testing_params_allowed() -> bool:
     return proxy_server.general_settings.get(MOCK_TESTING_CONFIG_KEY, False) is True
 
 
+_ALLOW_CLIENT_CACHE_CONTROL_CONFIG_KEY: Final = "allow_client_cache_control_params"
+_CLIENT_CACHE_CONTROL_KEYS: Final[frozenset[str]] = frozenset({"ttl", "namespace"})
+
+
+def allow_client_cache_control_params() -> bool:
+    """Read the opt-in from the running proxy's ``general_settings``."""
+    from litellm.proxy import proxy_server
+
+    return proxy_server.general_settings.get(_ALLOW_CLIENT_CACHE_CONTROL_CONFIG_KEY, False) is True
+
+
+def strip_client_cache_authority_fields(data: dict) -> None:  # mutable-ok: request body is the proxy-wide mutable dict contract
+    """Remove caller-controlled cache read/write and control fields (LD fork, R2-4/5).
+
+    The client-supplied ``cache_key`` selects the exact cache bucket to read
+    and then overwrites, which is arbitrary cache read/write and a path to
+    deflating spend counters when the cache shares a Redis deployment with
+    them. ``cache.ttl`` and ``cache.namespace`` (and ``metadata.redis_namespace``)
+    govern how long poisoned entries live and vector between namespaces.
+    The proxy chooses these server-side; the SDK surface keeps its kwargs.
+    """
+    data.pop("cache_key", None)
+    cache_control: Final = data.get("cache")
+    if not isinstance(cache_control, dict):
+        return
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        metadata.pop("redis_namespace", None)
+    if allow_client_cache_control_params():
+        return
+    for key in _CLIENT_CACHE_CONTROL_KEYS:
+        cache_control.pop(key, None)
+    if not cache_control:
+        data.pop("cache", None)
+
+
 def get_team_id_from_data(data: dict) -> str | None:
     """
     Get the team id from the data's metadata or litellm_metadata params.
@@ -894,6 +930,8 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 if key not in router_only_settings_from_override
             }
         )
+
+    strip_client_cache_authority_fields(data)
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.registry().names(kind="group_set") if llm_router is not None else []
