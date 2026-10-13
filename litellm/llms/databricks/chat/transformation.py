@@ -700,7 +700,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         setattr(model_response, "usage", Usage(**completion_response["usage"]))
         served_tier: Final = completion_response.get("service_tier")
         if isinstance(served_tier, str) and served_tier:
-            setattr(model_response, "service_tier", served_tier)  # noqa: B010  # ModelResponse declares no service_tier field
+            setattr(model_response, "service_tier", served_tier)  # noqa: B010  # no declared field
 
         model_response.choices = self._transform_dbrx_choices(
             choices=completion_response["choices"],
