@@ -103,15 +103,16 @@ from .long_decode import (
     LongDecodeHops,
     StreamResume,
     SyncStreamResume,
+    client_continuation_token,
     collect_hops_async,
     collect_hops_sync,
+    continuation_cap_of,
     hop_request,
     hops_original_response,
     initial_prompt_tokens_of,
     log_failed_hop,
     merge_hops,
     next_hop_token,
-    output_cap_of,
     output_tokens_of,
     parse_body,
     sum_usage_metadata,
@@ -2488,7 +2489,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 for key, value in (
                     ("thought_signatures", thought_signatures),
                     ("server_side_tool_invocations", server_side_tool_invocations),
-                    ("continuation_token", candidate.get("continuationToken")),
+                    ("continuation_token", client_continuation_token(candidate)),
                 )
                 if value is not None
             }
@@ -3336,7 +3337,7 @@ class ModelResponseIterator:
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
         self._resume = resume
-        self._output_cap = output_cap_of(resume.request_body) if resume is not None else None
+        self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
         self._pending_hop_token: str | None = None
         self._usage_offset: UsageMetadata = UsageMetadata()
         self._hop_usage: UsageMetadata = UsageMetadata()

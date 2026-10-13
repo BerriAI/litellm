@@ -40,7 +40,8 @@ _CONCATENATED_USAGE_DETAILS: Final = (
 
 HOP_FAILURES: Final = (VertexAIError, httpx.HTTPError, Timeout)
 
-CONTINUABLE_FINISH_REASONS: Final = frozenset({"MAX_TOKENS", "CONTINUATION"})
+HOP_END_FINISH_REASON: Final = "CONTINUATION"
+CUT_OFF_FINISH_REASONS: Final = frozenset({"MAX_TOKENS", HOP_END_FINISH_REASON})
 
 _VERTEX_V1_PATH: Final = "/v1/projects/"
 _VERTEX_PATH_ACCEPTING_CONTINUATION_TOKEN: Final = "/v1beta1/projects/"
@@ -65,11 +66,19 @@ class SyncStreamResume:
 StreamResume: TypeAlias = AsyncStreamResume | SyncStreamResume
 
 
-def output_cap_of(request_body: RequestBody) -> int | None:
+def continuation_cap_of(request_body: RequestBody) -> int | None:
     generation_config: Final = request_body.get("generationConfig")
     if generation_config is None or "max_output_tokens" not in generation_config:
         return None
+    if "candidate_count" in generation_config and generation_config["candidate_count"] > 1:
+        return None
     return generation_config["max_output_tokens"]
+
+
+def client_continuation_token(candidate: Candidates) -> str | None:
+    if candidate.get("finishReason") not in CUT_OFF_FINISH_REASONS:
+        return None
+    return candidate.get("continuationToken")
 
 
 def _first_candidate(body: GenerateContentResponseBody) -> Candidates | None:
@@ -90,7 +99,7 @@ def next_hop_token(
     if output_cap is None:
         return None
     candidate: Final = _first_candidate(body)
-    if candidate is None or candidate.get("finishReason") not in CONTINUABLE_FINISH_REASONS:
+    if candidate is None or candidate.get("finishReason") != HOP_END_FINISH_REASON:
         return None
     token: Final = candidate.get("continuationToken")
     hop_tokens: Final = output_tokens_of(hop_usage)
@@ -215,7 +224,7 @@ async def collect_hops_async(
     request_body: RequestBody,
     post: AsyncHopPost,
 ) -> LongDecodeHops:
-    output_cap: Final = output_cap_of(request_body)
+    output_cap: Final = continuation_cap_of(request_body)
     hops: LongDecodeHops = (first,)  # rebind-ok: grows by one hop per loop pass, CI bans the recursive form
     while (token := _unary_next_hop_token(hops, output_cap)) is not None:
         try:
@@ -232,7 +241,7 @@ def collect_hops_sync(
     request_body: RequestBody,
     post: SyncHopPost,
 ) -> LongDecodeHops:
-    output_cap: Final = output_cap_of(request_body)
+    output_cap: Final = continuation_cap_of(request_body)
     hops: LongDecodeHops = (first,)  # rebind-ok: grows by one hop per loop pass, CI bans the recursive form
     while (token := _unary_next_hop_token(hops, output_cap)) is not None:
         try:

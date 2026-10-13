@@ -441,6 +441,7 @@ GeminiFinishReason = Literal[
     "FINISH_REASON_UNSPECIFIED",
     "STOP",
     "MAX_TOKENS",
+    "CONTINUATION",
     "SAFETY",
     "RECITATION",
     "LANGUAGE",

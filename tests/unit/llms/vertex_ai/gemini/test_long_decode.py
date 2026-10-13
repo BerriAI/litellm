@@ -25,7 +25,7 @@ HOP_1: Final = {
     "candidates": [
         {
             "content": {"role": "model", "parts": [{"text": "hello"}]},
-            "finishReason": "MAX_TOKENS",
+            "finishReason": "CONTINUATION",
             "continuationToken": "dG9rLTE=",
         }
     ],
@@ -44,15 +44,19 @@ HOP_2_TRUNCATED: Final = {
     "candidates": [
         {
             "content": {"role": "model", "parts": [{"text": " world"}]},
-            "finishReason": "MAX_TOKENS",
+            "finishReason": "CONTINUATION",
             "continuationToken": "dG9rLTI=",
         }
     ],
     "usageMetadata": HOP_2["usageMetadata"],
 }
 
+TWO_CHOICES_CUT: Final = {
+    "candidates": [{**HOP_1["candidates"][0], "index": 0}, {**HOP_2_TRUNCATED["candidates"][0], "index": 1}],
+    "usageMetadata": HOP_1["usageMetadata"],
+}
+GOOGLE_REJECTION: Final = {"error": {"code": 400, "status": "INVALID_ARGUMENT"}}
 
-HOP_END_FINISH_REASONS: Final = ("MAX_TOKENS", "CONTINUATION")
 VERTEX_PUBLISHER_BASE: Final = "https://aiplatform.googleapis.com/v1/projects/p/locations/global/publishers/google"
 
 HOP_1_SEARCHES: Final = ("argon launch date", "argon output limit", "argon pricing")
@@ -102,14 +106,11 @@ def _sse(*chunks: Mapping[str, object]) -> httpx.Response:
     )
 
 
-@pytest.mark.parametrize("hop_end", HOP_END_FINISH_REASONS)
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
-async def test_unary_long_decode_resends_the_original_request_with_the_token_and_bills_every_hop(
-    is_async: bool, hop_end: str
-):
+async def test_unary_long_decode_resends_the_original_request_with_the_token_and_bills_every_hop(is_async: bool):
     sent: Final[list[dict[str, object]]] = []
-    hops: Final = (httpx.Response(200, json=_ending_with(HOP_1, hop_end)), httpx.Response(200, json=HOP_2))
+    hops: Final = (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2))
     kwargs: Final = {"model": MODEL, "messages": list(MESSAGES), "max_tokens": 100_000, "api_key": "fake-gemini-key"}
 
     response: Final = (
@@ -156,20 +157,16 @@ async def test_unary_long_decode_bills_the_searches_of_every_hop(is_async: bool,
     ]
 
 
-@pytest.mark.parametrize("hop_end", HOP_END_FINISH_REASONS)
 @pytest.mark.parametrize(
     "max_tokens, expected_requests, expected_token",
     [(None, 1, "dG9rLTE="), (30, 1, "dG9rLTE="), (50, 2, "dG9rLTI=")],
 )
 @pytest.mark.asyncio
 async def test_unary_long_decode_stops_at_the_callers_cap_and_returns_the_token_to_resume(
-    max_tokens: int | None, expected_requests: int, expected_token: str, hop_end: str
+    max_tokens: int | None, expected_requests: int, expected_token: str
 ):
     sent: Final[list[dict[str, object]]] = []
-    hops: Final = (
-        httpx.Response(200, json=_ending_with(HOP_1, hop_end)),
-        httpx.Response(200, json=_ending_with(HOP_2_TRUNCATED, hop_end)),
-    )
+    hops: Final = (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2_TRUNCATED))
 
     response: Final = await litellm.acompletion(
         model=MODEL,
@@ -183,6 +180,70 @@ async def test_unary_long_decode_stops_at_the_callers_cap_and_returns_the_token_
     assert response.choices[0].finish_reason == "length"
     assert response.choices[0].message.provider_specific_fields["continuation_token"] == expected_token
     assert response.usage.prompt_tokens_details.initial_prompt_tokens == (10 if expected_requests > 1 else None)
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_answer_cut_at_the_callers_cap_is_returned_with_its_token_in_one_request(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+    # The Gemini API answered 400 "max_output_tokens (16000) has already been exhausted" to a resend
+    # after MAX_TOKENS on 2026-10-13
+    hops: Final = (
+        httpx.Response(200, json=_ending_with(HOP_1, "MAX_TOKENS")),
+        httpx.Response(400, json=GOOGLE_REJECTION),
+    )
+    kwargs: Final = {
+        "model": MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 100_000,
+        "continuation_token": "cHJldg==",
+        "api_key": "fake-gemini-key",
+    }
+
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent))))
+        if is_async
+        else litellm.completion(
+            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(hops, sent))))
+        )
+    )
+
+    assert len(sent) == 1
+    assert response.choices[0].message.content == "hello"
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.provider_specific_fields["continuation_token"] == "dG9rLTE="
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_request_for_more_than_one_choice_is_never_continued(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+    # Vertex AI answered 400 "Candidate count greater than 1 is not supported when continuation_token is set"
+    # on 2026-10-13
+    hops: Final = (httpx.Response(200, json=TWO_CHOICES_CUT), httpx.Response(400, json=GOOGLE_REJECTION))
+    kwargs: Final = {
+        "model": MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 100_000,
+        "n": 2,
+        "api_key": "fake-gemini-key",
+    }
+
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent))))
+        if is_async
+        else litellm.completion(
+            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(hops, sent))))
+        )
+    )
+
+    assert len(sent) == 1
+    assert [choice.message.content for choice in response.choices] == ["hello", " world"]
+    assert [choice.finish_reason for choice in response.choices] == ["length", "length"]
+    assert [choice.message.provider_specific_fields["continuation_token"] for choice in response.choices] == [
+        "dG9rLTE=",
+        "dG9rLTI=",
+    ]
 
 
 @pytest.mark.asyncio
@@ -245,14 +306,11 @@ async def test_continuation_token_param_is_sent_at_the_top_level_of_generate_con
     assert "continuation_token" not in json.dumps(sent[0])
 
 
-def _stream_hops(hop_end: str = "MAX_TOKENS") -> tuple[httpx.Response, httpx.Response]:
-    return (
-        _sse(
-            {"candidates": [{"content": {"role": "model", "parts": [{"text": "hel"}]}}]},
-            _ending_with(STREAM_HOP_1_END, hop_end),
-        ),
-        _sse(HOP_2),
-    )
+STREAM_FIRST_CHUNK: Final = {"candidates": [{"content": {"role": "model", "parts": [{"text": "hel"}]}}]}
+
+
+def _stream_hops() -> tuple[httpx.Response, httpx.Response]:
+    return (_sse(STREAM_FIRST_CHUNK, STREAM_HOP_1_END), _sse(HOP_2))
 
 
 async def _stream_chunks(
@@ -260,6 +318,7 @@ async def _stream_chunks(
     handler: Callable[[httpx.Request], httpx.Response],
     api_base: str | None = None,
     continuation_token: str | None = None,
+    n: int | None = None,
 ) -> list:
     kwargs: Final = {
         "model": MODEL,
@@ -270,6 +329,7 @@ async def _stream_chunks(
         "api_key": "fake-gemini-key",
         "api_base": api_base,
         "continuation_token": continuation_token,
+        "n": n,
     }
     if is_async:
         stream: Final = await litellm.acompletion(
@@ -302,15 +362,12 @@ def _delta_fields(chunks: list) -> list[Mapping[str, object]]:
     ]
 
 
-@pytest.mark.parametrize("hop_end", HOP_END_FINISH_REASONS)
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
-async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish_and_summed_usage(
-    is_async: bool, hop_end: str
-):
+async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish_and_summed_usage(is_async: bool):
     sent: Final[list[dict[str, object]]] = []
 
-    chunks: Final = await _collect_stream(is_async, _stream_hops(hop_end), sent)
+    chunks: Final = await _collect_stream(is_async, _stream_hops(), sent)
 
     assert sent[1] == {**sent[0], "continuationToken": "dG9rLTE="}
     assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "hello world"
@@ -319,6 +376,36 @@ async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish
     assert chunks[-1].usage.prompt_tokens == 20
     assert chunks[-1].usage.completion_tokens == 50
     assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_answer_cut_at_the_callers_cap_ends_with_length_and_its_token_in_one_request(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        _sse(STREAM_FIRST_CHUNK, _ending_with(STREAM_HOP_1_END, "MAX_TOKENS")),
+        httpx.Response(400, json=GOOGLE_REJECTION),
+    )
+
+    chunks: Final = await _collect_stream(is_async, hops, sent)
+
+    assert len(sent) == 1
+    assert _stream_text(chunks) == "hello"
+    assert _stream_finish_reasons(chunks) == ["length"]
+    assert {"continuation_token": "dG9rLTE="} in _delta_fields(chunks)
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_request_for_more_than_one_choice_is_never_continued(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (_sse(TWO_CHOICES_CUT), httpx.Response(400, json=GOOGLE_REJECTION))
+
+    chunks: Final = await _stream_chunks(is_async, _replay(hops, sent), n=2)
+
+    assert len(sent) == 1
+    assert _stream_finish_reasons(chunks) == ["length"]
+    assert {"continuation_token": "dG9rLTE="} in _delta_fields(chunks)
 
 
 @pytest.mark.parametrize("is_async", [True, False])
@@ -450,17 +537,46 @@ async def test_streaming_long_decode_bills_the_searches_of_every_hop(is_async: b
     assert chunks[-1].usage.prompt_tokens_details.web_search_requests == len({*HOP_1_SEARCHES, *hop_2_searches})
 
 
+def _checkpoint(text: str, token: str) -> dict[str, object]:
+    return {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "continuationToken": token}]}
+
+
+def _client_tokens(chunks: list) -> list[object]:
+    return [fields["continuation_token"] for fields in _delta_fields(chunks) if "continuation_token" in fields]
+
+
+@pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
-async def test_streaming_checkpoint_token_reaches_the_client():
+async def test_streaming_mid_stream_checkpoint_tokens_never_reach_the_client(is_async: bool):
     sent: Final[list[dict[str, object]]] = []
-    checkpoint: Final = {
-        "candidates": [{"content": {"role": "model", "parts": [{"text": " wor"}]}, "continuationToken": "Y2twdC0x"}]
-    }
-    hops: Final = (_stream_hops()[0], _sse(checkpoint, HOP_2))
+    hops: Final = (
+        _sse(_checkpoint("hel", "Y2twdC0x"), STREAM_HOP_1_END),
+        _sse(_checkpoint(" big", "Y2twdC0y"), _checkpoint(" wide", "Y2twdC0z"), HOP_2),
+    )
 
-    chunks: Final = await _collect_stream(True, hops, sent)
+    chunks: Final = await _collect_stream(is_async, hops, sent)
 
-    assert {"continuation_token": "Y2twdC0x"} in _delta_fields(chunks)
+    assert len(sent) == 2
+    assert _stream_text(chunks) == "hello big wide world"
+    assert _stream_finish_reasons(chunks) == ["stop"]
+    assert _client_tokens(chunks) == []
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_cut_off_stream_gives_the_client_only_its_final_token(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        _sse(_checkpoint("hel", "Y2twdC0x"), _ending_with(STREAM_HOP_1_END, "MAX_TOKENS")),
+        httpx.Response(400, json=GOOGLE_REJECTION),
+    )
+
+    chunks: Final = await _collect_stream(is_async, hops, sent)
+
+    assert len(sent) == 1
+    assert _stream_text(chunks) == "hello"
+    assert _stream_finish_reasons(chunks) == ["length"]
+    assert _client_tokens(chunks) == ["dG9rLTE="]
 
 
 @pytest.mark.parametrize("is_async", [True, False])
