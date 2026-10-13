@@ -11,7 +11,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.model_inventory import prevent_supplier_device_login
+from litellm.llms.chatgpt.authenticator import prevent_device_login
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator, alias_target, caller_alias_maps
 from litellm.router import Router
@@ -121,7 +121,7 @@ class OfferingRouterView(Router):
     def pin_snapshot(self) -> Generator[None]:
         token: Final = _PINNED_SNAPSHOT.set((id(self), self._offering_snapshot))
         try:
-            with prevent_supplier_device_login():
+            with prevent_device_login():
                 yield
         finally:
             _PINNED_SNAPSHOT.reset(token)

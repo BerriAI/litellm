@@ -14,12 +14,12 @@ import yaml
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.llms.chatgpt.authenticator import prevent_device_login
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.model_inventory import (
     get_provider_model_inventory,
     model_inventory_api_base,
     model_inventory_identity,
-    prevent_supplier_device_login,
 )
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_CONCURRENCY
 from litellm.proxy.common_utils.encrypt_decrypt_utils import model_offering_identity_fingerprint
@@ -274,7 +274,7 @@ class ModelOfferingsManager:
             if _unavailable_reason(offering, providers[offering.provider]) is None
         )
         try:
-            with prevent_supplier_device_login():
+            with prevent_device_login():
                 candidate: Final = (
                     self.template.snapshot_with_model_list(deployments, metadata_authoritative=True)
                     if deployments != self.deployments

@@ -3,7 +3,8 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
-from litellm.types.proxy.model_offerings import ModelOfferingsConfig, OpenRouterProviderPolicy
+from litellm.types.llms.openrouter import OpenRouterProviderPolicy
+from litellm.types.proxy.model_offerings import ModelOfferingsConfig
 
 
 @pytest.mark.parametrize(

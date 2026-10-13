@@ -1,7 +1,6 @@
 """Supplier-specific inventory dispatch shared by router and selected-offering discovery."""
 
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -9,7 +8,6 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.llms.chatgpt.authenticator import prevent_device_login
 from litellm.llms.chatgpt.model_info import (
     chatgpt_model_inventory_api_base,
     chatgpt_model_inventory_identity,
@@ -22,12 +20,6 @@ from litellm.types.router import LiteLLM_Params
 
 _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
-
-
-@contextmanager
-def prevent_supplier_device_login() -> Generator[None]:
-    with prevent_device_login():
-        yield
 
 
 def model_inventory_api_base(provider: str, api_base: str | None) -> str | None:

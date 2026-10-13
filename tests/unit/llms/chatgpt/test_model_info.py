@@ -11,7 +11,6 @@ from litellm.llms.chatgpt.common_utils import GetAccessTokenError
 from litellm.llms.chatgpt.model_info import (
     _ChatGPTModel,
     chatgpt_model_inventory_identity,
-    get_chatgpt_model_info,
     get_chatgpt_model_inventory,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -163,14 +162,14 @@ async def test_account_catalog_preserves_client_policy_separately_from_model_lim
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         handler.client = client
         cache: Final = InMemoryCache()
-        result: Final = await get_chatgpt_model_info(
-            model="fixture-model",
+        result: Final = await get_chatgpt_model_inventory(
             api_base="https://account.test/backend-api/codex/",
             authenticator=Authenticator(),
             client=handler,
             cache=cache,
         )
-        assert result == {
+        assert isinstance(result, SupplierModelInventory)
+        assert result.models["fixture-model"] == {
             "codex_context_window": card["context_window"],
             "codex_max_context_window": card["max_context_window"],
             "supports_parallel_function_calling": card["supports_parallel_tool_calls"],
@@ -180,16 +179,14 @@ async def test_account_catalog_preserves_client_policy_separately_from_model_lim
             "supported_endpoints": ("/responses",),
             "supported_modalities": tuple(card["input_modalities"]),
         }
-        assert (
-            await get_chatgpt_model_info(
-                model="not-selected",
-                api_base="https://account.test/backend-api/codex/",
-                authenticator=Authenticator(),
-                client=handler,
-                cache=cache,
-            )
-            == {}
+        cached: Final = await get_chatgpt_model_inventory(
+            api_base="https://account.test/backend-api/codex/",
+            authenticator=Authenticator(),
+            client=handler,
+            cache=cache,
         )
+        assert cached is result
+        assert cached.models.get("not-selected", {}) == {}
 
 
 async def test_switching_accounts_invalidates_catalog_without_exposing_credentials(
@@ -212,15 +209,15 @@ async def test_switching_accounts_invalidates_catalog_without_exposing_credentia
             auth_file.write_text(
                 json.dumps({"access_token": "local-token", "account_id": account, "expires_at": 10**30})
             )
-            result: Final = await get_chatgpt_model_info(
-                model="fixture",
+            result: Final = await get_chatgpt_model_inventory(
                 api_base="https://account.test/backend-api/codex",
                 authenticator=Authenticator(),
                 client=handler,
                 cache=cache,
             )
-            assert result["codex_context_window"] == capacity
-            assert "local-token" not in json.dumps(dict(result))
+            assert isinstance(result, SupplierModelInventory)
+            assert result.models["fixture"]["codex_context_window"] == capacity
+            assert "local-token" not in json.dumps(dict(result.models["fixture"]))
 
 
 async def test_discovery_without_authorization_never_starts_device_login(
@@ -238,15 +235,13 @@ async def test_discovery_without_authorization_never_starts_device_login(
     await handler.client.aclose()
     async with httpx.AsyncClient(transport=httpx.MockTransport(reject)) as client:
         handler.client = client
-        assert (
-            await get_chatgpt_model_info(
-                model="fixture",
-                authenticator=Authenticator(),
-                client=handler,
-                cache=InMemoryCache(),
-            )
-            == {}
+        result: Final = await get_chatgpt_model_inventory(
+            authenticator=Authenticator(),
+            client=handler,
+            cache=InMemoryCache(),
         )
+        assert isinstance(result, SupplierInventoryUnavailable)
+        assert result.reason == "authentication"
     assert not (tmp_path / "auth.json").exists()
 
 
@@ -261,15 +256,13 @@ async def test_invalid_or_unavailable_catalog_preserves_fallback(
     await handler.client.aclose()
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(status, json=body))) as client:
         handler.client = client
-        assert (
-            await get_chatgpt_model_info(
-                model="fixture",
-                authenticator=Authenticator(),
-                client=handler,
-                cache=InMemoryCache(),
-            )
-            == {}
+        result: Final = await get_chatgpt_model_inventory(
+            authenticator=Authenticator(),
+            client=handler,
+            cache=InMemoryCache(),
         )
+        assert isinstance(result, SupplierInventoryUnavailable)
+        assert result.reason == ("http" if status == 503 else "malformed")
 
 
 @pytest.mark.parametrize(

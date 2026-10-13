@@ -24,7 +24,6 @@ from .authenticator import Authenticator
 from .common_utils import get_chatgpt_default_headers
 
 _CATALOG_CLIENT_VERSION: Final = "0.159.3"
-_EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class _ReasoningLevel(BaseModel):
@@ -144,24 +143,6 @@ def chatgpt_model_inventory_identity() -> str | None:
         return Authenticator().get_account_id()
     except Exception:  # noqa: BLE001  # unreadable server auth is not proof of an account change
         return None
-
-
-async def get_chatgpt_model_info(
-    *,
-    model: str,
-    client: AsyncHTTPHandler,
-    cache: InMemoryCache,
-    api_base: str | None = None,
-    authenticator: Authenticator | None = None,
-) -> Mapping[str, object]:
-    inventory: Final = await get_chatgpt_model_inventory(
-        client=client, cache=cache, api_base=api_base, authenticator=authenticator
-    )
-    return (
-        inventory.models.get(model, _EMPTY_METADATA)
-        if isinstance(inventory, SupplierModelInventory)
-        else _EMPTY_METADATA
-    )
 
 
 async def get_chatgpt_model_inventory(

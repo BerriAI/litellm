@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from litellm.proxy.model_discovery import discover_model_metadata
 from litellm.router_utils.model_request_defaults import deployment_params_with_request_defaults, model_request_defaults
-from litellm.types.proxy.model_metadata import GatewayModelMetadata, ModelRequestDefaults
+from litellm.types.router import ModelMetadata, ModelRequestDefaults
 
 _POLICY: Final = {
     "output_token_budget": 8192,
@@ -20,7 +20,7 @@ def test_request_budget_follows_effective_reasoning_without_claiming_supplier_li
     metadata: Final = {"context_window": 262144, "request_defaults": _POLICY}
     request: Final = {"reasoning_effort": effort}
     assert model_request_defaults(metadata, {}, request, "completion") == {"max_tokens": expected}
-    assert "max_output_tokens" not in discover_model_metadata((GatewayModelMetadata.model_validate(metadata),))
+    assert "max_output_tokens" not in discover_model_metadata((ModelMetadata.model_validate(metadata),))
     assert request == {"reasoning_effort": effort}
 
 
@@ -85,10 +85,10 @@ def test_invalid_request_budgets_are_rejected(value, field):
 
 
 def test_request_budget_maps_are_immutable_and_only_common_policy_is_advertised():
-    metadata: Final = GatewayModelMetadata.model_validate({"request_defaults": _POLICY})
+    metadata: Final = ModelMetadata.model_validate({"request_defaults": _POLICY})
     assert discover_model_metadata((metadata, metadata)) == {"request_defaults": _POLICY}
-    assert discover_model_metadata((metadata, GatewayModelMetadata())) == {}
-    other: Final = GatewayModelMetadata(request_defaults=ModelRequestDefaults(output_token_budget=16384))
+    assert discover_model_metadata((metadata, ModelMetadata())) == {}
+    other: Final = ModelMetadata(request_defaults=ModelRequestDefaults(output_token_budget=16384))
     assert discover_model_metadata((metadata, other)) == {}
     defaults: Final = metadata.request_defaults
     assert defaults is not None

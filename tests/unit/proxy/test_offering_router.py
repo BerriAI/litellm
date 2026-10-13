@@ -21,7 +21,7 @@ from litellm.proxy.offering_router import (
     OfferingSnapshotMiddleware,
 )
 from litellm.router import Router
-from litellm.types.proxy.model_offerings import OpenRouterProviderPolicy
+from litellm.types.llms.openrouter import OpenRouterProviderPolicy
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes
 

@@ -3,11 +3,11 @@ from typing import Final
 import pytest
 
 from litellm.proxy.model_discovery import discover_model_metadata, guaranteed_token_limit
-from litellm.types.proxy.model_metadata import GatewayModelMetadata, resolve_gateway_model_metadata
+from litellm.types.router import ModelMetadata, resolve_model_metadata
 
 
 def test_configured_overrides_preserve_false_empty_and_independent_limits():
-    metadata: Final = resolve_gateway_model_metadata(
+    metadata: Final = resolve_model_metadata(
         {
             "context_window": 1200,
             "max_input_tokens": 1100,
@@ -30,7 +30,7 @@ def test_configured_overrides_preserve_false_empty_and_independent_limits():
 
 def test_mixed_deployments_advertise_only_guaranteed_metadata():
     sources: Final = (
-        GatewayModelMetadata(
+        ModelMetadata(
             context_window=1200,
             max_input_tokens=1100,
             max_output_tokens=200,
@@ -40,7 +40,7 @@ def test_mixed_deployments_advertise_only_guaranteed_metadata():
             default_reasoning_effort="high",
             supported_modalities=["text", "image"],
         ),
-        GatewayModelMetadata(
+        ModelMetadata(
             context_window=800,
             max_input_tokens=700,
             max_output_tokens=100,
@@ -62,6 +62,6 @@ def test_mixed_deployments_advertise_only_guaranteed_metadata():
 
 @pytest.mark.parametrize("value", [None, True, 0, -1, "1200", 1.5])
 def test_unknown_or_invalid_context_never_fabricates_capacity(value):
-    metadata: Final = GatewayModelMetadata(context_window=value, max_input_tokens=1100, max_output_tokens=200)
+    metadata: Final = ModelMetadata(context_window=value, max_input_tokens=1100, max_output_tokens=200)
     assert discover_model_metadata((metadata,)) == {}
-    assert discover_model_metadata((GatewayModelMetadata(context_window=1200), metadata)) == {}
+    assert discover_model_metadata((ModelMetadata(context_window=1200), metadata)) == {}
