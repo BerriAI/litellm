@@ -59537,6 +59537,7 @@
             "cache_read_input_token_cost": 2.2e-08,
             "input_cost_per_token": 6.6e-07,
             "output_cost_per_token": 1.98e-06,
+            "weekday_timezone": "Asia/Shanghai",
             "windows": [
                 {
                     "hours_utc": [
@@ -59591,6 +59592,7 @@
             "cache_read_input_token_cost": 3e-09,
             "input_cost_per_token": 1.5e-07,
             "output_cost_per_token": 6e-07,
+            "weekday_timezone": "Asia/Shanghai",
             "windows": [
                 {
                     "hours_utc": [
@@ -59751,7 +59753,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_video_input": true,
+        "supports_vision": true
     },
     "tencent/kimi-k2.8-preview": {
         "cache_creation_input_token_cost": 0.0,
@@ -59775,7 +59778,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_video_input": true,
+        "supports_vision": true
     },
     "tencent/kimi-k2.7-code-highspeed": {
         "cache_creation_input_token_cost": 0.0,
@@ -59799,7 +59803,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_video_input": true,
+        "supports_vision": true
     },
     "tencent/kimi-k2.7-code": {
         "cache_creation_input_token_cost": 0.0,
@@ -59823,7 +59828,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": false
+        "supports_video_input": true,
+        "supports_vision": true
     },
     "tencent/minimax-m3": {
         "cache_creation_input_token_cost": 0.0,

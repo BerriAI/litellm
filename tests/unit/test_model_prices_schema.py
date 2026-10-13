@@ -619,10 +619,10 @@ TENCENT_TOKENHUB_GLM_ROWS: Final = MappingProxyType(
 )
 TENCENT_TOKENHUB_KIMI_ROWS: Final = MappingProxyType(
     {
-        "tencent/kimi-k3": (3e-06, 1.5e-05, 3e-07, 1000000),
-        "tencent/kimi-k2.8-preview": (1e-06, 4e-06, 2.5e-07, 1000000),
-        "tencent/kimi-k2.7-code-highspeed": (1.9e-06, 8e-06, 3.8e-07, 256000),
-        "tencent/kimi-k2.7-code": (9.5e-07, 4e-06, 1.9e-07, 256000),
+        "tencent/kimi-k3": (3e-06, 1.5e-05, 3e-07, 1000000, True, True),
+        "tencent/kimi-k2.8-preview": (1e-06, 4e-06, 2.5e-07, 1000000, True, True),
+        "tencent/kimi-k2.7-code-highspeed": (1.9e-06, 8e-06, 3.8e-07, 256000, True, True),
+        "tencent/kimi-k2.7-code": (9.5e-07, 4e-06, 1.9e-07, 256000, True, True),
     }
 )
 
@@ -666,8 +666,16 @@ def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hour
         for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS
         if isinstance(entry := rows.get(name), dict) and deepseek_off_peak_drift(entry) is not None
     }
+    invalid_timezones: Final = tuple(
+        name
+        for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS
+        if isinstance(entry := rows.get(name), dict)
+        and isinstance(block := entry.get("off_peak_pricing"), dict)
+        and block.get("weekday_timezone") != "Asia/Shanghai"
+    )
     assert drifted == {}
     assert all(name in rows for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS)
+    assert invalid_timezones == ()
 
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
@@ -714,6 +722,8 @@ def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
                 entry.get("output_cost_per_token"),
                 entry.get("cache_read_input_token_cost"),
                 entry.get("max_tokens"),
+                entry.get("supports_vision", False),
+                entry.get("supports_video_input", False),
             )
             for name in TENCENT_TOKENHUB_KIMI_ROWS
             if isinstance(entry := rows.get(name), dict)
