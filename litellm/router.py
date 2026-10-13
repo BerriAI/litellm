@@ -148,6 +148,7 @@ from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
+from litellm.router_strategy.price_weighted import PriceWeightedLoggingHandler
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import (
     get_deployments_for_tag,
@@ -406,6 +407,7 @@ RouterStrategySelector: TypeAlias = (
     LeastBusyLoggingHandler
     | LowestCostLoggingHandler
     | LowestLatencyLoggingHandler
+    | PriceWeightedLoggingHandler
     | LowestTPMLoggingHandler
     | LowestTPMLoggingHandler_v2
 )
@@ -1003,7 +1005,8 @@ class Router:
             retry_after (int): Minimum time to wait before retrying a failed request. Defaults to 0.
             allowed_fails (Optional[int]): Number of allowed fails before adding to cooldown. Defaults to None.
             cooldown_time (float): Time to cooldown a deployment after failure in seconds. Defaults to 1.
-            routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "cost-based-routing"]): Routing strategy used for the implicit "default" group (any model not claimed by an entry in `routing_groups`). Defaults to "simple-shuffle".
+            routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "cost-based-routing", "price-weighted-routing"]):
+                Routing strategy used for the implicit "default" group (any model not claimed by an entry in `routing_groups`). Defaults to "simple-shuffle".
             routing_strategy_args (dict): Additional args for the default group's routing strategy (e.g. latency window). Defaults to {}.
             routing_groups (Optional[List[RoutingGroup]]): Named subsets of `model_name`s with a group routing strategy.
                 Priority groups apply only to group calls and may overlap. Other groups supply their members' default
@@ -1012,7 +1015,7 @@ class Router:
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
-            enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+            enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle" or "price-weighted-routing", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
             fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
             fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
         Returns:
@@ -1461,6 +1464,7 @@ class Router:
         "usage-based-routing-v2": "lowesttpm_logger_v2",
         "latency-based-routing": "lowestlatency_logger",
         "cost-based-routing": "lowestcost_logger",
+        "price-weighted-routing": "priceweighted_logger",
     }
 
     @staticmethod
@@ -1508,24 +1512,20 @@ class Router:
                     routing_args=routing_strategy_args,
                 )
             case RoutingStrategy.COST_BASED.value:
-                def price_lookup(
-                    model_id: str, model_name: str
-                ) -> tuple[float | None, float | None]:
-                    model_info: Final = self.get_deployment_model_info(
-                        model_id=model_id, model_name=model_name
-                    )
-                    if model_info is None:
-                        return None, None
-                    return (
-                        model_info.get("input_cost_per_token"),
-                        model_info.get("output_cost_per_token"),
-                    )
-
                 selector = LowestCostLoggingHandler(
                     router_cache=self.cache,
                     routing_args={},
-                    price_lookup=price_lookup,
+                    price_lookup=self._deployment_token_prices,
                 )
+            case RoutingStrategy.PRICE_WEIGHTED.value:
+                priceweighted_logger: Final = PriceWeightedLoggingHandler(
+                    router_cache=self.cache,
+                    price_lookup=self._deployment_token_prices,
+                    routing_args=routing_strategy_args,
+                )
+                if register_callbacks:
+                    self._register_router_selector(priceweighted_logger)
+                return priceweighted_logger
             case _:
                 pass
 
@@ -1615,6 +1615,7 @@ class Router:
         self.lowesttpm_logger_v2: LowestTPMLoggingHandler_v2 | None = None
         self.lowestlatency_logger: LowestLatencyLoggingHandler | None = None
         self.lowestcost_logger: LowestCostLoggingHandler | None = None
+        self.priceweighted_logger: PriceWeightedLoggingHandler | None = None
 
         selector: Final = self._build_strategy_selector(
             strategy=routing_strategy,
@@ -1996,6 +1997,14 @@ class Router:
                     messages=messages,
                     input=input,
                 )
+            case "price-weighted-routing":
+                return await selector.async_get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
             case "latency-based-routing":
                 return await selector.async_get_available_deployments(
                     model_group=model,
@@ -2042,6 +2051,14 @@ class Router:
                     input=input,
                 )
             case "latency-based-routing":
+                return selector.get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
+            case "price-weighted-routing":
                 return selector.get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,
@@ -7567,7 +7584,7 @@ class Router:
     ) -> Any | None:
         """Same-model-group retry after a failed deployment; returns None if not applicable."""
         strategy, _ = self._get_routing_context(original_model_group, kwargs)
-        if strategy != "simple-shuffle":
+        if strategy not in ("simple-shuffle", "price-weighted-routing"):
             return None
 
         failed_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
@@ -7733,7 +7750,7 @@ class Router:
                 )
                 return response
 
-        # Weighted intra-group failover (simple-shuffle only); see _maybe_run_weighted_failover.
+        # Weighted intra-group failover; see _maybe_run_weighted_failover.
         if self.enable_weighted_failover and not _skip_order_fallback and original_model_group is not None:
             response = await self._maybe_run_weighted_failover(
                 exception=e,
@@ -11313,6 +11330,12 @@ class Router:
         model_name: Final = model_info["model_name"]
         return self.get_model_list(model_name=model_name)
 
+    def _deployment_token_prices(self, model_id: str, model_name: str) -> tuple[float | None, float | None]:
+        model_info: Final = self.get_deployment_model_info(model_id=model_id, model_name=model_name)
+        if model_info is None:
+            return None, None
+        return model_info.get("input_cost_per_token"), model_info.get("output_cost_per_token")
+
     def get_deployment_model_info(self, model_id: str, model_name: str) -> ModelInfo | None:
         """
         For a given model id, return the model info
@@ -13827,6 +13850,7 @@ class Router:
             self.routing_strategy != "usage-based-routing-v2"
             and self.routing_strategy != "simple-shuffle"
             and self.routing_strategy != "cost-based-routing"
+            and self.routing_strategy != "price-weighted-routing"
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
@@ -14755,7 +14779,7 @@ class Router:
                 "'usage-based-routing', v1). Silently skipping "
                 "configured plugins would let a policy plugin (e.g. a deny-all rule) be bypassed. "
                 "Use an async Router method with a supported routing_strategy (simple-shuffle, "
-                "usage-based-routing-v2, cost-based-routing, latency-based-routing, least-busy), "
+                "usage-based-routing-v2, cost-based-routing, price-weighted-routing, latency-based-routing, least-busy), "
                 "or remove `plugins` from the Router config."
             )
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg

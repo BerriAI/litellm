@@ -21,12 +21,8 @@ def _deployment_cost(
     price_lookup: Callable[[str, str], tuple[float | None, float | None]],
 ) -> float:
     lookup_input_price, lookup_output_price = price_lookup(model_id, model_name)
-    input_price: Final = (
-        input_price_override if input_price_override is not None else lookup_input_price
-    )
-    output_price: Final = (
-        output_price_override if output_price_override is not None else lookup_output_price
-    )
+    input_price: Final = input_price_override if input_price_override is not None else lookup_input_price
+    output_price: Final = output_price_override if output_price_override is not None else lookup_output_price
     input_cost: Final = input_price if input_price is not None else 5.0
     output_cost: Final = output_price if output_price is not None else 5.0
     return input_cost + output_cost

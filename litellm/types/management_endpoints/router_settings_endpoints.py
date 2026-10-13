@@ -87,6 +87,7 @@ ROUTING_STRATEGY_DESCRIPTIONS: Final[dict[str, str]] = {
     "least-busy": "Routes to the deployment with the lowest number of ongoing requests.",
     "latency-based-routing": "Routes to the deployment with the lowest latency over a sliding window.",
     "cost-based-routing": "Routes to the deployment with the lowest cost per token.",
+    "price-weighted-routing": "Routes to deployments with weights inversely proportional to estimated token cost.",
     "usage-based-routing": "Routes to the deployment with the lowest TPM (Tokens Per Minute) usage. (deprecated)",
     "usage-based-routing-v2": "Improved version of usage-based routing with better tracking.",
 }

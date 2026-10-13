@@ -1132,6 +1132,7 @@ class RoutingStrategy(enum.Enum):
     LEAST_BUSY = "least-busy"
     LATENCY_BASED = "latency-based-routing"
     COST_BASED = "cost-based-routing"
+    PRICE_WEIGHTED = "price-weighted-routing"
     USAGE_BASED_ROUTING_V2 = "usage-based-routing-v2"
     USAGE_BASED_ROUTING = "usage-based-routing"
     PROVIDER_BUDGET_LIMITING = "provider-budget-routing"

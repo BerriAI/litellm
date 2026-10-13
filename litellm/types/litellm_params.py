@@ -48,6 +48,7 @@ RoutingStrategyName: TypeAlias = Literal[
     "usage-based-routing",
     "latency-based-routing",
     "cost-based-routing",
+    "price-weighted-routing",
     "usage-based-routing-v2",
     "lar1",
 ]
