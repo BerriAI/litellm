@@ -16,6 +16,7 @@ from collections.abc import Callable, Mapping
 from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 import litellm
@@ -23,6 +24,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr import CrowdStrikeAIDRHandler
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
@@ -2738,6 +2740,7 @@ _FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
         guardrailVersion="DRAFT",
         experimental_use_latest_role_message_only=True,
     ),
+    lambda: AktoGuardrail(akto_base_url="http://127.0.0.1:9", akto_api_key="akto-test", guardrail_name="akto"),
 )
 
 
@@ -2782,6 +2785,7 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
             "hiddenlayer",
             "hiddenlayer-v2",
             "bedrock-latest-user",
+            "akto",
         ],
     )
     async def test_guardrail_gets_every_flat_text_and_its_mask_reaches_every_turn(self, make_guardrail, monkeypatch):
@@ -2859,6 +2863,49 @@ class TestConverseBedrockGuardrailLatestUserTurn:
         assert [message for index, message in enumerate(messages) if index != 3] == [
             message for index, message in enumerate(original) if index != 3
         ]
+
+
+class TestConverseAktoMasking:
+    @pytest.mark.asyncio
+    async def test_akto_mask_reaches_tool_call_arguments_and_json_tool_results(self, monkeypatch):
+        guardrail = AktoGuardrail(akto_base_url="http://127.0.0.1:9", akto_api_key="akto-test", guardrail_name="akto")
+
+        async def mask_cards(*, guardrails, ingest_data, payload, response_guardrails=False, **_):
+            sent = payload["requestPayload"]
+            verdict = {
+                "Allowed": True,
+                "Modified": True,
+                "ModifiedPayload": sent.replace("4111 1111 1111 1111", "[CARD]"),
+            }
+            return httpx.Response(200, json={"data": {"guardrailsResult": verdict}}, request=httpx.Request("POST", "/"))
+
+        monkeypatch.setattr(guardrail, "send_request", mask_cards)
+        data = {
+            "endpoint": "model/anthropic.claude-sonnet/converse",
+            "custom_llm_provider": "bedrock",
+            "data": {
+                "messages": [
+                    {"role": "user", "content": [{"text": "Pay booking 42."}]},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "4111 1111 1111 1111"}}}
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"toolResult": {"toolUseId": "t1", "content": [{"json": {"card": "4111 1111 1111 1111"}}]}}
+                        ],
+                    },
+                ]
+            },
+        }
+        expected = json.loads(json.dumps(data["data"]).replace("4111 1111 1111 1111", "[CARD]"))
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+        assert result["data"] == expected
 
 
 def _row_text(message: Mapping[str, object]) -> str:

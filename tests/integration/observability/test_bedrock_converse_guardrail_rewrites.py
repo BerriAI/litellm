@@ -183,8 +183,15 @@ def _generic_verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str
 
 
 def _akto_verdict(body: bytes) -> Reply:
-    allowed: Final = _INJECTION.encode() not in body
-    verdict: Final = {"Allowed": True} if allowed else {"Allowed": False, "Behaviour": "block", "Reason": "injection"}
+    sent: Final = JSON_OBJECT.validate_json(body).get("requestPayload")
+    masked: Final = _CARD_PATTERN.sub(_MASK, sent) if isinstance(sent, str) else sent
+    verdict: Final = (
+        {"Allowed": False, "Behaviour": "block", "Reason": "injection"}
+        if _INJECTION.encode() in body
+        else {"Allowed": True, "Modified": True, "ModifiedPayload": masked}
+        if masked != sent
+        else {"Allowed": True}
+    )
     return Reply(body=json.dumps({"data": {"guardrailsResult": verdict}}).encode())
 
 
@@ -791,7 +798,7 @@ def test_concurrent_requests_keep_their_own_rewrites(rig: _Rig) -> None:
     assert sent == expected
 
 
-def test_injection_in_additional_model_request_fields_is_blocked_by_a_row_reading_guardrail(rig: _Rig) -> None:
+def test_injection_in_additional_model_request_fields_is_blocked_by_akto(rig: _Rig) -> None:
     body: Final = {
         "messages": [_user({"text": "Summarise my account."})],
         "additionalModelRequestFields": {"system": _INJECTION, "thinking": {"type": "enabled", "budget_tokens": 1024}},
@@ -799,6 +806,18 @@ def test_injection_in_additional_model_request_fields_is_blocked_by_a_row_readin
     _refused(rig, _converse(rig, "akto", body))
     scanned: Final = tuple(json.loads(request.body) for request in rig.vendor.drain())
     assert any(_INJECTION in json.dumps(payload) for payload in scanned), scanned
+
+
+def test_akto_mask_reaches_tool_call_arguments_and_json_tool_results(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": "Pay booking 42."}),
+            _assistant(_tool_use(_CARD)),
+            _user(_tool_result({"json": {"card": _CARD}})),
+        ]
+    }
+
+    assert _forwarded(rig, _converse(rig, "akto", body))["messages"] == _masked(body["messages"])
 
 
 def test_masked_tool_definitions_reach_bedrock_masked(rig: _Rig) -> None:
