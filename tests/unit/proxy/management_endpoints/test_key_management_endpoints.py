@@ -22543,3 +22543,24 @@ async def test_key_generate_reads_the_team_from_the_writer_database_not_the_cach
         )
 
     assert raised.value.message == "Team not found for team_id=1234. Non-admin users cannot create keys for non-existent teams."
+
+
+def test_key_info_null_byte_key_rejected():
+    """Regression test for https://github.com/BerriAI/litellm/issues/46076
+
+    A null byte in the key query param used to reach Prisma, whose raw
+    driver error came back to the caller in the 500 body. It must be
+    rejected up front with a 400 that carries no database internals.
+    """
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="1234"
+    )
+    try:
+        response = client.get("/key/info", params={"key": "test\x00"})
+
+        assert response.status_code == 400
+        assert "null bytes" in response.text
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)

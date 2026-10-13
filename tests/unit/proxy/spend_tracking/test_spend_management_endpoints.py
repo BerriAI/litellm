@@ -8059,3 +8059,60 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
     assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
         ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
     ]
+
+
+def test_view_spend_logs_null_byte_api_key_rejected(client):
+    """Regression test for https://github.com/BerriAI/litellm/issues/46076
+
+    A null byte in the api_key query param used to reach Prisma, whose raw
+    driver error came back to the caller in the 500 body. It must be
+    rejected up front with a 400 that carries no database internals.
+    """
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get("/spend/logs", params={"api_key": "test\x00"})
+
+        assert response.status_code == 400
+        assert "null bytes" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_view_spend_logs_db_error_returns_generic_message(client, monkeypatch):
+    """Regression test for https://github.com/BerriAI/litellm/issues/46076
+
+    When the database does fail under /spend/logs, the raw driver error
+    must stay in the server logs and the 500 body must carry a generic
+    message instead of database internals.
+    """
+
+    class RaisingDB:
+        def __init__(self):
+            self.litellm_spendlogs = self
+
+        async def find_many(self, *args, **kwargs):
+            raise Exception('Postgres rejected "test": invalid byte sequence for encoding "UTF8"')
+
+        async def query_raw(self, *args, **kwargs):
+            raise Exception('Postgres rejected "test": invalid byte sequence for encoding "UTF8"')
+
+    class RaisingPrismaClient:
+        def __init__(self):
+            self.db = RaisingDB()
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client", RaisingPrismaClient()
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get("/spend/logs", params={"api_key": "sk-normal"})
+
+        assert response.status_code == 500
+        assert "Postgres" not in response.text
+        assert "server logs" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)

@@ -105,6 +105,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_no_null_bytes,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401  # legacy module exports
     _add_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -4522,6 +4523,8 @@ async def info_key_fn_v2(
             )
         # Resolve key_aliases to tokens so we never pass token=None (unbounded query)
         tokens_to_query: Final = list(data.keys) if data.keys else []
+        for token in tokens_to_query:
+            validate_no_null_bytes(keys=token)
         if data.key_aliases:
             alias_rows: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
                 where={"key_alias": {"in": data.key_aliases}},
@@ -4643,6 +4646,8 @@ async def info_key_fn(
         model_max_budget_limiter,
         prisma_client,
     )
+
+    validate_no_null_bytes(key=key)
 
     try:
         if prisma_client is None:

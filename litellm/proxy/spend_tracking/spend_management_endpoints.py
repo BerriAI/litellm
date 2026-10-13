@@ -51,6 +51,7 @@ from litellm.proxy.auth.authorization_dependencies import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.management_endpoints.common_utils import validate_no_null_bytes
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingCredentialMissing,
     ProviderBillingRequestFailed,
@@ -3538,6 +3539,14 @@ async def view_spend_logs(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    validate_no_null_bytes(
+        api_key=api_key,
+        user_id=user_id,
+        request_id=request_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
     if (
         user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
         or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -3660,8 +3669,9 @@ async def view_spend_logs(
             )
         elif isinstance(e, ProxyException):
             raise e
+        verbose_proxy_logger.exception("Unhandled error in /spend/logs")
         raise ProxyException(
-            message="/spend/logs Error" + str(e),
+            message="Internal server error from /spend/logs. Details are in the proxy server logs.",
             type="internal_error",
             param=getattr(e, "param", "None"),
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,

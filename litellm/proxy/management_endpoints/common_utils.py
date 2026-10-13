@@ -25,6 +25,21 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
+def validate_no_null_bytes(**params: str | None) -> None:
+    """Reject null bytes in string params before they reach the DB.
+
+    Postgres rejects strings containing ``\\x00`` outright, and the raw
+    driver error used to reach management endpoint clients in a 500 body,
+    leaking database internals (issue #46076).
+    """
+    for name, value in params.items():
+        if value is not None and "\x00" in value:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"{name} must not contain null bytes"},
+            )
+
+
 def validate_budget_duration(budget_duration: str | None, status_code: int = 400) -> None:
     """Reject budget durations that can't be parsed, are non-positive, or
     overflow date math, so a bad value can't be persisted and later crash the
