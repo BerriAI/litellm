@@ -123,10 +123,11 @@ class Observation:
     def _clean(self, *, stream: bool) -> list[tuple[WireRecord, float]]:
         """Served requests of one kind that were answered on the first attempt, with the mock's delay."""
         delays: Final = self._delay_by_marker
+        retried: Final = self.retried_markers
         pairs: list[tuple[WireRecord, float]] = []
         for record in self.served:
             delay = record.mock_delay_s if record.mock_delay_s is not None else delays.get(record.marker)
-            if record.stream == stream and delay is not None and record.marker not in self.retried_markers:
+            if record.stream == stream and delay is not None and record.marker not in retried:
                 pairs.append((record, delay))
         return pairs
 
