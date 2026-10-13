@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-coroutine.workspace = true
 litellm-host.workspace = true
 
 bytes.workspace = true
