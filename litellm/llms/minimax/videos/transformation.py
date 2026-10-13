@@ -366,13 +366,14 @@ def _create_cost_usd(model: str, duration: float, resolution: str | None, input_
 
 
 def _video_url_from_task(task: _MiniMaxTask) -> str:
-    """A task with no video yet is the caller's state to fix, so it is a 4xx the router does not retry."""
+    """A task with no video yet is the caller's state to fix, so it answers the status the OpenAI
+    videos API documents for content that is not ready, which the router does not retry."""
     if task.content is not None and task.content.url:
         return task.content.url
 
     if task.status in ("queued", "running"):
         raise _minimax_error(
-            400, f"Video is still processing (status: {task.status}). Poll the video until it is completed."
+            404, f"Video is still processing (status: {task.status}). Poll the video until it is completed."
         )
     if task.error is not None:
         raise _minimax_error(400, f"Video generation failed: {task.error.message or 'unknown error'}")

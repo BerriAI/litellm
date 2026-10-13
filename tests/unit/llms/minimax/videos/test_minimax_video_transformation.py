@@ -26,7 +26,7 @@ from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_video_id_with_provider,
 )
-from litellm.videos.main import avideo_generation
+from litellm.videos.main import avideo_content, avideo_generation
 
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -510,7 +510,7 @@ class TestMinimaxVideoStatus:
         with pytest.raises(MinimaxVideoError, match="sensitive content") as failed:
             _video_url_from_task(_MiniMaxTask(id="t1", status="failed", error=_TaskError(message="sensitive content")))
 
-        assert pending.value.status_code == 400
+        assert pending.value.status_code == 404
         assert failed.value.status_code == 400
 
     def test_not_ready_message_survives_the_handler_error_path(self):
@@ -523,7 +523,7 @@ class TestMinimaxVideoStatus:
         with pytest.raises(MinimaxVideoError) as rebuilt:
             BaseLLMHTTPHandler()._handle_error(e=pending.value, provider_config=MinimaxVideoConfig())
 
-        assert rebuilt.value.status_code == 400
+        assert rebuilt.value.status_code == 404
         assert "still processing" in rebuilt.value.message
 
     def test_unknown_status_fails_loud_instead_of_reporting_queued(self):
@@ -650,6 +650,25 @@ class TestMinimaxVideoContentDownload:
             )
 
         assert raised.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_downloading_a_running_task_is_a_client_error_not_a_server_error(self):
+        """Regression: the caller-visible status used to be a synthesized 500, so the
+        proxy retried the same poll twice and counted the caller's own early download
+        against the model's error rate."""
+        encoded = encode_video_id_with_provider("424010985738629", "minimax", "MiniMax-H3")
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"task": {"id": "424010985738629", "status": "running"}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            with pytest.raises(litellm.NotFoundError) as raised:
+                await avideo_content(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
+
+        assert raised.value.status_code == 404
 
 
 class TestMinimaxVideoList:
