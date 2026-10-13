@@ -3423,6 +3423,24 @@ class TestBatchLineItemsFromThePoller:
         assert row.batch_processed is True
 
     @pytest.mark.asyncio
+    async def test_a_batch_that_could_not_be_retired_sends_no_lines_until_it_is(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal, status="expired", output_file_id=None, error_file_id="file-err-1")
+        instance.prisma_client.db.litellm_managedobjecttable.update = AsyncMock(side_effect=RuntimeError("db down"))
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == []
+        assert logger.payloads == []
+        assert row.batch_processed is False
+
+    @pytest.mark.asyncio
     async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_after_it_is_retired(
         self, monkeypatch
     ):

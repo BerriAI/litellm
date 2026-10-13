@@ -472,9 +472,9 @@ class CheckBatchCost:
 
     async def _finalize_unbilled_terminal_job(
         self, job: "_ManagedObjectRow", response: "LiteLLMBatch"
-    ) -> None:
+    ) -> bool:
         """Persist a terminal batch that has nothing billable, converting any raw
-        provider file ids to managed ids, and take it out of the poll page."""
+        provider file ids to managed ids, and take it out of the poll page. Returns whether it was persisted."""
         try:
             from litellm.proxy.openai_files_endpoints.common_utils import (
                 _is_base64_encoded_unified_file_id,
@@ -502,10 +502,12 @@ class CheckBatchCost:
             verbose_proxy_logger.info(
                 f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
             )
+            return True
         except Exception as db_err:
             verbose_proxy_logger.error(
                 f"CheckBatchCost: failed to mark job {job.id} as {response.status} in DB: {db_err}"
             )
+            return False
 
     @staticmethod
     def _record_error(
@@ -1065,7 +1067,7 @@ class CheckBatchCost:
             payload: Final = await build_batch_line_items(source, input_content, (output_content, error_content))
             await dispatch_batch_line_items(payload, redact_bodies=redact_bodies)
             verbose_proxy_logger.info(
-                f"CheckBatchCost: sent the {len(payload['lines'])} line items of batch {batch_id} "
+                f"CheckBatchCost: handed the {len(payload['lines'])} line items of batch {batch_id} "
                 "to batch_line_item_callbacks"
             )
         except Exception as error:  # noqa: BLE001  # storing the lines is best effort, the batch is already billed
@@ -1241,8 +1243,8 @@ class CheckBatchCost:
                             f"CheckBatchCost: output file {response.output_file_id} of batch {batch_id} "
                             f"does not exist at the provider; retiring job {job.id} unbilled"
                         )
-                        await self._finalize_unbilled_terminal_job(job, response)
-                        self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
+                        if await self._finalize_unbilled_terminal_job(job, response):
+                            self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
                         continue
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to track cost for batch {batch_id} "
@@ -1274,6 +1276,8 @@ class CheckBatchCost:
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
                 self._store_batch_line_items_in_background(job, response, model_id, batch_id, output_content)
+                # release this batch's output before the next batch's output is read
+                del tracked, output_content
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
                 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -1286,8 +1290,8 @@ class CheckBatchCost:
                         f"has not appeared yet; leaving job {job.id} for the next poll cycle"
                     )
                     continue
-                await self._finalize_unbilled_terminal_job(job, response)
-                self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
+                if await self._finalize_unbilled_terminal_job(job, response):
+                    self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:
