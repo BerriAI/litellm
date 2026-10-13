@@ -36,16 +36,29 @@ async def async_completion_with_fallbacks(**kwargs):
     model = original_model
     top_level_fallbacks = kwargs.pop("fallbacks", [])
     nested_fallbacks = nested_kwargs.pop("fallbacks", [])
-    combined_fallbacks = []
+    raw_fallbacks = []
     if isinstance(top_level_fallbacks, list):
-        combined_fallbacks.extend(top_level_fallbacks)
+        raw_fallbacks.extend(top_level_fallbacks)
     elif top_level_fallbacks:
-        combined_fallbacks.append(top_level_fallbacks)
+        raw_fallbacks.append(top_level_fallbacks)
 
     if isinstance(nested_fallbacks, list):
-        combined_fallbacks.extend(nested_fallbacks)
+        raw_fallbacks.extend(nested_fallbacks)
     elif nested_fallbacks:
-        combined_fallbacks.append(nested_fallbacks)
+        raw_fallbacks.append(nested_fallbacks)
+
+    # Deduplicate fallbacks while preserving order
+    combined_fallbacks = []
+    seen_models = set()
+    for fb in raw_fallbacks:
+        fb_model = fb.get("model") if isinstance(fb, dict) else (fb if isinstance(fb, str) else None)
+        if fb_model is not None:
+            if fb_model in seen_models:
+                continue
+            seen_models.add(fb_model)
+        elif fb in combined_fallbacks:
+            continue
+        combined_fallbacks.append(fb)
 
     fallbacks: Final = [original_model] + combined_fallbacks
     kwargs.pop("acompletion", None)  # Remove to prevent keyword conflicts
