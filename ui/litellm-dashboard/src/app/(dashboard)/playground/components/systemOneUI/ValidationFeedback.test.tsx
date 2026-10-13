@@ -29,11 +29,11 @@ describe("ValidationStatus", () => {
 });
 
 describe("IssueList", () => {
-  it("lists every issue with its path and renders nothing when there are none", () => {
+  it("lists every issue under its field label and renders nothing when there are none", () => {
     const { rerender } = render(
       <IssueList id="issues" validation={validation([{ path: "state", message: "Required", severity: "error" }])} />,
     );
-    expect(screen.getByRole("list", { name: "Payload validation issues" })).toHaveTextContent("stateRequired");
+    expect(screen.getByRole("list", { name: "Payload validation issues" })).toHaveTextContent("InputRequired");
     rerender(<IssueList id="issues" validation={validation([])} />);
     expect(screen.queryByRole("list", { name: "Payload validation issues" })).not.toBeInTheDocument();
   });
