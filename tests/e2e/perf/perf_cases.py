@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Final
 
 from perf_case import (
+    ANTHROPIC,
+    BEDROCK,
+    OPENAI,
     Guardrail,
     Limit,
     MockDeployment,
@@ -45,23 +48,23 @@ MIXED_5RPS_SMALL_GATEWAY: Final = PerformanceTestCase(
         ModelGroup(
             "openai-group",
             deployments=(
-                MockDeployment(provider="openai", latency_s=0.6, jitter_s=0.3),
-                MockDeployment(provider="openai", latency_s=0.9, jitter_s=0.3),
-                MockDeployment(provider="openai", latency_s=0.5, jitter_s=0.2, flake_percent=30, flake_status=529),
+                MockDeployment(OPENAI),
+                MockDeployment(OPENAI, latency_s=0.9),
+                MockDeployment(OPENAI, latency_s=0.5, flake_percent=30, flake_status=529),
             ),
         ),
         ModelGroup(
             "anthropic-group",
             deployments=(
-                MockDeployment(provider="anthropic", latency_s=1.0, jitter_s=0.5),
-                MockDeployment(provider="anthropic", latency_s=0.8, jitter_s=0.4),
+                MockDeployment(ANTHROPIC),
+                MockDeployment(ANTHROPIC, latency_s=0.8),
             ),
         ),
         ModelGroup(
             "bedrock-group",
             deployments=(
-                MockDeployment(provider="bedrock", latency_s=1.2, jitter_s=0.4),
-                MockDeployment(provider="bedrock", latency_s=1.0, jitter_s=0.3, bedrock_route="invoke"),
+                MockDeployment(BEDROCK),
+                MockDeployment(BEDROCK, latency_s=1.0, bedrock_route="invoke"),
             ),
         ),
     ),

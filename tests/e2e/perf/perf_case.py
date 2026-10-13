@@ -17,7 +17,7 @@ from typing import Final, Literal
 
 from models import UserRole
 
-Provider = Literal["openai", "anthropic", "bedrock"]
+ProviderKind = Literal["openai", "anthropic", "bedrock"]
 BedrockRoute = Literal["converse", "invoke"]
 Endpoint = Literal["chat_completions", "responses", "messages"]
 GuardrailMode = Literal["pre_call", "post_call"]
@@ -71,28 +71,66 @@ class VirtualKey:
 
 
 @dataclass(frozen=True, slots=True)
+class Provider:
+    """A mock provider family and how it behaves unless a deployment says otherwise: base latency,
+    jitter (a third of the latency when not given, since a real provider never answers in a
+    constant time) and stream speed. `OPENAI`, `ANTHROPIC` and `BEDROCK` are the stock ones."""
+
+    kind: ProviderKind
+    latency_s: float
+    jitter_s: float | None = None
+    tokens_per_second: float = 50.0
+
+    def jitter_for(self, latency_s: float) -> float:
+        return round(latency_s / 3, 3) if self.jitter_s is None else self.jitter_s
+
+
+OPENAI: Final = Provider("openai", latency_s=0.6)
+ANTHROPIC: Final = Provider("anthropic", latency_s=1.0)
+BEDROCK: Final = Provider("bedrock", latency_s=1.2)
+
+
+@dataclass(frozen=True, slots=True)
 class MockDeployment:
-    """One deployment on a mock provider. The knobs travel in the deployment's model id (see
-    `mocks/mock_common.py`, which parses the same `perf-l<ms>-j<ms>-f<pct>-s<status>-t<tps>` form)."""
+    """One deployment on a mock provider. Every knob falls back to the provider's defaults, so
+    `MockDeployment(OPENAI)` already behaves like a provider; set only what this deployment does
+    differently (slower, flaky, a different Bedrock route). The knobs travel in the model id the
+    gateway sends, so one mock pod per provider serves every case."""
 
     provider: Provider
-    latency_s: float
-    jitter_s: float = 0.0
+    latency_s: float | None = None
+    jitter_s: float | None = None
     flake_percent: int = 0
     flake_status: int = 500
-    tokens_per_second: float = 50.0
+    tokens_per_second: float | None = None
     bedrock_route: BedrockRoute = "converse"
+
+    @property
+    def kind(self) -> ProviderKind:
+        return self.provider.kind
+
+    @property
+    def effective_latency_s(self) -> float:
+        return self.provider.latency_s if self.latency_s is None else self.latency_s
+
+    @property
+    def effective_jitter_s(self) -> float:
+        return self.provider.jitter_for(self.effective_latency_s) if self.jitter_s is None else self.jitter_s
+
+    @property
+    def effective_tokens_per_second(self) -> float:
+        return self.provider.tokens_per_second if self.tokens_per_second is None else self.tokens_per_second
 
     @property
     def model_suffix(self) -> str:
         return (
-            f"perf-l{round(self.latency_s * 1000)}-j{round(self.jitter_s * 1000)}"
-            f"-f{self.flake_percent}-s{self.flake_status}-t{round(self.tokens_per_second)}"
+            f"perf-l{round(self.effective_latency_s * 1000)}-j{round(self.effective_jitter_s * 1000)}"
+            f"-f{self.flake_percent}-s{self.flake_status}-t{round(self.effective_tokens_per_second)}"
         )
 
     @property
     def max_delay_s(self) -> float:
-        return self.latency_s + self.jitter_s
+        return self.effective_latency_s + self.effective_jitter_s
 
 
 @dataclass(frozen=True, slots=True)

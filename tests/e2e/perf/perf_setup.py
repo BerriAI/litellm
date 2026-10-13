@@ -15,18 +15,18 @@ from e2e_http import NoBody, unwrap
 from idp import TESTS_CLIENT_ID, Keycloak
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, LiteLLMParamsBody, TeamNewBody, UserNewBody, UserNewResponse
-from perf_case import Guardrail, MockDeployment, PerformanceTestCase, Provider
+from perf_case import Guardrail, MockDeployment, PerformanceTestCase, ProviderKind
 from perf_plan import Caller
 from perf_wire import TokenSource
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 
-MOCK_URL_ENV: Final[dict[Provider, str]] = {
+MOCK_URL_ENV: Final[dict[ProviderKind, str]] = {
     "openai": "E2E_PERF_MOCK_OPENAI_URL",
     "anthropic": "E2E_PERF_MOCK_ANTHROPIC_URL",
     "bedrock": "E2E_PERF_MOCK_BEDROCK_URL",
 }
-MOCK_URL_DEFAULT: Final[dict[Provider, str]] = {
+MOCK_URL_DEFAULT: Final[dict[ProviderKind, str]] = {
     "openai": "http://127.0.0.1:8090",
     "anthropic": "http://127.0.0.1:8091",
     "bedrock": "http://127.0.0.1:8092",
@@ -38,7 +38,7 @@ INPUT_COST_PER_TOKEN: Final = 1e-6
 OUTPUT_COST_PER_TOKEN: Final = 2e-6
 
 
-def mock_url(provider: Provider) -> str:
+def mock_url(provider: ProviderKind) -> str:
     return os.environ.get(MOCK_URL_ENV[provider], MOCK_URL_DEFAULT[provider]).rstrip("/")
 
 
@@ -103,8 +103,8 @@ def deployment_params(deployment: MockDeployment) -> LiteLLMParamsBody:
     """The litellm_params that point one deployment at its mock provider, with its knobs in the
     model id and a fixed custom price so spend is deterministic."""
     suffix: Final = deployment.model_suffix
-    base: Final = mock_url(deployment.provider)
-    if deployment.provider == "openai":
+    base: Final = mock_url(deployment.kind)
+    if deployment.kind == "openai":
         return LiteLLMParamsBody(
             model=f"openai/{suffix}",
             api_base=f"{base}/v1",
@@ -112,7 +112,7 @@ def deployment_params(deployment: MockDeployment) -> LiteLLMParamsBody:
             input_cost_per_token=INPUT_COST_PER_TOKEN,
             output_cost_per_token=OUTPUT_COST_PER_TOKEN,
         )
-    if deployment.provider == "anthropic":
+    if deployment.kind == "anthropic":
         return LiteLLMParamsBody(
             model=f"anthropic/{suffix}",
             api_base=base,
