@@ -3,7 +3,7 @@
 import math
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, TypeAlias, TypeGuard
+from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter
 
@@ -18,8 +18,8 @@ def _string_tags(tags: object) -> Iterator[str]:
         yield from (tag for tag in _OBJECT_LIST_ADAPTER.validate_python(tags) if isinstance(tag, str))
 
 
-def _is_json_scalar(value: object) -> TypeGuard[CustomMetadataValue]:
-    return isinstance(value, (str, int, bool)) or (isinstance(value, float) and math.isfinite(value))
+def _is_non_finite(value: object) -> bool:
+    return isinstance(value, float) and not math.isfinite(value)
 
 
 def _scalar_metadata(metadata: object) -> Iterator[tuple[str, CustomMetadataValue]]:
@@ -27,7 +27,7 @@ def _scalar_metadata(metadata: object) -> Iterator[tuple[str, CustomMetadataValu
         yield from (
             (key, value)
             for key, value in _OBJECT_MAPPING_ADAPTER.validate_python(metadata).items()
-            if isinstance(key, str) and _is_json_scalar(value)
+            if isinstance(key, str) and isinstance(value, (str, int, float, bool)) and not _is_non_finite(value)
         )
 
 
