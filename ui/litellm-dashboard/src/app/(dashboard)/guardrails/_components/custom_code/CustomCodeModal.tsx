@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
 import { toast } from "@/lib/toast";
-import { loggingOnlyScopeToChoice } from "../guardrail_info_helpers";
+import { loggingOnlyContinueFromParams, loggingOnlyScopeToChoice } from "../guardrail_info_helpers";
 import type { LoggingOnlyScope, LoggingOnlyScopeChoice } from "../guardrail_info_helpers";
 import {
   CustomCodeLoggingOnlyScopeSelect,
@@ -84,6 +84,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   const [mode, setMode] = useState<string[]>(["pre_call"]);
   const [streamScopeByMode, setStreamScopeByMode] = useState<Record<string, GuardrailStreamScope>>({});
   const [loggingOnlyScopeChoice, setLoggingOnlyScopeChoice] = useState<LoggingOnlyScopeChoice>("default");
+  const [loggingOnlyContinue, setLoggingOnlyContinue] = useState(false);
   const [defaultOn, setDefaultOn] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("empty");
   const [code, setCode] = useState(CODE_TEMPLATES.empty.code);
@@ -218,6 +219,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
           ),
         );
         setLoggingOnlyScopeChoice(loggingOnlyScopeToChoice(editData.litellm_params?.logging_only_scope));
+        setLoggingOnlyContinue(loggingOnlyContinueFromParams(editData.litellm_params));
         setDefaultOn(editData.litellm_params?.default_on || false);
         setCode(editData.litellm_params?.custom_code || CODE_TEMPLATES.empty.code);
         setSelectedTemplate(""); // No template selected in edit mode
@@ -227,6 +229,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         setMode(["pre_call"]);
         setStreamScopeByMode({});
         setLoggingOnlyScopeChoice("default");
+        setLoggingOnlyContinue(false);
         setDefaultOn(false);
         setSelectedTemplate("empty");
         setCode(CODE_TEMPLATES.empty.code);
@@ -284,7 +287,12 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         const updateData: any = {
           litellm_params: {
             custom_code: code,
-            ...getCustomCodeLoggingOnlyScopeUpdate(mode, editData.litellm_params, loggingOnlyScopeChoice),
+            ...getCustomCodeLoggingOnlyScopeUpdate(
+              mode,
+              editData.litellm_params,
+              loggingOnlyScopeChoice,
+              loggingOnlyContinue,
+            ),
           },
         };
 
@@ -323,7 +331,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             default_on: defaultOn,
             custom_code: code,
             ...(streamScope !== undefined ? { stream_scope: streamScope } : {}),
-            ...getCustomCodeLoggingOnlyScopeCreate(mode, loggingOnlyScopeChoice),
+            ...getCustomCodeLoggingOnlyScopeCreate(mode, loggingOnlyScopeChoice, loggingOnlyContinue),
           },
           guardrail_info: {},
         };
@@ -428,8 +436,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         </DialogHeader>
 
         {/* Top Controls */}
-        <div className="flex items-center gap-4 border-b border-border py-4">
-          <div className="max-w-[200px] flex-1">
+        <div className="flex flex-wrap items-center gap-4 border-b border-border py-4">
+          <div className="min-w-[160px] max-w-[200px] flex-1">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Guardrail Name</label>
             <Input
               value={guardrailName}
@@ -473,6 +481,19 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
           </div>
           {mode.includes("logging_only") && (
             <CustomCodeLoggingOnlyScopeSelect value={loggingOnlyScopeChoice} onChange={setLoggingOnlyScopeChoice} />
+          )}
+          {mode.includes("logging_only") && (
+            <div className="flex shrink-0 items-center gap-2 pt-5">
+              <span className="text-sm text-muted-foreground">
+                Continue observing the response after a flagged request
+              </span>
+              <Switch
+                checked={loggingOnlyScopeChoice === "default" && loggingOnlyContinue}
+                disabled={loggingOnlyScopeChoice !== "default"}
+                onCheckedChange={setLoggingOnlyContinue}
+                aria-label="Continue observing the response after a flagged request"
+              />
+            </div>
           )}
           <div className="w-[180px]">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Template</label>

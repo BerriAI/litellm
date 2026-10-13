@@ -9,6 +9,7 @@ import functools
 import json
 import os
 import re
+import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
@@ -923,6 +924,19 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
     return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_response_format")
 
 
+def bedrock_converse_supports_tool_result_images(model: str) -> bool:
+    """Whether Converse accepts an image nested in ``toolResult.content``.
+
+    Missing means yes, which is what Claude accepts. A price-map row sets
+    ``supports_bedrock_converse_tool_result_images`` to false when Bedrock
+    rejects that image and it has to sit beside the tool result instead.
+    """
+    entries: Final = tuple(entry for entry in _bedrock_price_map_entries(model) if entry is not None)
+    if not entries:
+        return True
+    return all(entry.get("supports_bedrock_converse_tool_result_images") is not False for entry in entries)
+
+
 def bedrock_model_is_openai_gpt(model: str) -> bool:
     """A GPT-5.x or GPT-6.x id, never GPT-OSS: the families whose sampling params AWS ties to reasoning being off."""
     return _openai_gpt_version(model) is not None
@@ -1217,20 +1231,25 @@ def bedrock_supports_tool_search(model: str) -> bool:
     return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
-def is_claude_4_5_on_bedrock(model: str) -> bool:
+def supports_bedrock_prompt_cache_ttl(model: str) -> bool:
     """
-    Check if the model supports Bedrock prompt caching with an extended '1h' TTL
-    (in addition to the default 5m TTL).
-
-    Backed by the ``cache_creation_input_token_cost_above_1hr`` field in
-    ``model_prices_and_context_window.json`` instead of a hardcoded list of
-    model-name patterns, so newly released models pick up support as soon as
-    their pricing entry ships, with no code change required here.
+    Whether Bedrock accepts a ``ttl`` ("5m"/"1h") on prompt ``cache_control``
+    for this model, decided by ``cache_creation_input_token_cost_above_1hr`` on
+    the model's or its base model's cost-map entry.
     """
     return any(
         (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
         for candidate in (model, get_bedrock_base_model(model))
     )
+
+
+def is_claude_4_5_on_bedrock(model: str) -> bool:
+    warnings.warn(
+        "is_claude_4_5_on_bedrock is deprecated, use supports_bedrock_prompt_cache_ttl",
+        UserWarning,
+        stacklevel=2,
+    )
+    return supports_bedrock_prompt_cache_ttl(model)
 
 
 _BEDROCK_MODEL_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")

@@ -15,6 +15,7 @@ import { Providers } from "../provider_info_helpers";
 import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
 import { useForm } from "react-hook-form";
 import AddModelForm from "./AddModelForm";
+import { EMPTY_DECISION_CATALOG } from "@/lib/decisionModels";
 import { handleAddModelSubmit } from "./handle_add_model_submit";
 import { toast } from "@/lib/toast";
 
@@ -245,6 +246,7 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     showAdvancedSettings: false,
     teams,
     credentials,
+    decisionCatalog: EMPTY_DECISION_CATALOG,
     userRole,
     userId,
   };
@@ -427,7 +429,7 @@ describe("AddModelForm", () => {
     expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
   });
 
-  it("offers the Evaluation decisions mode", async () => {
+  it("offers the Decisions mode", async () => {
     const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
     mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
 
@@ -436,7 +438,7 @@ describe("AddModelForm", () => {
     await screen.findByText("Provider");
     await userEvent.click(screen.getByRole("combobox", { name: "Mode" }));
 
-    expect(await screen.findByRole("option", { name: "Evaluation - /v1/decisions", exact: true })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Decisions - /v1/decisions", exact: true })).toBeInTheDocument();
   });
 
   it("shows only the Close button in the connection test dialog footer", async () => {

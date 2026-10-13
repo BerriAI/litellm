@@ -458,6 +458,35 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "route", "written"),
+    [
+        ("litellm-dashboard", "/key/list", False),
+        ("litellm-dashboard", "/v2/user/info", False),
+        ("litellm-dashboard", "/chat/completions", True),
+        ("team-1", "/key/list", True),
+        (None, "/key/list", True),
+    ],
+)
+async def test_async_post_call_failure_hook_skips_dashboard_session_info_route_failures(  # test-quality-ok: update_database is the DB write boundary, so whether it is awaited is the observable outcome
+    team_id: str | None, route: str, written: bool
+) -> None:
+    """An expired Admin UI session key refetching dashboard info routes must not
+    write a failure SpendLog row, while its LLM calls and other keys' info calls still do."""
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data={},
+            original_exception=Exception("Authentication Error - Expired Key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-session", team_id=team_id, request_route=route),
+        )
+
+    assert mock_update_database.await_count == (1 if written else 0)
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_releases_budget_reservation_before_route_skip():
     logger = ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}

@@ -99,6 +99,7 @@ export enum Providers {
   COHERE_CHAT = "Cohere Chat",
   COMETAPI = "Cometapi",
   COMPACTIFAI = "Compactifai",
+  CORALBRICKS = "CoralBricks",
   Cursor = "Cursor",
   Dashscope = "Dashscope",
   Databricks = "Databricks (Qwen API)",
@@ -221,6 +222,7 @@ export const provider_map: Record<string, string> = {
   COHERE_CHAT: "cohere_chat",
   COMETAPI: "cometapi",
   COMPACTIFAI: "compactifai",
+  CORALBRICKS: "coralbricks",
   Cursor: "cursor",
   Dashscope: "dashscope",
   Databricks: "databricks",
@@ -317,6 +319,9 @@ export const provider_map: Record<string, string> = {
 };
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
+
+export const resolveLitellmProviderSlug = (provider: string): string =>
+  provider_map[provider] ?? provider.toLowerCase();
 
 export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.A2A_Agent]: a2aAgentLogo.src,
@@ -456,6 +461,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Bedrock]: "claude-3-opus",
   [Providers.CHATGPT]: "chatgpt/gpt-5.4",
   [Providers.Cognition]: "cognition/swe-1.7",
+  [Providers.CORALBRICKS]: "coralbricks/glm-5.3-fast",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
   [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
@@ -487,7 +493,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
 
 export const getProviderModels = (provider: string, modelMap: any): Array<string> => {
   let providerKey = provider;
-  let custom_llm_provider = provider_map[providerKey];
+  let custom_llm_provider = providerKey ? resolveLitellmProviderSlug(providerKey) : undefined;
 
   let providerModels: Array<string> = [];
 
