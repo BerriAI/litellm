@@ -634,7 +634,7 @@ async def asend_message_streaming(
     proxy_server_request: dict[str, object] | None = None,
     agent_extra_headers: dict[str, str] | None = None,
     **kwargs: object,
-) -> AsyncIterator[Any]:
+) -> AsyncIterator["SendStreamingMessageResponse | Mapping[str, object]"]:
     """
     Async: Send a streaming message to an A2A agent.
 

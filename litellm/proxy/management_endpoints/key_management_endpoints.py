@@ -21,7 +21,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
 import yaml
@@ -6478,7 +6478,7 @@ async def reset_key_spend_fn(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     try:
         from litellm.proxy.proxy_server import (
             hash_token,
@@ -7022,7 +7022,7 @@ async def key_aliases(
     size: int = Query(50, ge=1, le=100, description="Page size"),
     search: str | None = Query(None, description="Search key aliases (case-insensitive partial match)"),
     team_id: str | None = Query(None, description="Filter aliases to keys belonging to this team"),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Lists key aliases with pagination and optional search.
 
