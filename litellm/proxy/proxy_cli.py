@@ -713,8 +713,6 @@ class ProxyInitializationHelpers:
         with prometheus configured as a callback in config.yaml, or the separate metrics server (always, since
         callbacks may also be enabled from the DB after startup).
         """
-        import tempfile
-
         from litellm.proxy.prometheus_cleanup import wipe_directory
 
         configured_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
@@ -725,24 +723,7 @@ class ProxyInitializationHelpers:
                 wipe_directory(configured_dir)
             return None
 
-        multiproc_dir: Final[str]
-        action: Final[str]
-        if configured_dir:
-            # An operator-set directory is theirs to manage; keep the historical wipe-on-boot.
-            os.makedirs(configured_dir, exist_ok=True)
-            wipe_directory(configured_dir)
-            multiproc_dir = configured_dir
-            action = "Using existing"
-        else:
-            # Unique per boot: a fixed shared name lets a second proxy on this host wipe the first one's counters.
-            import atexit
-
-            multiproc_dir = tempfile.mkdtemp(prefix="litellm_prometheus_multiproc_")
-            action = "Auto-created"
-
-            # Only the creating process removes the dir on exit. Forked workers share it and
-            # must not delete samples their siblings are still writing.
-            atexit.register(ProxyInitializationHelpers._rmtree_auto_created_dir, multiproc_dir, os.getpid())
+        multiproc_dir, action = ProxyInitializationHelpers._pick_multiproc_dir(configured_dir)
 
         os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
         print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
@@ -756,6 +737,31 @@ class ProxyInitializationHelpers:
         removes the dir, so forked workers sharing it never delete samples their siblings still write."""
         if os.getpid() == creator_pid:
             shutil.rmtree(multiproc_dir, ignore_errors=True)
+
+    @staticmethod
+    def _pick_multiproc_dir(configured_dir: str | None) -> tuple[str, str]:
+        """Pick the PROMETHEUS_MULTIPROC_DIR to use, with the boot-message verb for it.
+
+        An operator-set directory keeps its historical wipe-on-boot lifecycle. An auto-created one
+        is unique per boot — a fixed shared name lets a second proxy on this host wipe the first
+        one's counters — and registers the creator-only atexit cleanup.
+        """
+        import atexit
+        import tempfile
+
+        from litellm.proxy.prometheus_cleanup import wipe_directory
+
+        if configured_dir:
+            os.makedirs(configured_dir, exist_ok=True)
+            wipe_directory(configured_dir)
+            return configured_dir, "Using existing"
+
+        picked: Final = tempfile.mkdtemp(prefix="litellm_prometheus_multiproc_")
+
+        # Only the creating process removes the dir on exit. Forked workers share it and
+        # must not delete samples their siblings are still writing.
+        atexit.register(ProxyInitializationHelpers._rmtree_auto_created_dir, picked, os.getpid())
+        return picked, "Auto-created"
 
 
 @click.command()
