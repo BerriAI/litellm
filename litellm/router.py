@@ -1508,12 +1508,9 @@ class Router:
                     routing_args=routing_strategy_args,
                 )
             case RoutingStrategy.COST_BASED.value:
-                def price_lookup(
-                    model_id: str, model_name: str
-                ) -> tuple[float | None, float | None]:
-                    model_info: Final = self.get_deployment_model_info(
-                        model_id=model_id, model_name=model_name
-                    )
+
+                def price_lookup(model_id: str, model_name: str) -> tuple[float | None, float | None]:
+                    model_info: Final = self.get_deployment_model_info(model_id=model_id, model_name=model_name)
                     if model_info is None:
                         return None, None
                     return (
