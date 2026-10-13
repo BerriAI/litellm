@@ -3321,7 +3321,17 @@ async def test_cache_options_preserve_resolved_backend_and_explicit_connection(
     from pytest_socket import socket_allow_hosts
 
     from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    for shared_cache in (
+        proxy_server.spend_counter_cache,
+        proxy_server.cli_sso_session_cache,
+        proxy_server.litellm_config_cache,
+    ):
+        monkeypatch.setattr(shared_cache, "redis_cache", None)
+        monkeypatch.setattr(shared_cache, "default_redis_ttl", shared_cache.default_redis_ttl)
 
     socket_allow_hosts([], allow_unix_socket=True)
     monkeypatch.setenv("REDIS_HOST", "127.0.0.1")
