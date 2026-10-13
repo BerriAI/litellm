@@ -1,5 +1,3 @@
-import os
-import signal
 import uuid
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -8,11 +6,10 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, graceful_stop_seconds, group_members, owned_proxy_process
+from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.redis_process import owned_redis
 from integration._support.spend_counters import (
     counter_ttl,
@@ -144,14 +141,7 @@ def test_a_burst_with_upstream_failures_lands_each_success_once_with_a_long_ttl(
 
 
 def _workers(owned: OwnedProxy) -> tuple[int, ...]:
-    return tuple(
-        member.pid
-        for member in group_members(owned.process.pid)
-        if member.pid != owned.process.pid
-        and member.is_running()
-        and member.status() != psutil.STATUS_ZOMBIE
-        and any("spawn_main" in part for part in member.cmdline())
-    )
+    return tuple(sorted(owned.worker_pids()))
 
 
 def _attempt(gateway: Gateway, model: str, key: str, index: int) -> int:
@@ -176,8 +166,9 @@ def test_a_killed_worker_does_not_shorten_or_lose_the_counter(gateway: Gateway, 
             first: Final = pool.submit(_attempt, owned.gateway, model, key, 0)
             assert first.result(timeout=60) == 200
             in_flight: Final = [pool.submit(_attempt, owned.gateway, model, key, index) for index in range(1, 12)]
-            os.kill(before[0], signal.SIGKILL)
-            survivor: Final = _attempt(owned.gateway, model, key, 99)
+            with owned.replacing_worker(before[0]) as kill:
+                kill()
+                survivor: Final = _attempt(owned.gateway, model, key, 99)
             codes: Final = [future.result(timeout=120) for future in in_flight]
         assert survivor == 200, survivor
         assert all(code in (0, 200) for code in codes), codes
@@ -224,8 +215,11 @@ def test_a_reservation_leaked_by_a_killed_worker_stays_for_the_counter_ttl(gatew
                 lambda value: value is not None and value >= LEAK_KEY_BUDGET - 1e-9,
                 seconds=SLOW_UPSTREAM_SECONDS,
             )
-            for pid in before:
-                os.kill(pid, signal.SIGKILL)
+            with owned.replacing_worker(before[0]) as first, owned.replacing_worker(before[1]) as second:
+                first.freeze()
+                second.freeze()
+                first()
+                second()
             interrupted: Final = in_flight.result(timeout=60)
         assert interrupted != 200, interrupted
         leaked: Final = (counter_value(cache, counter), counter_ttl(cache, counter))
