@@ -2,7 +2,6 @@ from collections.abc import Mapping
 from typing import Final
 
 from httpx._models import Headers
-
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -18,8 +17,8 @@ class V1MError(BaseLLMException):
 
 
 class V1MConfig(OpenAIGPTConfig):
-    """
-    Configuration for v1m (System One) calibrated decision engine.
+    """Configuration for v1m (System One) calibrated decision engine.
+
     Website: https://v1m.ir
     """
 
@@ -38,12 +37,23 @@ class V1MConfig(OpenAIGPTConfig):
     def get_config(cls) -> OpenAIGPTConfig:
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: required list signature for OpenAIGPTConfig
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[str]:  # mutable-ok: required list signature for OpenAIGPTConfig
         return [
             "temperature",
             "max_tokens",
             "stream",
         ]
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Mapping[str, str] | Headers) -> BaseLLMException:
-        return V1MError(status_code=status_code, message=error_message, headers=headers)
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: Mapping[str, str] | Headers,
+    ) -> BaseLLMException:
+        return V1MError(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )
