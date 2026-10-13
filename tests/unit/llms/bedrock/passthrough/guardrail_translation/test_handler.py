@@ -3062,6 +3062,33 @@ class TestConverseTextsRebuiltFromRows:
             {"role": "user", "content": [{"text": "Card **** please."}]},
         ]
 
+    @pytest.mark.asyncio
+    async def test_rebuilt_texts_that_mask_a_turn_the_rows_leave_fail_closed_even_when_another_turn_has_that_mask(
+        self,
+    ):
+        data = {
+            "endpoint": "model/anthropic.claude-sonnet/converse",
+            "custom_llm_provider": "bedrock",
+            "data": {
+                "system": [{"text": "You are a support bot."}],
+                "messages": [
+                    {"role": "user", "content": [{"text": "4111 1111 1111 1111"}]},
+                    {"role": "assistant", "content": [{"text": "Noted."}]},
+                    {"role": "user", "content": [{"text": "4111 1111 1111 1111"}]},
+                ],
+            },
+        }
+
+        def mask_first_user_row_only(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
+            rows = copy.deepcopy(inputs["structured_messages"])
+            rows[1]["content"] = [{"type": "text", "text": "****"}]
+            return {"texts": ["****", "****"], "structured_messages": rows}
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(
+                data, _ScriptedGuardrail(mask_first_user_row_only)
+            )
+
 
 class TestConverseTextMaskTheRowsLeaveOut:
     @pytest.mark.asyncio
