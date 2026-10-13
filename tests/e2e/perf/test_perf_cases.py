@@ -71,7 +71,7 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
         rss_before=rss_before,
         rss_after=rss_after,
         wall_seconds=outcome.wall_seconds,
-        extra={} if spend_share is None else {"spend_logged_share": spend_share},
+        spend_logged_share=spend_share,
     )
     rows, exceeded_limits = evaluate(case, observation)
     print(render(case, observation, rows))

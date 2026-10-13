@@ -16,17 +16,14 @@ from typing import Final, Literal
 Endpoint = Literal["chat_completions", "responses", "messages"]
 GuardrailMode = Literal["pre_call", "post_call"]
 Metric = Literal[
+    "total_s",
+    "ttft_s",
     "added_latency_s",
     "header_added_s",
     "ttft_added_s",
-    "client_5xx",
-    "incorrect_responses",
-    "guardrail_calls_per_request",
-    "guardrail_missed",
-    "retried_share",
+    "non_200",
     "rss_growth_mb",
     "wall_seconds",
-    "spend_logged_share",
 ]
 UserRole = Literal["internal_user", "internal_user_viewer", "proxy_admin", "proxy_admin_viewer"]
 

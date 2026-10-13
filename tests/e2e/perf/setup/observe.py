@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import statistics
 from collections import Counter
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Final
 
 from e2e_http import NoBody, get_external, post_external, unwrap
@@ -95,7 +95,7 @@ class Observation:
     rss_before: RssCapture
     rss_after: RssCapture
     wall_seconds: float
-    extra: Mapping[Metric, float] = field(default_factory=lambda: dict[Metric, float]())
+    spend_logged_share: float | None = None
 
     @property
     def retried_markers(self) -> frozenset[str]:
@@ -120,6 +120,16 @@ class Observation:
                 pairs.append((record, delay))
         return pairs
 
+    def total_times(self) -> list[float]:
+        return [record.total_s for record in self.served]
+
+    def ttfts(self) -> list[float]:
+        return [record.first_token_s for record in self.served if record.stream and record.first_token_s is not None]
+
+    def non_200(self) -> int:
+        """Requests the plan expected to succeed that came back with any other status (0 is a client timeout)."""
+        return sum(1 for record in self.records if not record.blocked and record.status != 200)
+
     def added_latencies(self) -> list[float]:
         return [record.total_s - delay for record, delay in self._clean(stream=False)]
 
@@ -143,28 +153,19 @@ class Observation:
 def observe(metric: Metric, percentile_rank: int | None, observation: Observation) -> float | None:
     """The observed value of one metric, at a percentile when the metric is per request."""
     per_request: dict[str, list[float]] = {
+        "total_s": observation.total_times(),
+        "ttft_s": observation.ttfts(),
         "added_latency_s": observation.added_latencies(),
         "header_added_s": observation.header_added(),
         "ttft_added_s": observation.ttft_added(),
     }
     if metric in per_request:
         return percentile(per_request[metric], 50 if percentile_rank is None else percentile_rank)
-    records: Final = observation.records
-    if metric == "client_5xx":
-        return float(sum(1 for record in records if record.status >= 500 or record.status == 0))
-    if metric == "incorrect_responses":
-        return float(sum(1 for record in records if not record.ok))
-    if metric == "guardrail_calls_per_request":
-        return len(observation.guardrail_calls) / len(records) if records else None
-    if metric == "guardrail_missed":
-        return float(observation.guardrail_missed()) if observation.guardrail_calls else None
-    if metric == "retried_share":
-        return len(observation.retried_markers) / len(records) if records else None
+    if metric == "non_200":
+        return float(observation.non_200())
     if metric == "rss_growth_mb":
         return worst_worker_growth_mb(observation.rss_before, observation.rss_after)
-    if metric == "wall_seconds":
-        return observation.wall_seconds
-    return observation.extra.get(metric)
+    return observation.wall_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,26 +184,26 @@ class Row:
 
 
 REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
+    ("total_s", 50),
+    ("total_s", 95),
+    ("total_s", 99),
+    ("ttft_s", 50),
+    ("ttft_s", 95),
     ("added_latency_s", 50),
     ("added_latency_s", 95),
     ("added_latency_s", 99),
     ("header_added_s", 95),
     ("ttft_added_s", 50),
     ("ttft_added_s", 95),
-    ("client_5xx", None),
-    ("incorrect_responses", None),
-    ("guardrail_calls_per_request", None),
-    ("guardrail_missed", None),
-    ("retried_share", None),
+    ("non_200", None),
     ("rss_growth_mb", None),
     ("wall_seconds", None),
-    ("spend_logged_share", None),
 )
 
 
 def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[Row], list[str]]:
-    """Every reported metric with its observed value and the case's limit if it has one, plus the
-    problems: a limit exceeded, or a limited metric the run could not observe."""
+    """Every reported metric with its observed value and the case's limit if it has one, plus one line per
+    limit that was exceeded or that the run could not observe."""
     limits: Final[dict[tuple[Metric, int | None], Limit]] = {
         (limit.metric, limit.percentile): limit for limit in case.limits
     }
@@ -213,14 +214,14 @@ def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[
         limit = limits.get((metric, rank))
         label = f"{metric} p{rank}" if rank is not None else metric
         rows.append(Row(label=label, observed=observe(metric, rank, observation), limit=limit.max if limit else None))
-    problems: Final = [
+    exceeded: Final = [
         f"{row.label}: observed {row.observed:.4f} > limit {row.limit:.4f}"
         if row.over and row.observed is not None and row.limit is not None
         else f"{row.label}: limit set but nothing observed"
         for row in rows
         if row.over or row.missing
     ]
-    return rows, problems
+    return rows, exceeded
 
 
 def render(case: PerformanceTestCase, observation: Observation, rows: list[Row]) -> str:
@@ -242,8 +243,23 @@ def render(case: PerformanceTestCase, observation: Observation, rows: list[Row])
         limit = "" if row.limit is None else f"{row.limit:.4f}"
         flag = "  OVER" if row.over else "  MISSING" if row.missing else ""
         lines.append(f"  {row.label:32} {observed:>12} {limit:>12}{flag}")
+    lines.extend(_diagnostics(observation))
     for record in failures:
         lines.append(
             f"  wrong: seq {record.seq} {record.caller} {record.endpoint}{' stream' if record.stream else ''} status {record.status}: {record.error}"
         )
     return "\n".join(lines)
+
+
+def _diagnostics(observation: Observation) -> list[str]:
+    """Functional side-channels printed for whoever reads a red run, never limits of a case."""
+    count: Final = max(1, len(observation.records))
+    share: Final = observation.spend_logged_share
+    return [
+        "  diagnostics (not limits):",
+        f"    wrong bodies {sum(1 for record in observation.records if not record.ok)}",
+        f"    guardrail calls per request {len(observation.guardrail_calls) / count:.3f}",
+        f"    guardrail missed {observation.guardrail_missed() if observation.guardrail_calls else 'n/a'}",
+        f"    retried share {len(observation.retried_markers) / count:.4f}",
+        f"    spend logged share {'n/a' if share is None else f'{share:.3f}'}",
+    ]
