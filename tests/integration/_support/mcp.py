@@ -565,6 +565,7 @@ class McpCaller:
     entry: EntryPoint
     alias: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
+    protocol_version: str | None = None
 
     def _path(self) -> str:
         if self.entry == "server_mcp":
@@ -582,10 +583,23 @@ class McpCaller:
     def rpc(self, method: str, params: JsonRpc | None = None) -> httpx.Response:
         if self.entry == "sse":
             return _legacy_sse_rpc(self.gateway, self._headers(), method, params)
+        modern: Final = self.protocol_version == "2026-07-28"
+        arguments: Final = dict(params or {})
         return self.gateway.client.post(
             self._path(),
-            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params or {})},
-            headers=self._headers(),
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {
+                **arguments,
+                **({"_meta": {
+                    "io.modelcontextprotocol/protocolVersion": self.protocol_version,
+                    "io.modelcontextprotocol/clientInfo": {"name": "integration-caller", "version": "1"},
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }} if modern else {}),
+            }},
+            headers={**self._headers(), **({
+                "MCP-Protocol-Version": self.protocol_version,
+                "Mcp-Method": method,
+                "Mcp-Name": str(arguments.get("name", arguments.get("uri", ""))),
+            } if modern else {})},
         )
 
     def initialize(self) -> Outcome:

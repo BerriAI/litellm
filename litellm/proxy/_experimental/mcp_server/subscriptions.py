@@ -32,7 +32,9 @@ from mcp.types import (
     ListToolsRequest,
     ListToolsResult,
     PaginatedRequestParams,
+    PromptsCapability,
     RequestId,
+    ResourcesCapability,
     ServerCapabilities,
     ServerNotification,
     SubscribeRequest,
@@ -40,6 +42,7 @@ from mcp.types import (
     SubscriptionFilter,
     SubscriptionsListenRequestParams,
     SubscriptionsListenResult,
+    ToolsCapability,
     UnsubscribeRequest,
     UnsubscribeRequestParams,
 )
@@ -52,6 +55,7 @@ from litellm.proxy._experimental.mcp_server.catalog import (
 )
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.mcp import MCP_LEGACY_VERSIONS
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -217,6 +221,48 @@ async def _targets(context: OperationContext) -> tuple[SubscriptionTarget, ...]:
             return SubscriptionTarget(server, client, await client.subscription_auth_fingerprint())
 
         return tuple([await prepare(server) for server in allowed])
+
+
+async def subscription_capabilities(context: OperationContext) -> tuple[frozenset[str], ServerCapabilities]:
+    try:
+        targets: Final = await _targets(context)
+    except Exception:  # noqa: BLE001  # missing optional upstream credentials must not erase usable catalog results
+        return frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities()
+    configured: Final = frozenset(target.server.protocol_version for target in targets)
+    versions: Final = (
+        configured | frozenset(MCP_LEGACY_VERSIONS) if not configured or "auto" in configured else configured
+    )
+    if not targets or any(
+        target.server.protocol_version == "2026-07-28" and target.server.transport != "http" for target in targets
+    ):
+        return versions, ServerCapabilities()
+
+    async def probe(target: SubscriptionTarget) -> ServerCapabilities:
+        async def read(session: ClientSession) -> ServerCapabilities:
+            return session.server_capabilities or ServerCapabilities()
+
+        try:
+            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
+                return await target.client.run_with_session(read, quiet_on_error=True)
+        except Exception:  # noqa: BLE001  # an optional notification probe must not disable an otherwise usable catalog
+            return ServerCapabilities()
+
+    declared: Final = tuple(await asyncio.gather(*(probe(target) for target in targets)))
+    return versions, ServerCapabilities(
+        tools=ToolsCapability(list_changed=True)
+        if all(item.tools and item.tools.list_changed for item in declared)
+        else None,
+        prompts=PromptsCapability(list_changed=True)
+        if all(item.prompts and item.prompts.list_changed for item in declared)
+        else None,
+        resources=ResourcesCapability(
+            list_changed=all(item.resources and item.resources.list_changed for item in declared) or None,
+            subscribe=(len(targets) == 1 and any(item.resources and item.resources.subscribe for item in declared))
+            or None,
+        )
+        if any(item.resources for item in declared)
+        else None,
+    )
 
 
 async def _listing(event: ServerEvent, context: OperationContext) -> str | None:
@@ -432,6 +478,10 @@ class GatewaySubscriptions:
     ) -> SubscriptionsListenResult:
         context: Final = await authorize()
         targets: Final = await self._resolve_targets(context)
+        if any(
+            target.server.protocol_version == "2026-07-28" and target.server.transport != "http" for target in targets
+        ):
+            raise MCPError(code=-32602, message="Modern upstream subscriptions require HTTP")
         if not targets:
             raise HTTPException(status_code=403, detail="No authorized MCP subscription targets")
         if params.notifications.resource_subscriptions and len(targets) != 1:

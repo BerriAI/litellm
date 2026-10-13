@@ -140,3 +140,26 @@ def test_modern_protocol_is_rejected_on_legacy_sse_paths(path: str, monkeypatch:
         unsupported_protocol_version({"path": path, "headers": [(b"mcp-protocol-version", b"2026-07-28")]})
         == "2026-07-28"
     )
+
+
+@pytest.mark.parametrize("revision,upstreams,transport,allowed", [
+    ("2026-07-28", frozenset({"2026-07-28"}), MCPTransport.http, True),
+    ("2025-11-25", frozenset({"2026-07-28"}), MCPTransport.http, False),
+    ("2026-07-28", frozenset({"2025-11-25", "2026-07-28"}), MCPTransport.http, False),
+    ("2026-07-28", frozenset({"2026-07-28"}), MCPTransport.stdio, False),
+])
+def test_subscription_flags_require_a_supported_protocol_pair(revision, upstreams, transport, allowed):
+    result = build_discovery(
+        configured=("2025-11-25", "2026-07-28"), revision=revision, transport=transport,
+        authorized_operations=GATEWAY_OPERATIONS, upstream_versions=upstreams,
+        capabilities=ServerCapabilities(
+            tools=ToolsCapability(list_changed=True), prompts=PromptsCapability(list_changed=True),
+            resources=ResourcesCapability(list_changed=True, subscribe=True),
+        ),
+    )
+    assert bool(result.capabilities.tools.list_changed) is allowed
+    assert bool(result.capabilities.prompts.list_changed) is allowed
+    assert bool(result.capabilities.resources.list_changed) is allowed
+    assert bool(result.capabilities.resources.subscribe) is allowed
+    assert result.capabilities.tasks is None
+    assert result.capabilities.extensions is None

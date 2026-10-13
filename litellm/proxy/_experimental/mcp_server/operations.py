@@ -3401,26 +3401,42 @@ class GatewayOperations:
                         await asyncio.gather(*tasks, return_exceptions=True)
                     finally:
                         _mcp_server_admission_memo.reset(memo_token)
+                from litellm.proxy._experimental.mcp_server.subscriptions import subscription_capabilities
+
+                upstream_versions, notifications = (
+                    await subscription_capabilities(context)
+                    if context.protocol_version == "2026-07-28" and not context.mcp_proxy_mode
+                    else (frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities())
+                )
                 return build_discovery(
                     configured=configured_versions(),
                     revision=context.protocol_version or "2025-11-25",
                     transport=MCPTransport.http,
                     authorized_operations=GATEWAY_OPERATIONS,
-                    upstream_versions=frozenset(MCP_LEGACY_VERSIONS),
+                    upstream_versions=upstream_versions,
                     capabilities=ServerCapabilities(
-                        tools=ToolsCapability()
-                        if any(isinstance(result, ListToolsResult) and result.tools for result in results)
-                        else None,
-                        prompts=PromptsCapability()
-                        if any(isinstance(result, ListPromptsResult) and result.prompts for result in results)
-                        else None,
-                        resources=ResourcesCapability()
-                        if any(
-                            (isinstance(result, ListResourcesResult) and result.resources)
-                            or (isinstance(result, ListResourceTemplatesResult) and result.resource_templates)
-                            for result in results
-                        )
-                        else None,
+                        tools=notifications.tools
+                        or (
+                            ToolsCapability()
+                            if any(isinstance(result, ListToolsResult) and result.tools for result in results)
+                            else None
+                        ),
+                        prompts=notifications.prompts
+                        or (
+                            PromptsCapability()
+                            if any(isinstance(result, ListPromptsResult) and result.prompts for result in results)
+                            else None
+                        ),
+                        resources=notifications.resources
+                        or (
+                            ResourcesCapability()
+                            if any(
+                                (isinstance(result, ListResourcesResult) and result.resources)
+                                or (isinstance(result, ListResourceTemplatesResult) and result.resource_templates)
+                                for result in results
+                            )
+                            else None
+                        ),
                     ),
                 )
             case AuthorizedToolCall():

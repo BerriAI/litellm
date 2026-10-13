@@ -28,6 +28,7 @@ GATEWAY_OPERATIONS: Final = frozenset(
         "resources/list",
         "resources/read",
         "resources/templates/list",
+        "subscriptions/listen",
     }
 )
 
@@ -99,13 +100,30 @@ def build_discovery(
         if operations and revision_support is not None
         else frozenset()
     )
+    subscriptions: Final = (
+        "subscriptions/listen" in operations and revision == "2026-07-28" and transport is MCPTransport.http
+    )
     caller_capabilities: Final = capabilities.model_copy(deep=True)
+    tools: Final = caller_capabilities.tools
+    prompts: Final = caller_capabilities.prompts
+    resources: Final = caller_capabilities.resources
     return DiscoverResult(
         supported_versions=list(supported),
         capabilities=ServerCapabilities(
-            tools=caller_capabilities.tools if {"tools/list", "tools/call"} <= operations else None,
-            prompts=caller_capabilities.prompts if {"prompts/list", "prompts/get"} <= operations else None,
-            resources=caller_capabilities.resources if {"resources/list", "resources/read"} <= operations else None,
+            tools=tools.model_copy(update={"list_changed": tools.list_changed if subscriptions else None})
+            if tools is not None and {"tools/list", "tools/call"} <= operations
+            else None,
+            prompts=prompts.model_copy(update={"list_changed": prompts.list_changed if subscriptions else None})
+            if prompts is not None and {"prompts/list", "prompts/get"} <= operations
+            else None,
+            resources=resources.model_copy(
+                update={
+                    "list_changed": resources.list_changed if subscriptions else None,
+                    "subscribe": resources.subscribe if subscriptions else None,
+                }
+            )
+            if resources is not None and {"resources/list", "resources/read"} <= operations
+            else None,
             extensions={
                 key: value for key, value in (caller_capabilities.extensions or {}).items() if key in extensions
             }
