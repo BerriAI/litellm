@@ -511,6 +511,7 @@ if MCP_AVAILABLE:
     from mcp.server.auth.provider import AccessToken
     from mcp.server.context import ServerRequestContext
     from mcp.server.lowlevel.server import NotificationOptions
+    from mcp.server.lowlevel.server import Server as MCPProtocolServer
     from mcp.server.models import InitializationOptions
     from mcp.shared.exceptions import MCPError
     from mcp.shared.inbound import InboundLadderRejection, classify_inbound_request, find_duplicated_routing_header
@@ -606,7 +607,7 @@ if MCP_AVAILABLE:
     ########################################################
     ############ Initialize the MCP Server #################
     ########################################################
-    server: Final[Server] = Server(
+    server: Final = MCPProtocolServer[object](
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
     )
@@ -992,6 +993,49 @@ if MCP_AVAILABLE:
     async def discover(ctx: ServerRequestContext, params: RequestParams) -> DiscoverResult:
         async with _legacy_operation_context(ctx, trace=False) as context:
             return await operations.GatewayOperations().execute(DiscoverRequest(params=params), context)
+
+    from mcp.types import SubscriptionsListenRequestParams, SubscriptionsListenResult
+
+    from litellm.proxy._experimental.mcp_server.subscriptions import GatewaySubscriptions
+
+    subscriptions: Final = GatewaySubscriptions()
+
+    async def listen_subscriptions(
+        ctx: ServerRequestContext, params: SubscriptionsListenRequestParams
+    ) -> SubscriptionsListenResult:
+        if _mcp_proxy_mode.get():
+            _reject_mcp_proxy_operation()
+        request: Final = ctx.request
+        if not isinstance(request, StarletteRequest):
+            raise HTTPException(status_code=400, detail="Subscriptions require an HTTP request")
+        async with _legacy_operation_context(ctx, trace=False) as initial:
+            owner: Final = _owner_fingerprint_for(
+                initial.user_api_key_auth, dict(initial.oauth2_headers or {}), initial.client_ip
+            )
+
+            async def authorize() -> OperationContext:
+                auth, token, servers, server_headers, oauth_headers, headers = await extract_mcp_auth_context(
+                    request.scope, request.url.path
+                )
+                if _owner_fingerprint_for(auth, oauth_headers, initial.client_ip) != owner:
+                    raise HTTPException(status_code=403, detail="Subscription caller changed")
+                return operations.prepare_context(
+                    auth,
+                    token,
+                    servers,
+                    server_headers,
+                    oauth_headers,
+                    headers,
+                    initial.client_ip,
+                    False,
+                    initial.wire_compat,
+                    initial.protocol_version,
+                    incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, auth),
+                )
+
+            return await subscriptions.listen(ctx, params, authorize, owner)
+
+    server.add_request_handler("subscriptions/listen", SubscriptionsListenRequestParams, listen_subscriptions)
 
     server.add_request_handler("server/discover", RequestParams, discover)
     server.add_request_handler("tools/list", PaginatedRequestParams, handle_list_tools)
