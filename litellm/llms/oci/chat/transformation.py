@@ -147,7 +147,9 @@ def _normalize_tool_choice(selected_params: dict) -> None:
             "required": {"type": "REQUIRED"},
             "any": {"type": "REQUIRED"},
         }
-        selected_params["toolChoice"] = tc_map.get(tc.lower(), {"type": "FUNCTION", "name": tc})
+        selected_params["toolChoice"] = tc_map.get(
+            tc.lower(), {"type": "FUNCTION", "name": tc}
+        )
         return
     if isinstance(tc, dict):
         raw_type: Final = tc.get("type")
@@ -179,7 +181,9 @@ def _normalize_tool_choice(selected_params: dict) -> None:
         return
     raise OCIError(
         status_code=400,
-        message=(f"Invalid tool_choice for OCI: expected str or dict, got {type(tc).__name__}"),
+        message=(
+            f"Invalid tool_choice for OCI: expected str or dict, got {type(tc).__name__}"
+        ),
     )
 
 
@@ -213,7 +217,9 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
         # OCI's ResponseJsonSchema accepts only name/description/schema/isStrict.
         # OpenAI sends `strict` instead of `isStrict`; forwarding it (or any
         # other extra key) makes OCI reject the whole request with HTTP 400.
-        oci_schema: Final[dict[str, object]] = {"name": json_schema.get("name") or "response"}
+        oci_schema: Final[dict[str, object]] = {
+            "name": json_schema.get("name") or "response"
+        }
         if json_schema.get("description") is not None:
             oci_schema["description"] = json_schema["description"]
         if json_schema.get("schema") is not None:
@@ -227,7 +233,9 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
         return
 
     fmt: Final = rf_type.upper()
-    selected_params["responseFormat"] = {"type": "JSON_OBJECT" if fmt == "JSON" else fmt}
+    selected_params["responseFormat"] = {
+        "type": "JSON_OBJECT" if fmt == "JSON" else fmt
+    }
 
 
 def get_vendor_from_model(model: str) -> OCIVendors:
@@ -291,7 +299,8 @@ class OCIChatConfig(BaseConfig):
         # ``map_openai_params`` either drops them (under drop_params) or raises
         # a clear error, rather than silently passing them through.
         self.openai_to_oci_cohere_param_map = {
-            k: ("stopSequences" if k == "stop" else v) for k, v in self.openai_to_oci_generic_param_map.items()
+            k: ("stopSequences" if k == "stop" else v)
+            for k, v in self.openai_to_oci_generic_param_map.items()
         }
         self.openai_to_oci_cohere_param_map["tool_choice"] = False
         self.openai_to_oci_cohere_param_map["n"] = False
@@ -335,7 +344,9 @@ class OCIChatConfig(BaseConfig):
         adapted_params: Final = {}
         vendor: Final = get_vendor_from_model(model)
         param_map: Final = (
-            self.openai_to_oci_cohere_param_map if vendor == OCIVendors.COHERE else self.openai_to_oci_generic_param_map
+            self.openai_to_oci_cohere_param_map
+            if vendor == OCIVendors.COHERE
+            else self.openai_to_oci_generic_param_map
         )
 
         for key, value in {**non_default_params, **optional_params}.items():
@@ -447,9 +458,13 @@ class OCIChatConfig(BaseConfig):
         base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
         return f"{base}/{OCI_API_VERSION}/actions/chat"
 
-    def _get_optional_params(self, vendor: OCIVendors, optional_params: dict, model: str = "") -> dict:
+    def _get_optional_params(
+        self, vendor: OCIVendors, optional_params: dict, model: str = ""
+    ) -> dict:
         param_map: Final = (
-            self.openai_to_oci_cohere_param_map if vendor == OCIVendors.COHERE else self.openai_to_oci_generic_param_map
+            self.openai_to_oci_cohere_param_map
+            if vendor == OCIVendors.COHERE
+            else self.openai_to_oci_generic_param_map
         )
         selected_params: Final[dict] = {}
 
@@ -459,7 +474,9 @@ class OCIChatConfig(BaseConfig):
         # endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
         max_tokens_key: Final = (
             "maxCompletionTokens"
-            if vendor != OCIVendors.COHERE and model and _model_uses_max_completion_tokens(model)
+            if vendor != OCIVendors.COHERE
+            and model
+            and _model_uses_max_completion_tokens(model)
             else "maxTokens"
         )
 
@@ -501,7 +518,9 @@ class OCIChatConfig(BaseConfig):
 
         if "tools" in selected_params:
             if vendor == OCIVendors.COHERE:
-                selected_params["tools"] = adapt_tool_definitions_to_cohere_standard(selected_params["tools"])
+                selected_params["tools"] = adapt_tool_definitions_to_cohere_standard(
+                    selected_params["tools"]
+                )
             else:
                 selected_params["tools"] = adapt_tool_definition_to_oci_standard(
                     selected_params["tools"],
@@ -564,7 +583,9 @@ class OCIChatConfig(BaseConfig):
             system_messages: Final = [m for m in messages if m.get("role") == "system"]
             preamble_override = None
             if system_messages:
-                preamble: Final = "\n".join(extract_text_content(m["content"]) for m in system_messages)
+                preamble: Final = "\n".join(
+                    extract_text_content(m["content"]) for m in system_messages
+                )
                 if preamble:
                     preamble_override = preamble
 
@@ -581,18 +602,24 @@ class OCIChatConfig(BaseConfig):
             # When a user message follows the tool results, the turn is a normal
             # one and the request keeps the previous shape (tool results stay in
             # ``chatHistory``).
-            is_tool_result_turn: Final = bool(messages) and messages[-1].get("role") == "tool"
-            if is_tool_result_turn:
-                remaining_history, trailing_tool_results = split_trailing_tool_results(cohere_history)
-                chat_message: Final = ""
-            else:
-                remaining_history, trailing_tool_results = cohere_history, []  # rebind-ok: bound once per branch
-                chat_message = extract_text_content(user_messages[-1]["content"])
+            is_tool_result_turn: Final = (
+                bool(messages) and messages[-1].get("role") == "tool"
+            )
+            remaining_history, trailing_tool_results = (
+                split_trailing_tool_results(cohere_history)
+                if is_tool_result_turn
+                else (cohere_history, [])
+            )
+            chat_message: Final = (
+                ""
+                if is_tool_result_turn
+                else extract_text_content(user_messages[-1]["content"])
+            )
 
             chat_request: Final = CohereChatRequest(
                 apiFormat="COHERE",
                 message=chat_message,
-                chatHistory=remaining_history or None,
+                chatHistory=remaining_history,
                 toolResults=trailing_tool_results or None,
                 preambleOverride=preamble_override,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
@@ -645,9 +672,13 @@ class OCIChatConfig(BaseConfig):
 
         vendor: Final = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
-            model_response = handle_cohere_response(response_json, model, model_response, raw_response)
+            model_response = handle_cohere_response(
+                response_json, model, model_response, raw_response
+            )
         else:
-            model_response = handle_generic_response(response_json, model, model_response, raw_response)
+            model_response = handle_generic_response(
+                response_json, model, model_response, raw_response
+            )
 
         model_response.hidden_params["additional_headers"] = raw_response.headers
         return model_response
@@ -676,7 +707,11 @@ class OCIChatConfig(BaseConfig):
             response: Final = client.post(
                 api_base,
                 headers=headers,
-                data=(signed_json_body if signed_json_body is not None else json.dumps(data)),
+                data=(
+                    signed_json_body
+                    if signed_json_body is not None
+                    else json.dumps(data)
+                ),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,
@@ -718,7 +753,11 @@ class OCIChatConfig(BaseConfig):
             response: Final = await client.post(
                 api_base,
                 headers=headers,
-                data=(signed_json_body if signed_json_body is not None else json.dumps(data)),
+                data=(
+                    signed_json_body
+                    if signed_json_body is not None
+                    else json.dumps(data)
+                ),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,
@@ -736,7 +775,9 @@ class OCIChatConfig(BaseConfig):
             logging_obj=logging_obj,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers
+    ) -> BaseLLMException:
         return OCIError(status_code=status_code, message=error_message)
 
 
