@@ -26,6 +26,7 @@ litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
+parking_lot.workspace = true
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
 litellm-cache-redis.workspace = true

@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use crate::routes::inference::InferenceHost;
-use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
+use litellm_host_python::{Awaiter, InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -12,7 +12,7 @@ use pyo3::{
 pub(super) struct ChatCompletionsPythonHost(pub InferenceHost);
 
 pub(super) fn project(
-    host: &mut InferenceHost,
+    host: &InferenceHost,
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
 ) -> PyResult<ChatCompletionsCall> {
@@ -34,11 +34,11 @@ impl PythonBinding for ChatCompletionsPythonHost {
     type Failure = PyErr;
 
     fn decode_request(
-        &mut self,
+        &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<ChatCompletionsCall, InvokeError<Error>> {
-        let call = project(&mut self.0, py, arguments).map_err(InvokeError::Python)?;
+        let call = project(&self.0, py, arguments).map_err(InvokeError::Python)?;
         if call
             .optional_params
             .get("stream")
@@ -52,7 +52,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
     }
 
     fn encode_response(
-        &mut self,
+        &self,
         py: Python<'_>,
         response: <ChatCompletions as litellm_host::protocol::Protocol>::Response,
     ) -> PyResult<Py<PyAny>> {
@@ -60,7 +60,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
     }
 
     fn encode_stream_head(
-        &mut self,
+        &self,
         _py: Python<'_>,
         head: <ChatCompletions as litellm_host::protocol::Protocol>::StreamHead,
     ) -> PyResult<Py<PyAny>> {
@@ -68,7 +68,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
     }
 
     fn encode_chunk(
-        &mut self,
+        &self,
         _py: Python<'_>,
         chunk: <ChatCompletions as litellm_host::protocol::Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>> {
@@ -84,9 +84,9 @@ impl PythonBinding for ChatCompletionsPythonHost {
 }
 
 impl PythonHostCalls<ChatCompletions> for ChatCompletionsPythonHost {
-    fn handle_host_call(
-        &mut self,
-        _: Python<'_>,
+    async fn handle_host_call(
+        &self,
+        _: &dyn Awaiter,
         op: Infallible,
     ) -> Result<(), InvokeError<Error>> {
         match op {}

@@ -125,7 +125,7 @@ fn native_configuration(
 }
 
 pub(crate) fn configure(
-    python: &mut python::PythonCache,
+    python: &python::PythonCache,
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
     call_type: &str,

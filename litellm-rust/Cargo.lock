@@ -3631,9 +3631,11 @@ dependencies = [
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "litellm-auth",
  "litellm-host",
  "litellm-host-python",
+ "parking_lot",
  "proptest",
  "pyo3",
  "rstest",
@@ -4237,6 +4239,7 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-tracing",
+ "parking_lot",
  "prost",
  "pyo3",
  "pyo3-async-runtimes",

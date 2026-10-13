@@ -11,7 +11,7 @@ use litellm_host::{
     protocol::{Protocol, Reply},
 };
 use litellm_host_python::{
-    CallOptions, HookStep, InvokeError, PythonBinding, PythonCallEvent, PythonCallHooks,
+    Awaiter, CallOptions, InvokeError, PythonBinding, PythonCallEvent, PythonCallHooks,
     PythonHostCalls, PythonOwned, PythonRuntime, run_call,
 };
 use pyo3::{
@@ -147,7 +147,6 @@ pub struct SyntheticBinding {
     log: Log,
     op: OpScript,
     classifier_fails: bool,
-    pending_reply: Option<Reply<String>>,
 }
 
 pub fn binding(log: &Log, op: OpScript) -> SyntheticBinding {
@@ -155,7 +154,6 @@ pub fn binding(log: &Log, op: OpScript) -> SyntheticBinding {
         log: log.clone(),
         op,
         classifier_fails: false,
-        pending_reply: None,
     }
 }
 
@@ -186,7 +184,7 @@ impl PythonBinding for SyntheticBinding {
     type Failure = Classified;
 
     fn decode_request(
-        &mut self,
+        &self,
         _: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<String, InvokeError<Error>> {
@@ -200,22 +198,18 @@ impl PythonBinding for SyntheticBinding {
     }
 
     fn encode_stream_head(
-        &mut self,
+        &self,
         _: Python<'_>,
         head: std::convert::Infallible,
     ) -> PyResult<Py<PyAny>> {
         match head {}
     }
 
-    fn encode_chunk(
-        &mut self,
-        _: Python<'_>,
-        chunk: std::convert::Infallible,
-    ) -> PyResult<Py<PyAny>> {
+    fn encode_chunk(&self, _: Python<'_>, chunk: std::convert::Infallible) -> PyResult<Py<PyAny>> {
         match chunk {}
     }
 
-    fn encode_response(&mut self, py: Python<'_>, response: String) -> PyResult<Py<PyAny>> {
+    fn encode_response(&self, py: Python<'_>, response: String) -> PyResult<Py<PyAny>> {
         self.log.push("complete");
         Ok(PyString::new(py, &response).into_any().unbind())
     }
@@ -234,49 +228,34 @@ impl PythonBinding for SyntheticBinding {
 }
 
 impl PythonHostCalls<Synthetic> for SyntheticBinding {
-    fn handle_host_call(
-        &mut self,
-        _: Python<'_>,
+    async fn handle_host_call(
+        &self,
+        task: &dyn Awaiter,
         (op, reply): (&'static str, Reply<String>),
     ) -> Result<(), InvokeError<Error>> {
         self.log.push(format!("op:{op}"));
-        self.answer(|| op.to_string())
-            .map(|answer| reply.send(answer))
-    }
-
-    fn begin_host_call(
-        &mut self,
-        py: Python<'_>,
-        (op, reply): (&'static str, Reply<String>),
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
         if !matches!(self.op, OpScript::AwaitAnswer | OpScript::AwaitFailure) {
-            return self.handle_host_call(py, (op, reply)).map(|()| None);
+            return self
+                .answer(|| op.to_string())
+                .map(|answer| reply.send(answer));
         }
-        self.pending_reply = Some(reply);
-        let module = PyModule::from_code(
-            py,
-            pyo3::ffi::c_str!(
-                "async def answer(fail):\n    if fail:\n        raise LookupError('async host failed')\n    return 'awaited'\n"
-            ),
-            pyo3::ffi::c_str!("host_op.py"),
-            pyo3::ffi::c_str!("host_op"),
-        )?;
-        Ok(Some(
-            module
+        let awaitable = Python::attach(|py| -> PyResult<Py<PyAny>> {
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "async def answer(fail):\n    if fail:\n        raise LookupError('async host failed')\n    return 'awaited'\n"
+                ),
+                pyo3::ffi::c_str!("host_op.py"),
+                pyo3::ffi::c_str!("host_op"),
+            )?;
+            Ok(module
                 .getattr("answer")?
                 .call1((matches!(self.op, OpScript::AwaitFailure),))?
-                .unbind(),
-        ))
-    }
-
-    fn resume_host_call(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        let answer = result?.extract::<String>(py)?;
-        self.pending_reply.take().unwrap().send(answer);
-        Ok(None)
+                .unbind())
+        })?;
+        let answer = task.awaited(awaitable).await?;
+        reply.send(Python::attach(|py| answer.extract::<String>(py))?);
+        Ok(())
     }
 }
 
@@ -315,12 +294,12 @@ pub fn hooks(log: &Log, script: HookScript) -> SyntheticHooks {
 }
 
 impl CallHooks<PythonRuntime> for SyntheticHooks {
-    fn prepare_arguments(
-        &mut self,
-        _: Python<'_>,
+    async fn prepare_arguments<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         arguments: Py<PyDict>,
         _: f64,
-    ) -> PyResult<HookStep<Self, Py<PyDict>>> {
+    ) -> PyResult<Py<PyDict>> {
         self.log.push("begin");
         if matches!(self.script, HookScript::FailBegin) {
             return Err(PyValueError::new_err("begin failed"));
@@ -332,57 +311,54 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
                 prepared.set_item("api_key", "hook-key")?;
                 Ok(prepared.unbind())
             })?;
-            return Ok(HookStep::Ready(prepared));
+            return Ok(prepared);
         }
-        Ok(HookStep::Ready(arguments))
+        Ok(arguments)
     }
 
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
         if matches!(self.script, HookScript::ObserveArguments) {
-            let value: String = arguments
-                .bind(py)
-                .get_item("prepared")?
-                .unwrap()
-                .extract()?;
+            let value: String =
+                Python::attach(|py| arguments.bind(py).get_item("prepared")?.unwrap().extract())?;
             self.log.push(format!("adopted:{value}"));
         }
         Ok(())
     }
 
-    fn before_provider_request(
-        &mut self,
-        _: Python<'_>,
+    async fn before_provider_request<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         wire: Box<WireRequest>,
         _: &RequestContext,
-    ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
+    ) -> PyResult<Box<WireRequest>> {
         self.log.push("before_provider_request");
-        Ok(HookStep::Ready(Box::new(WireRequest {
+        Ok(Box::new(WireRequest {
             url: "rewritten".into(),
             ..*wire
-        })))
+        }))
     }
 
-    fn transform_response(
-        &mut self,
-        py: Python<'_>,
+    async fn transform_response<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         response: Py<PyAny>,
         _: Timing,
-    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
+    ) -> PyResult<Py<PyAny>> {
         self.log.push("after_success");
         match self.script {
-            HookScript::ReplaceResponse => Ok(HookStep::Ready(
-                "replaced".into_pyobject(py)?.into_any().unbind(),
-            )),
+            HookScript::ReplaceResponse => {
+                Python::attach(|py| Ok("replaced".into_pyobject(py)?.into_any().unbind()))
+            }
             HookScript::FailAfterSuccess => Err(PyValueError::new_err("after_success failed")),
-            _ => Ok(HookStep::Ready(response)),
+            _ => Ok(response),
         }
     }
 
-    fn on_event(
-        &mut self,
-        py: Python<'_>,
+    async fn on_event<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         event: PythonCallEvent<'_>,
-    ) -> PyResult<HookStep<Self, ()>> {
+    ) -> PyResult<()> {
         let terminal = matches!(
             event,
             PythonCallEvent::Succeeded { .. } | PythonCallEvent::Failed { .. }
@@ -393,7 +369,7 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
         if terminal && matches!(self.script, HookScript::FailTerminal) {
             return Err(PyValueError::new_err("callback failed"));
         }
-        self.log.push(match event {
+        self.log.push(Python::attach(|py| match event {
             PythonCallEvent::Execution(ExecutionEvent::ResultReady { .. }) => "cache_hit".into(),
             PythonCallEvent::Started { .. } => "started".into(),
             PythonCallEvent::Cancelled { .. } => "cancelled".into(),
@@ -404,18 +380,18 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
                 format!("succeeded:{}", response.bind(py))
             }
             PythonCallEvent::Failed { origin, error, .. } => {
-                format!("failed:{origin:?}:{}", error.value(py))
+                format!("failed:{origin:?}:{}", error.bind(py))
             }
-        });
-        Ok(HookStep::Ready(()))
+        }));
+        Ok(())
     }
 
-    fn on_stream_open(&mut self, _: Python<'_>, _: &Py<PyAny>) -> PyResult<()> {
+    fn on_stream_open(&self, _: &Py<PyAny>) -> PyResult<()> {
         self.log.push("opened");
         Ok(())
     }
 
-    fn on_stream_chunk(&mut self, _: Python<'_>, _: &Py<PyAny>) -> PyResult<()> {
+    fn on_stream_chunk(&self, _: &Py<PyAny>) -> PyResult<()> {
         self.log.push("delivered");
         Ok(())
     }
@@ -540,7 +516,7 @@ impl PythonBinding for StreamingBinding {
     type Failure = Classified;
 
     fn decode_request(
-        &mut self,
+        &self,
         _: Python<'_>,
         _: &Bound<'_, PyDict>,
     ) -> Result<(), InvokeError<Error>> {
@@ -548,7 +524,7 @@ impl PythonBinding for StreamingBinding {
     }
 
     fn encode_stream_head(
-        &mut self,
+        &self,
         py: Python<'_>,
         head: Vec<(&'static str, &'static str)>,
     ) -> PyResult<Py<PyAny>> {
@@ -561,11 +537,11 @@ impl PythonBinding for StreamingBinding {
         Ok(hidden.into_any().unbind())
     }
 
-    fn encode_chunk(&mut self, py: Python<'_>, chunk: &'static str) -> PyResult<Py<PyAny>> {
+    fn encode_chunk(&self, py: Python<'_>, chunk: &'static str) -> PyResult<Py<PyAny>> {
         Ok(PyString::new(py, chunk).into_any().unbind())
     }
 
-    fn encode_response(&mut self, py: Python<'_>, (): ()) -> PyResult<Py<PyAny>> {
+    fn encode_response(&self, py: Python<'_>, (): ()) -> PyResult<Py<PyAny>> {
         Ok(py.None())
     }
 
@@ -579,9 +555,9 @@ impl PythonBinding for StreamingBinding {
 }
 
 impl PythonHostCalls<Streaming> for StreamingBinding {
-    fn handle_host_call(
-        &mut self,
-        _: Python<'_>,
+    async fn handle_host_call(
+        &self,
+        _: &dyn Awaiter,
         op: std::convert::Infallible,
     ) -> Result<(), InvokeError<Error>> {
         match op {}

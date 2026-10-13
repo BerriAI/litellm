@@ -1,8 +1,9 @@
+use futures_util::future::BoxFuture;
 use litellm_coroutine::{Abandoned, Co, Reply};
 use pyo3::prelude::*;
 
 use crate::handle::Suspension;
-use crate::missing_state;
+use crate::{Awaiter, missing_state};
 
 pub(crate) type Answer = PyResult<Py<PyAny>>;
 
@@ -28,5 +29,11 @@ impl PythonTask {
             Ok(answer) => answer,
             Err(Abandoned) => Err(missing_state()),
         }
+    }
+}
+
+impl Awaiter for PythonTask {
+    fn awaited(&self, awaitable: Py<PyAny>) -> BoxFuture<'_, Answer> {
+        Box::pin(self.suspend(Suspension::Await(awaitable)))
     }
 }

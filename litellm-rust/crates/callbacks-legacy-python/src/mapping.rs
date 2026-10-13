@@ -1,12 +1,15 @@
+use std::future::{Future, ready};
+
+use futures_util::future::BoxFuture;
 use litellm_host::{
     hooks::CallHooks,
     interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{ExecutionEvent, FailureOrigin, Timing},
 };
-use litellm_host_python::{HookStep, PythonCallEvent, PythonRuntime};
-use pyo3::{prelude::*, types::PyDict};
+use litellm_host_python::{Awaiter, PythonCallEvent, PythonRuntime};
+use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 
-use crate::LegacyLogging;
+use crate::LegacyHooks;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallBoundary {
@@ -48,44 +51,62 @@ impl<H> Binding<H> {
     }
 }
 
-type Step<T> = PyResult<HookStep<LegacyLogging, T>>;
-type Prepare = fn(&mut LegacyLogging, Python<'_>, Py<PyDict>, f64) -> Step<Py<PyDict>>;
-type Before =
-    fn(&mut LegacyLogging, Python<'_>, Box<WireRequest>, &RequestContext) -> Step<Box<WireRequest>>;
-type After = fn(&mut LegacyLogging, Python<'_>, &RawResponse) -> Step<()>;
-type Transform = fn(&mut LegacyLogging, Python<'_>, Py<PyAny>, Timing) -> Step<Py<PyAny>>;
-type Success = fn(&mut LegacyLogging, Python<'_>, Timing, &Py<PyAny>) -> Step<()>;
-type Failure = fn(&mut LegacyLogging, Python<'_>, Timing, FailureOrigin, &PyErr) -> Step<()>;
-type Open = fn(&mut LegacyLogging, Python<'_>, &Py<PyAny>) -> PyResult<()>;
-type Chunk = fn(&mut LegacyLogging, Python<'_>, &Py<PyAny>) -> PyResult<()>;
+type Prepare = for<'a> fn(
+    &'a LegacyHooks,
+    &'a dyn Awaiter,
+    Py<PyDict>,
+    f64,
+) -> BoxFuture<'a, PyResult<Py<PyDict>>>;
+type Before = fn(&LegacyHooks, Box<WireRequest>, &RequestContext) -> PyResult<Box<WireRequest>>;
+type After = fn(&LegacyHooks, &RawResponse) -> PyResult<()>;
+type Transform = for<'a> fn(
+    &'a LegacyHooks,
+    &'a dyn Awaiter,
+    Py<PyAny>,
+    Timing,
+) -> BoxFuture<'a, PyResult<Py<PyAny>>>;
+type Success = fn(&LegacyHooks, Timing, &Py<PyAny>) -> PyResult<()>;
+type Failure = for<'a> fn(
+    &'a LegacyHooks,
+    &'a dyn Awaiter,
+    Timing,
+    FailureOrigin,
+    &'a Py<PyBaseException>,
+) -> BoxFuture<'a, PyResult<()>>;
+type Open = fn(&LegacyHooks, &Py<PyAny>) -> PyResult<()>;
+type Chunk = fn(&LegacyHooks, &Py<PyAny>) -> PyResult<()>;
 
 const PREPARE: Binding<Prepare> = Binding {
     boundary: CallBoundary::PrepareArguments,
-    invoke: LegacyLogging::prepare_call,
+    invoke: |hooks, task, arguments, started_at| {
+        Box::pin(hooks.prepare_call(task, arguments, started_at))
+    },
     callbacks: &["async_pre_call_deployment_hook"],
 };
 
 const BEFORE: Binding<Before> = Binding {
     boundary: CallBoundary::BeforeProviderRequest,
-    invoke: LegacyLogging::pre_call,
+    invoke: LegacyHooks::pre_call,
     callbacks: &["log_pre_api_call", "log_input_event"],
 };
 
 const AFTER: Binding<After> = Binding {
     boundary: CallBoundary::AfterProviderResponse,
-    invoke: LegacyLogging::post_call,
+    invoke: LegacyHooks::post_call,
     callbacks: &["log_post_api_call"],
 };
 
 const TRANSFORM: Binding<Transform> = Binding {
     boundary: CallBoundary::TransformResponse,
-    invoke: LegacyLogging::transform_public_response,
+    invoke: |hooks, task, response, timing| {
+        Box::pin(hooks.transform_public_response(task, response, timing))
+    },
     callbacks: &["async_post_call_success_deployment_hook"],
 };
 
 const SUCCESS: Binding<Success> = Binding {
     boundary: CallBoundary::Succeeded,
-    invoke: LegacyLogging::succeeded,
+    invoke: LegacyHooks::succeeded,
     callbacks: &[
         "log_success_event",
         "async_log_success_event",
@@ -99,7 +120,9 @@ const SUCCESS: Binding<Success> = Binding {
 
 const FAILURE: Binding<Failure> = Binding {
     boundary: CallBoundary::Failed,
-    invoke: LegacyLogging::failed,
+    invoke: |hooks, task, timing, origin, error| {
+        Box::pin(hooks.failed(task, timing, origin, error))
+    },
     callbacks: &[
         "async_post_call_failure_deployment_hook",
         "log_failure_event",
@@ -112,13 +135,13 @@ const FAILURE: Binding<Failure> = Binding {
 
 const OPEN: Binding<Open> = Binding {
     boundary: CallBoundary::StreamOpened,
-    invoke: LegacyLogging::stream_opened,
+    invoke: LegacyHooks::stream_opened,
     callbacks: &[],
 };
 
 const CHUNK: Binding<Chunk> = Binding {
     boundary: CallBoundary::StreamChunk,
-    invoke: LegacyLogging::stream_chunk,
+    invoke: LegacyHooks::stream_chunk,
     callbacks: &[],
 };
 
@@ -135,67 +158,69 @@ pub fn callback_mappings() -> impl Iterator<Item = CallbackMapping> {
         .chain(PYTHON_CALLBACKS.iter().copied())
 }
 
-impl CallHooks<PythonRuntime> for LegacyLogging {
-    fn prepare_arguments(
-        &mut self,
-        py: Python<'_>,
+impl CallHooks<PythonRuntime> for LegacyHooks {
+    fn prepare_arguments<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
         arguments: Py<PyDict>,
         started_at: f64,
-    ) -> Step<Py<PyDict>> {
-        (PREPARE.invoke)(self, py, arguments, started_at)
+    ) -> impl Future<Output = PyResult<Py<PyDict>>> + Send {
+        (PREPARE.invoke)(self, task, arguments, started_at)
     }
 
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
-        self.adopt_arguments(py, arguments);
+    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+        self.adopt_arguments(arguments);
         Ok(())
     }
 
-    fn before_provider_request(
-        &mut self,
-        py: Python<'_>,
+    fn before_provider_request<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         wire: Box<WireRequest>,
         context: &RequestContext,
-    ) -> Step<Box<WireRequest>> {
-        (BEFORE.invoke)(self, py, wire, context)
+    ) -> impl Future<Output = PyResult<Box<WireRequest>>> + Send {
+        ready((BEFORE.invoke)(self, wire, context))
     }
 
-    fn transform_response(
-        &mut self,
-        py: Python<'_>,
+    fn transform_response<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
         response: Py<PyAny>,
         timing: Timing,
-    ) -> Step<Py<PyAny>> {
-        (TRANSFORM.invoke)(self, py, response, timing)
+    ) -> impl Future<Output = PyResult<Py<PyAny>>> + Send {
+        (TRANSFORM.invoke)(self, task, response, timing)
     }
 
-    fn on_event(&mut self, py: Python<'_>, event: PythonCallEvent<'_>) -> Step<()> {
+    async fn on_event<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
+        event: PythonCallEvent<'_>,
+    ) -> PyResult<()> {
         match event {
-            PythonCallEvent::Started { .. } | PythonCallEvent::Cancelled { .. } => {
-                Ok(HookStep::Ready(()))
-            }
+            PythonCallEvent::Started { .. } | PythonCallEvent::Cancelled { .. } => Ok(()),
             PythonCallEvent::Execution(ExecutionEvent::ResultReady { facts }) => {
-                self.result_ready(py, &facts)
+                self.result_ready(&facts)
             }
             PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
-                (AFTER.invoke)(self, py, raw)
+                (AFTER.invoke)(self, raw)
             }
             PythonCallEvent::Succeeded { timing, response } => {
-                (SUCCESS.invoke)(self, py, timing, response)
+                (SUCCESS.invoke)(self, timing, response)
             }
             PythonCallEvent::Failed {
                 timing,
                 origin,
                 error,
-            } => (FAILURE.invoke)(self, py, timing, origin, error),
+            } => (FAILURE.invoke)(self, task, timing, origin, error).await,
         }
     }
 
-    fn on_stream_open(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
-        (OPEN.invoke)(self, py, head)
+    fn on_stream_open(&self, head: &Py<PyAny>) -> PyResult<()> {
+        (OPEN.invoke)(self, head)
     }
 
-    fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
-        (CHUNK.invoke)(self, py, chunk)
+    fn on_stream_chunk(&self, chunk: &Py<PyAny>) -> PyResult<()> {
+        (CHUNK.invoke)(self, chunk)
     }
 }
 
