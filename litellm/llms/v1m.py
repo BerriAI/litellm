@@ -31,7 +31,5 @@ class V1MConfig(OpenAIGPTConfig):
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> list:  # mutable-ok: inherited contract
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
         return super().get_supported_openai_params(model)
