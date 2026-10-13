@@ -57,7 +57,7 @@ CASE: Final = PerformanceTestCase(
         stream_share=0.5,
         intervene_share=0.1,
         block_share=0.02,
-        concurrency=20,
+        concurrency=60,
     ),
     limits=(
         Limit("added_latency_s", percentile=50, max=0.25),
