@@ -5346,6 +5346,234 @@ AZURE_GPT_6_SOL_INPUT_TEXT_ROLLUPS: Final = CostTrackingTestCase(
     ),
 )
 
+AZURE_GPT_6_SOL_TOOL_CALL: Final = CostTrackingTestCase(
+    name="azure/gpt-6-sol-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure/gpt-6-sol",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "59601dc5d1c2 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "reasoning_effort": "none",
+        "allowed_openai_params": ["tool_choice", "reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "choices": [
+                {
+                    "content_filter_results": _GPT_6_CONTENT_FILTER_RESULTS,
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "annotations": [],
+                        "content": None,
+                        "refusal": None,
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "arguments": '{"city":"Berlin","days":7,"units":"metric"}',
+                                    "name": "get_weather",
+                                },
+                                "id": "call_$REQUEST_ID",
+                                "type": "function",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "created": 1791855585,
+            "id": "chatcmpl-$REQUEST_ID",
+            "model": "gpt-6-sol-2026-09-22",
+            "object": "chat.completion",
+            "prompt_filter_results": _GPT_6_PROMPT_FILTER_RESULTS,
+            "routing": {"serving_pipereplica": "d20260925225746-6787865d-prefill-r15-dp0-prefill"},
+            "service_tier": "default",
+            "system_fingerprint": None,
+            "usage": {
+                "completion_tokens": 412,
+                "completion_tokens_details": {
+                    "accepted_prediction_tokens": 0,
+                    "audio_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+                "latency_checkpoint": {
+                    "engine_tbt_ms": 6,
+                    "engine_ttft_ms": 152,
+                    "engine_ttlt_ms": 305,
+                    "pre_inference_ms": 102,
+                    "service_tbt_ms": 9,
+                    "service_ttft_ms": 389,
+                    "service_ttlt_ms": 608,
+                    "user_visible_ttft_ms": 288,
+                },
+                "prompt_tokens": 1840,
+                "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+                "total_tokens": 2252,
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00897, input_cost=0.004232, output_cost=0.004738, prompt_tokens=1840, completion_tokens=412
+    ),
+    known_bug="LiteLLM raises UnsupportedParamsError for reasoning_effort='none' on Azure gpt-6 chat, which Azure accepts (captured 200), so function tools cannot be sent",
+)
+
+AZURE_GPT_6_LUNA_TOOL_CALL: Final = CostTrackingTestCase(
+    name="azure/gpt-6-luna-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure/gpt-6-luna",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "2dc3f74a8aa3 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "reasoning_effort": "none",
+        "allowed_openai_params": ["tool_choice", "reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "choices": [
+                {
+                    "content_filter_results": _GPT_6_CONTENT_FILTER_RESULTS,
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                    "logprobs": None,
+                    "message": {
+                        "annotations": [],
+                        "content": None,
+                        "refusal": None,
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "arguments": '{"city":"Berlin","days":7,"units":"metric"}',
+                                    "name": "get_weather",
+                                },
+                                "id": "call_$REQUEST_ID",
+                                "type": "function",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "created": 1791855585,
+            "id": "chatcmpl-$REQUEST_ID",
+            "model": "gpt-6-luna-2026-09-22",
+            "object": "chat.completion",
+            "prompt_filter_results": _GPT_6_PROMPT_FILTER_RESULTS,
+            "routing": {"serving_pipereplica": "d20260925225746-6787865d-prefill-r15-dp0-prefill"},
+            "service_tier": "default",
+            "system_fingerprint": None,
+            "usage": {
+                "completion_tokens": 412,
+                "completion_tokens_details": {
+                    "accepted_prediction_tokens": 0,
+                    "audio_tokens": 0,
+                    "reasoning_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+                "latency_checkpoint": {
+                    "engine_tbt_ms": 6,
+                    "engine_ttft_ms": 152,
+                    "engine_ttlt_ms": 305,
+                    "pre_inference_ms": 102,
+                    "service_tbt_ms": 9,
+                    "service_ttft_ms": 389,
+                    "service_ttlt_ms": 608,
+                    "user_visible_ttft_ms": 288,
+                },
+                "prompt_tokens": 1840,
+                "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+                "total_tokens": 2252,
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.000507, input_cost=0.0002392, output_cost=0.0002678, prompt_tokens=1840, completion_tokens=412
+    ),
+    known_bug="LiteLLM raises UnsupportedParamsError for reasoning_effort='none' on Azure gpt-6 chat, which Azure accepts (captured 200), so function tools cannot be sent",
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_5_4_MINI_INPUT_TEXT,
     AZURE_GPT_5_4_MINI_CACHE_READ,
@@ -5415,6 +5643,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_1_SOL_STREAM_NO_USAGE,
     AZURE_GPT_6_SOL_UPSTREAM_404_ZERO_SPEND,
     AZURE_GPT_6_SOL_INPUT_TEXT_ROLLUPS,
+    AZURE_GPT_6_SOL_TOOL_CALL,
+    AZURE_GPT_6_LUNA_TOOL_CALL,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
