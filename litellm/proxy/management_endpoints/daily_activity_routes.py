@@ -125,6 +125,7 @@ def _key_metadata(api_key: str, metadata: Mapping[str, KeyMetadataRow]) -> KeyMe
         team_id=row.team_id,
         user_id=row.user_id,
         user_email=row.user_email,
+        user_alias=row.user_alias,
         key_exists=row.key_exists,
     )
 

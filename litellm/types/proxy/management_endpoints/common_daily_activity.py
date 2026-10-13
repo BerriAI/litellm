@@ -49,6 +49,7 @@ class KeyMetadata(LiteLLMBaseModel):
     team_id: str | None = None
     user_id: str | None = None
     user_email: str | None = None
+    user_alias: str | None = None
     key_exists: bool | None = None
 
 

@@ -733,6 +733,23 @@ async def test_attach_user_details_claims_no_team_for_a_multi_team_user_session_
     assert attached["cli-session-bob"]["user_email"] == "bob@example.com"
 
 
+@pytest.mark.asyncio
+async def test_attach_user_details_carries_the_user_alias():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(user_id="alice", user_email="alice@example.com", user_alias="Alice A", teams=[])
+        ]
+    )
+    personal_key = hash_token("sk-personal")
+
+    attached = await attach_user_details(
+        mock_prisma, {personal_key: {"key_alias": "personal", "user_id": "alice"}}
+    )
+
+    assert attached[personal_key]["user_alias"] == "Alice A"
+
+
 def _user_lookup_by_filter() -> AsyncMock:
     async def find_many(*, where):
         return [

@@ -166,6 +166,7 @@ class _KeyMetadataDict(TypedDict, total=False):
     team_id: ReadOnly[str | None]
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
+    user_alias: ReadOnly[str | None]
     key_exists: ReadOnly[bool]
 
 
@@ -181,6 +182,7 @@ def _key_metadata(api_key_metadata: Mapping[str, KeyMetadataRow], api_key: str) 
         team_id=meta.team_id if meta is not None else None,
         user_id=meta.user_id if meta is not None else None,
         user_email=meta.user_email if meta is not None else None,
+        user_alias=meta.user_alias if meta is not None else None,
         key_exists=meta.key_exists if meta is not None else False,
     )
 
@@ -490,6 +492,7 @@ class _ProxyDailyActivityReads:
                 "team_id": row.team_id,
                 "user_id": row.user_id,
                 "user_email": row.user_email,
+                "user_alias": row.user_alias,
                 "key_exists": row.key_exists,
             }
             for key, row in resolved.items()
@@ -532,6 +535,7 @@ class _ProxyDailyActivityReads:
                     team_id=value.get("team_id"),
                     user_id=value.get("user_id"),
                     user_email=value.get("user_email"),
+                    user_alias=value.get("user_alias"),
                     key_exists=value.get("key_exists", False),
                 )
                 if key in resolved
@@ -543,6 +547,7 @@ class _ProxyDailyActivityReads:
                     user_email=value.get("user_email"),
                     key_exists=value.get("key_exists", False),
                     tags=(),
+                    user_alias=value.get("user_alias"),
                 )
                 for key, value in attached.items()
             }

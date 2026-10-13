@@ -74,6 +74,7 @@ class KeyMetadataRow:
     user_email: str | None
     key_exists: bool
     tags: tuple[str, ...]
+    user_alias: str | None = None
 
 
 class ExportType(str, Enum):

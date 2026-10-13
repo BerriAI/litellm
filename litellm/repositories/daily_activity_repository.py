@@ -277,6 +277,7 @@ class DailyActivityRepository:
             user_email=None,
             key_exists=key_exists,
             tags=tags,
+            user_alias=None,
         )
 
     async def daily_rows(self, scope: DailyActivityScope, *, page: int, page_size: int) -> DailyRowsPage:
