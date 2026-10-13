@@ -1916,3 +1916,133 @@ def test_endpoint_unsupported_ignores_models_without_deployments(model):
 
 def test_endpoint_unsupported_skips_the_check_without_a_router():
     assert _unsupported("acompletion", "embed-only", None) is None
+
+
+def _router_with_defaults(default_litellm_params: dict[str, object]):
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "served",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"id": "served-deployment"},
+            }
+        ],
+        default_litellm_params=default_litellm_params,
+    )
+
+
+@pytest.mark.parametrize(
+    "route_type, param",
+    [
+        ("aimage_generation", "prompt"),
+        ("aspeech", "input"),
+        ("atext_completion", "prompt"),
+        ("atranscription", "file"),
+    ],
+)
+def test_router_default_for_positional_param_still_raises(route_type: str, param: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": "served"},
+            llm_router=_router_with_defaults({param: "supplied-by-router-default"}),
+        )
+
+    assert exc_info.value.param == param
+
+
+@pytest.mark.parametrize(
+    "route_type, param",
+    [
+        ("aimage_generation", "prompt"),
+        ("aspeech", "input"),
+    ],
+)
+def test_user_config_default_for_positional_param_still_raises(route_type: str, param: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": "img", "user_config": {"model_list": [], "default_litellm_params": {param: "x"}}},
+            llm_router=None,
+        )
+
+    assert exc_info.value.param == param
+
+
+def test_deployment_param_for_positional_param_still_raises() -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "img",
+                "litellm_params": {"model": "openai/gpt-image-1", "api_key": "test-key", "prompt": "a cat"},
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type="aimage_generation", data={"model": "img"}, llm_router=router)
+
+    assert exc_info.value.param == "prompt"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("omni-moderation-2024-09-26", id="unknown-model"),
+        pytest.param("openai/gpt-4o-mini", id="deployment-name"),
+        pytest.param("served-deployment", id="deployment-id"),
+    ],
+)
+def test_router_default_ignored_for_moderation_model_the_router_does_not_list(model: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="amoderation",
+            data={"model": model},
+            llm_router=_router_with_defaults({"input": "supplied"}),
+        )
+
+    assert exc_info.value.param == "input"
+
+
+@pytest.mark.asyncio
+async def test_null_user_config_is_treated_as_absent() -> None:
+    router: Final = _router_with_defaults({})
+
+    response: Final = await (
+        await route_request(
+            {
+                "model": "served",
+                "messages": [{"role": "user", "content": "hi"}],
+                "mock_response": "from the main router",
+                "user_config": None,
+            },
+            router,
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.choices[0].message.content == "from the main router"

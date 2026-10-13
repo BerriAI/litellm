@@ -451,7 +451,7 @@ class TestProxyBaseLLMRequestProcessing:
             mock_add_litellm_data_to_request,
         )
         mock_general_settings = {}
-        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict = ProxyUserAPIKeyAuth()
         mock_proxy_config = MagicMock(spec=ProxyConfig)
         route_type = "acompletion"
 
@@ -573,7 +573,7 @@ class TestProxyBaseLLMRequestProcessing:
         returned_data, logging_obj = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
-            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=MagicMock(spec=ProxyConfig),
             route_type=route_type,
@@ -1080,7 +1080,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         mock_general_settings = {}
-        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict = ProxyUserAPIKeyAuth()
         mock_proxy_config = MagicMock(spec=ProxyConfig)
 
         mock_router_settings = {
@@ -2079,7 +2079,7 @@ class TestProxyBaseLLMRequestProcessing:
             mock_add_litellm_data_to_request,
         )
         mock_general_settings = {}
-        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict = ProxyUserAPIKeyAuth()
         mock_proxy_config = MagicMock(spec=ProxyConfig)
         route_type = "acompletion"
 
