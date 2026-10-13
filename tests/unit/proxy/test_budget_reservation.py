@@ -2366,6 +2366,9 @@ class _ExpiringRedisCache:
         self.expires_at[key] = self._expiry(kwargs.get("ttl"))
         return self.store[key]
 
+    def reset_fence_key(self, key: str) -> str:
+        return f"{{{key}}}:reset_fence"
+
     async def async_set_max(self, key: str, value: float, **kwargs: object) -> float:
         self._evict_expired(key)
         self.store[key] = max(self.store.get(key, float("-inf")), float(value))

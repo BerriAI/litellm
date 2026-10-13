@@ -41,6 +41,7 @@ class CountingRedis(RedisCache):
         self.store: dict[str, object] = dict(store or {})
         self.fail = fail
         self.commands: list[str] = []
+        self.namespace = None
 
     async def async_get_cache(self, key: str, **kwargs: object) -> object:
         if self.fail:
