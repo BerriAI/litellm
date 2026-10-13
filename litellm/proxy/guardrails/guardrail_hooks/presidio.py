@@ -13,10 +13,10 @@ import hashlib
 import hmac
 import json
 import os
-import secrets
 import re
+import secrets
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -192,7 +192,7 @@ _PII_TOKEN_KEY: Final = hmac.new(
 ).digest()
 
 
-def _pii_token(entity_type: str, original: str, pii_tokens: dict[str, str], scope: str) -> str:
+def _pii_token(entity_type: str, original: str, pii_tokens: Mapping[str, str], scope: str) -> str:
     """
     Token derived from the value, not from a counter.
 
@@ -206,10 +206,9 @@ def _pii_token(entity_type: str, original: str, pii_tokens: dict[str, str], scop
     traffic from sharing a token, so masked logs cannot link them.
     """
     digest: Final = hmac.new(_PII_TOKEN_KEY, f"{scope}\0{entity_type}\0{original}".encode(), hashlib.sha256).hexdigest()
-    token = f"<{entity_type}_{digest[:6]}>"
-    if pii_tokens.get(token, original) != original:  # 24-bit collision between two values
-        token = f"<{entity_type}_{digest}>"
-    return token
+    short: Final = f"<{entity_type}_{digest[:6]}>"
+    # A 24-bit collision between two values falls back to the full digest.
+    return short if pii_tokens.get(short, original) == original else f"<{entity_type}_{digest}>"
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
