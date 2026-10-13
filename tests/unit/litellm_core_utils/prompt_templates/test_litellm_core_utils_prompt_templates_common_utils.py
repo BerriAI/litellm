@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
+    hoist_system_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
     parse_tool_call_arguments,
@@ -2174,6 +2175,113 @@ class TestMergeConsecutiveSystemMessages:
         )
 
         assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]
+
+
+class TestHoistSystemMessages:
+    def test_hoists_a_mid_conversation_system_message_and_joins_it(self):
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "system", "content": "Reminder"},
+        ]
+
+        hoisted = hoist_system_messages(messages)
+
+        assert hoisted == [
+            {"role": "system", "content": "Reminder"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+
+    def test_joins_every_system_message_in_the_order_they_appear(self):
+        messages = [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "Reminder A"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "system", "content": "Reminder B"},
+            {"role": "user", "content": "Bye"},
+        ]
+
+        hoisted = hoist_system_messages(messages)
+
+        assert hoisted == [
+            {"role": "system", "content": "You are terse.\n\nReminder A\n\nReminder B"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "user", "content": "Bye"},
+        ]
+
+    def test_keeps_content_list_parts_when_hoisting(self):
+        cached_part = {"type": "text", "text": "Reminder A", "cache_control": {"type": "ephemeral"}}
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "You are terse."},
+            {"role": "system", "content": [cached_part]},
+        ]
+
+        hoisted = hoist_system_messages(messages)
+
+        assert hoisted == [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse."},
+                    cached_part,
+                ],
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+        assert hoisted[0]["content"][1] is cached_part
+
+    def test_keeps_other_message_keys_when_hoisting_a_single_system_message(self):
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "Reminder", "cache_control": {"type": "ephemeral"}},
+        ]
+
+        hoisted = hoist_system_messages(messages)
+
+        assert hoisted[0] == {"role": "system", "content": "Reminder", "cache_control": {"type": "ephemeral"}}
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            [],
+            [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}],
+            [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "Hello"}],
+            [{"role": "system", "content": "You are terse."}],
+        ],
+        ids=["empty", "no-system", "single-system-first", "system-only"],
+    )
+    def test_returns_the_same_list_object_when_already_normalized(self, messages):
+        assert hoist_system_messages(messages) is messages
+
+    def test_does_not_mutate_the_input_messages(self):
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "Reminder A"},
+            {"role": "system", "content": "Reminder B"},
+        ]
+        originals: Final = tuple(messages)
+        before = copy.deepcopy(messages)
+
+        hoisted = hoist_system_messages(messages)
+
+        assert hoisted is not messages
+        assert messages == before
+        assert [message is original for message, original in zip(messages, originals)] == [True] * len(originals)
+        assert [message for message in hoisted if message["role"] != "system"] == list(originals[:1])
+
+    def test_hoisting_is_idempotent(self):
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "Reminder"},
+        ]
+
+        once = hoist_system_messages(messages)
+
+        assert hoist_system_messages(once) is once
 
 
 _CLAUDE_CODE_TOOL_TURN: Final = [

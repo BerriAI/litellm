@@ -266,6 +266,7 @@ class PromptOptions:
     eos_token: str | None = None
     hf_model_name: str | None = None
     supports_system_message: bool | None = None
+    merge_system_message: bool | None = None
     ensure_alternating_roles: bool | None = None
     user_continue_message: "ChatCompletionUserMessage | None" = None
     assistant_continue_message: "ChatCompletionAssistantMessage | None" = None

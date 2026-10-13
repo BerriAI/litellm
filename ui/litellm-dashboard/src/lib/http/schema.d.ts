@@ -34841,6 +34841,11 @@ export interface components {
              * @default false
              */
             merge_reasoning_content_in_choices: boolean | null;
+            /**
+             * Merge System Message
+             * @description Hoist every system message to the front of `messages` and merge them into one leading system message before calling the provider. Needed by strict OpenAI-compatible servers such as vLLM that reject a system message anywhere else.
+             */
+            merge_system_message?: boolean | null;
             /** Milvus Db Name */
             milvus_db_name?: string | null;
             /** Milvus Partition Names */
@@ -49882,6 +49887,11 @@ export interface components {
              * @default false
              */
             merge_reasoning_content_in_choices: boolean | null;
+            /**
+             * Merge System Message
+             * @description Hoist every system message to the front of `messages` and merge them into one leading system message before calling the provider. Needed by strict OpenAI-compatible servers such as vLLM that reject a system message anywhere else.
+             */
+            merge_system_message?: boolean | null;
             /** Milvus Db Name */
             milvus_db_name?: string | null;
             /** Milvus Partition Names */

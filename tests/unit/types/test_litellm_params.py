@@ -205,6 +205,7 @@ OPTION_NAMES: Final = (
     "eos_token",
     "hf_model_name",
     "supports_system_message",
+    "merge_system_message",
     "ensure_alternating_roles",
     "user_continue_message",
     "assistant_continue_message",

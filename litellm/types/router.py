@@ -514,6 +514,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     use_in_pass_through: bool | None = False
     use_litellm_proxy: bool | None = False
     use_chat_completions_api: bool | None = None
+    merge_system_message: bool | None = Field(
+        default=None,
+        description="Hoist every system message to the front of `messages` and merge them into one leading system message before calling the provider. Needed by strict OpenAI-compatible servers such as vLLM that reject a system message anywhere else.",
+    )
     use_xai_oauth: bool | None = Field(
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
@@ -698,6 +702,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     drop_params: bool | None
     ## RESPONSES API → CHAT COMPLETIONS BRIDGE ##
     use_chat_completions_api: bool | None
+    merge_system_message: bool | None  # writable-ok: deployment param, updated via the model management API
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
     litellm_credential_name: str | None
