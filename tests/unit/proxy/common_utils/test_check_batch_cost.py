@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 from contextlib import contextmanager
+from hashlib import sha256
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3365,7 +3366,7 @@ class TestBatchLineItemsFromThePoller:
 
         journal: list = []
         row, instance = self._setup(journal)
-        row.api_key = "hash-of-a-deleted-key"
+        row.api_key = sha256(b"sk-deleted-key").hexdigest()
         logger = self._recording_logger(journal)
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
 
@@ -3694,7 +3695,7 @@ class TestCreatorTurnedOffMessageLogging:
         return CheckBatchCost(proxy_logging_obj=MagicMock(), prisma_client=prisma, llm_router=MagicMock())
 
     @staticmethod
-    def _job(api_key="hash-alice", team_id=None, created_by="alice"):
+    def _job(api_key=sha256(b"sk-alice").hexdigest(), team_id=None, created_by="alice"):
         from types import SimpleNamespace
 
         return SimpleNamespace(id="job-1", api_key=api_key, team_id=team_id, created_by=created_by)
@@ -3763,12 +3764,13 @@ class TestCreatorTurnedOffMessageLogging:
         assert await instance._creator_turned_off_message_logging(self._job(**job_fields)) is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("api_key", [None, "opaque-oauth2-access-token"], ids=["jwt", "oauth2"])
     @pytest.mark.parametrize(
         ("team_value", "proxy_wide", "expected"),
         [(None, False, False), (None, True, True), ("true", False, True), ("false", True, False)],
     )
-    async def test_a_batch_created_without_a_key_follows_its_team_and_the_proxy_setting(
-        self, monkeypatch, team_value, proxy_wide, expected
+    async def test_a_batch_created_without_a_virtual_key_follows_its_team_and_the_proxy_setting(
+        self, monkeypatch, api_key, team_value, proxy_wide, expected
     ):
         from types import SimpleNamespace
 
@@ -3777,7 +3779,7 @@ class TestCreatorTurnedOffMessageLogging:
         monkeypatch.setattr(litellm, "turn_off_message_logging", proxy_wide)
         team_row = SimpleNamespace(metadata=self._logging(team_value)) if team_value is not None else None
         instance = self._instance(team_row=team_row)
-        job = self._job(api_key=None, team_id="team-alpha" if team_row is not None else None, created_by="jwt-alice")
+        job = self._job(api_key=api_key, team_id="team-alpha" if team_row is not None else None, created_by="alice")
 
         assert await instance._creator_turned_off_message_logging(job) is expected
         instance.prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()

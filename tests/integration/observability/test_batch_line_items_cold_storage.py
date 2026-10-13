@@ -3,7 +3,8 @@
 An owned two-worker proxy lists ``s3_v2`` and ``gcs_bucket`` under ``batch_line_item_callbacks``. Once the batch-cost
 poller logs a finished batch, each sink gets one NDJSON object for the batch holding one record per line. The proxy runs
 on its own database so the shared rig's pollers never claim these batches first, and accepts JWTs signed by a local key
-next to virtual keys. Two more owned proxies list an unsupported name next to ``s3_v2`` and a null list
+next to virtual keys. Three more owned proxies list an unsupported name next to ``s3_v2``, list a null list, and
+check OAuth2 tokens against a local token info endpoint
 """
 
 import json
@@ -152,7 +153,24 @@ def _signed_token(signing_key: rsa.RSAPrivateKey, subject: str) -> str:
     )
 
 
-def _config(directory: Path, s3_url: str, line_item_callbacks: JsonValue) -> Path:
+def _oauth2_token_info_peer() -> Callable[[Request], Reply]:
+    """Answers for a bearer token ``oauth_<team id>_<user id>`` with that user and team, and 401 for anything else."""
+
+    def respond(request: Request) -> Reply:
+        scheme, _, token = request.headers.get("authorization", "").partition(" ")
+        parts: Final = token.split("_")
+        if scheme != "Bearer" or len(parts) != 3 or parts[0] != "oauth":
+            return Reply(status=401, body=b'{"error":"invalid_token"}')
+        return Reply(body=json.dumps({"sub": parts[2], "team_id": parts[1]}).encode())
+
+    return respond
+
+
+def _oauth2_token(team_id: str, user_id: str) -> str:
+    return f"oauth_{team_id}_{user_id}"
+
+
+def _config(directory: Path, s3_url: str, line_item_callbacks: JsonValue, *, oauth2: bool) -> Path:
     shipped: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration: Final = {
         **shipped,
@@ -177,6 +195,7 @@ def _config(directory: Path, s3_url: str, line_item_callbacks: JsonValue) -> Pat
             **shipped["general_settings"],
             "enable_jwt_auth": True,
             "litellm_jwtauth": {"user_id_jwt_field": "sub", "user_id_upsert": True},
+            "enable_oauth2_auth": oauth2,
         },
         "litellm_settings": {
             **shipped["litellm_settings"],
@@ -199,7 +218,9 @@ def _config(directory: Path, s3_url: str, line_item_callbacks: JsonValue) -> Pat
 
 
 @contextmanager
-def _owned_rig(tmp_path_factory: pytest.TempPathFactory, name: str, line_item_callbacks: JsonValue) -> Iterator[Rig]:
+def _owned_rig(
+    tmp_path_factory: pytest.TempPathFactory, name: str, line_item_callbacks: JsonValue, *, oauth2: bool = False
+) -> Iterator[Rig]:
     directory: Final = tmp_path_factory.mktemp(name)
     certificate, key = write_self_signed_cert(directory, names=("storage.googleapis.com",))
     s3: Final = ObjectSink(reject=b"sink-down-", hang=b"sink-hang-")
@@ -207,6 +228,7 @@ def _owned_rig(tmp_path_factory: pytest.TempPathFactory, name: str, line_item_ca
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     with (
         wire_server(_jwks_peer(signing_key)) as jwks_wire,
+        wire_server(_oauth2_token_info_peer()) as token_info_wire,
         gateway_from_environment() as environment,
         scratch_database(name.replace("-", "_")) as database_url,
         wire_server(s3_peer(s3)) as s3_wire,
@@ -225,13 +247,14 @@ def _owned_rig(tmp_path_factory: pytest.TempPathFactory, name: str, line_item_ca
                 "GCS_PATH_SERVICE_ACCOUNT": str(service_account),
                 "GCS_FLUSH_INTERVAL": "1",
                 "JWT_PUBLIC_KEY_URL": jwks_wire.url,
+                "OAUTH_TOKEN_INFO_ENDPOINT": token_info_wire.url,
                 "HTTPS_PROXY": tunnel.url,
                 "https_proxy": tunnel.url,
                 "SSL_CERT_FILE": str(certificate),
                 "NO_PROXY": "127.0.0.1,localhost",
                 "no_proxy": "127.0.0.1,localhost",
             },
-            config=_config(directory, s3_wire.url, line_item_callbacks),
+            config=_config(directory, s3_wire.url, line_item_callbacks, oauth2=oauth2),
             remove_environment=("DATABASE_URL_READ_REPLICA",),
             workers=2,
         ) as candidate:
@@ -253,6 +276,12 @@ def rig_with_an_unsupported_name(tmp_path_factory: pytest.TempPathFactory) -> It
 @pytest.fixture(scope="module")
 def rig_with_a_null_list(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     with _owned_rig(tmp_path_factory, "batch-line-items-null", None) as owned:
+        yield owned
+
+
+@pytest.fixture(scope="module")
+def rig_with_oauth2(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _owned_rig(tmp_path_factory, "batch-line-items-oauth2", ["s3_v2"], oauth2=True) as owned:
         yield owned
 
 
@@ -623,6 +652,51 @@ def test_a_batch_created_with_a_jwt_and_no_key_gets_its_lines_with_request_and_r
     assert [(record["custom_id"], record["request"], record["response"]) for record in records] == [
         ("jwt-1", lines.inputs[0], lines.outputs[0])
     ]
+
+
+def test_a_batch_created_with_an_oauth2_token_follows_its_teams_message_logging_setting(rig_with_oauth2: Rig) -> None:
+    rig: Final = rig_with_oauth2
+    open_team: Final = string_value(
+        rig.gateway.post("/team/new", {"team_alias": f"open-{uuid.uuid4().hex[:8]}"})["team_id"]
+    )
+    quiet_team: Final = string_value(
+        rig.gateway.post("/team/new", {"team_alias": f"quiet-{uuid.uuid4().hex[:8]}", "metadata": _quiet_logging()})[
+            "team_id"
+        ]
+    )
+    user_id: Final = f"oauth-user-{uuid.uuid4().hex[:12]}"
+    open_lines: Final = Lines(
+        inputs=(_input_line("oauth-open", "asked with an oauth token"),),
+        outputs=(_success_line("oauth-open"),),
+        errors=(),
+    )
+    quiet_lines: Final = Lines(
+        inputs=(_input_line("oauth-quiet", "a quiet team's oauth secret"),),
+        outputs=(_success_line("oauth-quiet"),),
+        errors=(),
+    )
+    opened: Final = _submit(rig, open_lines, {}, token=_oauth2_token(open_team, user_id))
+    quieted: Final = _submit(rig, quiet_lines, {}, token=_oauth2_token(quiet_team, user_id))
+    quiet_name: Final = _object_name(f"{S3_PREFIX}/", quieted.batch_id)
+    try:
+        open_records: Final = _written(rig.s3, _object_name(f"{S3_PREFIX}/", opened.batch_id))
+        quiet_records: Final = _written(rig.s3, quiet_name)
+    finally:
+        delete_scenario(opened.handle)
+        delete_scenario(quieted.handle)
+
+    assert read_rows(
+        'SELECT api_key, created_by, team_id FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id = %s',
+        (opened.batch_id,),
+        database_url=rig.database_url,
+    ) == [{"api_key": _oauth2_token(open_team, user_id), "created_by": user_id, "team_id": open_team}]
+    assert [(record["custom_id"], record["request"], record["response"]) for record in open_records] == [
+        ("oauth-open", open_lines.inputs[0], open_lines.outputs[0])
+    ]
+    assert [(record["custom_id"], record["request"], record["response"]) for record in quiet_records] == [
+        ("oauth-quiet", None, None)
+    ]
+    assert b"a quiet team's oauth secret" not in rig.s3.objects()[quiet_name]
 
 
 def test_a_batch_where_every_line_failed_still_writes_its_error_lines(rig: Rig) -> None:

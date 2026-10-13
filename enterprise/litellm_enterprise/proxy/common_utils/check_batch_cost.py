@@ -14,7 +14,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     CLI_SESSION_KEY_PREFIX,
-    LITELLM_PROXY_MASTER_KEY_ALIAS,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
@@ -1112,8 +1111,10 @@ class CheckBatchCost:
 
     async def _creator_turned_off_message_logging(self, job: "_ManagedObjectRow") -> bool:
         """Whether the creating key's or team's logging settings turn off message logging, falling back to the
-        proxy-wide setting. A batch created without a virtual key, such as under JWT auth or with the master key, has
-        only its team's and the proxy's settings. A key or team that can no longer be read counts as turned off."""
+        proxy-wide setting. A batch whose saved credential is not a virtual key's hash, such as one created under JWT
+        or OAuth2 auth or with the master key, has only its team's and the proxy's settings. A key or team that can no
+        longer be read counts as turned off."""
+        from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
         from litellm.proxy.proxy_server import proxy_config
@@ -1121,10 +1122,7 @@ class CheckBatchCost:
 
         api_key: Final = getattr(job, "api_key", None)
         team_id: Final = getattr(job, "team_id", None)
-        has_key_row: Final = api_key is not None and api_key not in (
-            LITELLM_PROXY_MASTER_KEY_ALIAS,
-            f"{CLI_SESSION_KEY_PREFIX}-{job.created_by}",
-        )
+        has_key_row: Final = api_key is not None and is_valid_sha256_hash(api_key)
         try:
             key_row: Final = (
                 await _token_table(self.prisma_client).find_unique(where={"token": api_key}) if has_key_row else None
