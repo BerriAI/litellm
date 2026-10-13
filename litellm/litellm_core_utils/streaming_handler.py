@@ -1365,9 +1365,11 @@ class CustomStreamWrapper:
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
+                LlmProviders.OPENROUTER.value,
             ]:
                 if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
-                    # for azure, we need to pass the model from the original chunk
+                    # these providers route to a served model whose name differs
+                    # from the requested one, so pass the chunk's model through
                     self.model = getattr(chunk, "model", self.model)
             response_obj = self.handle_openai_chat_completion_chunk(chunk)
             if response_obj is None:

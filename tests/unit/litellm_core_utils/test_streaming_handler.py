@@ -3228,6 +3228,69 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
     )
 
 
+def test_openrouter_streaming_chunks_carry_served_model():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/46095
+
+    Every raw SSE chunk OpenRouter sends names the model it actually served,
+    e.g. openrouter/auto resolving to deepseek/deepseek-v4.1-flash. The
+    wrapper must keep that per-chunk model like it does for azure, so routed
+    streams are priced and logged under the model that answered instead of
+    the requested router alias, which has no price entry.
+    """
+    served_model = "deepseek/deepseek-v4.1-flash"
+    openrouter_chunks = [
+        ModelResponseStream(
+            id="chatcmpl-or-1",
+            created=1742056047,
+            model=served_model,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="hi", role="assistant"),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or-1",
+            created=1742056047,
+            model=served_model,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content="", role=None),
+                )
+            ],
+        ),
+    ]
+
+    response = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=openrouter_chunks),
+        model="openrouter/auto",
+        custom_llm_provider="openrouter",
+        logging_obj=Logging(
+            model="openrouter/auto",
+            messages=[{"role": "user", "content": "Say hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+    )
+
+    chunks = [chunk for chunk in response]
+
+    assert len(chunks) > 0
+    assert all(
+        chunk.model == served_model for chunk in chunks
+    ), f"Expected every chunk to carry the served model {served_model}, got {[c.model for c in chunks]}"
+
+
 def test_gemini_legacy_vertex_stop_finish_reason_normalised():
     """
     The legacy vertex_ai SDK streaming path sets finish_reason from a proto enum
