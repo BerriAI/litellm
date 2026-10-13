@@ -70,7 +70,7 @@ function KeyInput({ value, taken, onCommit, label, placeholder }: KeyInputProps)
   const errorId = useId();
   const [draft, setDraft] = useState(value);
   const next = draft.trim();
-  const error = keyError(next, value, taken);
+  const error = next === value ? undefined : keyError(next, value, taken);
 
   function commit() {
     if (error === undefined && next !== value) {

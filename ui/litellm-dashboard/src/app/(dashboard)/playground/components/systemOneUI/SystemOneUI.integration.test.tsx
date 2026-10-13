@@ -138,6 +138,7 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue("");
     expect(screen.getAllByRole("group", { name: /Question / })).toHaveLength(1);
     expect(screen.getByRole("textbox", { name: "Question name" })).toHaveValue("");
+    expect(screen.queryByText("Enter a name")).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Instructions" })).toHaveValue("");
     expect(screen.queryByRole("textbox", { name: "Option label" })).not.toBeInTheDocument();
     expect(screen.getByText("1 issue to fix")).toBeInTheDocument();
