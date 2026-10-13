@@ -4,13 +4,12 @@ Test for preset_cache_key multiple values bug fix.
 This test verifies that get_cache_key doesn't raise TypeError when kwargs
 already contains preset_cache_key.
 
-Issue: When get_cache_key(**kwargs) is called with kwargs containing 
+Issue: When get_cache_key(**kwargs) is called with kwargs containing
 preset_cache_key, the call to _set_preset_cache_key_in_kwargs() would fail with:
     TypeError: got multiple values for keyword argument 'preset_cache_key'
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 class TestPresetCacheKeyFix:
@@ -81,6 +80,43 @@ class TestPresetCacheKeyFix:
         # The method should set preset_cache_key in litellm_params
         assert "preset_cache_key" in litellm_params
         assert litellm_params["preset_cache_key"] == result
+
+    def test_authenticated_cache_keys_are_isolated_by_server_auth_identity(self):
+        """Authenticated callers must not share an exact-response cache entry."""
+        from litellm.caching.caching import Cache
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = Cache()
+        request = {"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]}
+        caller_a = {"user_api_key_auth": UserAPIKeyAuth(token="validated-token-a")}
+        caller_b = {"user_api_key_auth": UserAPIKeyAuth(token="validated-token-b")}
+
+        key_a = cache.get_cache_key(**request, metadata=caller_a)
+        key_b = cache.get_cache_key(**request, metadata=caller_b)
+        key_a_again = cache.get_cache_key(**request, metadata=caller_a)
+
+        assert key_a is not None
+        assert key_b is not None
+        assert key_a != key_b
+        assert key_a_again == key_a
+
+    def test_authenticated_cache_without_stable_token_bypasses_explicit_and_derived_keys(self):
+        """A keyless authenticated object must not fall back to a shared key."""
+        from litellm.caching.caching import Cache
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = Cache()
+        metadata = {"user_api_key_auth": UserAPIKeyAuth(user_id="user-a")}
+        request = {"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]}
+
+        assert cache.get_cache_key(**request, metadata=metadata) is None
+        assert cache.prepare_explicit_cache_key("caller-selected", metadata=metadata) is None
+
+    def test_unauthenticated_explicit_cache_key_remains_compatible(self):
+        """Non-proxy callers may continue to use an explicit cache key."""
+        from litellm.caching.caching import Cache
+
+        assert Cache().prepare_explicit_cache_key("caller-selected") == "caller-selected"
 
 
 if __name__ == "__main__":
