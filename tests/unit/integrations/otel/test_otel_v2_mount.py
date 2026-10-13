@@ -17,6 +17,7 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+import httpx  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from opentelemetry.instrumentation.propagators import (  # noqa: E402
     ResponsePropagator,
@@ -43,6 +44,9 @@ from litellm.integrations.otel.mount import (  # noqa: E402
     PASSTHROUGH_PREFIXES,
     _passthrough_span_name_hook,
     instrument_fastapi_app,
+)
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: E402
+    HttpPassThroughEndpointHelpers,
 )
 from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     request_root_http_route,
@@ -296,6 +300,11 @@ def _traced_app(monkeypatch, tracer_provider):
     async def stream():
         return StreamingResponse(chunks(), headers={"x-litellm-call-id": "call-stream"})
 
+    @app.get("/relayed")
+    async def relayed():
+        upstream = httpx.Headers({"traceresponse": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"})
+        return fastapi.Response(headers=HttpPassThroughEndpointHelpers.get_response_headers(upstream))
+
     instrument_fastapi_app(app)
     return app
 
@@ -311,7 +320,7 @@ def test_every_traced_response_names_its_own_server_span(monkeypatch):
     provider, exporter = _exporting_provider()
     client = TestClient(_traced_app(monkeypatch, provider))
 
-    responses = {path: client.get(path) for path in ("/success", "/failure", "/stream")}
+    responses = {path: client.get(path) for path in ("/success", "/failure", "/stream", "/relayed")}
 
     server_spans = {
         (s.attributes or {})["http.route"]: s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
@@ -320,7 +329,7 @@ def test_every_traced_response_names_its_own_server_span(monkeypatch):
     assert responses["/stream"].text == "data: first\n\ndata: [DONE]\n\n"
     for path, response in responses.items():
         context = server_spans[path].context
-        assert response.headers["traceresponse"] == f"00-{context.trace_id:032x}-{context.span_id:016x}-01"
+        assert response.headers.get_list("traceresponse") == [f"00-{context.trace_id:032x}-{context.span_id:016x}-01"]
 
 
 def test_traceresponse_keeps_the_caller_trace(monkeypatch):

@@ -54,6 +54,7 @@ from litellm.integrations.custom_guardrail import (
     without_server_streaming_classification,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
@@ -377,6 +378,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # If we forward the upstream's Server header, uvicorn adds its
         # own and strict HTTP parsers (e.g. aiohttp) reject the
         # response with "Duplicate 'Server' header found".
+        gateway_owned_trace_headers: Final = ("traceresponse",) if is_otel_v2_enabled() else ()
         excluded_headers: Final = {
             "transfer-encoding",
             "content-encoding",
@@ -385,6 +387,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "date",
             "connection",
             "keep-alive",
+            *gateway_owned_trace_headers,
         }
 
         return_headers: Final = {key: value for key, value in headers.items() if key.lower() not in excluded_headers}

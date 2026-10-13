@@ -33,6 +33,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -4673,6 +4674,20 @@ def test_get_response_headers_strips_server_and_date():
     assert lowered["content-type"] == "application/json"
     assert lowered["x-request-id"] == "req_abc"
     assert lowered["anthropic-ratelimit-requests-remaining"] == "100"
+
+
+def test_get_response_headers_relays_upstream_traceresponse_only_without_otel_v2(monkeypatch):
+    upstream_headers = httpx.Headers({"traceresponse": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"})
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    relayed_without_v2 = HttpPassThroughEndpointHelpers.get_response_headers(upstream_headers)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    relayed_with_v2 = HttpPassThroughEndpointHelpers.get_response_headers(upstream_headers)
+    is_otel_v2_enabled.cache_clear()
+
+    assert relayed_without_v2["traceresponse"] == upstream_headers["traceresponse"]
+    assert "traceresponse" not in relayed_with_v2
 
 
 class TestStaleRouteCleanupOnReload:
