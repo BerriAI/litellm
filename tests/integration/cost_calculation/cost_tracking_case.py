@@ -129,6 +129,7 @@ class JsonResponse(BaseModel):
     content_type: Literal["application/json"]
     body: dict[str, JsonValue]
     status: int = 200
+    headers: dict[str, str] = Field(default_factory=dict)
 
 
 class SseResponse(BaseModel):
@@ -137,6 +138,7 @@ class SseResponse(BaseModel):
     content_type: Literal["text/event-stream"]
     frames: tuple[str, ...]
     frame_delay_ms: int = Field(default=0, ge=0)
+    headers: dict[str, str] = Field(default_factory=dict)
 
 
 class EventStreamEvent(BaseModel):
@@ -329,6 +331,8 @@ class CostTrackingTestCase(BaseModel):
     def reports_provider_cost(self) -> bool:
         if not isinstance(self.response, JsonResponse):
             return False
+        if "x-litellm-response-cost" in self.response.headers:
+            return True
         usage: Final = self.response.body.get("usage")
         return isinstance(usage, dict) and isinstance(usage.get("cost"), (int, float))
 

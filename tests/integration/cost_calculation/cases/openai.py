@@ -7162,6 +7162,201 @@ OPENAI_DEPLOYMENT_PRICING_OVERRIDE: Final = CostTrackingTestCase(
     ),
 )
 
+_CC_CUSTOM_MODEL_COST_HEADER_FRAMES: Final = sse_frames(
+    {
+        "id": "chatcmpl-$REQUEST_ID",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "cc-custom-model",
+        "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "scripted response"}, "finish_reason": None}
+        ],
+    },
+    {
+        "id": "chatcmpl-$REQUEST_ID",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "cc-custom-model",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    },
+    {
+        "id": "chatcmpl-$REQUEST_ID",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "cc-custom-model",
+        "choices": [],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 253, "total_tokens": 263},
+    },
+    done=True,
+)
+
+_CC_CUSTOM_MODEL_RESPONSES_BODY: Final[dict[str, JsonValue]] = {
+    "id": "resp_$REQUEST_ID",
+    "object": "response",
+    "status": "completed",
+    "created_at": 1700000000,
+    "model": "cc-custom-model",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_$REQUEST_ID",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+        }
+    ],
+    "usage": {
+        "input_tokens": 10,
+        "output_tokens": 253,
+        "total_tokens": 263,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 0},
+    },
+}
+
+OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER: Final = CostTrackingTestCase(
+    name="openai-deployment-zero-pricing-ignores-upstream-cost-header",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.0, output_cost_per_token=0.0),
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "openai-deployment-zero-pricing-ignores-upstream-cost-header"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "model": "cc-custom-model",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "scripted response"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 253, "total_tokens": 263},
+        },
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=10, completion_tokens=253),
+)
+
+OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_STREAM: Final = CostTrackingTestCase(
+    name="openai-deployment-zero-pricing-ignores-upstream-cost-header-stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.0, output_cost_per_token=0.0),
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "openai-deployment-zero-pricing-ignores-upstream-cost-header"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=_CC_CUSTOM_MODEL_COST_HEADER_FRAMES,
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=10, completion_tokens=253),
+)
+
+OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_MESSAGES: Final = CostTrackingTestCase(
+    name="openai-deployment-zero-pricing-ignores-upstream-cost-header-messages",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/messages",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.0, output_cost_per_token=0.0),
+    request={
+        "model": "$MODEL",
+        "max_tokens": 300,
+        "messages": [{"role": "user", "content": "openai-deployment-zero-pricing-ignores-upstream-cost-header"}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body=_CC_CUSTOM_MODEL_RESPONSES_BODY,
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=10, completion_tokens=253),
+)
+
+OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_RESPONSES: Final = CostTrackingTestCase(
+    name="openai-deployment-zero-pricing-ignores-upstream-cost-header-responses",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/responses",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.0, output_cost_per_token=0.0),
+    request={
+        "model": "$MODEL",
+        "input": "openai-deployment-zero-pricing-ignores-upstream-cost-header",
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body=_CC_CUSTOM_MODEL_RESPONSES_BODY,
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(spend=0.0, input_cost=0.0, output_cost=0.0, prompt_tokens=10, completion_tokens=253),
+)
+
+OPENAI_DEPLOYMENT_PRICING_IGNORES_UPSTREAM_COST_HEADER: Final = CostTrackingTestCase(
+    name="openai-deployment-pricing-ignores-upstream-cost-header",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    deployment=Deployment(model="openai/cc-custom-model", input_cost_per_token=0.001, output_cost_per_token=0.002),
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "openai-deployment-pricing-ignores-upstream-cost-header"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$UNIQUE_ID",
+            "object": "chat.completion",
+            "model": "cc-custom-model",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "scripted response"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 253, "total_tokens": 263},
+        },
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(
+        spend=0.516, input_cost=0.01, output_cost=0.506, prompt_tokens=10, completion_tokens=253, rollups=True
+    ),
+)
+
+GPT_5_6_UPSTREAM_COST_HEADER_BILLS_HEADER_VALUE: Final = CostTrackingTestCase(
+    name="gpt-5.6-upstream-cost-header-bills-header-value",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "gpt-5.6-upstream-cost-header-bills-header-value"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "model": "gpt-5.6",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "scripted response"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 253, "total_tokens": 263},
+        },
+        headers={"x-litellm-response-cost": "0.000413"},
+    ),
+    expected=ExactExpected(
+        spend=0.000413,
+        input_cost=0.0,
+        output_cost=0.000413,
+        prompt_tokens=10,
+        completion_tokens=253,
+        breakdown_persisted=False,
+    ),
+)
+
 GPT_5_6_UPSTREAM_400_ZERO_SPEND: Final = CostTrackingTestCase(
     name="gpt-5.6-upstream_400_zero_spend",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -8134,6 +8329,12 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_RESPONSES_SERVICE_TIER_FLEX,
     GPT_5_6_RESPONSES_SERVICE_TIER_PRIORITY,
     OPENAI_DEPLOYMENT_PRICING_OVERRIDE,
+    OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER,
+    OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_STREAM,
+    OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_MESSAGES,
+    OPENAI_DEPLOYMENT_ZERO_PRICING_IGNORES_UPSTREAM_COST_HEADER_RESPONSES,
+    OPENAI_DEPLOYMENT_PRICING_IGNORES_UPSTREAM_COST_HEADER,
+    GPT_5_6_UPSTREAM_COST_HEADER_BILLS_HEADER_VALUE,
     GPT_5_6_UPSTREAM_400_ZERO_SPEND,
     GPT_5_6_UPSTREAM_401_ZERO_SPEND,
     GPT_5_6_UPSTREAM_500_STREAM_REQUEST_ZERO_SPEND,
