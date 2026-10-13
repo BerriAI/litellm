@@ -5457,7 +5457,6 @@ AZURE_GPT_6_SOL_TOOL_CALL: Final = CostTrackingTestCase(
     expected=ExactExpected(
         spend=0.00897, input_cost=0.004232, output_cost=0.004738, prompt_tokens=1840, completion_tokens=412
     ),
-    known_bug="LiteLLM raises UnsupportedParamsError for reasoning_effort='none' on Azure gpt-6 chat, which Azure accepts (captured 200), so function tools cannot be sent",
 )
 
 AZURE_GPT_6_LUNA_TOOL_CALL: Final = CostTrackingTestCase(
@@ -5571,7 +5570,6 @@ AZURE_GPT_6_LUNA_TOOL_CALL: Final = CostTrackingTestCase(
     expected=ExactExpected(
         spend=0.000507, input_cost=0.0002392, output_cost=0.0002678, prompt_tokens=1840, completion_tokens=412
     ),
-    known_bug="LiteLLM raises UnsupportedParamsError for reasoning_effort='none' on Azure gpt-6 chat, which Azure accepts (captured 200), so function tools cannot be sent",
 )
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (

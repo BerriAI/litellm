@@ -1005,6 +1005,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "output_cost_per_token_flex": 5.75e-06,
         "output_cost_per_token_priority": 2.3e-05,
         "supports_function_calling": True,
+        "supports_none_reasoning_effort": True,
     },
     "azure/gpt-6-luna": {
         "cache_read_input_token_cost": 1.3e-08,
@@ -1020,6 +1021,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "output_cost_per_token_flex": 3.25e-07,
         "output_cost_per_token_priority": 1.3e-06,
         "supports_function_calling": True,
+        "supports_none_reasoning_effort": True,
     },
     "azure/gpt-6-astra": {
         "cache_read_input_token_cost": 1.25e-06,
@@ -1035,6 +1037,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "output_cost_per_token_flex": 3.125e-05,
         "output_cost_per_token_priority": 0.000125,
         "supports_function_calling": True,
+        "supports_none_reasoning_effort": True,
     },
     "azure/gpt-6.1-sol": {
         "cache_read_input_token_cost": 2.4e-07,
@@ -1050,5 +1053,6 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "output_cost_per_token_flex": 6e-06,
         "output_cost_per_token_priority": 2.4e-05,
         "supports_function_calling": True,
+        "supports_none_reasoning_effort": True,
     },
 }

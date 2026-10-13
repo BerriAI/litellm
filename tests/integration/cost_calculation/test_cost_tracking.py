@@ -42,14 +42,9 @@ if _data_errors := data_errors():
     raise ValueError("\n".join(_data_errors))
 
 
-def _marks(case: CostTrackingTestCase) -> tuple[pytest.MarkDecorator, ...]:
-    covers: Final = pytest.mark.covers(case.covers)
-    if case.known_bug is None:
-        return (covers,)
-    return (covers, pytest.mark.xfail(strict=True, reason=f"BUG: {case.known_bug}"))
-
-
-_CASES: Final = tuple(pytest.param(case, marks=_marks(case), id=case.name) for case in STANDALONE_CASES)
+_CASES: Final = tuple(
+    pytest.param(case, marks=pytest.mark.covers(case.covers), id=case.name) for case in STANDALONE_CASES
+)
 
 
 def _wav_bytes(seconds: float) -> bytes:
