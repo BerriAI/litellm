@@ -178,6 +178,43 @@ def test_non_openai_error_uses_nested_error_object(code: int | str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("message", "expected_message"),
+    [
+        ("Provider unavailable", "Provider unavailable"),
+        ({"detail": "Provider unavailable"}, '{"detail": "Provider unavailable"}'),
+    ],
+)
+def test_non_completion_error_preserves_nested_fields(
+    message: str | dict[str, str],
+    expected_message: str,
+) -> None:
+    with pytest.raises(Exception, match=r"^$") as exc_info:
+        convert_to_model_response_object(
+            response_object={"error": {"code": 503, "message": message}},
+            model_response_object=ModelResponse(),
+            response_type="embedding",
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.message == expected_message
+
+
+def test_completion_error_serializes_nested_dictionary_message() -> None:
+    with pytest.raises(Exception, match=r"^$") as exc_info:
+        convert_to_model_response_object(
+            response_object={
+                "error": {"code": 401, "message": {"detail": "Invalid credentials"}},
+                "choices": None,
+            },
+            model_response_object=ModelResponse(),
+            response_type="completion",
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.message == '{"detail": "Invalid credentials"}'
+
+
+@pytest.mark.parametrize(
     ("error", "expected_status", "expected_message", "expected_exception", "expected_match"),
     [
         (
