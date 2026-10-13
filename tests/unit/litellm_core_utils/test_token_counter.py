@@ -515,6 +515,35 @@ def test_token_counter_skips_non_mapping_tools():
     assert mixed_tokens == valid_tokens
 
 
+def test_token_counter_array_param_without_items_schema():
+    """Regression for #46052: JSON Schema allows an array parameter without an
+    items schema (common in MCP tool definitions); token_counter must not raise
+    KeyError('items') - on the proxy this surfaced as a 500 from
+    /v1/messages/count_tokens."""
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "List files matching any of the given patterns",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patterns": {"type": "array", "description": "glob patterns"},
+                    "tags": {"type": "array", "items": True},
+                },
+                "required": ["patterns"],
+            },
+        },
+    }
+    tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=[{"role": "user", "content": "which files?"}],
+        tools=[tool],
+    )
+
+    assert tokens > 0
+
+
 class NeedsToleranceUpdateError(Exception):
     """Custom exception to mark tests that have improved"""
 
