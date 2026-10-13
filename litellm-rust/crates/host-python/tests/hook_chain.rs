@@ -1,74 +1,57 @@
+mod support;
+
+use std::future::{Future, ready};
+
+use futures_util::{FutureExt, future::BoxFuture};
 use litellm_host::{
     hooks::CallHooks,
     interceptors::{RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing},
 };
-use litellm_host_python::{HookChain, HookStep, PythonCallEvent, PythonOwned, PythonRuntime};
+use litellm_host_python::{
+    Awaiter, HookChain, PythonCallEvent, PythonOwned, PythonRuntime, run_call,
+};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyTuple},
 };
 use rstest::{fixture, rstest};
+use support::{
+    Interpreter, Log, OpScript, binding, call_options, handed, interpreter, success_machine,
+};
 
 struct ScriptHooks {
     object: Py<PyAny>,
     asynchronous: bool,
-    wire: Option<Box<WireRequest>>,
 }
 
 impl ScriptHooks {
-    fn invoke(&self, py: Python<'_>, name: &str, value: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    async fn invoke(
+        &self,
+        task: &dyn Awaiter,
+        name: &str,
+        value: impl FnOnce(Python<'_>) -> PyResult<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let result = Python::attach(|py| {
+            let value = value(py)?;
+            if self.asynchronous {
+                self.object.call_method1(py, "invoke", (name, value))
+            } else {
+                self.object.call_method1(py, name, (value,))
+            }
+        })?;
         if self.asynchronous {
-            self.object.call_method1(py, "invoke", (name, value))
+            task.awaited(result).await
         } else {
-            self.object.call_method1(py, name, (value,))
+            Ok(result)
         }
-    }
-
-    fn arguments(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> PyResult<HookStep<Self, Py<PyDict>>> {
-        Ok(HookStep::Ready(
-            result?.into_bound(py).cast_into::<PyDict>()?.unbind(),
-        ))
-    }
-
-    fn response(
-        &mut self,
-        _: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
-        result.map(HookStep::Ready)
-    }
-
-    fn notification(
-        &mut self,
-        _: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> PyResult<HookStep<Self, ()>> {
-        result.map(|_| HookStep::Ready(()))
-    }
-
-    fn request(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
-        let wire = self.wire.take().unwrap();
-        Ok(HookStep::Ready(Box::new(WireRequest {
-            url: result?.extract(py)?,
-            ..*wire
-        })))
     }
 }
 
 impl PythonOwned for ScriptHooks {
     fn close(&mut self, py: Python<'_>) {
         self.object = py.None();
-        self.wire = None;
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
@@ -77,96 +60,103 @@ impl PythonOwned for ScriptHooks {
 }
 
 impl CallHooks<PythonRuntime> for ScriptHooks {
-    fn prepare_arguments(
-        &mut self,
-        py: Python<'_>,
+    async fn prepare_arguments<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
         arguments: Py<PyDict>,
         _: f64,
-    ) -> PyResult<HookStep<Self, Py<PyDict>>> {
-        let value = self.invoke(py, "prepare", arguments.into_any())?;
-        if self.asynchronous {
-            Ok(HookStep::Await(value, Self::arguments))
-        } else {
-            self.arguments(py, Ok(value))
-        }
+    ) -> PyResult<Py<PyDict>> {
+        let value = self
+            .invoke(task, "prepare", |_| Ok(arguments.into_any()))
+            .await?;
+        Python::attach(|py| Ok(value.into_bound(py).cast_into::<PyDict>()?.unbind()))
     }
 
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
-        self.object.call_method1(py, "adopt", (arguments,))?;
+    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+        Python::attach(|py| self.object.call_method1(py, "adopt", (arguments,)))?;
         Ok(())
     }
 
-    fn before_provider_request(
-        &mut self,
-        py: Python<'_>,
+    async fn before_provider_request<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
         wire: Box<WireRequest>,
         context: &RequestContext,
-    ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
-        self.object.bind(py).setattr("model", &context.model)?;
-        let value = self.invoke(
-            py,
-            "before",
-            wire.url.clone().into_pyobject(py)?.into_any().unbind(),
-        )?;
-        self.wire = Some(wire);
-        if self.asynchronous {
-            Ok(HookStep::Await(value, Self::request))
-        } else {
-            self.request(py, Ok(value))
-        }
+    ) -> PyResult<Box<WireRequest>> {
+        Python::attach(|py| self.object.bind(py).setattr("model", &context.model))?;
+        let url = self
+            .invoke(task, "before", |py| {
+                Ok(wire.url.clone().into_pyobject(py)?.into_any().unbind())
+            })
+            .await?;
+        Ok(Box::new(WireRequest {
+            url: Python::attach(|py| url.extract(py))?,
+            ..*wire
+        }))
     }
 
-    fn transform_response(
-        &mut self,
-        py: Python<'_>,
+    async fn transform_response<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
         response: Py<PyAny>,
         _: Timing,
-    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
-        let value = self.invoke(py, "transform", response)?;
-        if self.asynchronous {
-            Ok(HookStep::Await(value, Self::response))
-        } else {
-            self.response(py, Ok(value))
-        }
+    ) -> PyResult<Py<PyAny>> {
+        self.invoke(task, "transform", |_| Ok(response)).await
     }
 
-    fn on_event(
-        &mut self,
-        py: Python<'_>,
+    async fn on_event<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
         event: PythonCallEvent<'_>,
-    ) -> PyResult<HookStep<Self, ()>> {
-        let (name, value) = match event {
-            PythonCallEvent::Succeeded { response, .. } => ("success", response.clone_ref(py)),
-            PythonCallEvent::Failed { error, .. } => {
-                ("failure", error.clone_ref(py).into_value(py).into_any())
-            }
-            PythonCallEvent::Started { .. } => ("started", py.None()),
-            PythonCallEvent::Cancelled { .. } => ("cancelled", py.None()),
-            PythonCallEvent::Execution(_) => ("provider", py.None()),
-        };
-        let value = self.invoke(
-            py,
-            "event",
-            PyTuple::new(py, [name.into_pyobject(py)?.into_any().unbind(), value])?
-                .into_any()
-                .unbind(),
-        )?;
-        if self.asynchronous {
-            Ok(HookStep::Await(value, Self::notification))
-        } else {
-            self.notification(py, Ok(value))
-        }
+    ) -> PyResult<()> {
+        self.invoke(task, "event", |py| {
+            let (name, value) = match event {
+                PythonCallEvent::Succeeded { response, .. } => ("success", response.clone_ref(py)),
+                PythonCallEvent::Failed { error, .. } => {
+                    ("failure", error.clone_ref(py).into_any())
+                }
+                PythonCallEvent::Started { .. } => ("started", py.None()),
+                PythonCallEvent::Cancelled { .. } => ("cancelled", py.None()),
+                PythonCallEvent::Execution(_) => ("provider", py.None()),
+            };
+            Ok(
+                PyTuple::new(py, [name.into_pyobject(py)?.into_any().unbind(), value])?
+                    .into_any()
+                    .unbind(),
+            )
+        })
+        .await
+        .map(drop)
     }
 
-    fn on_stream_open(&mut self, py: Python<'_>, _head: &Py<PyAny>) -> PyResult<()> {
-        self.object.call_method1(py, "stream", (py.None(),))?;
+    fn on_stream_open(&self, _head: &Py<PyAny>) -> PyResult<()> {
+        Python::attach(|py| self.object.call_method1(py, "stream", (py.None(),)))?;
         Ok(())
     }
 
-    fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
-        self.object.call_method1(py, "stream", (chunk,))?;
+    fn on_stream_chunk(&self, chunk: &Py<PyAny>) -> PyResult<()> {
+        Python::attach(|py| self.object.call_method1(py, "stream", (chunk,)))?;
         Ok(())
     }
+}
+
+/// Runs every awaitable a hook hands it to completion on a fresh event loop.
+struct RunToCompletion;
+
+impl Awaiter for RunToCompletion {
+    fn awaited(&self, awaitable: Py<PyAny>) -> BoxFuture<'_, PyResult<Py<PyAny>>> {
+        let result = Python::attach(|py| {
+            py.import("asyncio")?
+                .call_method1("run", (awaitable,))
+                .map(Bound::unbind)
+        });
+        Box::pin(ready(result))
+    }
+}
+
+fn finish<T>(hook: impl Future<Output = PyResult<T>>) -> PyResult<T> {
+    hook.now_or_never()
+        .expect("every awaitable runs to completion inline")
 }
 
 #[fixture]
@@ -223,23 +213,8 @@ fn chain(py: Python<'_>, scripts: &Py<PyDict>, asynchronous: bool) -> HookChain 
     let hook = |name| ScriptHooks {
         object: scripts.bind(py).get_item(name).unwrap().unwrap().unbind(),
         asynchronous,
-        wire: None,
     };
     HookChain::new().with(hook("first")).with(hook("second"))
-}
-
-fn finish<H, T>(py: Python<'_>, hooks: &mut H, step: HookStep<H, T>) -> PyResult<T> {
-    match step {
-        HookStep::Ready(value) => Ok(value),
-        HookStep::Await(awaitable, resume) => {
-            let value = py
-                .import("asyncio")?
-                .call_method1("run", (awaitable,))
-                .map(Bound::unbind);
-            let next = resume(hooks, py, value)?;
-            finish(py, hooks, next)
-        }
-    }
 }
 
 const TIMING: Timing = Timing {
@@ -250,8 +225,8 @@ const TIMING: Timing = Timing {
 struct PreparedPolicy;
 
 impl CallHooks<PythonRuntime> for PreparedPolicy {
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
-        arguments.bind(py).set_item("policy", "configured")
+    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+        Python::attach(|py| arguments.bind(py).set_item("policy", "configured"))
     }
 }
 
@@ -271,13 +246,11 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
     #[case] asynchronous: bool,
 ) {
     Python::attach(|py| {
-        let mut hooks = chain(py, &scripts, asynchronous).with(PreparedPolicy);
+        let hooks = chain(py, &scripts, asynchronous).with(PreparedPolicy);
         let original = PyDict::new(py).unbind();
-        let step = hooks
-            .prepare_arguments(py, original.clone_ref(py), 0.0)
-            .unwrap();
-        let arguments = finish(py, &mut hooks, step).unwrap();
-        hooks.arguments_prepared(py, &arguments).unwrap();
+        let arguments =
+            finish(hooks.prepare_arguments(&RunToCompletion, original.clone_ref(py), 0.0)).unwrap();
+        hooks.arguments_prepared(&arguments).unwrap();
         let context = RequestContext {
             model: "model".into(),
             custom_llm_provider: "provider".into(),
@@ -290,25 +263,22 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
             headers: vec![],
             body: serde_json::Value::Null,
         });
-        let step = hooks.before_provider_request(py, wire, &context).unwrap();
-        assert_eq!(finish(py, &mut hooks, step).unwrap().url, "urlab");
+        let wire = finish(hooks.before_provider_request(&RunToCompletion, wire, &context)).unwrap();
+        assert_eq!(wire.url, "urlab");
         let response = PyDict::new(py).unbind().into_any();
-        let step = hooks
-            .transform_response(py, response.clone_ref(py), TIMING)
-            .unwrap();
-        let final_response = finish(py, &mut hooks, step).unwrap();
-        let step = hooks
-            .on_event(
-                py,
-                PythonCallEvent::Succeeded {
-                    timing: TIMING,
-                    response: &final_response,
-                },
-            )
-            .unwrap();
-        finish(py, &mut hooks, step).unwrap();
-        hooks.on_stream_open(py, &py.None()).unwrap();
-        hooks.on_stream_chunk(py, &response).unwrap();
+        let final_response =
+            finish(hooks.transform_response(&RunToCompletion, response.clone_ref(py), TIMING))
+                .unwrap();
+        finish(hooks.on_event(
+            &RunToCompletion,
+            PythonCallEvent::Succeeded {
+                timing: TIMING,
+                response: &final_response,
+            },
+        ))
+        .unwrap();
+        hooks.on_stream_open(&py.None()).unwrap();
+        hooks.on_stream_chunk(&response).unwrap();
         let locals = scripts.bind(py);
         locals.set_item("arguments", arguments).unwrap();
         locals.set_item("original", original).unwrap();
@@ -348,7 +318,7 @@ fn terminal_failure_does_not_skip_later_hooks(
     #[values("first", "second")] failing_hook: &str,
 ) {
     Python::attach(|py| {
-        let mut hooks = chain(py, &scripts, asynchronous).with(ScriptHooks {
+        let hooks = chain(py, &scripts, asynchronous).with(ScriptHooks {
             object: scripts
                 .bind(py)
                 .get_item("third")
@@ -356,7 +326,6 @@ fn terminal_failure_does_not_skip_later_hooks(
                 .unwrap()
                 .unbind(),
             asynchronous,
-            wire: None,
         });
         let locals = scripts.bind(py);
         locals
@@ -368,7 +337,7 @@ fn terminal_failure_does_not_skip_later_hooks(
                 pyo3::exceptions::PyRuntimeError::new_err("callback failed").into_value(py),
             )
             .unwrap();
-        let error = pyo3::exceptions::PyValueError::new_err("provider failed");
+        let error = pyo3::exceptions::PyValueError::new_err("provider failed").into_value(py);
         let response = py.None();
         let event = if failed {
             PythonCallEvent::Failed {
@@ -382,17 +351,9 @@ fn terminal_failure_does_not_skip_later_hooks(
                 response: &response,
             }
         };
-        let step = hooks.on_event(py, event).unwrap();
-        finish(py, &mut hooks, step).unwrap();
+        finish(hooks.on_event(&RunToCompletion, event)).unwrap();
         locals
-            .set_item(
-                "selected",
-                if failed {
-                    error.into_value(py).into_any()
-                } else {
-                    response
-                },
-            )
+            .set_item("selected", if failed { error.into_any() } else { response })
             .unwrap();
         py.run(
             c"
@@ -412,7 +373,7 @@ assert all(value is selected for name, kind, value in log)
 #[case::async_(true)]
 fn transformation_failure_stops_the_chain(scripts: Py<PyDict>, #[case] asynchronous: bool) {
     Python::attach(|py| {
-        let mut hooks = chain(py, &scripts, asynchronous);
+        let hooks = chain(py, &scripts, asynchronous);
         let locals = scripts.bind(py);
         py.run(
             c"first.error = ValueError('prepare failed')",
@@ -420,9 +381,8 @@ fn transformation_failure_stops_the_chain(scripts: Py<PyDict>, #[case] asynchron
             Some(locals),
         )
         .unwrap();
-        let result = hooks
-            .prepare_arguments(py, PyDict::new(py).unbind(), 0.0)
-            .and_then(|step| finish(py, &mut hooks, step));
+        let result =
+            finish(hooks.prepare_arguments(&RunToCompletion, PyDict::new(py).unbind(), 0.0));
         assert!(
             result.unwrap_err().value(py).is(locals
                 .get_item("first")
@@ -445,7 +405,7 @@ fn transformation_failure_stops_the_chain(scripts: Py<PyDict>, #[case] asynchron
 #[case::async_(true)]
 fn cancellation_stops_notification_dispatch(scripts: Py<PyDict>, #[case] asynchronous: bool) {
     Python::attach(|py| {
-        let mut hooks = chain(py, &scripts, asynchronous);
+        let hooks = chain(py, &scripts, asynchronous);
         let locals = scripts.bind(py);
         py.run(
             c"first.error = asyncio.CancelledError()",
@@ -454,15 +414,13 @@ fn cancellation_stops_notification_dispatch(scripts: Py<PyDict>, #[case] asynchr
         )
         .unwrap();
         let response = py.None();
-        let result = hooks
-            .on_event(
-                py,
-                PythonCallEvent::Succeeded {
-                    timing: TIMING,
-                    response: &response,
-                },
-            )
-            .and_then(|step| finish(py, &mut hooks, step));
+        let result = finish(hooks.on_event(
+            &RunToCompletion,
+            PythonCallEvent::Succeeded {
+                timing: TIMING,
+                response: &response,
+            },
+        ));
         assert!(
             result
                 .unwrap_err()
@@ -477,56 +435,11 @@ fn cancellation_stops_notification_dispatch(scripts: Py<PyDict>, #[case] asynchr
     });
 }
 
-struct Preparing {
-    hooks: HookChain,
-    arguments: Option<Py<PyDict>>,
-    resume: Option<litellm_host_python::HookResume<HookChain, Py<PyDict>>>,
-}
-
-impl litellm_host_python::ExecutionBody for Preparing {
-    fn resume(
-        &mut self,
-        result: Option<PyResult<Py<PyAny>>>,
-    ) -> PyResult<litellm_host_python::ExecutionStep> {
-        Python::attach(|py| {
-            let step = match self.resume.take() {
-                Some(resume) => resume(&mut self.hooks, py, result.unwrap())?,
-                None => self
-                    .hooks
-                    .prepare_arguments(py, self.arguments.take().unwrap(), 0.0)?,
-            };
-            match step {
-                HookStep::Ready(arguments) => {
-                    self.hooks.arguments_prepared(py, &arguments)?;
-                    Ok(litellm_host_python::ExecutionStep::Return(
-                        arguments.into_any(),
-                    ))
-                }
-                HookStep::Await(awaitable, resume) => {
-                    self.resume = Some(resume);
-                    Ok(litellm_host_python::ExecutionStep::Suspended(
-                        litellm_host_python::Suspension::Await(awaitable),
-                    ))
-                }
-            }
-        })
-    }
-
-    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.arguments)?;
-        self.hooks.traverse(visit)
-    }
-}
-
-fn lifecycle(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
-    let source =
-        std::ffi::CString::new(include_str!("../../../../litellm/rust_bridge/execution.py"))
-            .unwrap();
-    PyModule::from_code(py, &source, c"execution.py", c"hook_chain_test_lifecycle")
-}
-
 #[rstest]
-fn suspended_hooks_keep_the_callers_task_and_context(scripts: Py<PyDict>) {
+fn suspended_hooks_keep_the_callers_task_and_context(
+    #[from(interpreter)] _python: Interpreter,
+    scripts: Py<PyDict>,
+) {
     Python::attach(|py| {
         let locals = scripts.bind(py);
         py.run(
@@ -537,8 +450,9 @@ state = contextvars.ContextVar('state')
 async def invoke(name, value):
     assert asyncio.current_task() is caller
     assert threading.get_ident() == thread
-    if name == 'prepare':
-        state.set(state.get() + 'x')
+    if name != 'prepare':
+        return value
+    state.set(state.get() + 'x')
     await asyncio.sleep(0)
     assert asyncio.current_task() is caller
     return {**value, 'context': state.get()}
@@ -549,24 +463,20 @@ second = Hooks('b', invoke)
             Some(locals),
         )
         .unwrap();
-        let hooks = chain(py, &scripts, true);
-        let execution = litellm_host_python::Execution::new(
-            Preparing {
-                hooks,
-                arguments: Some(PyDict::new(py).unbind()),
-                resume: None,
-            },
-            lifecycle,
-        );
-        let module = lifecycle(py).unwrap();
-        let call = module
-            .getattr("drive")
-            .unwrap()
-            .call1((
-                Py::new(py, execution).unwrap(),
-                module.getattr("AsyncStream").unwrap(),
-            ))
-            .unwrap();
+        let machine = success_machine();
+        let call = handed(
+            py,
+            run_call(
+                py,
+                move |_, _, request| Ok(machine(request)),
+                binding(&Log::default(), OpScript::Answer),
+                chain(py, &scripts, true),
+                PyDict::new(py).unbind(),
+                call_options(true),
+            ),
+            true,
+        )
+        .unwrap();
         locals.set_item("call", call).unwrap();
         py.run(
             c"
@@ -575,111 +485,11 @@ async def exercise():
     caller = asyncio.current_task()
     thread = threading.get_ident()
     state.set('caller')
-    result = await call
-    assert result['context'] == 'callerxx'
+    await call
+    assert first.adopted['context'] == 'callerxx'
     assert state.get() == 'callerxx'
-    assert first.adopted is result and second.adopted is result
+    assert second.adopted is first.adopted
 asyncio.run(exercise())
-",
-            Some(locals),
-            Some(locals),
-        )
-        .unwrap();
-    });
-}
-
-#[pyclass(weakref)]
-struct HookOwner {
-    hooks: HookChain,
-}
-
-#[pymethods]
-impl HookOwner {
-    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.hooks.traverse(&visit)
-    }
-
-    fn __clear__(&mut self, py: Python<'_>) {
-        self.hooks.close(py);
-    }
-}
-
-#[rstest]
-#[case::first_response(false, false)]
-#[case::first_exception(true, false)]
-#[case::second_response(false, true)]
-#[case::second_exception(true, true)]
-fn suspended_notification_cycles_are_collectable(
-    scripts: Py<PyDict>,
-    #[case] failed: bool,
-    #[case] first_ready: bool,
-) {
-    Python::attach(|py| {
-        let hook = |name, asynchronous| ScriptHooks {
-            object: scripts.bind(py).get_item(name).unwrap().unwrap().unbind(),
-            asynchronous,
-            wire: None,
-        };
-        let owner = Py::new(
-            py,
-            HookOwner {
-                hooks: HookChain::new()
-                    .with(hook("first", !first_ready))
-                    .with(hook("second", true)),
-            },
-        )
-        .unwrap();
-        let locals = scripts.bind(py);
-        locals.set_item("owner", &owner).unwrap();
-        py.run(
-            c"
-import gc
-import weakref
-class Payload(Exception):
-    pass
-payload = Payload()
-payload.owner = owner
-owner_ref = weakref.ref(owner)
-payload_ref = weakref.ref(payload)
-",
-            Some(locals),
-            Some(locals),
-        )
-        .unwrap();
-        let payload = locals.get_item("payload").unwrap().unwrap().unbind();
-        let step = if failed {
-            owner.borrow_mut(py).hooks.on_event(
-                py,
-                PythonCallEvent::Failed {
-                    timing: TIMING,
-                    origin: FailureOrigin::Call,
-                    error: &PyErr::from_value(payload.bind(py).clone()),
-                },
-            )
-        } else {
-            owner.borrow_mut(py).hooks.on_event(
-                py,
-                PythonCallEvent::Succeeded {
-                    timing: TIMING,
-                    response: &payload,
-                },
-            )
-        }
-        .unwrap();
-        let HookStep::Await(awaitable, _) = step else {
-            panic!("notification must suspend")
-        };
-        awaitable.call_method0(py, "close").unwrap();
-        drop(awaitable);
-        drop(payload);
-        drop(owner);
-        py.run(
-            c"
-log.clear()
-del owner, payload
-gc.collect()
-assert owner_ref() is None
-assert payload_ref() is None
 ",
             Some(locals),
             Some(locals),
@@ -701,21 +511,18 @@ fn builder_runs_hooks_in_append_order(
     #[values(false, true)] asynchronous: bool,
 ) {
     Python::attach(|py| {
-        let mut hooks = ["first", "second", "third", "fourth"]
+        let hooks = ["first", "second", "third", "fourth"]
             .into_iter()
             .take(count)
             .fold(HookChain::new(), |chain, name| {
                 chain.with(ScriptHooks {
                     object: scripts.bind(py).get_item(name).unwrap().unwrap().unbind(),
                     asynchronous,
-                    wire: None,
                 })
             });
         let original = PyDict::new(py).unbind();
-        let step = hooks
-            .prepare_arguments(py, original.clone_ref(py), 0.0)
-            .unwrap();
-        let result = finish(py, &mut hooks, step).unwrap();
+        let result =
+            finish(hooks.prepare_arguments(&RunToCompletion, original.clone_ref(py), 0.0)).unwrap();
         if count == 0 {
             assert!(result.bind(py).is(original.bind(py)));
         } else {

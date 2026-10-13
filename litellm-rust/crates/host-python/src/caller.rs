@@ -1,10 +1,11 @@
 use std::ops::ControlFlow;
 
+use futures_util::future::BoxFuture;
 use litellm_coroutine::{Abandoned, Co, Reply};
 use pyo3::prelude::*;
 
-use crate::Error;
 use crate::handle::Suspension;
+use crate::{Awaiter, Error};
 
 pub(crate) type Answer = PyResult<Py<PyAny>>;
 
@@ -54,5 +55,11 @@ impl PythonCaller {
             Ok(answer) => answer,
             Err(Abandoned) => Err(Error::MissingState.into()),
         }
+    }
+}
+
+impl Awaiter for PythonCaller {
+    fn awaited(&self, awaitable: Py<PyAny>) -> BoxFuture<'_, Answer> {
+        Box::pin(self.await_python(awaitable))
     }
 }

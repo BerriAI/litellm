@@ -1,9 +1,17 @@
+use std::collections::VecDeque;
 use std::ffi::CStr;
+use std::future::{Future, ready};
+use std::pin::pin;
+use std::task::{Context, Poll, Waker};
+
+use futures_util::future::BoxFuture;
+use litellm_host_python::Awaiter;
+use parking_lot::Mutex;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
-use crate::{LegacyLogging, PublicCall};
+use crate::{LegacyHooks, LegacyLogging, PublicCall};
 
 /// The parameters of every `callbacks_legacy_python` function, as the real module declares them.
 /// `tests/unit/rust_bridge/host/test_callbacks_legacy_python.py` pins this file to the Python
@@ -192,4 +200,52 @@ pub(crate) fn legacy_call(
     };
     let call = PublicCall::capture(&dict("bound"), &PyTuple::empty(py), &dict("kwargs")).unwrap();
     LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
+}
+
+/// Answers each awaitable a hook hands it from `answers` in order, then with the awaitable
+/// itself, and counts what it was handed.
+#[derive(Default)]
+pub(crate) struct Scripted {
+    answers: Mutex<VecDeque<PyResult<Py<PyAny>>>>,
+    awaited: Mutex<usize>,
+}
+
+impl Scripted {
+    pub(crate) fn answering(answers: impl IntoIterator<Item = PyResult<Py<PyAny>>>) -> Self {
+        Self {
+            answers: Mutex::new(answers.into_iter().collect()),
+            awaited: Mutex::new(0),
+        }
+    }
+
+    pub(crate) fn count(&self) -> usize {
+        *self.awaited.lock()
+    }
+}
+
+impl Awaiter for Scripted {
+    fn awaited(&self, awaitable: Py<PyAny>) -> BoxFuture<'_, PyResult<Py<PyAny>>> {
+        *self.awaited.lock() += 1;
+        let answer = self.answers.lock().pop_front().unwrap_or(Ok(awaitable));
+        Box::pin(ready(answer))
+    }
+}
+
+/// Runs a hook whose every await `Scripted` answers inline.
+pub(crate) fn finish<T>(hook: impl Future<Output = T>) -> T {
+    match pin!(hook).poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(value) => value,
+        Poll::Pending => panic!("a scripted hook never suspends"),
+    }
+}
+
+pub(crate) fn hooks(logging: LegacyLogging) -> LegacyHooks {
+    LegacyHooks::new(logging)
+}
+
+pub(crate) fn failure(locals: &Bound<'_, PyDict>) -> Py<pyo3::exceptions::PyBaseException> {
+    local(locals, "failure")
+        .cast_into::<pyo3::exceptions::PyBaseException>()
+        .unwrap()
+        .unbind()
 }

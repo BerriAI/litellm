@@ -14,7 +14,7 @@ mod deferred;
 mod logger;
 mod mapping;
 mod python;
-pub use adapter::LegacyLogging;
+pub use adapter::{LegacyHooks, LegacyLogging};
 pub use call::PublicCall;
 pub(crate) use callbacks::{LegacyCallbacks, is_internal_call};
 pub(crate) use logger::{DeploymentHooks, PythonLogger, finalize, setup};

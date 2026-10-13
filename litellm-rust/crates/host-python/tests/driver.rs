@@ -535,11 +535,11 @@ enum ArgumentPolicy {
 }
 
 impl CallHooks<PythonRuntime> for ArgumentPolicy {
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
-        match self {
+    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+        Python::attach(|py| match self {
             Self::Inherit => arguments.bind(py).set_item("api_key", "inherited"),
             Self::Reject(error) => Err(PyErr::from_value(error.bind(py).clone().into_any())),
-        }
+        })
     }
 }
 

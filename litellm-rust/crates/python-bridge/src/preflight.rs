@@ -36,14 +36,16 @@ pub(crate) const PYTHON_CONTRACT: &str = include_str!("../preflight_contract.jso
 pub(crate) struct SdkPolicy;
 
 impl CallHooks<PythonRuntime> for SdkPolicy {
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
-        inherit_credentials(py, arguments.bind(py), || {
-            Ok(PythonPreflight::CredentialList
-                .call(py, ())?
-                .cast_into::<PyList>()?)
-        })?;
-        PythonPreflight::CheckLimits.call(py, (arguments,))?;
-        Ok(())
+    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
+        Python::attach(|py| {
+            inherit_credentials(py, arguments.bind(py), || {
+                Ok(PythonPreflight::CredentialList
+                    .call(py, ())?
+                    .cast_into::<PyList>()?)
+            })?;
+            PythonPreflight::CheckLimits.call(py, (arguments,))?;
+            Ok(())
+        })
     }
 }
 
@@ -426,7 +428,7 @@ arguments = {'litellm_credential_name': 'missing'}
 ",
             );
             SdkPolicy
-                .arguments_prepared(py, &argument_dict(&locals).unbind())
+                .arguments_prepared(&argument_dict(&locals).unbind())
                 .unwrap();
             py.run(
                 c"
@@ -464,7 +466,7 @@ arguments = {'litellm_credential_name': 'ocr-test'}
 ",
             );
             let error = SdkPolicy
-                .arguments_prepared(py, &argument_dict(&locals).unbind())
+                .arguments_prepared(&argument_dict(&locals).unbind())
                 .unwrap_err();
             assert!(
                 error

@@ -11,7 +11,7 @@ use litellm_host::{
     protocol::{Protocol, Reply},
 };
 use litellm_host_python::{
-    CallOptions, HookStep, InvokeError, PythonBinding, PythonCallEvent, PythonCallHooks,
+    Awaiter, CallOptions, InvokeError, PythonBinding, PythonCallEvent, PythonCallHooks,
     PythonHostCalls, PythonOwned, PythonRuntime, run_call,
 };
 use pyo3::{
@@ -335,12 +335,12 @@ pub fn hooks(log: &Log, script: HookScript) -> SyntheticHooks {
 }
 
 impl CallHooks<PythonRuntime> for SyntheticHooks {
-    fn prepare_arguments(
-        &mut self,
-        _: Python<'_>,
+    async fn prepare_arguments<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         arguments: Py<PyDict>,
         _: f64,
-    ) -> PyResult<HookStep<Self, Py<PyDict>>> {
+    ) -> PyResult<Py<PyDict>> {
         self.log.push("begin");
         if matches!(self.script, HookScript::FailBegin) {
             return Err(PyValueError::new_err("begin failed"));
@@ -352,57 +352,54 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
                 prepared.set_item("api_key", "hook-key")?;
                 Ok(prepared.unbind())
             })?;
-            return Ok(HookStep::Ready(prepared));
+            return Ok(prepared);
         }
-        Ok(HookStep::Ready(arguments))
+        Ok(arguments)
     }
 
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+    fn arguments_prepared(&self, arguments: &Py<PyDict>) -> PyResult<()> {
         if matches!(self.script, HookScript::ObserveArguments) {
-            let value: String = arguments
-                .bind(py)
-                .get_item("prepared")?
-                .unwrap()
-                .extract()?;
+            let value: String =
+                Python::attach(|py| arguments.bind(py).get_item("prepared")?.unwrap().extract())?;
             self.log.push(format!("adopted:{value}"));
         }
         Ok(())
     }
 
-    fn before_provider_request(
-        &mut self,
-        _: Python<'_>,
+    async fn before_provider_request<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         wire: Box<WireRequest>,
         _: &RequestContext,
-    ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
+    ) -> PyResult<Box<WireRequest>> {
         self.log.push("before_provider_request");
-        Ok(HookStep::Ready(Box::new(WireRequest {
+        Ok(Box::new(WireRequest {
             url: "rewritten".into(),
             ..*wire
-        })))
+        }))
     }
 
-    fn transform_response(
-        &mut self,
-        py: Python<'_>,
+    async fn transform_response<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         response: Py<PyAny>,
         _: Timing,
-    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
+    ) -> PyResult<Py<PyAny>> {
         self.log.push("after_success");
         match self.script {
-            HookScript::ReplaceResponse => Ok(HookStep::Ready(
-                "replaced".into_pyobject(py)?.into_any().unbind(),
-            )),
+            HookScript::ReplaceResponse => {
+                Python::attach(|py| Ok("replaced".into_pyobject(py)?.into_any().unbind()))
+            }
             HookScript::FailAfterSuccess => Err(PyValueError::new_err("after_success failed")),
-            _ => Ok(HookStep::Ready(response)),
+            _ => Ok(response),
         }
     }
 
-    fn on_event(
-        &mut self,
-        py: Python<'_>,
+    async fn on_event<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         event: PythonCallEvent<'_>,
-    ) -> PyResult<HookStep<Self, ()>> {
+    ) -> PyResult<()> {
         let terminal = matches!(
             event,
             PythonCallEvent::Succeeded { .. } | PythonCallEvent::Failed { .. }
@@ -413,7 +410,7 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
         if terminal && matches!(self.script, HookScript::FailTerminal) {
             return Err(PyValueError::new_err("callback failed"));
         }
-        self.log.push(match event {
+        self.log.push(Python::attach(|py| match event {
             PythonCallEvent::Execution(ExecutionEvent::ResultReady { .. }) => "cache_hit".into(),
             PythonCallEvent::Started { .. } => "started".into(),
             PythonCallEvent::Cancelled { .. } => "cancelled".into(),
@@ -424,18 +421,18 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
                 format!("succeeded:{}", response.bind(py))
             }
             PythonCallEvent::Failed { origin, error, .. } => {
-                format!("failed:{origin:?}:{}", error.value(py))
+                format!("failed:{origin:?}:{}", error.bind(py))
             }
-        });
-        Ok(HookStep::Ready(()))
+        }));
+        Ok(())
     }
 
-    fn on_stream_open(&mut self, _: Python<'_>, _: &Py<PyAny>) -> PyResult<()> {
+    fn on_stream_open(&self, _: &Py<PyAny>) -> PyResult<()> {
         self.log.push("opened");
         Ok(())
     }
 
-    fn on_stream_chunk(&mut self, _: Python<'_>, _: &Py<PyAny>) -> PyResult<()> {
+    fn on_stream_chunk(&self, _: &Py<PyAny>) -> PyResult<()> {
         self.log.push("delivered");
         Ok(())
     }
