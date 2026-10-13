@@ -14116,19 +14116,12 @@ async def _try_provider_token_count(
             code=status_code,
         )
     if result is not None and result.error is True:
-        if litellm.disable_token_counter is True:
-            raise ProxyException(
-                message=result.error_message or "Token counting failed",
-                type="token_counting_error",
-                param="model",
-                code=result.status_code or 500,
-            )
-        verbose_proxy_logger.warning(
-            "Provider token counting failed (%s): %s. Falling back to local tokenizer.",
-            result.status_code,
-            result.error_message,
+        raise ProxyException(
+            message=result.error_message or "Token counting failed",
+            type="token_counting_error",
+            param="model",
+            code=result.status_code or 500,
         )
-        return None
     return result
 
 
