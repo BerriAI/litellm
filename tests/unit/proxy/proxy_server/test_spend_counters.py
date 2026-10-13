@@ -1612,3 +1612,11 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     )
 
     assert result is None
+
+
+@pytest.mark.parametrize(("max_batch_size", "keys_per_pipeline"), [(1, 1), (2, 1), (3, 1), (1000, 500)])
+def test_a_reset_pipeline_takes_half_the_redis_batch_size_and_never_less_than_one_key(
+    max_batch_size: int, keys_per_pipeline: int
+) -> None:
+    """Each key rides with its fence, so half the batch size; a step of zero would make every reset raise."""
+    assert ps._keys_per_reset_pipeline(max_batch_size) == keys_per_pipeline

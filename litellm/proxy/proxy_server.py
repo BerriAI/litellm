@@ -3979,7 +3979,11 @@ async def _spend_counter_keys_in_redis(redis_cache: RedisCache, prefix: str) -> 
     return frozenset(key.removeprefix(namespace_prefix) for key in scanned)
 
 
-_KEYS_PER_RESET_PIPELINE: Final = DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE // 2
+def _keys_per_reset_pipeline(max_batch_size: int) -> int:
+    return max(1, max_batch_size // 2)
+
+
+_KEYS_PER_RESET_PIPELINE: Final = _keys_per_reset_pipeline(DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE)
 
 
 async def _write_reset_pipeline(
