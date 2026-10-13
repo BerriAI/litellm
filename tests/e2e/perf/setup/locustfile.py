@@ -176,7 +176,6 @@ class PlanUser(FastHttpUser):
     wait_time = constant_throughput(_RPS / _USERS)
     network_timeout = 120.0
     connection_timeout = 30.0
-    max_retries = 0
 
     @task
     def send(self) -> None:
