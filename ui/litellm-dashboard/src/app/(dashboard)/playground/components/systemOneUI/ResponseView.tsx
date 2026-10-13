@@ -1,9 +1,9 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown, LoaderCircle } from "lucide-react";
+import { ChevronRight, Inbox, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import type { SystemOneAnswer, SystemOneResponse } from "./lib/schemas";
 import type { OpenAIDecisionsResponse } from "./lib/openAIDecisions";
@@ -175,17 +175,19 @@ function AnswerCards({ answers }: { answers: SystemOneResponse["answers"] | Open
         type: answer.type,
         details: <AnswerDetails answer={answer} />,
       }));
-  return cards.map(({ id, name, type, details }) => (
-    <Card key={id} size="sm">
-      <CardHeader>
-        <CardTitle className="font-mono">{name}</CardTitle>
-        <CardAction>
-          <Badge variant="secondary">{type}</Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent>{details}</CardContent>
-    </Card>
-  ));
+  return (
+    <ul className="grid gap-3">
+      {cards.map(({ id, name, type, details }) => (
+        <li key={id} className="grid gap-3 rounded-lg bg-muted/50 p-4">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="font-mono text-[13px] font-medium">{name}</h3>
+            <span className="text-xs text-muted-foreground">{type}</span>
+          </div>
+          {details}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 export default function ResponseView({
@@ -220,11 +222,16 @@ export default function ResponseView({
 
   if (!response) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Calibrated probabilities</CardTitle>
-          <CardDescription>Send a request to see decision answers and probabilities.</CardDescription>
+      <Card className="gap-0 py-0">
+        <CardHeader className="flex min-h-12 flex-row items-center border-b px-4 py-2">
+          <CardTitle className="text-sm font-medium">Response</CardTitle>
         </CardHeader>
+        <CardContent className="flex min-h-[360px] flex-col items-center justify-center gap-3 p-4 text-center">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-muted">
+            <Inbox className="size-5 text-muted-foreground" />
+          </div>
+          <p className="text-sm text-muted-foreground">Send a request to see answers here</p>
+        </CardContent>
       </Card>
     );
   }
@@ -232,36 +239,43 @@ export default function ResponseView({
   const model = response.model ?? fallbackModel;
 
   return (
-    <Card className="wrap-anywhere">
-      <CardHeader>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="grid gap-1">
-            <CardTitle>{view === "curl" ? "Response JSON" : "Calibrated probabilities"}</CardTitle>
-            {model && <CardDescription>{model}</CardDescription>}
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            {latencyMs !== undefined && <Badge variant="outline">{Math.round(latencyMs)} ms</Badge>}
-            {response.usage && (
-              <Badge variant="outline">
-                {response.usage.input_tokens} input / {response.usage.output_tokens} output tokens
-              </Badge>
-            )}
-          </div>
+    <Card className="gap-0 overflow-hidden py-0 wrap-anywhere">
+      <CardHeader className="min-h-12 flex-row flex-wrap items-center justify-between gap-2 border-b px-4 py-2">
+        <CardTitle className="text-sm font-medium">{view === "curl" ? "Response JSON" : "Response"}</CardTitle>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {latencyMs !== undefined && (
+            <Badge variant="outline" className="font-mono text-[11px] font-normal tabular-nums">
+              {Math.round(latencyMs)} ms
+            </Badge>
+          )}
+          {model && (
+            <Badge
+              variant="outline"
+              className="h-auto max-w-full min-w-0 shrink font-mono text-[11px] font-normal wrap-anywhere whitespace-normal"
+            >
+              {model}
+            </Badge>
+          )}
+          {response.usage && (
+            <Badge variant="outline" className="font-mono text-[11px] font-normal tabular-nums">
+              {response.usage.input_tokens} in / {response.usage.output_tokens} out
+            </Badge>
+          )}
         </div>
       </CardHeader>
-      <CardContent className="grid gap-3">
+      <CardContent className="grid gap-3 p-4">
         {view === "curl" ? <RawResponse response={response} /> : <AnswerCards answers={response.answers} />}
         {view === "form" && (
-          <Collapsible open={showRaw} onOpenChange={setShowRaw}>
+          <Collapsible open={showRaw} onOpenChange={setShowRaw} className="-mx-4 -mb-4 border-t">
             <CollapsibleTrigger
               render={
-                <Button variant="ghost" size="sm">
-                  <ChevronDown className="size-4" />
+                <Button variant="ghost" className="w-full justify-start rounded-none px-4 text-muted-foreground">
+                  <ChevronRight className={`size-4 transition-transform ${showRaw ? "rotate-90" : ""}`} />
                   Raw response
                 </Button>
               }
             />
-            <CollapsibleContent>
+            <CollapsibleContent className="px-4 pb-4">
               <RawResponse response={response} />
             </CollapsibleContent>
           </Collapsible>

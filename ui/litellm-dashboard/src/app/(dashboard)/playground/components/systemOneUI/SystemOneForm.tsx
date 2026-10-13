@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useId, useMemo, useState } from "react";
-import { AddButton, FormFrame, RemoveButton } from "./DecisionFormControls";
+import { AddButton, FormFrame, QuestionCardHeader, RemoveButton } from "./DecisionFormControls";
 import {
   blankQuestion,
   freeName,
@@ -70,7 +70,7 @@ function KeyInput({ value, taken, onCommit, label, placeholder }: KeyInputProps)
   const errorId = useId();
   const [draft, setDraft] = useState(value);
   const next = draft.trim();
-  const error = keyError(next, value, taken);
+  const error = next === value ? undefined : keyError(next, value, taken);
 
   function commit() {
     if (error === undefined && next !== value) {
@@ -203,34 +203,49 @@ function CriteriaEditor({ question, onChange }: QuestionEditorProps<FormQuestion
 
 interface QuestionCardProps extends QuestionEditorProps<FormQuestion> {
   name: string;
+  index: number;
   taken: readonly string[];
   onRename: (name: string) => void;
   onRemove: () => void;
 }
 
-function QuestionCard({ name, question, taken, onChange, onRename, onRemove }: QuestionCardProps) {
+function QuestionCard({ name, index, question, taken, onChange, onRename, onRemove }: QuestionCardProps) {
   const instructionsId = useId();
+  const title = name === "" ? String(index + 1) : name;
 
   return (
-    <fieldset aria-label={`Question ${name}`} className="grid gap-3 rounded-md border p-3">
-      <div className="flex flex-wrap items-start gap-2">
-        <KeyInput key={name} label="Question name" value={name} taken={taken} onCommit={onRename} />
-        <Select
-          value={question.type}
-          onValueChange={(type) => isQuestionType(type) && onChange(retype(question, type))}
-        >
-          <SelectTrigger className="w-36" aria-label="Answer type">
-            <SelectValue>{TYPE_LABELS[question.type]}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {QUESTION_TYPES.map((type) => (
-              <SelectItem key={type} value={type} title={TYPE_HELP[type]}>
-                {TYPE_LABELS[type]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <RemoveButton label={`Remove question ${name}`} onClick={onRemove} />
+    <fieldset aria-label={`Question ${title}`} className="grid gap-3 rounded-lg border bg-muted/30 p-3">
+      <QuestionCardHeader index={index} onRemove={onRemove} removeLabel={`Remove question ${title}`} />
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
+        <div className="grid gap-1.5">
+          <span className="text-sm font-medium">Name</span>
+          <KeyInput
+            key={name}
+            label="Question name"
+            value={name}
+            taken={taken}
+            onCommit={onRename}
+            placeholder="e.g. area"
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <span className="text-sm font-medium">Answer type</span>
+          <Select
+            value={question.type}
+            onValueChange={(type) => isQuestionType(type) && onChange(retype(question, type))}
+          >
+            <SelectTrigger className="w-full" aria-label="Answer type">
+              <SelectValue>{TYPE_LABELS[question.type]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {QUESTION_TYPES.map((type) => (
+                <SelectItem key={type} value={type} title={TYPE_HELP[type]}>
+                  {TYPE_LABELS[type]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor={instructionsId}>Instructions</Label>
@@ -286,6 +301,7 @@ export default function SystemOneForm({ value, onChange, validation, onReset }: 
         <QuestionCard
           key={index}
           name={name}
+          index={index}
           question={question}
           taken={names}
           onChange={(next) => writeQuestions({ ...questions, [name]: next })}
