@@ -17,7 +17,7 @@ class V1MConfig(OpenAIGPTConfig):
         temperature: float | None = None,
         max_tokens: int | None = None,
         stream: bool | None = None,
-       ) -> None:
+    ) -> None:
         if temperature is not None:
             self.temperature = temperature
         if max_tokens is not None:
