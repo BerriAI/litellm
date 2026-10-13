@@ -11,11 +11,8 @@ const requestWith = (fields: Record<string, unknown> = {}) =>
 
 describe("validateSystemOnePayload", () => {
   it("rejects empty input", () => {
-    expect(validateSystemOnePayload(" ").issues).toContainEqual({
-      path: "root",
-      message: "Payload cannot be empty.",
-      severity: "error",
-    });
+    const emptyIssue = { path: "root", label: "Request", message: "Payload cannot be empty.", severity: "error" };
+    expect(validateSystemOnePayload(" ").issues).toContainEqual(emptyIssue);
   });
 
   it("reports JSON syntax errors", () => {
@@ -346,11 +343,19 @@ describe("blank context", () => {
     expect(validateSystemOnePayload(raw, "/v1/systemone").issues.map((issue) => issue.path)).toEqual(["state"]);
     const filled = validateSystemOnePayload(raw.replace('"state":""', '"state":"A ticket"'), "/v1/systemone");
     expect(filled.isValid).toBe(false);
-    expect(filled.issues).toContainEqual({
-      path: "questions",
-      message: "Give every question a name.",
-      severity: "error",
+    expect(filled.issues).toEqual([
+      { path: "questions", label: "Questions", message: "Give every question a name.", severity: "error" },
+    ]);
+  });
+
+  it("labels a /v1/systemone question by its key even when the key is all digits", () => {
+    const raw = JSON.stringify({
+      state: "A ticket",
+      questions: { "2": { type: "choice", instructions: "", criteria: {} } },
     });
+    const labels = validateSystemOnePayload(raw, "/v1/systemone").issues.map((issue) => issue.label);
+    expect(labels).toContain('Question "2" options');
+    expect(labels.some((label) => label.startsWith("Question 3"))).toBe(false);
   });
 
   it("accepts /v1/systemone once the state carries text", () => {
