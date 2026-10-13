@@ -5,6 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_usage,
     CostTrackingTestCase,
     ExactExpected,
     FailureDetails,
@@ -6705,7 +6706,83 @@ CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_OPUS_5_5_MESSAGES_INPUT_T
     }
 )
 
+CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = with_usage(
+    CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "claude-haiku-5-5-tiered_input_above_100k",
+    {
+        "input_tokens": 150000,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(spend=0.33528, input_cost=0.33, output_cost=0.00528, prompt_tokens=150000, completion_tokens=480),
+)
+
+CLAUDE_HAIKU_5_5_TIERED_AT_100K_BOUNDARY: Final = with_usage(
+    CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "claude-haiku-5-5-tiered_at_100k_boundary",
+    {
+        "input_tokens": 100000,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(spend=0.11264, input_cost=0.11, output_cost=0.00264, prompt_tokens=100000, completion_tokens=480),
+)
+
+CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K: Final = with_usage(
+    CLAUDE_HAIKU_5_5_CACHE_READ,
+    "claude-haiku-5-5-tiered_cache_read_above_100k",
+    {
+        "input_tokens": 4096,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 110592,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.03862144, input_cost=0.03334144, output_cost=0.00528, prompt_tokens=114688, completion_tokens=480
+    ),
+)
+
+CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_5M_ABOVE_100K: Final = with_usage(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
+    "claude-haiku-5-5-tiered_cache_write_5m_above_100k",
+    {
+        "input_tokens": 4096,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 110592,
+        "cache_creation": {"ephemeral_5m_input_tokens": 110592, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.3184192, input_cost=0.3131392, output_cost=0.00528, prompt_tokens=114688, completion_tokens=480
+    ),
+)
+
+CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_1H_ABOVE_100K: Final = with_usage(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
+    "claude-haiku-5-5-tiered_cache_write_1h_above_100k",
+    {
+        "input_tokens": 4096,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 110592,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 110592},
+    },
+    ExactExpected(
+        spend=0.500896, input_cost=0.495616, output_cost=0.00528, prompt_tokens=114688, completion_tokens=480
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K,
+    CLAUDE_HAIKU_5_5_TIERED_AT_100K_BOUNDARY,
+    CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K,
+    CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_5M_ABOVE_100K,
+    CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_1H_ABOVE_100K,
     CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,

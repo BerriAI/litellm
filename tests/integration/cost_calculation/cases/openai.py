@@ -5,6 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_usage,
     COST_MAP,
     BinaryResponse,
     CostTrackingTestCase,
@@ -10620,6 +10621,226 @@ GPT_6_1_SOL_CHAT_BRIDGED_JSON: Final = GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON.mod
     }
 )
 
+GPT_6_SOL_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_SOL_INPUT_TEXT,
+    "gpt-6-sol-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=1.329064, input_cost=1.32, output_cost=0.009064, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_SOL_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_SOL_INPUT_TEXT,
+    "gpt-6-sol-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=0.537064, input_cost=0.528, output_cost=0.009064, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_SOL_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_SOL_INPUT_TEXT,
+    "gpt-6-sol-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.602932, input_cost=0.5984, output_cost=0.004532, prompt_tokens=272000, completion_tokens=412),
+)
+
+GPT_6_SOL_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    GPT_6_SOL_SERVICE_TIER_FLEX,
+    "gpt-6-sol-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.664532, input_cost=0.66, output_cost=0.004532, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_SOL_SERVICE_TIER_PRIORITY,
+    "gpt-6-sol-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=2.658128, input_cost=2.64, output_cost=0.018128, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6-luna-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.060412, input_cost=0.06, output_cost=0.000412, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6-luna-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=0.024412, input_cost=0.024, output_cost=0.000412, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6-luna-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.027406, input_cost=0.0272, output_cost=0.000206, prompt_tokens=272000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    GPT_6_LUNA_SERVICE_TIER_FLEX,
+    "gpt-6-luna-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.030206, input_cost=0.03, output_cost=0.000206, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_LUNA_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    "gpt-6-luna-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.120824, input_cost=0.12, output_cost=0.000824, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_ASTRA_INPUT_TEXT,
+    "gpt-6-astra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=7.24944, input_cost=7.2, output_cost=0.04944, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_ASTRA_INPUT_TEXT,
+    "gpt-6-astra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=2.92944, input_cost=2.88, output_cost=0.04944, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_ASTRA_INPUT_TEXT,
+    "gpt-6-astra-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=3.28872, input_cost=3.264, output_cost=0.02472, prompt_tokens=272000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    GPT_6_ASTRA_SERVICE_TIER_FLEX,
+    "gpt-6-astra-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=3.62472, input_cost=3.6, output_cost=0.02472, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_ASTRA_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_ASTRA_SERVICE_TIER_PRIORITY,
+    "gpt-6-astra-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=14.49888, input_cost=14.4, output_cost=0.09888, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_1_SOL_INPUT_TEXT,
+    "gpt-6.1-sol-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=1.20824, input_cost=1.2, output_cost=0.00824, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_1_SOL_INPUT_TEXT,
+    "gpt-6.1-sol-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=0.44824, input_cost=0.44, output_cost=0.00824, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_1_SOL_INPUT_TEXT,
+    "gpt-6.1-sol-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.54812, input_cost=0.544, output_cost=0.00412, prompt_tokens=272000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    GPT_6_1_SOL_SERVICE_TIER_FLEX,
+    "gpt-6.1-sol-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.60412, input_cost=0.6, output_cost=0.00412, prompt_tokens=300000, completion_tokens=412),
+)
+
+GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_1_SOL_SERVICE_TIER_PRIORITY,
+    "gpt-6.1-sol-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=2.41648, input_cost=2.4, output_cost=0.01648, prompt_tokens=300000, completion_tokens=412),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
     GPT_6_SOL_CHAT_BRIDGED_JSON,
@@ -10629,6 +10850,26 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_ASTRA_CHAT_BRIDGED_JSON,
     GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON,
     GPT_6_1_SOL_CHAT_BRIDGED_JSON,
+    GPT_6_SOL_TIERED_INPUT_ABOVE_272K,
+    GPT_6_SOL_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_SOL_TIERED_AT_272K_BOUNDARY,
+    GPT_6_SOL_TIERED_FLEX_ABOVE_272K,
+    GPT_6_SOL_TIERED_PRIORITY_ABOVE_272K,
+    GPT_6_LUNA_TIERED_INPUT_ABOVE_272K,
+    GPT_6_LUNA_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_LUNA_TIERED_AT_272K_BOUNDARY,
+    GPT_6_LUNA_TIERED_FLEX_ABOVE_272K,
+    GPT_6_LUNA_TIERED_PRIORITY_ABOVE_272K,
+    GPT_6_ASTRA_TIERED_INPUT_ABOVE_272K,
+    GPT_6_ASTRA_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_ASTRA_TIERED_AT_272K_BOUNDARY,
+    GPT_6_ASTRA_TIERED_FLEX_ABOVE_272K,
+    GPT_6_ASTRA_TIERED_PRIORITY_ABOVE_272K,
+    GPT_6_1_SOL_TIERED_INPUT_ABOVE_272K,
+    GPT_6_1_SOL_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_1_SOL_TIERED_AT_272K_BOUNDARY,
+    GPT_6_1_SOL_TIERED_FLEX_ABOVE_272K,
+    GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K,
     GPT_5_3_CODEX_INPUT_TEXT,
     GPT_5_3_CODEX_CACHE_READ,
     GPT_5_3_CODEX_REASONING,

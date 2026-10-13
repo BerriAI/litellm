@@ -5,6 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_usage,
     BinaryResponse,
     CostTrackingTestCase,
     Deployment,
@@ -5621,11 +5622,261 @@ AZURE_GPT_6_1_SOL_MESSAGES_BRIDGED_JSON: Final = AZURE_GPT_6_1_SOL_INPUT_TEXT.mo
     }
 )
 
+AZURE_GPT_6_SOL_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_SOL_INPUT_TEXT,
+    "azure-gpt-6-sol-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=1.389476, input_cost=1.38, output_cost=0.009476, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_SOL_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_SOL_INPUT_TEXT,
+    "azure-gpt-6-sol-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=0.561476, input_cost=0.552, output_cost=0.009476, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_SOL_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    AZURE_GPT_6_SOL_INPUT_TEXT,
+    "azure-gpt-6-sol-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.630338, input_cost=0.6256, output_cost=0.004738, prompt_tokens=272000, completion_tokens=412),
+)
+
+AZURE_GPT_6_SOL_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_SOL_SERVICE_TIER_FLEX,
+    "azure-gpt-6-sol-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.694738, input_cost=0.69, output_cost=0.004738, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_SOL_SERVICE_TIER_PRIORITY,
+    "azure-gpt-6-sol-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=2.778952, input_cost=2.76, output_cost=0.018952, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_LUNA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_LUNA_INPUT_TEXT,
+    "azure-gpt-6-luna-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0785356, input_cost=0.078, output_cost=0.0005356, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
+AZURE_GPT_6_LUNA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_LUNA_INPUT_TEXT,
+    "azure-gpt-6-luna-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(
+        spend=0.0317356, input_cost=0.0312, output_cost=0.0005356, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
+AZURE_GPT_6_LUNA_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    AZURE_GPT_6_LUNA_INPUT_TEXT,
+    "azure-gpt-6-luna-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0356278, input_cost=0.03536, output_cost=0.0002678, prompt_tokens=272000, completion_tokens=412
+    ),
+)
+
+AZURE_GPT_6_LUNA_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_LUNA_SERVICE_TIER_FLEX,
+    "azure-gpt-6-luna-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0392678, input_cost=0.039, output_cost=0.0002678, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
+AZURE_GPT_6_LUNA_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    "azure-gpt-6-luna-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.0785356, input_cost=0.078, output_cost=0.0005356, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
+AZURE_GPT_6_ASTRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_ASTRA_INPUT_TEXT,
+    "azure-gpt-6-astra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=7.5515, input_cost=7.5, output_cost=0.0515, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_ASTRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_ASTRA_INPUT_TEXT,
+    "azure-gpt-6-astra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=3.0515, input_cost=3.0, output_cost=0.0515, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_ASTRA_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    AZURE_GPT_6_ASTRA_INPUT_TEXT,
+    "azure-gpt-6-astra-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=3.42575, input_cost=3.4, output_cost=0.02575, prompt_tokens=272000, completion_tokens=412),
+)
+
+AZURE_GPT_6_ASTRA_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_ASTRA_SERVICE_TIER_FLEX,
+    "azure-gpt-6-astra-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=3.77575, input_cost=3.75, output_cost=0.02575, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_ASTRA_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_ASTRA_SERVICE_TIER_PRIORITY,
+    "azure-gpt-6-astra-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=7.5515, input_cost=7.5, output_cost=0.0515, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_1_SOL_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_1_SOL_INPUT_TEXT,
+    "azure-gpt-6.1-sol-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=1.449888, input_cost=1.44, output_cost=0.009888, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_1_SOL_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_1_SOL_INPUT_TEXT,
+    "azure-gpt-6.1-sol-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(spend=0.585888, input_cost=0.576, output_cost=0.009888, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_1_SOL_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    AZURE_GPT_6_1_SOL_INPUT_TEXT,
+    "azure-gpt-6.1-sol-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.657744, input_cost=0.6528, output_cost=0.004944, prompt_tokens=272000, completion_tokens=412),
+)
+
+AZURE_GPT_6_1_SOL_TIERED_FLEX_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_1_SOL_SERVICE_TIER_FLEX,
+    "azure-gpt-6.1-sol-tiered_flex_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=0.724944, input_cost=0.72, output_cost=0.004944, prompt_tokens=300000, completion_tokens=412),
+)
+
+AZURE_GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_6_1_SOL_SERVICE_TIER_PRIORITY,
+    "azure-gpt-6.1-sol-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(spend=1.449888, input_cost=1.44, output_cost=0.009888, prompt_tokens=300000, completion_tokens=412),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_6_1_SOL_MESSAGES_BRIDGED_JSON,
+    AZURE_GPT_6_SOL_TIERED_INPUT_ABOVE_272K,
+    AZURE_GPT_6_SOL_TIERED_CACHE_READ_ABOVE_272K,
+    AZURE_GPT_6_SOL_TIERED_AT_272K_BOUNDARY,
+    AZURE_GPT_6_SOL_TIERED_FLEX_ABOVE_272K,
+    AZURE_GPT_6_SOL_TIERED_PRIORITY_ABOVE_272K,
+    AZURE_GPT_6_LUNA_TIERED_INPUT_ABOVE_272K,
+    AZURE_GPT_6_LUNA_TIERED_CACHE_READ_ABOVE_272K,
+    AZURE_GPT_6_LUNA_TIERED_AT_272K_BOUNDARY,
+    AZURE_GPT_6_LUNA_TIERED_FLEX_ABOVE_272K,
+    AZURE_GPT_6_LUNA_TIERED_PRIORITY_ABOVE_272K,
+    AZURE_GPT_6_ASTRA_TIERED_INPUT_ABOVE_272K,
+    AZURE_GPT_6_ASTRA_TIERED_CACHE_READ_ABOVE_272K,
+    AZURE_GPT_6_ASTRA_TIERED_AT_272K_BOUNDARY,
+    AZURE_GPT_6_ASTRA_TIERED_FLEX_ABOVE_272K,
+    AZURE_GPT_6_ASTRA_TIERED_PRIORITY_ABOVE_272K,
+    AZURE_GPT_6_1_SOL_TIERED_INPUT_ABOVE_272K,
+    AZURE_GPT_6_1_SOL_TIERED_CACHE_READ_ABOVE_272K,
+    AZURE_GPT_6_1_SOL_TIERED_AT_272K_BOUNDARY,
+    AZURE_GPT_6_1_SOL_TIERED_FLEX_ABOVE_272K,
+    AZURE_GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K,
     AZURE_GPT_5_4_MINI_INPUT_TEXT,
     AZURE_GPT_5_4_MINI_CACHE_READ,
     AZURE_GPT_5_4_MINI_AUDIO_INPUT,
