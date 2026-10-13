@@ -48446,6 +48446,8 @@ export interface components {
             end_user_tpm_limit?: number | null;
             /** Expires */
             expires?: string | null;
+            /** Impersonated By */
+            impersonated_by?: string | null;
             /**
              * Is Session Token
              * @default false

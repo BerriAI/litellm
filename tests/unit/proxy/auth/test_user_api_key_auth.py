@@ -1283,6 +1283,7 @@ async def test_user_api_key_from_query_param():
             "type": "http",
             "path": "/v1beta/models/gemini:streamGenerateContent",
             "query_string": f"alt=sse&key={user_key}".encode(),
+            "headers": [],
         }
     )
     request._url = URL(url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}")

@@ -171,6 +171,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
+    impersonated_by: str | None = None
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
