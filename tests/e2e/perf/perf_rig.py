@@ -4,13 +4,15 @@
 the proxy runs auth, routing, logging and spend for every request while the provider call costs nothing,
 plus a pool of keys scoped to it, all torn down by `ResourceManager`. `PerfRig.measure` drives Locust
 through a warm-up phase that is discarded and a measured phase that is kept, reading every worker's RSS
-over the network from /debug/memory/summary before and after so the proxy can run anywhere. `PerfRig.problems`
+over the network from /debug/memory/summary before and after so the proxy can run anywhere (new pods that replaced
+the old ones mid-load, an upgrade under traffic, are measured against the old pods' median). `PerfRig.problems`
 reports what the run broke in one `PerfBudget` and prints the numbers so the build log carries them
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import median
 from typing import Final
 
 from e2e_config import PROXY_BASE_URL, unique_marker
@@ -105,13 +107,20 @@ def _sample_workers(proxy: ProxyClient) -> dict[WorkerKey, RssReading]:
 
 
 def _worst_worker_growth_mb(before: dict[WorkerKey, RssReading], after: dict[WorkerKey, RssReading]) -> float:
-    growths: Final = tuple(
+    """Growth per worker when the same workers answered before and after. When none did, the pods were
+    replaced during the load (an upgrade rolling under traffic), so every new worker is measured against
+    the median old worker instead: the new version under load may not sit more than the ceiling above the
+    old one at warm-up."""
+    assert before and after, (
+        f"no worker answered /debug/memory/summary; before: {sorted(before)}, after: {sorted(after)}"
+    )
+    paired: Final = tuple(
         after[worker].ram_usage_mb - before[worker].ram_usage_mb for worker in after if worker in before
     )
-    assert growths, (
-        f"no worker answered /debug/memory/summary both before and after the load; before: {sorted(before)}, after: {sorted(after)}"
-    )
-    return max(growths)
+    if paired:
+        return max(paired)
+    baseline: Final = median(reading.ram_usage_mb for reading in before.values())
+    return max(reading.ram_usage_mb for reading in after.values()) - baseline
 
 
 @dataclass(frozen=True, slots=True)
