@@ -3,6 +3,7 @@ import json
 import sys
 import types
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -641,6 +642,39 @@ class TestBedrockRealtimeSessionLifecycle:
         await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
 
         assert client_ws.sent_to_client == []
+
+    @pytest.mark.asyncio
+    async def test_conflicting_session_update_gets_error_and_sends_nothing_to_bedrock(self, stub_aws_models):
+        tool: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
+        other_tool: Final = {"type": "function", "name": "get_time", "parameters": {"type": "object"}}
+
+        def update(tools) -> str:
+            return json.dumps(
+                {
+                    "type": "session.update",
+                    "event_id": "evt_update_1",
+                    "session": {"tools": tools, "modalities": ["text"]},
+                }
+            )
+
+        handler = BedrockRealtime()
+        config = BedrockRealtimeConfig()
+        stream = FakeBedrockStream()
+        client_ws = DisconnectingClientWS([update([tool]), update([other_tool]), update([tool])])
+
+        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging())
+
+        acked: Final = [json.loads(message) for message in client_ws.sent_to_client]
+        assert [event["type"] for event in acked] == ["session.updated", "error", "session.updated"]
+        error: Final = acked[1]["error"]
+        assert error["code"] == "session_update_not_applied"
+        assert error["event_id"] == "evt_update_1"
+        prompt_starts: Final = [
+            payload
+            for payload in (json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent)
+            if "promptStart" in payload.get("event", {})
+        ]
+        assert len(prompt_starts) == 1
 
 
 class TestBedrockRealtimeProviderFailurePropagation:

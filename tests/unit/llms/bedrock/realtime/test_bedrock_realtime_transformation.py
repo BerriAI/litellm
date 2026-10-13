@@ -1510,6 +1510,55 @@ class TestBedrockRealtimeUserEventsAndUsage:
             e["response"]["id"] for e in events if e["type"] == "response.created"
         ]
 
+    def test_response_done_message_item_carries_the_text_part(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "It is 72.", "END_TURN"),
+        )
+        (done,) = [e for e in events if e["type"] == "response.done"]
+        (message_item,) = [o for o in done["response"]["output"] if o["type"] == "message"]
+        assert message_item["content"] == [{"type": "text", "text": "It is 72."}]
+
+    def test_response_done_message_item_merges_text_then_audio_parts_in_order(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "Hi.", "PARTIAL_TURN") + self._assistant_audio_block("END_TURN"),
+        )
+        (done,) = [e for e in events if e["type"] == "response.done"]
+        assert [o["type"] for o in done["response"]["output"]] == ["message"]
+        assert done["response"]["output"][0]["content"] == [
+            {"type": "text", "text": "Hi."},
+            {"type": "audio", "transcript": ""},
+        ]
+
+    def test_session_update_conflict(self):
+        config: Final = BedrockRealtimeConfig()
+        tool: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
+        other_tool: Final = {"type": "function", "name": "get_time", "parameters": {"type": "object"}}
+
+        def update(**session) -> dict[str, object]:
+            return {"type": "session.update", "session": session}
+
+        # Before the prompt starts, nothing conflicts
+        assert config.session_update_conflict(update(tools=[tool])) is None
+
+        # First update starts the prompt with the tool applied
+        config.transform_session_update_event(update(tools=[tool]))
+        assert config.prompt_started
+
+        # Omitted fields and identical repeats do not conflict, even with reordered tool keys
+        assert config.session_update_conflict(update(modalities=["text"])) is None
+        assert (
+            config.session_update_conflict(
+                update(tools=[{"parameters": {"type": "object"}, "name": "get_weather", "type": "function"}])
+            )
+            is None
+        )
+
+        # Changed tools or instructions conflict
+        assert config.session_update_conflict(update(tools=[other_tool])) is not None
+        assert config.session_update_conflict(update(instructions="Be brief.")) is not None
+
     def test_stray_non_assistant_content_end_emits_no_duplicate_done_events(self):
         events: Final = self._run(
             BedrockRealtimeConfig(),

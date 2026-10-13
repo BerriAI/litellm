@@ -7,10 +7,11 @@ Transforms between OpenAI Realtime API format and Bedrock Nova Sonic format.
 import base64
 import json
 import uuid as uuid_lib
+from collections.abc import Mapping
 from typing import Final, cast
 
 import httpx
-from pydantic import ConfigDict
+from pydantic import ConfigDict, JsonValue
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -36,6 +37,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamResponseOutputItem,
     OpenAIRealtimeStreamResponseOutputItemAdded,
+    OpenAIRealtimeStreamResponseOutputItemContent,
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
     OpenAIRealtimeUsageTokenDetails,
@@ -141,6 +143,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self._message_output_index = 0
         self._assistant_block_open = False
         self._response_done_pending = False
+        self._started_tools: str = json.dumps([], sort_keys=True)
+        self._started_instructions: str | None = None
 
     def get_error_class(
         self,
@@ -331,6 +335,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         prompt_start: Final = {"event": {"promptStart": prompt_start_config}}
         messages.append(json.dumps(prompt_start))
         self.prompt_started = True
+        self._started_tools = json.dumps(tools or [], sort_keys=True)
+        self._started_instructions = session_config.get("instructions")
 
         # Bedrock requires the first content block in a prompt to be SYSTEM role
         instructions: Final = str(session_config.get("instructions") or DEFAULT_SYSTEM_PROMPT)
@@ -375,6 +381,20 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         messages.append(json.dumps(text_content_end))
 
         return messages
+
+    def session_update_conflict(self, json_message: Mapping[str, JsonValue]) -> str | None:
+        """Error message when a session.update changes what Bedrock locked at prompt start."""
+        if not self.prompt_started:
+            return None
+        session_config: Final = json_message.get("session")
+        if not isinstance(session_config, Mapping):
+            return None
+        if (
+            "tools" in session_config
+            and json.dumps(session_config.get("tools") or [], sort_keys=True) != self._started_tools
+        ) or ("instructions" in session_config and session_config.get("instructions") != self._started_instructions):
+            return "Bedrock Nova Sonic cannot change tools or instructions after the session has started, so this session.update was not applied"
+        return None
 
     def transform_input_audio_buffer_append_event(self, json_message: dict) -> list[str]:
         """
@@ -1071,14 +1091,10 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         self._assistant_block_open = False
         returned_messages: Final[list[OpenAIRealtimeEvents]] = []
+        accumulated_text: Final = "".join(chunk.get("delta", "") for chunk in current_delta_chunks or [])
 
         # Send appropriate done event based on type
         if current_delta_type == "text":
-            # Accumulate text
-            accumulated_text = ""
-            if current_delta_chunks:
-                accumulated_text = "".join([chunk.get("delta", "") for chunk in current_delta_chunks])
-
             text_done: Final = OpenAIRealtimeResponseTextDone(
                 type="response.text.done",
                 content_index=0,
@@ -1125,13 +1141,26 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
             returned_messages.append(content_part_done)
 
+        completed_part: Final[OpenAIRealtimeStreamResponseOutputItemContent | None] = (
+            {"type": "text", "text": accumulated_text}
+            if current_delta_type == "text"
+            else ({"type": "audio", "transcript": ""} if current_delta_type == "audio" else None)
+        )
+        existing_content: Final = next(
+            (
+                item["content"]
+                for _, item in self._response_done_items
+                if item.get("id") == current_output_item_id and "content" in item
+            ),
+            (),
+        )
         completed_message_item: Final[OpenAIRealtimeStreamResponseOutputItem] = {
             "id": current_output_item_id,
             "object": "realtime.item",
             "type": "message",
             "status": "completed",
             "role": "assistant",
-            "content": [],
+            "content": [*existing_content, *((completed_part,) if completed_part is not None else ())],
         }
         output_item_done: Final = OpenAIRealtimeOutputItemDone(
             type="response.output_item.done",

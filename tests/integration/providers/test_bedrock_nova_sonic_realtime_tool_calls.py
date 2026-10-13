@@ -287,6 +287,8 @@ def test_tool_result_round_trip(candidate: Gateway, cert: tuple[Path, Path]) -> 
         assert "72" in text
         last_output: Final = object_value(dones[-1]["response"])["output"]
         assert tuple(object_value(item).get("type") for item in last_output) == ("message",)
+        (answer_item,) = last_output
+        assert object_value(answer_item)["content"] == [{"type": "text", "text": "It is 72 and sunny"}]
         results: Final = eventually(lambda: peer.tool_results(), lambda values: len(values) == 1, seconds=10)
         assert results == (("tooluse_A", TOOL_RESULT_OUTPUT),)
         rows: Final = eventually(

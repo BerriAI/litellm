@@ -17,6 +17,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import redact_string, verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import (
     BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS,
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
@@ -227,6 +228,32 @@ async def _ack_session_update(
         await client_ws.send_text(
             json.dumps(transformation_config.session_updated_event(model, logging_obj, requested_modalities))
         )
+    except Exception as e:  # noqa: BLE001  # any send failure means the client is gone
+        verbose_proxy_logger.debug("Client to Bedrock forwarding ended: %s", e, exc_info=True)
+        return False
+    return True
+
+
+async def _reject_session_update(
+    client_ws: RealtimeClientWebSocket,
+    parsed_client_message: Mapping[str, JsonValue],
+    error_message: str,
+) -> bool:
+    """Send an error event for a session.update Bedrock cannot apply; False means the client is gone."""
+    client_event_id: Final = parsed_client_message.get("event_id")
+    error_event: Final = {
+        "type": "error",
+        "event_id": f"event_{uuid.uuid4()}",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "session_update_not_applied",
+            "message": error_message,
+            "param": "session",
+            "event_id": client_event_id if isinstance(client_event_id, str) else None,
+        },
+    }
+    try:
+        await client_ws.send_text(json.dumps(error_event))
     except Exception as e:  # noqa: BLE001  # any send failure means the client is gone
         verbose_proxy_logger.debug("Client to Bedrock forwarding ended: %s", e, exc_info=True)
         return False
@@ -495,6 +522,11 @@ class BedrockRealtime(BaseAWSLLM):
                 parsed_client_message = _parse_client_message(message)
                 is_session_update = _json_str(parsed_client_message.get("type")) == "session.update"
                 if is_session_update:
+                    conflict = transformation_config.session_update_conflict(parsed_client_message)
+                    if conflict is not None:
+                        if not await _reject_session_update(client_ws, parsed_client_message, conflict):
+                            break
+                        continue
                     client_ws.scope[BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY] = message
 
                 transformed_messages = transformation_config.transform_realtime_request(
