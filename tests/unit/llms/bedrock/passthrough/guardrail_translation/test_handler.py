@@ -23,7 +23,16 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr import CrowdStrikeAIDRHandler
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
+    HiddenlayerGuardrail,
+    HiddenlayerGuardrailV2,
+)
+from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import LLMAsAJudgeGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import OpenAIModerationGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs import PanwPrismaAirsHandler
+from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security import PromptSecurityGuardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -2708,3 +2717,131 @@ class TestConverseToolDefinitionRewrites:
         assert headroom.received[-1]["texts"] == ["list files", "Listing them.", "ls", "a.txt", "now delete them"]
         assert "structured_messages" not in headroom.received[-1]
         assert "tools" not in headroom.received[-1]
+
+
+_FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
+    lambda: OpenAIModerationGuardrail(guardrail_name="moderation", api_key="sk-test"),
+    lambda: LLMAsAJudgeGuardrail(
+        guardrail_name="judge", judge_model="gpt-judge", criteria=[{"name": "safe", "description": "is safe"}]
+    ),
+    lambda: CrowdStrikeAIDRHandler(guardrail_name="crowdstrike", api_key="cs-test", api_base="http://127.0.0.1:9"),
+    lambda: PromptSecurityGuardrail(guardrail_name="prompt-security", api_key="ps-test", api_base="http://127.0.0.1:9"),
+    lambda: PanwPrismaAirsHandler(
+        guardrail_name="panw", profile_name="default", api_key="panw-test", api_base="http://127.0.0.1:9"
+    ),
+    lambda: HiddenlayerGuardrail(guardrail_name="hiddenlayer", api_base="http://127.0.0.1:9"),
+    lambda: HiddenlayerGuardrailV2(guardrail_name="hiddenlayer-v2", api_base="http://127.0.0.1:9"),
+)
+
+
+def _card_in_every_turn_data() -> dict:
+    return {
+        "endpoint": "model/anthropic.claude-sonnet/converse",
+        "custom_llm_provider": "bedrock",
+        "data": {
+            "system": [{"text": "Billing card 4111 1111 1111 1111."}],
+            "messages": [
+                {"role": "user", "content": [{"text": "My card is 4111 1111 1111 1111."}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "4111 1111 1111 1111"}}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"toolResult": {"toolUseId": "t1", "content": [{"text": "paid with 4111 1111 1111 1111"}]}},
+                        {"text": "Thanks, what next?"},
+                    ],
+                },
+            ],
+            "toolConfig": copy.deepcopy(_tool_config_data()["data"]["toolConfig"]),
+        },
+    }
+
+
+class TestConverseGuardrailsThatReadFlatTextsOnly:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "make_guardrail",
+        _FLAT_TEXT_READERS,
+        ids=[
+            "openai-moderation",
+            "llm-as-a-judge",
+            "crowdstrike-aidr",
+            "prompt-security",
+            "panw-prisma-airs",
+            "hiddenlayer",
+            "hiddenlayer-v2",
+        ],
+    )
+    async def test_guardrail_gets_every_flat_text_and_its_mask_reaches_every_turn(self, make_guardrail, monkeypatch):
+        guardrail = make_guardrail()
+        received: list[GenericGuardrailAPIInputs] = []
+
+        async def mask_texts(inputs, request_data, input_type, logging_obj=None):
+            received.append(copy.deepcopy(inputs))
+            return {"texts": _masked_texts(inputs)}
+
+        monkeypatch.setattr(guardrail, "apply_guardrail", mask_texts)
+        data = _card_in_every_turn_data()
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+        assert received[-1]["texts"] == [
+            "Billing card 4111 1111 1111 1111.",
+            "My card is 4111 1111 1111 1111.",
+            "4111 1111 1111 1111",
+            "paid with 4111 1111 1111 1111",
+            "Thanks, what next?",
+        ]
+        assert "structured_messages" not in received[-1]
+        assert "tools" not in received[-1]
+        assert "4111" not in json.dumps({key: value for key, value in result["data"].items() if key != "toolConfig"})
+
+
+def _row_text(message: Mapping[str, object]) -> str:
+    content = message.get("content")
+    if isinstance(content, list):
+        return "\n".join(part["text"] for part in content if isinstance(part, dict) and "text" in part)
+    return content if isinstance(content, str) else ""
+
+
+class TestConverseTextsRebuiltFromRows:
+    @pytest.mark.asyncio
+    async def test_row_shaped_texts_of_the_same_length_never_overwrite_other_fields(self):
+        data = {
+            "endpoint": "model/anthropic.claude-sonnet/converse",
+            "custom_llm_provider": "bedrock",
+            "data": {
+                "messages": [
+                    {"role": "user", "content": [{"text": "Look up booking 42."}]},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"toolUse": {"toolUseId": "t1", "name": "lookup", "input": {"query": "booking 42"}}}
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"toolResult": {"toolUseId": "t1", "content": [{"text": "paid with 4111 1111 1111 1111"}]}}
+                        ],
+                    },
+                ]
+            },
+        }
+        expected = copy.deepcopy(data["data"])
+        expected["messages"][2]["content"][0]["toolResult"]["content"] = [{"text": "paid with [CARD]"}]
+
+        def row_texts(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
+            rows = json.loads(json.dumps(inputs["structured_messages"]).replace("4111 1111 1111 1111", "[CARD]"))
+            return {"texts": [_row_text(row) for row in rows], "structured_messages": rows}
+
+        guard = _ScriptedGuardrail(row_texts)
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert guard.received[-1]["texts"] == ["Look up booking 42.", "booking 42", "paid with 4111 1111 1111 1111"]
+        assert result["data"] == expected

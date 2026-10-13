@@ -48,6 +48,12 @@ if TYPE_CHECKING:
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
 _EVENT_STREAM_MEDIA_TYPE: Final = "application/vnd.amazon.eventstream"
+# Handed rows, these scan only part of the conversation (the latest user turn, the last row, the turns
+# after the last assistant turn, or no tool results) or rebuild their returned texts from the rows, while
+# the flat texts carry every string of the body in the order the write-back expects.
+_FLAT_TEXT_PROVIDERS: Final = frozenset(
+    {"openai_moderation", "llm_as_a_judge", "crowdstrike_aidr", "prompt_security", "panw_prisma_airs", "hiddenlayer"}
+)
 
 
 def _is_converse_endpoint(endpoint: str) -> bool:
@@ -66,6 +72,18 @@ def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
     )
 
     return PassThroughEndpointHandler()
+
+
+def _reads_flat_texts_only(guardrail: "CustomGuardrail") -> bool:
+    """Whether `guardrail` gets only the flat texts on Converse, without rows or tools."""
+    from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import HiddenlayerGuardrailV2
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
+
+    flat_text_readers: Final = (
+        HiddenlayerGuardrailV2,
+        *(cls for name, cls in guardrail_class_registry.items() if name in _FLAT_TEXT_PROVIDERS),
+    )
+    return is_compression_guardrail(guardrail) or isinstance(guardrail, flat_text_readers)
 
 
 _StringHolder = tuple[Any, str | int]
@@ -187,6 +205,26 @@ def _texts_applied_rows(body: Mapping[str, object], texts: Sequence[str], scope:
     _write_back_texts(texts, holders)
     request: Final = parse_converse_request(rewritten)
     return converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
+
+
+def _texts_follow_rows(
+    body: Mapping[str, object],
+    rows: Sequence[ConverseRow],
+    texts: Sequence[str],
+    guardrailed_texts: Sequence[str],
+    changed_rows: frozenset[int],
+    scope: _Scope,
+) -> bool:
+    """Whether the returned texts sit in the flat layout and only touch rows the vendor also changed."""
+    if len(guardrailed_texts) != len(texts):
+        return False
+    view: Final = _texts_applied_rows(body, guardrailed_texts, scope)
+    if len(view) != len(rows):
+        return False
+    rows_changed_by_texts: Final = frozenset(
+        index for index, (row, viewed) in enumerate(zip(rows, view)) if row.message != viewed.message
+    )
+    return rows_changed_by_texts <= changed_rows
 
 
 def _child(node: object, key: str | int) -> object:
@@ -578,7 +616,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         texts, holders = _extract_converse_texts(
             request_body, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results
         )
-        request: Final = None if is_compression_guardrail(guardrail_to_apply) else parse_converse_request(request_body)
+        request: Final = None if _reads_flat_texts_only(guardrail_to_apply) else parse_converse_request(request_body)
         rows: Final = converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
         scoped_indices: Final = scoped_structured_message_indices(
             tuple(row.message for row in rows),
@@ -615,8 +653,20 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             if sent_messages and isinstance(guardrailed_messages, list) and guardrailed_messages != sent_messages
             else None
         )
+        changed_rows: Final[frozenset[int]] = (
+            frozenset()
+            if rewritten_rows is None
+            else frozenset(
+                index
+                for index, sent, returned in zip(scoped_indices, sent_messages, rewritten_rows)
+                if sent != returned
+            )
+        )
         applied_texts: Final = (
-            texts if rewritten_rows is not None and len(guardrailed_texts) != len(texts) else guardrailed_texts
+            texts
+            if rewritten_rows is not None
+            and not _texts_follow_rows(request_body, rows, texts, guardrailed_texts, changed_rows, scope)
+            else guardrailed_texts
         )
         row_edits: Final = (
             ()

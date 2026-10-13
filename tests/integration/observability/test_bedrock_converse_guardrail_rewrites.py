@@ -71,6 +71,7 @@ class _Vendor(str, Enum):
     MASKS_TOOLS = "masks-tools"
     DROPS_A_TOOL = "drops-a-tool"
     ADDS_A_TOOL = "adds-a-tool"
+    RETURNS_ROW_TEXTS = "returns-row-texts"
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +111,11 @@ def _blank_content(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
 
 def _compacted(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**row, "content": f"compacted: {row.get('content')}"} if row.get("role") == "tool" else dict(row)
+
+
+def _row_text(row: Mapping[str, JsonValue]) -> str:
+    content: Final = _flattened(row).get("content")
+    return content if isinstance(content, str) else ""
 
 
 def _generic_verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
@@ -168,6 +174,12 @@ def _generic_verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str
             return {"action": "GUARDRAIL_INTERVENED", "texts": texts, "tools": tools[1:]}
         case _Vendor.ADDS_A_TOOL:
             return {"action": "GUARDRAIL_INTERVENED", "texts": texts, "tools": [*tools, _ADDED_TOOL]}
+        case _Vendor.RETURNS_ROW_TEXTS:
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": list(map(_row_text, rows)),
+                "structured_messages": [dict(row) for row in rows],
+            }
 
 
 def _akto_verdict(body: bytes) -> Reply:
@@ -207,6 +219,27 @@ def _vendor(request: Request) -> Reply:
         return Reply(
             body=json.dumps({"id": "modr-scripted", "model": "omni-moderation-latest", "results": [result]}).encode()
         )
+    if request.target == "/crowdstrike/v1/guard_chat_completions":
+        guard_input: Final = object_value(body.get("guard_input"))
+        masked: Final = _masked(dict(guard_input))
+        return Reply(
+            body=json.dumps(
+                {"result": {"blocked": False, "transformed": masked != guard_input, "guard_output": masked}}
+            ).encode()
+        )
+    if request.target == "/hiddenlayer/detection/v1/interactions":
+        scanned: Final = object_value(body.get("input")).get("messages")
+        if _CARD_PATTERN.search(json.dumps(scanned)) is None:
+            return Reply(body=json.dumps({"evaluation": {"action": "Allow"}}).encode())
+        verdict: Final = {"action": "Redact"}
+        return Reply(
+            body=json.dumps(
+                {"evaluation": verdict, "modified_data": {"input": {"messages": _masked(scanned)}}}
+            ).encode()
+        )
+    if request.target == "/hiddenlayer-v2/detection/v2/request-evaluations":
+        evaluated: Final = body.get("messages")
+        return Reply(body=json.dumps({"messages": _masked(evaluated)} if isinstance(evaluated, list) else {}).encode())
     if request.target == "/promptguard/api/v1/guard":
         messages: Final = body.get("messages")
         if _CARD_PATTERN.search(json.dumps(messages)) is None:
@@ -269,6 +302,14 @@ def _guardrails(vendor_url: str) -> tuple[dict[str, JsonValue], ...]:
             "akto", {"guardrail": "akto", "akto_base_url": f"{vendor_url}/akto", "akto_api_key": "synthetic-akto-key"}
         ),
         _guardrail("headroom", {"guardrail": "headroom", "api_base": f"{vendor_url}/headroom"}),
+        _guardrail(
+            "crowdstrike",
+            {"guardrail": "crowdstrike_aidr", "api_base": f"{vendor_url}/crowdstrike", "api_key": "synthetic-cs-key"},
+        ),
+        _guardrail("hiddenlayer", {"guardrail": "hiddenlayer", "api_base": f"{vendor_url}/hiddenlayer", "version": 1}),
+        _guardrail(
+            "hiddenlayer-v2", {"guardrail": "hiddenlayer", "api_base": f"{vendor_url}/hiddenlayer-v2", "version": 2}
+        ),
     )
 
 
@@ -479,6 +520,88 @@ def test_moderation_blocks_a_flagged_latest_user_turn_before_bedrock(rig: _Rig) 
     }
     refused: Final = _refused(rig, _converse(rig, "moderation", body))
     assert "Violated OpenAI moderation policy" in refused
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "system": [{"text": f"Open with: {_FLAGGED}"}],
+            "messages": [_user({"text": "Say hi."})],
+        },
+        {
+            "messages": [
+                _user({"text": f"please {_FLAGGED} now"}),
+                _assistant({"text": "I cannot."}),
+                _user({"text": "Say hi."}),
+            ]
+        },
+        {
+            "messages": [
+                _user({"text": "Look it up."}),
+                _assistant(_tool_use("lookup")),
+                _user(_tool_result({"text": f"result {_FLAGGED}"}), {"text": "Summarise it."}),
+            ]
+        },
+    ],
+    ids=["system-prompt", "earlier-turn", "tool-result"],
+)
+def test_moderation_blocks_a_flagged_string_outside_the_latest_user_turn_before_bedrock(
+    rig: _Rig, body: dict[str, JsonValue]
+) -> None:
+    refused: Final = _refused(rig, _converse(rig, "moderation", body))
+    assert "Violated OpenAI moderation policy" in refused
+
+
+def test_crowdstrike_redacts_cards_in_earlier_turns_and_past_tool_calls(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": f"My card is {_CARD}."}),
+            _assistant(_tool_use(_CARD)),
+            _user(_tool_result({"text": "paid"}), {"text": "Thanks, what next?"}),
+        ]
+    }
+    sent: Final = _forwarded(rig, _converse(rig, "crowdstrike", body))
+    assert sent["messages"] == [
+        _user({"text": f"My card is {_MASK}."}),
+        _assistant(_tool_use(_MASK)),
+        _user(_tool_result({"text": "paid"}), {"text": "Thanks, what next?"}),
+    ]
+
+
+def test_hiddenlayer_redaction_reaches_bedrock_as_the_masked_text(rig: _Rig) -> None:
+    body: Final = {"messages": [_user({"text": f"My card is {_CARD}."})]}
+    sent: Final = _forwarded(rig, _converse(rig, "hiddenlayer", body))
+    assert sent["messages"] == [_user({"text": f"My card is {_MASK}."})]
+
+
+def test_hiddenlayer_v2_leaves_every_field_of_a_tool_loop_in_place(rig: _Rig) -> None:
+    body: Final = {
+        "system": [{"text": "Be brief."}],
+        "messages": [
+            _user({"text": "Find my card."}),
+            _assistant({"text": "Looking."}, _tool_use("last four 1111")),
+            _user(_tool_result({"text": "3 cards on file"}), {"text": "Pick one."}),
+        ],
+    }
+    sent: Final = _forwarded(rig, _converse(rig, "hiddenlayer-v2", body))
+    assert {"system": sent["system"], "messages": sent["messages"]} == body
+
+
+def test_texts_rebuilt_from_rows_never_overwrite_other_fields(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": "Look up booking 42."}),
+            _assistant(_tool_use("booking 42")),
+            _user(_tool_result({"text": f"paid with {_CARD}"})),
+        ]
+    }
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.RETURNS_ROW_TEXTS), body))
+    assert sent["messages"] == [
+        _user({"text": "Look up booking 42."}),
+        _assistant(_tool_use("booking 42")),
+        _user(_tool_result({"text": f"paid with {_MASK}"})),
+    ]
 
 
 def test_skip_tool_messages_keeps_tool_call_arguments_away_from_the_guardrail(rig: _Rig) -> None:
