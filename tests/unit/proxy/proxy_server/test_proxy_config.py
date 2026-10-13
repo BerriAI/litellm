@@ -3787,6 +3787,129 @@ def test_ProxyConfig__decrypt_and_set_db_env_variables_invalid_dict_raises():
         pc._decrypt_and_set_db_env_variables("not-a-dict")  # type: ignore[arg-type]
 
 
+def _unset_env_for_test(monkeypatch: pytest.MonkeyPatch, *keys: str) -> None:
+    for key in keys:
+        monkeypatch.setenv(key, "placeholder")
+        monkeypatch.delenv(key)
+
+
+async def _sync_db_env_row(
+    monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, row: Mapping[str, JsonValue], config: Mapping[str, object]
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    stored: Final = {key: encrypt_value_helper(value) if isinstance(value, str) else value for key, value in row.items()}
+
+    async def get_config_param(_, param_name):
+        if param_name != "environment_variables":
+            return None
+        return SimpleNamespace(param_name=param_name, param_value=stored)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
+    await pc._update_config_from_db(MagicMock(), dict(config), store_model_in_db=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "process_value", "config_value", "expected_after_removal"),
+    [
+        ("LIT_DB_ENV_REMOVED", None, None, None),
+        ("LIT_DB_ENV_REMOVED", "process-value", None, "process-value"),
+        ("LIT_DB_ENV_REMOVED", None, "config-value", "config-value"),
+        ("LIT_DB_ENV_REMOVED", "process-value", "config-value", "config-value"),
+        ("LIT_DB_ENV_REMOVED", "process-value", "os.environ/LIT_DB_ENV_REMOVED", "process-value"),
+        ("NO_PROXY", "process-value", "config-value", "process-value"),
+    ],
+    ids=[
+        "db-only",
+        "process-env",
+        "config-file",
+        "config-file-over-process-env",
+        "config-file-self-reference",
+        "blocked-config-key",
+    ],
+)
+async def test_ProxyConfig_db_env_var_removed_from_row_falls_back_to_its_value_without_the_db(
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+    process_value: str | None,
+    config_value: str | None,
+    expected_after_removal: str | None,
+) -> None:
+    _unset_env_for_test(monkeypatch, key, "LIT_DB_ENV_KEPT")
+    if process_value is not None:
+        monkeypatch.setenv(key, process_value)
+    config: Final = {"environment_variables": {} if config_value is None else {key: config_value}}
+    pc: Final = ProxyConfig()
+    pc._load_yaml_settings_stores(config)
+
+    await _sync_db_env_row(monkeypatch, pc, {key: "db-value", "LIT_DB_ENV_KEPT": "kept"}, config)
+    pc._load_environment_variables(config)
+    await _sync_db_env_row(monkeypatch, pc, {key: "db-value", "LIT_DB_ENV_KEPT": "kept"}, config)
+    assert os.environ.get(key) == "db-value"
+
+    await _sync_db_env_row(monkeypatch, pc, {"LIT_DB_ENV_KEPT": "kept"}, config)
+
+    assert os.environ.get(key) == expected_after_removal
+    assert os.environ.get("LIT_DB_ENV_KEPT") == "kept"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_db_env_var_removal_unsets_both_spellings_of_a_lowercase_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "lit_db_env_lower", "LIT_DB_ENV_LOWER")
+    pc: Final = ProxyConfig()
+
+    await _sync_db_env_row(monkeypatch, pc, {"lit_db_env_lower": "db-value"}, {})
+    assert (os.environ.get("lit_db_env_lower"), os.environ.get("LIT_DB_ENV_LOWER")) == ("db-value", "db-value")
+
+    await _sync_db_env_row(monkeypatch, pc, {}, {})
+
+    assert "lit_db_env_lower" not in os.environ
+    assert "LIT_DB_ENV_LOWER" not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_db_env_var_readded_after_removal_is_removed_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    _unset_env_for_test(monkeypatch, "LIT_DB_ENV_READDED")
+    monkeypatch.setenv("LIT_DB_ENV_READDED", "process-value")
+    pc: Final = ProxyConfig()
+
+    for db_value in ("first-db-value", "second-db-value"):
+        await _sync_db_env_row(monkeypatch, pc, {"LIT_DB_ENV_READDED": db_value}, {})
+        assert os.environ.get("LIT_DB_ENV_READDED") == db_value
+        await _sync_db_env_row(monkeypatch, pc, {}, {})
+        assert os.environ.get("LIT_DB_ENV_READDED") == "process-value"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_db_env_var_cleared_by_an_endpoint_stays_unset_after_the_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    pc: Final = ProxyConfig()
+    monkeypatch.setenv("UI_LOGO_PATH", "https://example.com/logo.png")
+
+    await _sync_db_env_row(monkeypatch, pc, {"UI_LOGO_PATH": "https://example.com/logo.png"}, {})
+    monkeypatch.delenv("UI_LOGO_PATH")
+    await _sync_db_env_row(monkeypatch, pc, {}, {})
+
+    assert "UI_LOGO_PATH" not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_db_env_row_with_a_non_string_value_still_applies_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "LIT_DB_ENV_TEXT", "LIT_DB_ENV_NUMBER")
+    pc: Final = ProxyConfig()
+
+    await _sync_db_env_row(monkeypatch, pc, {"LIT_DB_ENV_TEXT": "text", "LIT_DB_ENV_NUMBER": 5}, {})
+
+    assert os.environ.get("LIT_DB_ENV_TEXT") == "text"
+    assert "LIT_DB_ENV_NUMBER" not in os.environ
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._decrypt_db_variables
 # ---------------------------------------------------------------------------

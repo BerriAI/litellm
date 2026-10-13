@@ -5435,6 +5435,12 @@ def _as_settings_mapping(value: object) -> Mapping[str, SettingsJsonValue]:
     return _SETTINGS_MAPPING.validate_python(value)
 
 
+def _resolved_config_environment_value(value: object) -> str | None:
+    if isinstance(value, str) and value.startswith("os.environ/"):
+        return get_secret_str(secret_name=value)
+    return str(value)
+
+
 def _get_field_default(field_info: FieldInfo) -> JsonValue:
     if field_info.default is PydanticUndefined:
         return None
@@ -5579,6 +5585,8 @@ class ProxyConfig:
         self._last_cleanup_schedule_attempt: tuple[object, ...] | None = None
         self._cleanup_reschedule_failed: bool = False
         self._warned_db_mcp_stdio_flag_ignored: bool = False
+        self._process_environment: Final[Mapping[str, str]] = MappingProxyType(dict(os.environ))
+        self._db_environment_keys: frozenset[str] = frozenset()
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -6373,26 +6381,8 @@ class ProxyConfig:
                         MCP_STDIO_ENABLED_ENV_VAR,
                     )
                     continue
-                #########################################################
-                # handles this scenario:
-                # ```yaml
-                # environment_variables:
-                #     ARIZE_ENDPOINT: os.environ/ARIZE_ENDPOINT
-                # ```
-                #########################################################
-                if isinstance(value, str) and value.startswith("os.environ/"):
-                    resolved_secret_string: str | None = get_secret_str(secret_name=value)
-                    if resolved_secret_string is not None:
-                        os.environ[key] = resolved_secret_string
-                else:
-                    #########################################################
-                    # handles this scenario:
-                    # ```yaml
-                    # environment_variables:
-                    #     ARIZE_ENDPOINT: https://otlp.arize.com/v1
-                    # ```
-                    #########################################################
-                    os.environ[key] = str(value)
+                if (resolved_value := _resolved_config_environment_value(value)) is not None:
+                    os.environ[key] = resolved_value
 
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
@@ -7802,26 +7792,66 @@ class ProxyConfig:
             environment_variables: dict - dictionary of environment variables to decrypt and set
             eg. `{"LANGFUSE_PUBLIC_KEY": "kFiKa1VZukMmD8RB6WXB9F......."}`
         """
-        decrypted_env_vars: Final = {}
-        for k, v in environment_variables.items():
-            if isinstance(k, str) and is_mcp_stdio_flag_key(k):
-                if not self._warned_db_mcp_stdio_flag_ignored:
-                    verbose_proxy_logger.warning(
-                        "Ignoring %s stored in the database. Set it in the proxy's environment instead",
-                        MCP_STDIO_ENABLED_ENV_VAR,
-                    )
-                    self._warned_db_mcp_stdio_flag_ignored = True
-                continue
-            try:
-                decrypted_value = decrypt_value_helper(value=v, key=k, return_original_value=return_original_value)
-                if decrypted_value is not None:
-                    os.environ[k] = decrypted_value
-                    decrypted_env_vars[k] = decrypted_value
-            except Exception as e:
-                verbose_proxy_logger.error("Error setting env variable: %s - %s", k, str(e))
-        return decrypted_env_vars
+        decrypted: Final = self._decrypted_db_env_variables(environment_variables, return_original_value)
+        os.environ.update(decrypted)
+        return dict(decrypted)
 
     _decrypt_and_set_db_env_variables = decrypt_and_set_db_env_variables
+
+    def _decrypted_db_env_variables(
+        self, environment_variables: Mapping[str, object], return_original_value: bool
+    ) -> Mapping[str, str]:
+        return MappingProxyType(
+            {
+                key: decrypted
+                for key, value in environment_variables.items()
+                if (decrypted := self._decrypted_db_env_value(key, value, return_original_value)) is not None
+            }
+        )
+
+    def _decrypted_db_env_value(self, key: str, value: object, return_original_value: bool) -> str | None:
+        if is_mcp_stdio_flag_key(key):
+            if not self._warned_db_mcp_stdio_flag_ignored:
+                verbose_proxy_logger.warning(
+                    "Ignoring %s stored in the database. Set it in the proxy's environment instead",
+                    MCP_STDIO_ENABLED_ENV_VAR,
+                )
+                self._warned_db_mcp_stdio_flag_ignored = True
+            return None
+        if not isinstance(value, str):
+            verbose_proxy_logger.error("Error setting env variable: %s - value is not a string", key)
+            return None
+        try:
+            return decrypt_value_helper(value=value, key=key, return_original_value=return_original_value)
+        except Exception as e:
+            verbose_proxy_logger.error("Error setting env variable: %s - %s", key, str(e))
+            return None
+
+    def _apply_db_environment_variables(self, row: Mapping[str, SettingsJsonValue]) -> Mapping[str, SettingsJsonValue]:
+        decrypted: Final = self._decrypted_db_env_variables(row, return_original_value=True)
+        applied: Final = {
+            **decrypted,
+            **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
+        }
+        self._restore_environment_without_db(self._db_environment_keys - applied.keys())
+        self._db_environment_keys = frozenset(applied)
+        os.environ.update(applied)
+        return _as_settings_mapping(applied)
+
+    def _restore_environment_without_db(self, keys: frozenset[str]) -> None:
+        for key in keys:
+            os.environ.pop(key, None)
+        os.environ.update(
+            {key: value for key in keys if (value := self._environment_value_without_db(key)) is not None}
+        )
+
+    def _environment_value_without_db(self, key: str) -> str | None:
+        config_value: Final = (
+            _resolved_config_environment_value(self.environment_variables.config_value(key))
+            if self.environment_variables.owned_by_config(key) and key not in self._BLOCKED_ENV_KEYS
+            else None
+        )
+        return config_value if config_value is not None else self._process_environment.get(key)
 
     def decrypt_db_variables(self, variables_dict: dict) -> dict:
         """
@@ -8259,16 +8289,7 @@ class ProxyConfig:
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
         if section == "environment_variables":
-            decrypted: Final = self.decrypt_and_set_db_env_variables(
-                dict(_as_settings_mapping(value)), return_original_value=True
-            )
-            normalized: Final = {
-                **decrypted,
-                **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
-            }
-            for key, decrypted_value in normalized.items():
-                os.environ[key] = decrypted_value
-            return _as_settings_mapping(normalized)
+            return self._apply_db_environment_variables(_as_settings_mapping(value))
 
         scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
         return _as_settings_mapping(scrubbed)
