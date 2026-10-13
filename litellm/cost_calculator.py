@@ -18,6 +18,8 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
 )
+from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
+from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -570,7 +572,22 @@ def cost_per_token(
     ):  # Option 3. if user passed model="bedrock/anthropic.claude-3", use model="anthropic.claude-3"
         model = model_without_prefix
 
-    # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
+    if is_decisions_call_type(call_type):
+        decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        decisions_overrides: Final = decisions_pricing_fields(
+            litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
+        )
+        if decisions_overrides:
+            return generic_cost_per_token(
+                model=model,
+                usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
+                data_residency=data_residency,
+                model_info=cast(  # cast-ok: _decisions fields override same-named ModelInfo rates
+                    ModelInfo, {**decisions_model_info, **decisions_overrides}
+                ),
+            )
     if call_type == "speech" or call_type == "aspeech":
         lyria_generation_cost: Final = (
             get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
@@ -1124,6 +1141,8 @@ def infer_call_type(call_type: CallTypesLiteral | None, completion_response: obj
         return "text_completion"
     elif isinstance(completion_response, LiteLLMSendMessageResponse):
         return "send_message"
+    elif isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
+        return "adecisions"
 
     return call_type
 
@@ -1134,6 +1153,8 @@ _infer_call_type = infer_call_type
 def _apply_cost_discount(
     base_cost: float,
     custom_llm_provider: str | None,
+    model: str | None = None,
+    region_name: str | None = None,
 ) -> tuple[float, float, float]:
     """
     Apply provider-specific cost discount from module-level config.
@@ -1141,17 +1162,20 @@ def _apply_cost_discount(
     Args:
         base_cost: The base cost before discount
         custom_llm_provider: The LLM provider name
+        model: The model name, used to resolve <provider>/<model-pattern> discount keys
+        region_name: The region segment the cost key may carry, so patterns can match the region-stripped name
 
     Returns:
         Tuple of (final_cost, discount_percent, discount_amount)
     """
     original_cost: Final = base_cost
-    discount_percent = 0.0
-    discount_amount = 0.0
+    resolved_discount: Final = resolve_cost_discount(
+        litellm.cost_discount_config, custom_llm_provider, model, region_name
+    )
+    discount_percent: Final = 0.0 if resolved_discount is None else resolved_discount
+    discount_amount: Final = original_cost * discount_percent
 
-    if custom_llm_provider and custom_llm_provider in litellm.cost_discount_config:
-        discount_percent = litellm.cost_discount_config[custom_llm_provider]
-        discount_amount = original_cost * discount_percent
+    if resolved_discount is not None:
         final_cost: Final = original_cost - discount_amount
 
         if verbose_logger.isEnabledFor(logging.DEBUG):
@@ -1472,6 +1496,7 @@ def completion_cost(
             )
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
+        custom_priced_request_model: Final = model if custom_pricing is True else None
         selected_model: Final = select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -1726,6 +1751,8 @@ def completion_cost(
                     ) = _apply_cost_discount(
                         base_cost=_final_cost,
                         custom_llm_provider=custom_llm_provider,
+                        model=model,
+                        region_name=region_name if isinstance(region_name, str) else None,
                     )
 
                     # Apply margin from module-level config if configured
@@ -1785,6 +1812,7 @@ def completion_cost(
                     litellm_logging_obj=litellm_logging_obj,
                     total_time=total_time,
                 )
+                model_for_discount = custom_priced_request_model or model
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
@@ -1893,6 +1921,8 @@ def completion_cost(
                     ) = _apply_cost_discount(
                         base_cost=_final_cost,
                         custom_llm_provider=custom_llm_provider,
+                        model=model_for_discount,
+                        region_name=region_name if isinstance(region_name, str) else None,
                     )
                 else:
                     discount_percent = 0.0
@@ -2062,7 +2092,7 @@ def response_cost_calculator(
                         getattr(response_object, HIDDEN_PARAMS_ATTR),
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
-                    if provider_response_cost is not None:
+                    if provider_response_cost is not None and not custom_pricing:
                         return provider_response_cost
 
             response_cost = completion_cost(

@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import { displayMode } from "@/lib/decisionModels";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 export interface ModelHubData {
@@ -136,7 +137,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
     sortingFn: "alphanumeric",
     cell: ({ row }) =>
       row.original.mode ? (
-        <span className="font-mono text-xs text-muted-foreground">{row.original.mode}</span>
+        <span className="font-mono text-xs text-muted-foreground">{displayMode(row.original.mode)}</span>
       ) : (
         <span className="text-xs text-muted-foreground">-</span>
       ),
