@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import (
     Final,
     Literal,
-    cast,  # noqa: TID251  # preserve the runtime-compatible auth header union
+    cast,  # noqa: TID251  # typed boundary for provider response/request mappings
 )
 
 import httpx
