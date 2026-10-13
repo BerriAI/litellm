@@ -18845,6 +18845,14 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
             "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
         ),
     },
+    "personal_key_model_access_from_teams": {
+        "type": "Boolean",
+        "description": (
+            "Caps each personal key (a key with no team) to the models its owner's current teams can call, "
+            "re-evaluated on every request. A user in no team gets no model access. A user in several teams "
+            "can call any model one of those teams can call. Team keys are unaffected."
+        ),
+    },
     "max_ui_session_budget": {
         "type": "Dollar",
         "default": 1.0,
