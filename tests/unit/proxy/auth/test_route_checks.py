@@ -214,7 +214,9 @@ def test_user_banner_read_open_to_non_admin_roles(role):
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
     ],
 )
-def test_latest_release_info_read_open_to_non_admin_roles(role):  # test-quality-ok: allowed path returns None, not raising is the observable
+def test_latest_release_info_read_open_to_non_admin_roles(
+    role,
+):  # test-quality-ok: allowed path returns None, not raising is the observable
     user_obj = LiteLLM_UserTable(
         user_id="test_user",
         user_email="test@example.com",
@@ -4872,3 +4874,30 @@ def test_user_info_route_forbidden() -> None:
             request_data={},
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ],
+)
+@pytest.mark.parametrize(
+    ("method", "route"), [("POST", "/telemetry/ui_events"), ("GET", "/telemetry/ui_events/enabled")]
+)
+def test_every_dashboard_role_can_send_telemetry_ui_events(
+    user_role: LitellmUserRoles, method: str, route: str
+) -> None:
+    request: Final = MagicMock(spec=Request)
+    request.method = method
+    request.query_params = {}
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="u", user_role=user_role.value),
+        _user_role=user_role,
+        route=route,
+        request=request,
+        valid_token=UserAPIKeyAuth(user_id="u", user_role=user_role),
+        request_data={},
+    )
