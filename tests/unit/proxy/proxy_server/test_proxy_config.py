@@ -23,6 +23,7 @@ from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from apscheduler.job import Job
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
@@ -4226,6 +4227,10 @@ async def test_ProxyConfig__update_general_settings_updates_health_check_retenti
     reschedule.assert_awaited_once()
 
 
+def _second_run_gap_seconds(job: Job) -> float:
+    return (job.trigger.get_next_fire_time(job.next_run_time, job.next_run_time) - job.next_run_time).total_seconds()
+
+
 def _paused_scheduler(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -4250,7 +4255,9 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_first_run_only_move
     before: Final = datetime.now(timezone.utc)
     try:
         await ProxyConfig()._reschedule_spend_log_cleanup_job()
-        delay: Final = (real_scheduler.get_job("spend_log_cleanup_job").next_run_time - before).total_seconds()
+        job: Final = real_scheduler.get_job("spend_log_cleanup_job")
+        delay: Final = (job.next_run_time - before).total_seconds()
+        assert _second_run_gap_seconds(job) == 86400
         if run_on_startup:
             assert delay <= SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS + 5
         else:
@@ -4275,8 +4282,10 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_opt_in_never_delays
     before: Final = datetime.now(timezone.utc)
     try:
         await ProxyConfig()._reschedule_spend_log_cleanup_job()
-        delay: Final = (real_scheduler.get_job("spend_log_cleanup_job").next_run_time - before).total_seconds()
+        job: Final = real_scheduler.get_job("spend_log_cleanup_job")
+        delay: Final = (job.next_run_time - before).total_seconds()
         assert delay <= 30 + 1, delay
+        assert _second_run_gap_seconds(job) == 30
     finally:
         real_scheduler.shutdown(wait=False)
 

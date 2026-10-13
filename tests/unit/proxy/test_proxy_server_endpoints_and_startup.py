@@ -888,6 +888,9 @@ async def test_startup_moves_first_retention_cleanup_up_only_when_opted_in(
         job: Final = scheduler.get_job("spend_log_cleanup_job")
         assert job is not None
         delay: Final = (job.next_run_time - before).total_seconds()
+        second_run: Final = job.trigger.get_next_fire_time(job.next_run_time, job.next_run_time)
+        second_run_gap: Final = (second_run - job.next_run_time).total_seconds()
+        assert 24 * 3600 <= second_run_gap <= 24 * 3600 + 60, second_run_gap
         if run_on_startup:
             assert SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS - 5 <= delay
             assert delay <= SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS + 5
