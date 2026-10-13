@@ -1924,6 +1924,42 @@ class TestToolTransformation:
         assert [tool["function"]["name"] for tool in result["tools"]] == ["get_weather", "finance__get_stock_price"]
         assert all("defer_loading" not in tool for tool in result["tools"])
 
+    def test_native_bm25_search_tool_keeps_the_other_tools_deferred(self) -> None:
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            *_deferred_tools_with_server_tool_search()[1:],
+        ]
+
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+        )
+
+        chat_tools: Final = result["tools"]
+        assert chat_tools[0] == {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+        assert [tool["defer_loading"] for tool in chat_tools[1:]] == [True, True]
+
+    def test_native_search_tool_passes_through_routes_without_tool_search(self) -> None:
+        model: Final = "azure_ai/claude-sonnet-5-5"
+        assert litellm.supports_tool_search(model, "azure_ai") is False
+        tools: Final = [
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            *_deferred_tools_with_server_tool_search()[1:],
+        ]
+
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": tools},
+            custom_llm_provider="azure_ai",
+        )
+
+        chat_tools: Final = result["tools"]
+        assert chat_tools[0] == {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
+        assert [tool["defer_loading"] for tool in chat_tools[1:]] == [True, True]
+
     def test_server_tool_search_follows_the_bedrock_route(self) -> None:
         transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
         converse: Final = transform(

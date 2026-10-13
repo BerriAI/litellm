@@ -4,7 +4,7 @@ from typing import Final, Literal, TypeAlias
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.prompt_templates.factory import is_anthropic_tool_search_use
-from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES, AnthropicToolSearchToolRegex
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.responses.main import ResponseToolSearchCall
 from litellm.types.utils import LlmProviders
@@ -55,7 +55,7 @@ def anthropic_tool_search_chat_tool() -> AnthropicToolSearchToolRegex:
 
 
 def is_anthropic_tool_search_chat_tool(tool: Mapping[str, object]) -> bool:
-    return tool.get("type") == ANTHROPIC_TOOL_SEARCH_TOOL_TYPE
+    return tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
 def provider_builds_anthropic_request(model: str, custom_llm_provider: str | None) -> bool:

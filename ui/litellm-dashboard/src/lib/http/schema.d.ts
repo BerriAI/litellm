@@ -42993,7 +42993,7 @@ export interface components {
          */
         ResponseItemList: {
             /** Data */
-            data: (components["schemas"]["ResponseInputMessageItem"] | components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseFunctionToolCallItem"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallItem"] | components["schemas"]["ResponseCustomToolCallOutputItem"])[];
+            data: (components["schemas"]["ResponseInputMessageItem"] | components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseFunctionToolCallItem"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["openai__types__responses__response_tool_search_call__ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallItem"] | components["schemas"]["ResponseCustomToolCallOutputItem"])[];
             /** First Id */
             first_id: string;
             /** Has More */
@@ -43212,34 +43212,6 @@ export interface components {
             format?: components["schemas"]["ResponseFormatText"] | components["schemas"]["ResponseFormatTextJSONSchemaConfigParam"] | components["schemas"]["ResponseFormatJSONObject"];
             /** Verbosity */
             verbosity?: ("low" | "medium" | "high") | null;
-        } & {
-            [key: string]: unknown;
-        };
-        /** ResponseToolSearchCall */
-        ResponseToolSearchCall: {
-            /** Arguments */
-            arguments: unknown;
-            /** Call Id */
-            call_id?: string | null;
-            /** Created By */
-            created_by?: string | null;
-            /**
-             * Execution
-             * @enum {string}
-             */
-            execution: "server" | "client";
-            /** Id */
-            id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "in_progress" | "completed" | "incomplete";
-            /**
-             * Type
-             * @constant
-             */
-            type: "tool_search_call";
         } & {
             [key: string]: unknown;
         };
@@ -43477,9 +43449,9 @@ export interface components {
             /** Object */
             object?: string | null;
             /** Output */
-            output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
+            output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["openai__types__responses__response_tool_search_call__ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
                 [key: string]: unknown;
-            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["ResponseToolSearchCall"])[];
+            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["litellm__types__responses__main__ResponseToolSearchCall"])[];
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Previous Response Id */
@@ -49288,6 +49260,32 @@ export interface components {
             /** Type */
             type: "computer_use_preview" | string;
         };
+        /** ResponseToolSearchCall */
+        litellm__types__responses__main__ResponseToolSearchCall: {
+            /** Arguments */
+            arguments: unknown;
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_call";
+        } & {
+            [key: string]: unknown;
+        };
         /** ModelInfo */
         litellm__types__router__ModelInfo: {
             /** Access Windows */
@@ -49369,6 +49367,34 @@ export interface components {
              * @constant
              */
             type: "computer";
+        };
+        /** ResponseToolSearchCall */
+        openai__types__responses__response_tool_search_call__ResponseToolSearchCall: {
+            /** Arguments */
+            arguments: unknown;
+            /** Call Id */
+            call_id?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_call";
+        } & {
+            [key: string]: unknown;
         };
         /**
          * UserLocation

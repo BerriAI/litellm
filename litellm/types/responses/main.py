@@ -142,7 +142,6 @@ class ResponseToolSearchCall(BaseLiteLLMOpenAIResponseObject):
     execution: Literal["server", "client"]
     status: Literal["in_progress", "completed", "incomplete"]
     type: Literal["tool_search_call"]
-    created_by: str | None = None
 
 
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):

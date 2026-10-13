@@ -383,31 +383,31 @@ class LiteLLMCompletionResponsesConfig:
         return supported_params is not None and "web_search_options" not in supported_params
 
     @staticmethod
-    def _drop_tool_search_when_unsupported(
-        tools: Sequence[ChatToolParam], model: str, custom_llm_provider: str | None
-    ) -> Sequence[ChatToolParam]:
+    def _without_unsupported_tool_search(
+        tools: ResponseTools, model: str, custom_llm_provider: str | None
+    ) -> ResponseTools:
         from litellm.utils import supports_tool_search
 
-        has_search_tool: Final = any(is_anthropic_tool_search_chat_tool(tool) for tool in tools)
-        if (
-            has_search_tool
-            and supports_tool_search(model=model, custom_llm_provider=custom_llm_provider)
-            and provider_builds_anthropic_request(model, custom_llm_provider)
-        ):
+        if not has_server_tool_search(tools):
             return tools
-        if has_search_tool:
-            verbose_logger.warning(
-                "Dropping Responses API tool of type 'tool_search' and the deferral of the other tools: model '%s' "
-                "(provider '%s') cannot run tool search on this route, so the target provider would reject or "
-                "ignore it.",
-                model,
-                custom_llm_provider,
-            )
-        return [
-            LiteLLMCompletionResponsesConfig._without_deferral(tool)
-            for tool in tools
-            if not is_anthropic_tool_search_chat_tool(tool)
-        ]
+        route_runs_tool_search: Final = supports_tool_search(
+            model=model, custom_llm_provider=custom_llm_provider
+        ) and provider_builds_anthropic_request(model, custom_llm_provider)
+        if route_runs_tool_search:
+            return tools
+        verbose_logger.warning(
+            "Dropping Responses API tool of type 'tool_search': model '%s' (provider '%s') cannot run tool search "
+            "on this route, so the target provider would reject or ignore it.",
+            model,
+            custom_llm_provider,
+        )
+        return [tool for tool in tools or () if not is_server_tool_search_tool(tool)]
+
+    @staticmethod
+    def _undeferred_unless_a_search_tool_goes_out(tools: Sequence[ChatToolParam]) -> Sequence[ChatToolParam]:
+        if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+            return tools
+        return [LiteLLMCompletionResponsesConfig._without_deferral(tool) for tool in tools]
 
     @staticmethod
     def _without_deferral(tool: ChatToolParam) -> ChatToolParam:
@@ -503,15 +503,14 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        request_tools: Final = LiteLLMCompletionResponsesConfig._without_unsupported_tool_search(
+            responses_api_request.get("tools") or [], model=model, custom_llm_provider=custom_llm_provider
+        )
         (
             converted_tools,
             web_search_options,
-        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []
-        )
-        tools: Final = LiteLLMCompletionResponsesConfig._drop_tool_search_when_unsupported(
-            converted_tools, model=model, custom_llm_provider=custom_llm_provider
-        )
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(request_tools)
+        tools: Final = LiteLLMCompletionResponsesConfig._undeferred_unless_a_search_tool_goes_out(converted_tools)
 
         if web_search_options is not None and LiteLLMCompletionResponsesConfig._should_drop_derived_web_search_options(
             model=model, custom_llm_provider=custom_llm_provider
