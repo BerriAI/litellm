@@ -617,6 +617,14 @@ TENCENT_TOKENHUB_GLM_ROWS: Final = MappingProxyType(
         "tencent/glm-5.2": (1.4e-06, 4.4e-06, 2.6e-07, False, False),
     }
 )
+TENCENT_TOKENHUB_KIMI_ROWS: Final = MappingProxyType(
+    {
+        "tencent/kimi-k3": (3e-06, 1.5e-05, 3e-07, 1000000),
+        "tencent/kimi-k2.8-preview": (1e-06, 4e-06, 2.5e-07, 1000000),
+        "tencent/kimi-k2.7-code-highspeed": (1.9e-06, 8e-06, 3.8e-07, 256000),
+        "tencent/kimi-k2.7-code": (9.5e-07, 4e-06, 1.9e-07, 256000),
+    }
+)
 
 
 def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
@@ -691,6 +699,40 @@ def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
         or entry.get("input_cost_per_token_cache_hit") != entry.get("cache_read_input_token_cost")
     )
     assert actual == TENCENT_TOKENHUB_GLM_ROWS
+    assert invalid_metadata == ()
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
+    """TokenHub publishes these Kimi prices, limits, and capabilities
+    (tencentcloud.com/products/tokenhub, read 2026-10-13)."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    actual: Final = MappingProxyType(
+        {
+            name: (
+                entry.get("input_cost_per_token"),
+                entry.get("output_cost_per_token"),
+                entry.get("cache_read_input_token_cost"),
+                entry.get("max_tokens"),
+            )
+            for name in TENCENT_TOKENHUB_KIMI_ROWS
+            if isinstance(entry := rows.get(name), dict)
+        }
+    )
+    invalid_metadata: Final = tuple(
+        name
+        for name, expected in TENCENT_TOKENHUB_KIMI_ROWS.items()
+        if not isinstance(entry := rows.get(name), dict)
+        or entry.get("litellm_provider") != "tencent"
+        or entry.get("max_input_tokens") != expected[3]
+        or entry.get("max_output_tokens") != expected[3]
+        or entry.get("input_cost_per_token_cache_hit") != entry.get("cache_read_input_token_cost")
+        or not entry.get("supports_reasoning")
+        or not entry.get("supports_response_schema")
+        or not entry.get("supports_function_calling")
+        or not entry.get("supports_prompt_caching")
+    )
+    assert actual == TENCENT_TOKENHUB_KIMI_ROWS
     assert invalid_metadata == ()
 
 
