@@ -839,6 +839,22 @@ def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
     )
 
 
+def _declares_rates(model_info: ModelInfo | None) -> bool:
+    entry: Final = _raw_cost_map_entry(model_info["key"]) if model_info is not None else None
+    return entry is not None and _cost_map_entry_prices_anything(entry)
+
+
+def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
+    """The provider to price an explicit base_model under, when the deployment's own provider has
+    no rates for it (e.g. chatgpt/ subscription rows) but the base model's own row does"""
+    if custom_llm_provider is None or _declares_rates(_cost_map_model_info(base_model, custom_llm_provider)):
+        return None
+    own_model_info: Final = _cost_map_model_info(base_model, None)
+    if own_model_info is None or not _declares_rates(own_model_info):
+        return None
+    return own_model_info["litellm_provider"]
+
+
 def select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -1500,10 +1516,21 @@ def completion_cost(
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
         custom_priced_request_model: Final = model if custom_pricing is True else None
+        base_model_provider: Final = (
+            _base_model_pricing_provider(
+                base_model,
+                _get_provider_for_cost_calc(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                ),
+            )
+            if base_model is not None and custom_pricing is not True
+            else None
+        )
         selected_model: Final = select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=base_model_provider or custom_llm_provider,
             custom_pricing=custom_pricing,
             base_model=base_model,
             router_model_id=router_model_id,
@@ -1850,6 +1877,13 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
+                pricing_provider: str | None = (
+                    base_model_provider
+                    if base_model_provider is not None and idx == 0
+                    else custom_llm_provider
+                    if isinstance(custom_llm_provider, str)
+                    else None
+                )
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
@@ -1857,7 +1891,7 @@ def completion_cost(
                     model=model,
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
-                    custom_llm_provider=custom_llm_provider,
+                    custom_llm_provider=pricing_provider,
                     response_time_ms=response_time_ms,
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
@@ -1954,12 +1988,9 @@ def completion_cost(
                     _cache_creation_cost: float | None = None
                     _billed_token_rates: BilledTokenRates | None = None
                     if cost_per_token_usage_object is not None and model:
-                        _breakdown_provider: str | None = (
-                            custom_llm_provider if isinstance(custom_llm_provider, str) else None
-                        )
                         _token_type_breakdown = get_token_type_cost_breakdown(
                             model=model,
-                            custom_llm_provider=_breakdown_provider,
+                            custom_llm_provider=pricing_provider,
                             usage=cost_per_token_usage_object,
                             service_tier=service_tier,
                             data_residency=data_residency,
