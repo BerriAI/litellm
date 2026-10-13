@@ -12,7 +12,7 @@ from typing import (
     cast,  # noqa: TID251  # Prisma's generated TransactionManager doesn't expose typed table accessors; we narrow to our protocol
 )
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
@@ -68,6 +68,7 @@ class _VirtualModelTableClient(Protocol):
 
 class _VirtualModelMemberTableClient(Protocol):
     async def create_many(self, data: Sequence[Mapping[str, object]]) -> int: ...
+    async def delete_many(self, where: Mapping[str, object]) -> int: ...
 
 
 class _TransactionTables(Protocol):
@@ -253,6 +254,28 @@ async def _patch_virtual_model_in_transaction(
     existing: Final = _validate_virtual_model(existing_raw)
     existing_member_ids: Final = frozenset(m.model_id for m in existing.members or [])
 
+    if request_body.remove_members:
+        for model_id in request_body.remove_members:
+            if model_id not in existing_member_ids:
+                raise ProxyException(
+                    message=f"Model {model_id} is not a member of this virtual model",
+                    type=ProxyErrorTypes.validation_error.value,
+                    code=status.HTTP_400_BAD_REQUEST,
+                    param="remove_members",
+                )
+
+    if request_body.add_members and request_body.remove_members:
+        add_ids: Final = frozenset(m.model_id for m in request_body.add_members)
+        remove_ids: Final = frozenset(request_body.remove_members)
+        overlap: Final = add_ids & remove_ids
+        if overlap:
+            raise ProxyException(
+                message=f"Cannot add and remove the same model(s) in one request: {sorted(overlap)}",
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param="remove_members",
+            )
+
     if request_body.add_members:
         for member in request_body.add_members:
             if member.model_id in existing_member_ids:
@@ -263,7 +286,7 @@ async def _patch_virtual_model_in_transaction(
                     param="members",
                 )
 
-        if len(existing_member_ids) + len(request_body.add_members) > 50:
+        if len(existing_member_ids - frozenset(request_body.remove_members or ())) + len(request_body.add_members) > 50:
             raise ProxyException(
                 message=f"Virtual model cannot have more than 50 members. "
                 f"Current: {len(existing_member_ids)}, adding: {len(request_body.add_members)}",
@@ -290,6 +313,14 @@ async def _patch_virtual_model_in_transaction(
                 code=status.HTTP_400_BAD_REQUEST,
                 param="members",
             )
+
+    if request_body.remove_members:
+        await tx.litellm_virtualmodelmembertable.delete_many(
+            where={
+                "virtual_model_id": virtual_model_id,
+                "model_id": {"in": list(request_body.remove_members)},
+            }
+        )
 
     try:
         updated_raw: Final = await tx.litellm_virtualmodeltable.update(
@@ -486,6 +517,9 @@ async def create_virtual_model(
 )
 async def list_virtual_models(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    search: str | None = Query(
+        default=None, max_length=255, description="Filter virtual models by name substring (case-insensitive)"
+    ),
 ) -> tuple[VirtualModelResponse, ...]:
     from litellm.proxy import proxy_server
 
@@ -500,8 +534,15 @@ async def list_virtual_models(
             param=None,
         )
 
+    where: Final[dict[str, dict[str, str]] | None] = (
+        {"virtual_model_name": {"contains": search, "mode": "insensitive"}}
+        if isinstance(search, str) and search
+        else None
+    )
+
     rows_raw: Final = await VirtualModelRepository(prisma_client).table.find_many(
-        include={"members": {"order_by": {"priority": "asc"}}}
+        include={"members": {"order_by": {"priority": "asc"}}},
+        where=where,
     )
     rows: Final = _validate_virtual_models(rows_raw)
 
@@ -617,7 +658,7 @@ async def patch_virtual_model(
     from litellm.proxy.common_utils.config_sync_pubsub import publish_config_change_for_object_type
 
     await publish_config_change_for_object_type("litellm_virtualmodeltable")
-    if request_body.add_members:
+    if request_body.add_members or request_body.remove_members:
         await publish_config_change_for_object_type("litellm_virtualmodelmembertable")
 
     reconcile_outcome: Final = await _reconcile_after_write()

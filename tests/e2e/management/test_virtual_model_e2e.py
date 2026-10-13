@@ -69,6 +69,7 @@ class VirtualModelPatchBody(BaseModel):
     virtual_model_name: str | None = None
     description: str | None = None
     add_members: tuple[VirtualModelMemberRequest, ...] | None = None
+    remove_members: tuple[str, ...] | None = None
 
 
 class VirtualModelMemberRow(BaseModel):
@@ -92,10 +93,6 @@ class VirtualModelRow(BaseModel):
 
 class VirtualModelListResponse(RootModel[tuple[VirtualModelRow, ...]]):
     pass
-
-
-class _RemovalShapedPatchBody(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
 
 def _create_virtual_model(client: ManagementClient, body: VirtualModelCreateBody) -> VirtualModelRow:
@@ -309,19 +306,28 @@ class TestVirtualModelRoutes:
             f"expected the admin-only rejection for non-admin DELETE, got: {delete_result.body[:300]}"
         )
 
-        body = _RemovalShapedPatchBody.model_construct()
-        body.__pydantic_extra__ = {"remove_members": [member_id]}
-        patch_validation = client.proxy.transport.patch(
+        body = VirtualModelPatchBody(remove_members=(member_id,))
+        admin_removal_result = client.proxy.transport.patch(
             f"/virtual_model/{created.virtual_model_id}",
             headers=client.proxy.transport.master,
             json=body,
             response_type=VirtualModelRow,
         )
-        assert isinstance(patch_validation, UnknownApiError), (
-            f"expected validation error for removal-shaped payload, got {type(patch_validation)}"
+        assert isinstance(admin_removal_result, VirtualModelRow), (
+            f"expected success for admin removal payload, got {type(admin_removal_result)}"
         )
-        assert patch_validation.status_code >= 400 and patch_validation.status_code < 500, (
-            f"expected 4xx for removal payload, got {patch_validation.status_code}"
+        assert len(admin_removal_result.members) == 0, (
+            f"expected membership to shrink to zero, got {len(admin_removal_result.members)} members"
+        )
+
+        non_admin_removal = client.proxy.transport.patch(
+            f"/virtual_model/{created.virtual_model_id}",
+            headers=client.proxy.transport.bearer(non_admin_key),
+            json=body,
+            response_type=VirtualModelRow,
+        )
+        assert isinstance(non_admin_removal, UnauthorizedError), (
+            f"expected auth error for non-admin removal, got {type(non_admin_removal)}"
         )
 
     @pytest.mark.covers("mgmt.virtual_model.call.happy_path")

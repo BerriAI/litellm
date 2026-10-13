@@ -75,6 +75,7 @@ class MockTransaction:
         self.query_raw = AsyncMock()
         self.litellm_virtualmodeltable = AsyncMock()
         self.litellm_virtualmodelmembertable = AsyncMock()
+        self.litellm_virtualmodelmembertable.delete_many = AsyncMock()
 
 
 class MockTransactionManager:
@@ -545,6 +546,208 @@ class TestVirtualModelList:
         assert result[0].live_member_count == 1
 
     @pytest.mark.asyncio
+    async def test_list_with_search_passes_where_clause_to_prisma(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
+
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        await list_virtual_models(search="foo", user_api_key_dict=_make_admin_user())
+
+        find_many_call = prisma.db.litellm_virtualmodeltable.find_many.call_args
+        where_clause = find_many_call[1].get("where")
+        assert where_clause == {"virtual_model_name": {"contains": "foo", "mode": "insensitive"}}
+
+    @pytest.mark.asyncio
+    async def test_list_with_search_filters_by_name_substring(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
+
+        vm_id_matching: Final = str(uuid4())
+        vm_id_other: Final = str(uuid4())
+
+        prisma: Final = MockPrismaClient()
+
+        def _fake_find_many(**kwargs) -> list[LiteLLM_VirtualModelTable]:
+            where = kwargs.get("where", {})
+            name_filter = where.get("virtual_model_name", {})
+            if name_filter:
+                contains = name_filter.get("contains", "").lower()
+                if contains == "deepseek":
+                    return [
+                        LiteLLM_VirtualModelTable(
+                            virtual_model_id=vm_id_matching,
+                            virtual_model_name="DeepSeek-V4",
+                            description=None,
+                            routing_strategy="ordered",
+                            members=[],
+                            created_at=datetime.now(),
+                            created_by="admin",
+                            updated_at=datetime.now(),
+                            updated_by="admin",
+                            num_retries=None,
+                            timeout=None,
+                            stream_timeout=None,
+                            allowed_fails=None,
+                            cooldown_time=None,
+                        )
+                    ]
+            return [
+                LiteLLM_VirtualModelTable(
+                    virtual_model_id=vm_id_matching,
+                    virtual_model_name="DeepSeek-V4",
+                    description=None,
+                    routing_strategy="ordered",
+                    members=[],
+                    created_at=datetime.now(),
+                    created_by="admin",
+                    updated_at=datetime.now(),
+                    updated_by="admin",
+                    num_retries=None,
+                    timeout=None,
+                    stream_timeout=None,
+                    allowed_fails=None,
+                    cooldown_time=None,
+                ),
+                LiteLLM_VirtualModelTable(
+                    virtual_model_id=vm_id_other,
+                    virtual_model_name="OtherModel",
+                    description=None,
+                    routing_strategy="ordered",
+                    members=[],
+                    created_at=datetime.now(),
+                    created_by="admin",
+                    updated_at=datetime.now(),
+                    updated_by="admin",
+                    num_retries=None,
+                    timeout=None,
+                    stream_timeout=None,
+                    allowed_fails=None,
+                    cooldown_time=None,
+                ),
+            ]
+
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(side_effect=_fake_find_many)
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        result = await list_virtual_models(search="deepseek", user_api_key_dict=_make_admin_user())
+
+        assert len(result) == 1
+        assert result[0].virtual_model_id == vm_id_matching
+        assert result[0].virtual_model_name == "DeepSeek-V4"
+
+    @pytest.mark.asyncio
+    async def test_list_with_search_is_case_insensitive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
+
+        vm_id: Final = str(uuid4())
+
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(
+            return_value=[
+                LiteLLM_VirtualModelTable(
+                    virtual_model_id=vm_id,
+                    virtual_model_name="DeepSeek-V4",
+                    description=None,
+                    routing_strategy="ordered",
+                    members=[],
+                    created_at=datetime.now(),
+                    created_by="admin",
+                    updated_at=datetime.now(),
+                    updated_by="admin",
+                    num_retries=None,
+                    timeout=None,
+                    stream_timeout=None,
+                    allowed_fails=None,
+                    cooldown_time=None,
+                )
+            ]
+        )
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        result = await list_virtual_models(search="deepseek", user_api_key_dict=_make_admin_user())
+
+        find_many_call = prisma.db.litellm_virtualmodeltable.find_many.call_args
+        where_clause = find_many_call[1].get("where")
+        assert where_clause["virtual_model_name"]["mode"] == "insensitive"
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_list_with_search_no_matches_returns_empty_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
+
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        result = await list_virtual_models(search="nonexistent", user_api_key_dict=_make_admin_user())
+
+        assert result == ()
+
+    @pytest.mark.asyncio
+    async def test_list_with_search_passes_sql_wildcards_verbatim(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
+
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        await list_virtual_models(search="test%model_name", user_api_key_dict=_make_admin_user())
+
+        find_many_call = prisma.db.litellm_virtualmodeltable.find_many.call_args
+        where_clause = find_many_call[1].get("where")
+        assert where_clause == {"virtual_model_name": {"contains": "test%model_name", "mode": "insensitive"}}
+
+    @pytest.mark.asyncio
+    async def test_list_without_search_has_no_name_filter_in_where(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
+
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        await list_virtual_models(user_api_key_dict=_make_admin_user())
+
+        find_many_call = prisma.db.litellm_virtualmodeltable.find_many.call_args
+        where_clause = find_many_call[1].get("where")
+        assert where_clause is None
+
+    @pytest.mark.asyncio
+    async def test_list_with_empty_search_has_no_name_filter_in_where(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
+
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        await list_virtual_models(search="", user_api_key_dict=_make_admin_user())
+
+        find_many_call = prisma.db.litellm_virtualmodeltable.find_many.call_args
+        where_clause = find_many_call[1].get("where")
+        assert where_clause is None
+
+    @pytest.mark.asyncio
     async def test_viewer_can_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
@@ -896,11 +1099,554 @@ class TestVirtualModelPatch:
         assert "litellm_virtualmodelmembertable" in published_tables
 
     @pytest.mark.asyncio
-    async def test_patch_with_remove_members_rejected_by_schema(self) -> None:
-        with pytest.raises(ValidationError, match="remove_members"):
-            VirtualModelPatchRequest(
-                remove_members=["some-id"],
+    async def test_patch_with_remove_members_accepted_by_schema(self) -> None:
+        req = VirtualModelPatchRequest(remove_members=("model-id-1", "model-id-2"))
+        assert req.remove_members == ("model-id-1", "model-id-2")
+
+    @pytest.mark.asyncio
+    async def test_patch_remove_members_happy_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import patch_virtual_model
+
+        vm_id: Final = str(uuid4())
+        model_id_1: Final = str(uuid4())
+        model_id_2: Final = str(uuid4())
+        model_id_3: Final = str(uuid4())
+
+        updated_vm: Final = LiteLLM_VirtualModelTable(
+            virtual_model_id=vm_id,
+            virtual_model_name="test-vm",
+            description=None,
+            routing_strategy="ordered",
+            members=[
+                LiteLLM_VirtualModelMemberTable(
+                    virtual_model_id=vm_id,
+                    model_id=model_id_1,
+                    priority=1,
+                ),
+                LiteLLM_VirtualModelMemberTable(
+                    virtual_model_id=vm_id,
+                    model_id=model_id_3,
+                    priority=3,
+                ),
+            ],
+            created_at=datetime.now(),
+            created_by="admin",
+            updated_at=datetime.now(),
+            updated_by="admin-user",
+            num_retries=None,
+            timeout=None,
+            stream_timeout=None,
+            allowed_fails=None,
+            cooldown_time=None,
+        )
+
+        prisma: Final = MockPrismaClient()
+
+        mock_tx = MockTransaction()
+        prisma._tx_manager = MockTransactionManager(mock_tx)
+        mock_tx.litellm_virtualmodeltable.find_unique = AsyncMock(
+            return_value=LiteLLM_VirtualModelTable(
+                virtual_model_id=vm_id,
+                virtual_model_name="test-vm",
+                description=None,
+                routing_strategy="ordered",
+                members=[
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id_1,
+                        priority=1,
+                    ),
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id_2,
+                        priority=2,
+                    ),
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id_3,
+                        priority=3,
+                    ),
+                ],
+                created_at=datetime.now(),
+                created_by="admin",
+                updated_at=datetime.now(),
+                updated_by="admin",
+                num_retries=None,
+                timeout=None,
+                stream_timeout=None,
+                allowed_fails=None,
+                cooldown_time=None,
             )
+        )
+        mock_tx.litellm_virtualmodelmembertable.delete_many = AsyncMock(return_value=1)
+        mock_tx.litellm_virtualmodeltable.update = AsyncMock(return_value=updated_vm)
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.virtual_model_endpoints.clear_cache",
+                new_callable=AsyncMock,
+            ) as mock_clear_cache,
+            patch(
+                "litellm.proxy.common_utils.config_sync_pubsub.publish_config_change_for_object_type",
+                new_callable=AsyncMock,
+            ) as mock_publish,
+        ):
+            mock_clear_cache.return_value = MagicMock(still_desired=None, live_after=None)
+            result = await patch_virtual_model(
+                virtual_model_id=vm_id,
+                request_body=VirtualModelPatchRequest(
+                    remove_members=(model_id_2,),
+                ),
+                user_api_key_dict=_make_admin_user(),
+            )
+
+        assert result.virtual_model_id == vm_id
+        assert len(result.members) == 2
+        assert result.members[0].model_id == model_id_1
+        assert result.members[0].priority == 1
+        assert result.members[1].model_id == model_id_3
+        assert result.members[1].priority == 3
+
+        mock_tx.litellm_virtualmodelmembertable.delete_many.assert_called_once()
+        delete_many_call = mock_tx.litellm_virtualmodelmembertable.delete_many.call_args
+        where_clause = delete_many_call[1]["where"]
+        assert where_clause["virtual_model_id"] == vm_id
+        assert model_id_2 in where_clause["model_id"]["in"]
+
+        assert mock_publish.call_count == 2
+        published_tables = [call[0][0] for call in mock_publish.call_args_list]
+        assert "litellm_virtualmodeltable" in published_tables
+        assert "litellm_virtualmodelmembertable" in published_tables
+
+    @pytest.mark.asyncio
+    async def test_patch_remove_members_non_member_returns_400(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import patch_virtual_model
+
+        vm_id: Final = str(uuid4())
+        model_id_existing: Final = str(uuid4())
+        model_id_nonmember: Final = str(uuid4())
+
+        prisma: Final = MockPrismaClient()
+
+        mock_tx = MockTransaction()
+        prisma._tx_manager = MockTransactionManager(mock_tx)
+        mock_tx.litellm_virtualmodeltable.find_unique = AsyncMock(
+            return_value=LiteLLM_VirtualModelTable(
+                virtual_model_id=vm_id,
+                virtual_model_name="test-vm",
+                description=None,
+                routing_strategy="ordered",
+                members=[
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id_existing,
+                        priority=1,
+                    ),
+                ],
+                created_at=datetime.now(),
+                created_by="admin",
+                updated_at=datetime.now(),
+                updated_by="admin",
+                num_retries=None,
+                timeout=None,
+                stream_timeout=None,
+                allowed_fails=None,
+                cooldown_time=None,
+            )
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await patch_virtual_model(
+                virtual_model_id=vm_id,
+                request_body=VirtualModelPatchRequest(
+                    remove_members=(model_id_nonmember,),
+                ),
+                user_api_key_dict=_make_admin_user(),
+            )
+
+        assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+        assert "not a member" in exc_info.value.message.lower()
+        mock_tx.litellm_virtualmodelmembertable.delete_many.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_patch_remove_members_same_id_in_add_and_remove_returns_400(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import patch_virtual_model
+
+        vm_id: Final = str(uuid4())
+        model_id: Final = str(uuid4())
+
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[_make_deployment(model_id, "model-1")])
+
+        mock_tx = MockTransaction()
+        prisma._tx_manager = MockTransactionManager(mock_tx)
+        mock_tx.litellm_virtualmodeltable.find_unique = AsyncMock(
+            return_value=LiteLLM_VirtualModelTable(
+                virtual_model_id=vm_id,
+                virtual_model_name="test-vm",
+                description=None,
+                routing_strategy="ordered",
+                members=[
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id,
+                        priority=1,
+                    ),
+                ],
+                created_at=datetime.now(),
+                created_by="admin",
+                updated_at=datetime.now(),
+                updated_by="admin",
+                num_retries=None,
+                timeout=None,
+                stream_timeout=None,
+                allowed_fails=None,
+                cooldown_time=None,
+            )
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        with pytest.raises(ProxyException) as exc_info:
+            await patch_virtual_model(
+                virtual_model_id=vm_id,
+                request_body=VirtualModelPatchRequest(
+                    add_members=(VirtualModelMemberRequest(model_id=model_id, priority=2),),
+                    remove_members=(model_id,),
+                ),
+                user_api_key_dict=_make_admin_user(),
+            )
+
+        assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+        assert "add and remove" in exc_info.value.message.lower()
+
+    @pytest.mark.asyncio
+    async def test_patch_remove_members_to_zero_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import patch_virtual_model
+
+        vm_id: Final = str(uuid4())
+        model_id: Final = str(uuid4())
+
+        updated_vm: Final = LiteLLM_VirtualModelTable(
+            virtual_model_id=vm_id,
+            virtual_model_name="test-vm",
+            description=None,
+            routing_strategy="ordered",
+            members=[],
+            created_at=datetime.now(),
+            created_by="admin",
+            updated_at=datetime.now(),
+            updated_by="admin-user",
+            num_retries=None,
+            timeout=None,
+            stream_timeout=None,
+            allowed_fails=None,
+            cooldown_time=None,
+        )
+
+        prisma: Final = MockPrismaClient()
+
+        mock_tx = MockTransaction()
+        prisma._tx_manager = MockTransactionManager(mock_tx)
+        mock_tx.litellm_virtualmodeltable.find_unique = AsyncMock(
+            return_value=LiteLLM_VirtualModelTable(
+                virtual_model_id=vm_id,
+                virtual_model_name="test-vm",
+                description=None,
+                routing_strategy="ordered",
+                members=[
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id,
+                        priority=1,
+                    ),
+                ],
+                created_at=datetime.now(),
+                created_by="admin",
+                updated_at=datetime.now(),
+                updated_by="admin",
+                num_retries=None,
+                timeout=None,
+                stream_timeout=None,
+                allowed_fails=None,
+                cooldown_time=None,
+            )
+        )
+        mock_tx.litellm_virtualmodelmembertable.delete_many = AsyncMock(return_value=1)
+        mock_tx.litellm_virtualmodeltable.update = AsyncMock(return_value=updated_vm)
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+
+        with patch(
+            "litellm.proxy.management_endpoints.virtual_model_endpoints.clear_cache",
+            new_callable=AsyncMock,
+        ) as mock_clear_cache:
+            mock_clear_cache.return_value = MagicMock(still_desired=None, live_after=None)
+            result = await patch_virtual_model(
+                virtual_model_id=vm_id,
+                request_body=VirtualModelPatchRequest(
+                    remove_members=(model_id,),
+                ),
+                user_api_key_dict=_make_admin_user(),
+            )
+
+        assert result.virtual_model_id == vm_id
+        assert len(result.members) == 0
+        mock_tx.litellm_virtualmodelmembertable.delete_many.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_patch_remove_members_does_not_renumber_priorities(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import patch_virtual_model
+
+        vm_id: Final = str(uuid4())
+        model_id_1: Final = str(uuid4())
+        model_id_2: Final = str(uuid4())
+        model_id_3: Final = str(uuid4())
+
+        updated_vm: Final = LiteLLM_VirtualModelTable(
+            virtual_model_id=vm_id,
+            virtual_model_name="test-vm",
+            description=None,
+            routing_strategy="ordered",
+            members=[
+                LiteLLM_VirtualModelMemberTable(
+                    virtual_model_id=vm_id,
+                    model_id=model_id_1,
+                    priority=1,
+                ),
+                LiteLLM_VirtualModelMemberTable(
+                    virtual_model_id=vm_id,
+                    model_id=model_id_3,
+                    priority=3,
+                ),
+            ],
+            created_at=datetime.now(),
+            created_by="admin",
+            updated_at=datetime.now(),
+            updated_by="admin-user",
+            num_retries=None,
+            timeout=None,
+            stream_timeout=None,
+            allowed_fails=None,
+            cooldown_time=None,
+        )
+
+        prisma: Final = MockPrismaClient()
+
+        mock_tx = MockTransaction()
+        prisma._tx_manager = MockTransactionManager(mock_tx)
+        mock_tx.litellm_virtualmodeltable.find_unique = AsyncMock(
+            return_value=LiteLLM_VirtualModelTable(
+                virtual_model_id=vm_id,
+                virtual_model_name="test-vm",
+                description=None,
+                routing_strategy="ordered",
+                members=[
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id_1,
+                        priority=1,
+                    ),
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id_2,
+                        priority=2,
+                    ),
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id_3,
+                        priority=3,
+                    ),
+                ],
+                created_at=datetime.now(),
+                created_by="admin",
+                updated_at=datetime.now(),
+                updated_by="admin",
+                num_retries=None,
+                timeout=None,
+                stream_timeout=None,
+                allowed_fails=None,
+                cooldown_time=None,
+            )
+        )
+        mock_tx.litellm_virtualmodelmembertable.delete_many = AsyncMock(return_value=1)
+        mock_tx.litellm_virtualmodeltable.update = AsyncMock(return_value=updated_vm)
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+
+        with patch(
+            "litellm.proxy.management_endpoints.virtual_model_endpoints.clear_cache",
+            new_callable=AsyncMock,
+        ) as mock_clear_cache:
+            mock_clear_cache.return_value = MagicMock(still_desired=None, live_after=None)
+            result = await patch_virtual_model(
+                virtual_model_id=vm_id,
+                request_body=VirtualModelPatchRequest(
+                    remove_members=(model_id_2,),
+                ),
+                user_api_key_dict=_make_admin_user(),
+            )
+
+        assert len(result.members) == 2
+        assert result.members[0].priority == 1
+        assert result.members[1].priority == 3
+
+    @pytest.mark.asyncio
+    async def test_patch_remove_members_publishes_member_table_change(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import patch_virtual_model
+
+        vm_id: Final = str(uuid4())
+        model_id: Final = str(uuid4())
+
+        updated_vm: Final = LiteLLM_VirtualModelTable(
+            virtual_model_id=vm_id,
+            virtual_model_name="test-vm",
+            description=None,
+            routing_strategy="ordered",
+            members=[],
+            created_at=datetime.now(),
+            created_by="admin",
+            updated_at=datetime.now(),
+            updated_by="admin-user",
+            num_retries=None,
+            timeout=None,
+            stream_timeout=None,
+            allowed_fails=None,
+            cooldown_time=None,
+        )
+
+        prisma: Final = MockPrismaClient()
+
+        mock_tx = MockTransaction()
+        prisma._tx_manager = MockTransactionManager(mock_tx)
+        mock_tx.litellm_virtualmodeltable.find_unique = AsyncMock(
+            return_value=LiteLLM_VirtualModelTable(
+                virtual_model_id=vm_id,
+                virtual_model_name="test-vm",
+                description=None,
+                routing_strategy="ordered",
+                members=[
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id,
+                        priority=1,
+                    ),
+                ],
+                created_at=datetime.now(),
+                created_by="admin",
+                updated_at=datetime.now(),
+                updated_by="admin",
+                num_retries=None,
+                timeout=None,
+                stream_timeout=None,
+                allowed_fails=None,
+                cooldown_time=None,
+            )
+        )
+        mock_tx.litellm_virtualmodelmembertable.delete_many = AsyncMock(return_value=1)
+        mock_tx.litellm_virtualmodeltable.update = AsyncMock(return_value=updated_vm)
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.virtual_model_endpoints.clear_cache",
+                new_callable=AsyncMock,
+            ) as mock_clear_cache,
+            patch(
+                "litellm.proxy.common_utils.config_sync_pubsub.publish_config_change_for_object_type",
+                new_callable=AsyncMock,
+            ) as mock_publish,
+        ):
+            mock_clear_cache.return_value = MagicMock(still_desired=None, live_after=None)
+            await patch_virtual_model(
+                virtual_model_id=vm_id,
+                request_body=VirtualModelPatchRequest(
+                    remove_members=(model_id,),
+                ),
+                user_api_key_dict=_make_admin_user(),
+            )
+
+        assert mock_publish.call_count == 2
+        published_tables = [call[0][0] for call in mock_publish.call_args_list]
+        assert "litellm_virtualmodeltable" in published_tables
+        assert "litellm_virtualmodelmembertable" in published_tables
+
+    @pytest.mark.asyncio
+    async def test_patch_remove_members_validation_failure_no_writes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import patch_virtual_model
+
+        vm_id: Final = str(uuid4())
+        model_id_existing: Final = str(uuid4())
+        model_id_nonmember: Final = str(uuid4())
+
+        prisma: Final = MockPrismaClient()
+
+        mock_tx = MockTransaction()
+        prisma._tx_manager = MockTransactionManager(mock_tx)
+        mock_tx.litellm_virtualmodeltable.find_unique = AsyncMock(
+            return_value=LiteLLM_VirtualModelTable(
+                virtual_model_id=vm_id,
+                virtual_model_name="test-vm",
+                description=None,
+                routing_strategy="ordered",
+                members=[
+                    LiteLLM_VirtualModelMemberTable(
+                        virtual_model_id=vm_id,
+                        model_id=model_id_existing,
+                        priority=1,
+                    ),
+                ],
+                created_at=datetime.now(),
+                created_by="admin",
+                updated_at=datetime.now(),
+                updated_by="admin",
+                num_retries=None,
+                timeout=None,
+                stream_timeout=None,
+                allowed_fails=None,
+                cooldown_time=None,
+            )
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        with pytest.raises(ProxyException):
+            await patch_virtual_model(
+                virtual_model_id=vm_id,
+                request_body=VirtualModelPatchRequest(
+                    remove_members=(model_id_nonmember,),
+                ),
+                user_api_key_dict=_make_admin_user(),
+            )
+
+        mock_tx.litellm_virtualmodelmembertable.delete_many.assert_not_called()
+        mock_tx.litellm_virtualmodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_patch_re_adding_existing_member_returns_400(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1372,6 +2118,89 @@ class TestVirtualModelPatch:
 
         assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
         assert "cannot have more than 50 members" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_patch_swap_at_cap_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import patch_virtual_model
+
+        vm_id: Final = str(uuid4())
+        model_ids: Final = [str(uuid4()) for _ in range(50)]
+
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(mid, f"model-{i}") for i, mid in enumerate(model_ids)]
+        )
+
+        existing_members = [
+            LiteLLM_VirtualModelMemberTable(
+                virtual_model_id=vm_id,
+                model_id=model_ids[i],
+                priority=i,
+            )
+            for i in range(50)
+        ]
+
+        mock_tx = MockTransaction()
+        prisma._tx_manager = MockTransactionManager(mock_tx)
+        mock_tx.litellm_virtualmodeltable.find_unique = AsyncMock(
+            return_value=LiteLLM_VirtualModelTable(
+                virtual_model_id=vm_id,
+                virtual_model_name="test-vm",
+                description=None,
+                routing_strategy="ordered",
+                members=existing_members,
+                created_at=datetime.now(),
+                created_by="admin",
+                updated_at=datetime.now(),
+                updated_by="admin",
+                num_retries=None,
+                timeout=None,
+                stream_timeout=None,
+                allowed_fails=None,
+                cooldown_time=None,
+            )
+        )
+        mock_tx.litellm_virtualmodelmembertable.delete_many = AsyncMock(return_value=1)
+        mock_tx.litellm_virtualmodelmembertable.create_many = AsyncMock(return_value=1)
+        mock_tx.litellm_virtualmodeltable.update = AsyncMock(
+            return_value=LiteLLM_VirtualModelTable(
+                virtual_model_id=vm_id,
+                virtual_model_name="test-vm",
+                description=None,
+                routing_strategy="ordered",
+                members=existing_members,
+                created_at=datetime.now(),
+                created_by="admin",
+                updated_at=datetime.now(),
+                updated_by="admin",
+                num_retries=None,
+                timeout=None,
+                stream_timeout=None,
+                allowed_fails=None,
+                cooldown_time=None,
+            )
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        new_model_id: Final = str(uuid4())
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(mid, f"model-{i}") for i, mid in enumerate(model_ids)]
+            + [_make_deployment(new_model_id, "model-new")]
+        )
+
+        result = await patch_virtual_model(
+            virtual_model_id=vm_id,
+            request_body=VirtualModelPatchRequest(
+                remove_members=(model_ids[0],),
+                add_members=(VirtualModelMemberRequest(model_id=new_model_id, priority=50),),
+            ),
+            user_api_key_dict=_make_admin_user(),
+        )
+
+        assert result.members is not None
+        assert len(result.members) == 50
 
     @pytest.mark.asyncio
     async def test_lock_taken_only_when_adding_members(self, monkeypatch: pytest.MonkeyPatch) -> None:

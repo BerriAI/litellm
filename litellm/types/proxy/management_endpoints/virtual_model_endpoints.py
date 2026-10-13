@@ -60,6 +60,7 @@ class VirtualModelPatchRequest(BaseModel):
     virtual_model_name: str | None = None
     description: str | None = None
     add_members: tuple[VirtualModelMemberRequest, ...] | None = None
+    remove_members: tuple[str, ...] | None = None
     routing_strategy: VirtualModelRoutingStrategy | None = None
     num_retries: Annotated[int | None, Field(ge=0, le=3)] = None
     timeout: int | None = None
