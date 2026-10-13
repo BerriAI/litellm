@@ -90,49 +90,6 @@ def _add_guardrail(gateway: Gateway, name: str, decision_model: str, mode: str =
     return string_value(created["guardrail_id"])
 
 
-def _judge_reply(score: int) -> JsonResponse:
-    return JsonResponse(
-        content_type="application/json",
-        body={
-            "id": f"chatcmpl-judge-{uuid.uuid4().hex}",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "integration-judge",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": f'{{"overall_score": {score}, "reasoning": "verdict"}}',
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-        },
-    )
-
-
-def _add_judge_guardrail(gateway: Gateway, name: str, judge_model: str, mode: str = "pre_call") -> str:
-    created: Final = gateway.post(
-        "/guardrails",
-        {
-            "guardrail": {
-                "guardrail_name": name,
-                "litellm_params": {
-                    "guardrail": "llm_as_a_judge",
-                    "mode": mode,
-                    "judge_model": judge_model,
-                    "criteria": [{"name": "Safety", "weight": 100, "description": "Is the prompt safe?"}],
-                    "overall_threshold": 80,
-                    "on_failure": "block",
-                },
-            }
-        },
-    )
-    return string_value(created["guardrail_id"])
-
-
 def _delete_guardrail(gateway: Gateway, identity: str) -> None:
     response: Final = gateway.request("DELETE", f"/guardrails/{identity}")
     assert response.status_code == 200, response.text
@@ -366,87 +323,23 @@ def test_team_decision_model_wins_over_a_shared_name_only_for_the_owner(
         ), response.text
 
 
-@pytest.mark.parametrize("mode", ["pre_call", "post_call", "during_call"])
-def test_judge_guardrail_blocks_using_the_callers_team_model(gateway: Gateway, mode: str) -> None:
-    with gateway.scenario() as scenario:
-        handle: Final = register_scenario(f"judge-team-{uuid.uuid4().hex}", _judge_reply(0))
-        scenario.cleanups.callback(delete_scenario, handle)
-        chat: Final = scenario.model()
-        team: Final = scenario.team(models=[chat])
-        judge: Final = scenario.model(
-            api_base=f"{handle.api_base()}/v1",
-            api_key=handle.scenario_id,
-            model_info={"team_id": team},
-        )
-        key: Final = scenario.key(team_id=team)
-        guardrail: Final = f"judge-team-guard-{uuid.uuid4().hex}"
-        scenario.cleanups.callback(_delete_guardrail, gateway, _add_judge_guardrail(gateway, guardrail, judge, mode))
-        guarded: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {
-                "model": chat,
-                "messages": [{"role": "user", "content": "unsafe prompt"}],
-                "metadata": {"guardrails": [guardrail]},
-            },
-            key=key,
-        )
-        assert guarded.status_code == 422, guarded.text
-        other_team: Final = scenario.team(models=[chat])
-        other_key: Final = scenario.key(team_id=other_team)
-        with httpx.Client(timeout=10, trust_env=False) as client:
-            client.get(f"{gateway.upstream_url}/__observations").raise_for_status()
-            foreign: Final = gateway.request(
-                "POST",
-                "/v1/chat/completions",
-                {
-                    "model": chat,
-                    "messages": [{"role": "user", "content": "unsafe prompt"}],
-                    "metadata": {"guardrails": [guardrail]},
-                },
-                key=other_key,
-            )
-            assert foreign.status_code == 200, foreign.text
-            observed: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
-            requests: Final = observed["requests"]
-            assert isinstance(requests, list)
-            assert all(handle.scenario_id not in str(object_value(call)["path"]) for call in requests), observed
-
-
 @pytest.mark.parametrize("explicit_access", [False, True])
 @pytest.mark.parametrize("route", ["/apply_guardrail", "/guardrails/apply_guardrail"])
-@pytest.mark.parametrize(("kind", "forwarded_status"), [("decision_model", 502), ("llm_as_a_judge", 200)])
-def test_standalone_guardrail_ignores_a_forged_team(
-    gateway: Gateway, route: str, explicit_access: bool, kind: str, forwarded_status: int
-) -> None:
+def test_standalone_guardrail_ignores_a_forged_team(gateway: Gateway, route: str, explicit_access: bool) -> None:
     with gateway.scenario() as scenario:
-        is_decision: Final = kind == "decision_model"
-        handle: Final = register_scenario(
-            f"{kind}-forged-{uuid.uuid4().hex}", _upstream(_PROBABILITY_ABOVE) if is_decision else _judge_reply(0)
-        )
+        handle: Final = register_scenario(f"dm-forged-{uuid.uuid4().hex}", _upstream(_PROBABILITY_ABOVE))
         scenario.cleanups.callback(delete_scenario, handle)
         owner: Final = scenario.team(models=[])
         foreign: Final = scenario.team(models=[])
-        guarded_model: Final = (
-            scenario.model(
-                model="typesafe/jev-latest",
-                api_base=handle.api_base(),
-                api_key=handle.scenario_id,
-                model_info={"team_id": owner},
-            )
-            if is_decision
-            else scenario.model(
-                api_base=f"{handle.api_base()}/v1", api_key=handle.scenario_id, model_info={"team_id": owner}
-            )
+        guarded_model: Final = scenario.model(
+            model="typesafe/jev-latest",
+            api_base=handle.api_base(),
+            api_key=handle.scenario_id,
+            model_info={"team_id": owner},
         )
         key: Final = scenario.key(team_id=foreign, **({"allowed_routes": [route]} if explicit_access else {}))
-        guardrail: Final = f"{kind}-forged-guard-{uuid.uuid4().hex}"
-        identity: Final = (
-            _add_guardrail(gateway, guardrail, guarded_model)
-            if is_decision
-            else _add_judge_guardrail(gateway, guardrail, guarded_model)
-        )
-        scenario.cleanups.callback(_delete_guardrail, gateway, identity)
+        guardrail: Final = f"dm-forged-guard-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(_delete_guardrail, gateway, _add_guardrail(gateway, guardrail, guarded_model))
         with httpx.Client(timeout=10, trust_env=False) as client:
             client.get(f"{gateway.upstream_url}/__observations").raise_for_status()
             response: Final = gateway.request(
@@ -461,7 +354,7 @@ def test_standalone_guardrail_ignores_a_forged_team(
             )
             observed: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
             assert observed["requests"] == [], observed
-            assert response.status_code == (forwarded_status if explicit_access else 401), response.text
+            assert response.status_code == (502 if explicit_access else 401), response.text
 
 
 def _spend_teams_by_request(request_id: str) -> list[dict[str, JsonValue]]:
@@ -477,39 +370,24 @@ def _spend_requests_by_team(team: str) -> list[dict[str, JsonValue]]:
 
 
 @pytest.mark.parametrize("guard_owner", ["proxy-wide", "caller-team"])
-@pytest.mark.parametrize("kind", ["decision_model", "llm_as_a_judge"])
-def test_guardrail_model_spend_is_not_charged_to_the_team_caller(gateway: Gateway, kind: str, guard_owner: str) -> None:
+def test_guardrail_model_spend_is_not_charged_to_the_team_caller(gateway: Gateway, guard_owner: str) -> None:
     with gateway.scenario() as scenario:
-        is_decision: Final = kind == "decision_model"
-        chat_handle: Final = register_scenario(f"{kind}-chat-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW))
+        chat_handle: Final = register_scenario(f"dm-chat-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW))
         scenario.cleanups.callback(delete_scenario, chat_handle)
-        guard_handle: Final = register_scenario(
-            f"{kind}-shared-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW) if is_decision else _judge_reply(100)
-        )
+        guard_handle: Final = register_scenario(f"dm-guard-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW))
         scenario.cleanups.callback(delete_scenario, guard_handle)
         chat: Final = scenario.model(api_base=f"{chat_handle.api_base()}/v1", api_key=chat_handle.scenario_id)
         team: Final = scenario.team(models=[chat])
         key: Final = scenario.key(team_id=team)
         guard_info: Final[dict[str, JsonValue]] = {"team_id": team} if guard_owner == "caller-team" else {}
-        guard_model: Final = (
-            scenario.model(
-                model="typesafe/jev-latest",
-                api_base=guard_handle.api_base(),
-                api_key=guard_handle.scenario_id,
-                model_info=guard_info,
-            )
-            if is_decision
-            else scenario.model(
-                api_base=f"{guard_handle.api_base()}/v1", api_key=guard_handle.scenario_id, model_info=guard_info
-            )
+        guard_model: Final = scenario.model(
+            model="typesafe/jev-latest",
+            api_base=guard_handle.api_base(),
+            api_key=guard_handle.scenario_id,
+            model_info=guard_info,
         )
-        guardrail: Final = f"{kind}-shared-guard-{uuid.uuid4().hex}"
-        identity: Final = (
-            _add_guardrail(gateway, guardrail, guard_model)
-            if is_decision
-            else _add_judge_guardrail(gateway, guardrail, guard_model)
-        )
-        scenario.cleanups.callback(_delete_guardrail, gateway, identity)
+        guardrail: Final = f"dm-guard-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(_delete_guardrail, gateway, _add_guardrail(gateway, guardrail, guard_model))
         with httpx.Client(timeout=10, trust_env=False) as client:
             client.get(f"{gateway.upstream_url}/__observations").raise_for_status()
             guarded: Final = gateway.request(

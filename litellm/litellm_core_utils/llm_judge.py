@@ -197,7 +197,6 @@ async def judge_acompletion(
     judge_model: str,
     messages: list[AllMessageValues],  # mutable-ok: the SDK acompletion signature takes a list
     team_id: str | None = None,
-    pin_team_deployment: bool = False,
     **params: object,
 ) -> ModelResponse:
     """Dispatch a judge call through the proxy's router when the judge model is a
@@ -209,13 +208,10 @@ async def judge_acompletion(
 
     The arm is chosen by `judge_target` under the caller's own team, the same call
     start-time validation makes, so a judge a team can reach cannot be validated as a
-    deployment and then dispatched as a public name the SDK has never heard of.
-
-    With `pin_team_deployment`, a router call goes to the id of the deployment `team_id`'s
-    route picks, so it reaches that team's model without carrying the team."""
-    if router is not None and judge_target(router, judge_model, team_id).via == "router":
-        return await router.acompletion(
-            model=await team_routed_model(router, judge_model, team_id if pin_team_deployment else None),
+    deployment and then dispatched as a public name the SDK has never heard of."""
+    if judge_target(router, judge_model, team_id).via == "router":
+        return await router.acompletion(  # pyright: ignore[reportOptionalMemberAccess]  # a router target implies router is not None
+            model=judge_model,
             messages=messages,
             num_retries=0,
             fallbacks=[],

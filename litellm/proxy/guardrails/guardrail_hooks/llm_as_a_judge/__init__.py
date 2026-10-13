@@ -14,8 +14,6 @@ from litellm._logging import verbose_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.llm_judge import (
-    attached_auth,
-    caller_team_for,
     default_router_provider,
     extract_text_from_content,
     judge_acompletion,
@@ -239,7 +237,6 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         messages: Sequence[JudgeMessage],
         text_under_review: str,
         input_type: JudgeInputType = "response",
-        team_id: str | None = None,
     ) -> dict[str, object]:
         judge_messages: Final[list[AllMessageValues]] = [
             {"role": "system", "content": JUDGE_SYSTEM_PROMPTS[input_type]},
@@ -252,8 +249,6 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             self._router_provider(),
             self.judge_model,
             judge_messages,
-            team_id=team_id,
-            pin_team_deployment=True,
             response_format={"type": "json_object"},
             temperature=0,
             metadata=dict(_JUDGE_CALL_METADATA),
@@ -282,12 +277,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             )
 
             try:
-                judge_result = await self._run_judge(
-                    messages,
-                    text_under_review,
-                    input_type,
-                    caller_team_for(self._router_provider(), self.judge_model, attached_auth(request_data)),  # pyright: ignore[reportUnknownArgumentType]  # base signature types request_data as a bare dict
-                )
+                judge_result = await self._run_judge(messages, text_under_review, input_type)
             except Exception as judge_err:
                 verbose_logger.warning(
                     "llm_as_a_judge guardrail: judge call failed, failing open. Error: %s", judge_err
