@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Final, TypeVar
+from typing import Final, Literal, TypeVar
 
 import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, OPENAI_EMBEDDING_MODEL, unique_marker
@@ -55,12 +55,27 @@ class VirtualModelMemberRequest(BaseModel):
     priority: int = 1
 
 
+RoutingStrategy = Literal[
+    "simple-shuffle",
+    "least-busy",
+    "usage-based-routing-v2",
+    "latency-based-routing",
+    "cost-based-routing",
+    "ordered",
+]
+
+
 class VirtualModelCreateBody(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     virtual_model_name: str
     members: tuple[VirtualModelMemberRequest, ...]
     description: str | None = None
+    routing_strategy: RoutingStrategy | None = None
+    num_retries: int | None = None
+    timeout: int | None = None
+    allowed_fails: int | None = None
+    cooldown_time: int | None = None
 
 
 class VirtualModelPatchBody(BaseModel):
@@ -129,20 +144,53 @@ def _delete_virtual_model(client: ManagementClient, virtual_model_id: str) -> Vi
     )
 
 
-def _list_virtual_models(client: ManagementClient) -> tuple[VirtualModelRow, ...]:
+def _patch_virtual_model(
+    client: ManagementClient, virtual_model_id: str, body: VirtualModelPatchBody
+) -> VirtualModelRow:
+    return unwrap(
+        client.proxy.transport.patch(
+            f"/virtual_model/{virtual_model_id}",
+            headers=client.proxy.transport.master,
+            json=body,
+            response_type=VirtualModelRow,
+        )
+    )
+
+
+class VirtualModelListParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    search: str | None = None
+
+
+class ConfigUpdateBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    router_settings: dict[str, object] | None = None
+
+
+class ConfigUpdateResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    message: str
+
+
+def _list_virtual_models(client: ManagementClient, search: str | None = None) -> tuple[VirtualModelRow, ...]:
     return unwrap(
         client.proxy.transport.get(
             "/virtual_model",
             headers=client.proxy.transport.master,
-            params=NoBody(),
+            params=VirtualModelListParams(search=search),
             response_type=VirtualModelListResponse,
         )
     ).root
 
 
-def _virtual_model_entry(client: ManagementClient, virtual_model_name: str) -> VirtualModelRow | None:
+def _virtual_model_entry(
+    client: ManagementClient, virtual_model_name: str, search: str | None = None
+) -> VirtualModelRow | None:
     return next(
-        (vm for vm in _list_virtual_models(client) if vm.virtual_model_name == virtual_model_name),
+        (vm for vm in _list_virtual_models(client, search=search) if vm.virtual_model_name == virtual_model_name),
         None,
     )
 
@@ -307,14 +355,13 @@ class TestVirtualModelRoutes:
         )
 
         body = VirtualModelPatchBody(remove_members=(member_id,))
-        admin_removal_result = client.proxy.transport.patch(
-            f"/virtual_model/{created.virtual_model_id}",
-            headers=client.proxy.transport.master,
-            json=body,
-            response_type=VirtualModelRow,
-        )
-        assert isinstance(admin_removal_result, VirtualModelRow), (
-            f"expected success for admin removal payload, got {type(admin_removal_result)}"
+        admin_removal_result = unwrap(
+            client.proxy.transport.patch(
+                f"/virtual_model/{created.virtual_model_id}",
+                headers=client.proxy.transport.master,
+                json=body,
+                response_type=VirtualModelRow,
+            )
         )
         assert len(admin_removal_result.members) == 0, (
             f"expected membership to shrink to zero, got {len(admin_removal_result.members)} members"
@@ -677,3 +724,248 @@ class TestVirtualModelRoutes:
         assert not chunks.stream_error
         assert chunks.chunks > 0
         assert chunks.stream_done
+
+    @pytest.mark.covers("mgmt.virtual_model.list.search")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+        )
+    )
+    def test_list_with_search_filters_by_name(self, client: ManagementClient, resources: ResourceManager) -> None:
+        vm1_name = f"e2e-vm-search-alpha-{unique_marker()}"
+        vm2_name = f"e2e-vm-search-beta-{unique_marker()}"
+        member_name = f"e2e-vm-search-member-{unique_marker()}"
+
+        member_id = client.proxy.create_model(
+            member_name,
+            LiteLLMParamsBody(model=BACKEND_MODEL),
+        )
+        resources.defer(lambda: client.proxy.delete_model(member_id))
+
+        vm1 = _create_virtual_model(
+            client,
+            VirtualModelCreateBody(
+                virtual_model_name=vm1_name,
+                members=(VirtualModelMemberRequest(model_id=member_id, priority=1),),
+            ),
+        )
+        resources.defer(lambda: _delete_virtual_model(client, vm1.virtual_model_id))
+
+        vm2 = _create_virtual_model(
+            client,
+            VirtualModelCreateBody(
+                virtual_model_name=vm2_name,
+                members=(VirtualModelMemberRequest(model_id=member_id, priority=1),),
+            ),
+        )
+        resources.defer(lambda: _delete_virtual_model(client, vm2.virtual_model_id))
+
+        alpha_lower = _list_virtual_models(client, search="alpha")
+        assert len(alpha_lower) == 1, f"expected one match for 'alpha', got {len(alpha_lower)}"
+        assert alpha_lower[0].virtual_model_name == vm1_name
+
+        alpha_upper = _list_virtual_models(client, search="ALPHA")
+        assert len(alpha_upper) == 1, f"expected one match for 'ALPHA', got {len(alpha_upper)}"
+        assert alpha_upper[0].virtual_model_name == vm1_name
+
+        alpha_partial = _list_virtual_models(client, search="lph")
+        assert len(alpha_partial) == 1, f"expected one match for 'lph', got {len(alpha_partial)}"
+        assert alpha_partial[0].virtual_model_name == vm1_name
+
+        nonexistent = _list_virtual_models(client, search="nonexistent-marker-xyz")
+        assert len(nonexistent) == 0, f"expected no matches for 'nonexistent-marker-xyz', got {len(nonexistent)}"
+
+    @pytest.mark.covers("mgmt.virtual_model.update.remove_member_reroutes")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+        )
+    )
+    def test_remove_member_then_call_succeeds_via_survivor(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        vm_name = f"e2e-vm-remove-reroute-{unique_marker()}"
+        member1_name = f"e2e-vm-remove-member1-{unique_marker()}"
+        member2_name = f"e2e-vm-remove-member2-{unique_marker()}"
+
+        member1_id = client.proxy.create_model(
+            member1_name,
+            LiteLLMParamsBody(model=BACKEND_MODEL),
+        )
+        resources.defer(lambda: client.proxy.delete_model(member1_id))
+
+        member2_id = client.proxy.create_model(
+            member2_name,
+            LiteLLMParamsBody(model=BACKEND_MODEL),
+        )
+        resources.defer(lambda: client.proxy.delete_model(member2_id))
+
+        created = _create_virtual_model(
+            client,
+            VirtualModelCreateBody(
+                virtual_model_name=vm_name,
+                members=(
+                    VirtualModelMemberRequest(model_id=member1_id, priority=1),
+                    VirtualModelMemberRequest(model_id=member2_id, priority=2),
+                ),
+            ),
+        )
+        resources.defer(lambda: _delete_virtual_model(client, created.virtual_model_id))
+
+        assert len(created.members) == 2
+
+        updated = _patch_virtual_model(
+            client,
+            created.virtual_model_id,
+            VirtualModelPatchBody(remove_members=(member1_id,)),
+        )
+        assert len(updated.members) == 1, (
+            f"expected membership to shrink to one after removal, got {len(updated.members)}"
+        )
+        assert updated.members[0].model_id == member2_id
+
+        response = unwrap(
+            client.proxy.chat(
+                client.master_key,
+                ChatBody(
+                    model=f"virtual_model/{vm_name}",
+                    messages=[ChatMessage(role="user", content="say ok")],
+                    max_tokens=16,
+                ),
+            )
+        )
+
+        assert len(response.choices) > 0, (
+            f"expected the surviving member to serve after priority-1 removal, got {response}"
+        )
+
+    @pytest.mark.covers("mgmt.virtual_model.call.retry_ordering")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+        )
+    )
+    def test_broken_priority_1_retries_to_priority_2(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        vm_name = f"e2e-vm-retry-order-{unique_marker()}"
+        broken_member_name = f"e2e-vm-retry-broken-{unique_marker()}"
+        healthy_member_name = f"e2e-vm-retry-healthy-{unique_marker()}"
+
+        broken_member_id = client.proxy.create_model(
+            broken_member_name,
+            LiteLLMParamsBody(
+                model=BACKEND_MODEL,
+                api_base=_UNREACHABLE_API_BASE,
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(broken_member_id))
+
+        healthy_member_id = client.proxy.create_model(
+            healthy_member_name,
+            LiteLLMParamsBody(model=BACKEND_MODEL),
+        )
+        resources.defer(lambda: client.proxy.delete_model(healthy_member_id))
+
+        created = _create_virtual_model(
+            client,
+            VirtualModelCreateBody(
+                virtual_model_name=vm_name,
+                members=(
+                    VirtualModelMemberRequest(model_id=broken_member_id, priority=1),
+                    VirtualModelMemberRequest(model_id=healthy_member_id, priority=2),
+                ),
+                allowed_fails=100,
+                num_retries=1,
+            ),
+        )
+        resources.defer(lambda: _delete_virtual_model(client, created.virtual_model_id))
+
+        response = unwrap(
+            client.proxy.chat(
+                client.master_key,
+                ChatBody(
+                    model=f"virtual_model/{vm_name}",
+                    messages=[ChatMessage(role="user", content="say ok")],
+                    max_tokens=16,
+                ),
+            )
+        )
+
+        assert len(response.choices) > 0, (
+            f"expected priority-2 healthy member to serve after priority-1 failed, got {response}"
+        )
+
+    @pytest.mark.covers("mgmt.virtual_model.call.alias_strategy")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+        )
+    )
+    def test_alias_applies_virtual_model_routing_strategy(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        vm_name = f"e2e-vm-alias-strat-{unique_marker()}"
+        alias_name = f"e2e-vm-alias-{unique_marker()}"
+        member1_name = f"e2e-vm-alias-member1-{unique_marker()}"
+        member2_name = f"e2e-vm-alias-member2-{unique_marker()}"
+
+        member1_id = client.proxy.create_model(
+            member1_name,
+            LiteLLMParamsBody(model=BACKEND_MODEL),
+        )
+        resources.defer(lambda: client.proxy.delete_model(member1_id))
+
+        member2_id = client.proxy.create_model(
+            member2_name,
+            LiteLLMParamsBody(model=BACKEND_MODEL),
+        )
+        resources.defer(lambda: client.proxy.delete_model(member2_id))
+
+        created = _create_virtual_model(
+            client,
+            VirtualModelCreateBody(
+                virtual_model_name=vm_name,
+                members=(
+                    VirtualModelMemberRequest(model_id=member1_id, priority=1),
+                    VirtualModelMemberRequest(model_id=member2_id, priority=2),
+                ),
+                routing_strategy="simple-shuffle",
+            ),
+        )
+        resources.defer(lambda: _delete_virtual_model(client, created.virtual_model_id))
+
+        alias_patch = unwrap(
+            client.proxy.transport.post(
+                "/config/update",
+                headers=client.proxy.transport.master,
+                json=ConfigUpdateBody(
+                    router_settings={
+                        "model_group_alias": {
+                            alias_name: f"virtual_model/{vm_name}",
+                        },
+                    }
+                ),
+                response_type=ConfigUpdateResponse,
+            )
+        )
+        assert alias_patch.message, f"expected success message, got {alias_patch}"
+
+        response = unwrap(
+            client.proxy.chat(
+                client.master_key,
+                ChatBody(
+                    model=alias_name,
+                    messages=[ChatMessage(role="user", content="say ok")],
+                    max_tokens=16,
+                ),
+            )
+        )
+
+        assert len(response.choices) > 0, f"expected the alias to route through the virtual model, got {response}"
