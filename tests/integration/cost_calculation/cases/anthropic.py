@@ -1459,6 +1459,313 @@ CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE_CACHE: Final = CostTrackingTestCase(
+    name="claude-opus-5-anthropic_fast_mode_cache",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-opus-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "121e2a9a4452 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5",
+            "content": [{"type": "text", "text": "scripted answer 121e2a9a4452"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 1840,
+                "output_tokens": 412,
+                "cache_read_input_tokens": 400,
+                "cache_creation_input_tokens": 300,
+                "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 200},
+                "speed": "fast",
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.13395,
+        input_cost=0.07215,
+        output_cost=0.0618,
+        prompt_tokens=2540,
+        completion_tokens=412,
+        cache_read_cost=0.0012,
+        cache_creation_cost=0.01575,
+    ),
+)
+
+CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE_CACHE_STREAM: Final = CostTrackingTestCase(
+    name="claude-opus-5-anthropic_fast_mode_cache-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="claude-opus-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "6e8ee84cf8b8 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "allowed_openai_params": [],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-opus-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {
+                        "input_tokens": 1840,
+                        "cache_read_input_tokens": 400,
+                        "cache_creation_input_tokens": 300,
+                        "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 200},
+                        "speed": "fast",
+                    },
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "scripted answer 6e8ee84cf8b8"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 412}},
+            {"type": "message_stop"},
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.13395,
+        input_cost=0.07215,
+        output_cost=0.0618,
+        prompt_tokens=2540,
+        completion_tokens=412,
+        cache_read_cost=0.0012,
+        cache_creation_cost=0.01575,
+    ),
+)
+
+CLAUDE_OPUS_5_MESSAGES_FAST_MODE_CACHE: Final = CostTrackingTestCase(
+    name="claude-opus-5-messages_fast_mode_cache",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-opus-5",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "6d2006a65289 summarize the attached material in one line",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5",
+            "content": [{"type": "text", "text": "scripted response"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": 1840,
+                "output_tokens": 412,
+                "cache_read_input_tokens": 400,
+                "cache_creation_input_tokens": 300,
+                "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 200},
+                "speed": "fast",
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.13395,
+        input_cost=0.07215,
+        output_cost=0.0618,
+        prompt_tokens=2540,
+        completion_tokens=412,
+        cache_read_cost=0.0012,
+        cache_creation_cost=0.01575,
+    ),
+)
+
+CLAUDE_OPUS_5_ANTHROPIC_STANDARD_SPEED_CACHE: Final = CostTrackingTestCase(
+    name="claude-opus-5-anthropic_standard_speed_cache",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-opus-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "2b9904617ede summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5",
+            "content": [{"type": "text", "text": "scripted answer 2b9904617ede"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 1840,
+                "output_tokens": 412,
+                "cache_read_input_tokens": 400,
+                "cache_creation_input_tokens": 300,
+                "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 200},
+                "speed": "standard",
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.022325,
+        input_cost=0.012025,
+        output_cost=0.0103,
+        prompt_tokens=2540,
+        completion_tokens=412,
+        cache_read_cost=0.0002,
+        cache_creation_cost=0.002625,
+    ),
+)
+
+CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE_US_INFERENCE_CACHE: Final = CostTrackingTestCase(
+    name="claude-opus-5-anthropic_fast_mode_us_inference_cache",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-opus-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "04b13c88ad07 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5",
+            "content": [{"type": "text", "text": "scripted answer 04b13c88ad07"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 1840,
+                "output_tokens": 412,
+                "cache_read_input_tokens": 400,
+                "cache_creation_input_tokens": 300,
+                "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 200},
+                "speed": "fast",
+                "inference_geo": "us",
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.147345,
+        input_cost=0.079365,
+        output_cost=0.06798,
+        prompt_tokens=2540,
+        completion_tokens=412,
+        cache_read_cost=0.00132,
+        cache_creation_cost=0.017325,
+    ),
+)
+
 CLAUDE_OPUS_5_ANTHROPIC_US_INFERENCE: Final = CostTrackingTestCase(
     name="claude-opus-5-anthropic_us_inference",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -3786,6 +4093,11 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_OPUS_5_TIERED_CACHE_WRITE_ABOVE_200K,
     CLAUDE_OPUS_5_SERVICE_TIER_PRIORITY,
     CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE,
+    CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE_CACHE,
+    CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE_CACHE_STREAM,
+    CLAUDE_OPUS_5_MESSAGES_FAST_MODE_CACHE,
+    CLAUDE_OPUS_5_ANTHROPIC_STANDARD_SPEED_CACHE,
+    CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE_US_INFERENCE_CACHE,
     CLAUDE_OPUS_5_ANTHROPIC_US_INFERENCE,
     CLAUDE_OPUS_5_WEB_SEARCH_MEDIUM,
     CLAUDE_OPUS_5_STREAM,
@@ -3842,6 +4154,9 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         plain=CLAUDE_OPUS_5_RESPONSE_MODEL_OVERRIDE, streamed=CLAUDE_OPUS_5_STREAM_RESPONSE_MODEL_OVERRIDE
     ),
     StreamParityTestCase(plain=CLAUDE_OPUS_5_TOOL_CALL, streamed=CLAUDE_OPUS_5_STREAM_TOOL_CALL),
+    StreamParityTestCase(
+        plain=CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE_CACHE, streamed=CLAUDE_OPUS_5_ANTHROPIC_FAST_MODE_CACHE_STREAM
+    ),
     StreamParityTestCase(
         plain=CLAUDE_SONNET_5_RESPONSE_MODEL_OVERRIDE, streamed=CLAUDE_SONNET_5_STREAM_RESPONSE_MODEL_OVERRIDE
     ),
