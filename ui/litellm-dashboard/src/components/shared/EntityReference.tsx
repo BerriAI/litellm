@@ -38,12 +38,13 @@ export function EntityReference({ id, name, href }: EntityReferenceProps) {
 interface UserReferenceProps {
   userId: string | null | undefined;
   displayName?: string | null;
+  linkToUserPage: boolean;
 }
 
-export function UserReference({ userId, displayName }: UserReferenceProps) {
+export function UserReference({ userId, displayName, linkToUserPage }: UserReferenceProps) {
   if (userId == null || userId === "") return null;
   if (userId === DEFAULT_PROXY_ADMIN_USER_ID && !displayName) {
     return <DefaultProxyAdminTag userId={userId} />;
   }
-  return <EntityReference id={userId} name={displayName} href={userDetailHref(userId)} />;
+  return <EntityReference id={userId} name={displayName} href={linkToUserPage ? userDetailHref(userId) : undefined} />;
 }

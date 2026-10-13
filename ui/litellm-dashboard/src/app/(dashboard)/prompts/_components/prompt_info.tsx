@@ -19,6 +19,8 @@ import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVers
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { UserReference } from "@/components/shared/EntityReference";
 import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { canListUsers } from "@/utils/roles";
 
 export interface PromptInfoProps {
   promptId: string;
@@ -53,6 +55,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
   const [versionHistory, setVersionHistory] = useState<PromptSpec[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [loadingVersions, setLoadingVersions] = useState(false);
+  const { userRole } = useAuthorized();
   const { data: displayNames } = useUserDisplayNames(
     React.useMemo(
       () => [promptData?.created_by ?? "", ...versionHistory.map((v) => v.created_by ?? "")],
@@ -342,6 +345,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
                       <UserReference
                         userId={promptData.created_by}
                         displayName={displayNames?.[promptData.created_by]}
+                        linkToUserPage={canListUsers(userRole)}
                       />
                     ) : (
                       "-"
@@ -398,7 +402,11 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
                           <TableCell>
                             <span className="text-sm">
                               {v.created_by ? (
-                                <UserReference userId={v.created_by} displayName={displayNames?.[v.created_by]} />
+                                <UserReference
+                                  userId={v.created_by}
+                                  displayName={displayNames?.[v.created_by]}
+                                  linkToUserPage={canListUsers(userRole)}
+                                />
                               ) : (
                                 "-"
                               )}

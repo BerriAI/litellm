@@ -25,6 +25,8 @@ import type {
   MCPGatewaySessionsTerminateResponse,
 } from "@/components/mcp_tools/types";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { canListUsers } from "@/utils/roles";
 
 const mcpGatewaySessionKeys = createQueryKeys("mcpGatewaySessions");
 const REFETCH_INTERVAL_MS = 15000;
@@ -134,6 +136,7 @@ function SessionsBody({
   isLoading: boolean;
   onDisconnect: ((selector: MCPGatewaySessionSelector) => void) | null;
 }) {
+  const { userRole } = useAuthorized();
   if (isLoading) {
     return (
       <div
@@ -218,7 +221,11 @@ function SessionsBody({
                   {session.user_id === null ? (
                     <span className="text-muted-foreground">{UNKNOWN_LABEL}</span>
                   ) : (
-                    <UserReference userId={session.user_id} displayName={session.user_email} />
+                    <UserReference
+                      userId={session.user_id}
+                      displayName={session.user_email}
+                      linkToUserPage={canListUsers(userRole)}
+                    />
                   )}
                 </TableCell>
                 <TableCell className="text-xs">{session.key_alias ?? "-"}</TableCell>

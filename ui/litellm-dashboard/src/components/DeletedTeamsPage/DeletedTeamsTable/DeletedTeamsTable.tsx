@@ -9,6 +9,8 @@ import { DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 
 import { getDeletedTeamsTableColumns } from "./DeletedTeamsTableColumns";
 import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { canListUsers } from "@/utils/roles";
 
 interface DeletedTeamsTableProps {
   teams: DeletedTeam[];
@@ -41,11 +43,19 @@ export function DeletedTeamsTable({
 }: DeletedTeamsTableProps) {
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
+  const { userRole } = useAuthorized();
   const { data: displayNames } = useUserDisplayNames(
     useMemo(() => teams.map((team) => team.deleted_by ?? ""), [teams]),
   );
 
-  const columns = useMemo(() => getDeletedTeamsTableColumns((userId) => displayNames?.[userId]), [displayNames]);
+  const columns = useMemo(
+    () =>
+      getDeletedTeamsTableColumns({
+        resolveUserName: (userId) => displayNames?.[userId],
+        linkToUserPage: canListUsers(userRole),
+      }),
+    [displayNames, userRole],
+  );
 
   return (
     <DataTable

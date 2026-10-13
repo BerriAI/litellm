@@ -47,6 +47,7 @@ function renderTable(overrides: Partial<React.ComponentProps<typeof AuditLogsTab
     onColumnFiltersChange: vi.fn(),
     onRefresh: vi.fn(),
     onViewLog: vi.fn(),
+    linkToUserPage: true,
     ...overrides,
   };
   render(<AuditLogsTable {...props} />);

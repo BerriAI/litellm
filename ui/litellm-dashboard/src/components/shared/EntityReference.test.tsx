@@ -47,23 +47,35 @@ describe("EntityReference", () => {
 
 describe("UserReference", () => {
   it("renders nothing for a nullish user id", () => {
-    const { container } = render(<UserReference userId={null} />);
+    const { container } = render(<UserReference userId={null} linkToUserPage={false} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it("shows the display name linked to the user detail page", () => {
-    render(<UserReference userId="user-9" displayName="Ada Reviewer" />);
+    render(<UserReference userId="user-9" displayName="Ada Reviewer" linkToUserPage />);
     const link = screen.getByRole("link", { name: "Ada Reviewer" });
-    expect(link).toHaveAttribute("href", expect.stringContaining("user-9"));
+    expect(link).toHaveAttribute("href", "/ui/users?user=user-9");
+  });
+
+  it("shows the name without a link when the viewer cannot open the users page", () => {
+    render(<UserReference userId="user-9" displayName="Ada Reviewer" linkToUserPage={false} />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("Ada Reviewer")).toBeInTheDocument();
+  });
+
+  it("shows the raw user id without a link when the viewer cannot open the users page", () => {
+    render(<UserReference userId="user-9" linkToUserPage={false} />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("user-9")).toBeInTheDocument();
   });
 
   it("keeps the default proxy admin badge when the sentinel id has no name", () => {
-    render(<UserReference userId={DEFAULT_PROXY_ADMIN_USER_ID} />);
+    render(<UserReference userId={DEFAULT_PROXY_ADMIN_USER_ID} linkToUserPage={false} />);
     expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
   });
 
   it("falls back to the raw user id when no display name resolved", () => {
-    render(<UserReference userId="user-9" />);
+    render(<UserReference userId="user-9" linkToUserPage />);
     expect(screen.getByRole("link", { name: "user-9" })).toBeInTheDocument();
   });
 });

@@ -7,11 +7,13 @@ import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
 import { UserReference } from "@/components/shared/EntityReference";
 import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { teamDetailHref } from "@/utils/entityLinks";
+import { canListUsers } from "@/utils/roles";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { ArrowLeft } from "lucide-react";
@@ -59,6 +61,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const { onTabChange, hasVisited } = useVisitedTabs(tab);
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
+  const { userRole } = useAuthorized();
   const { data: displayNames } = useUserDisplayNames(useMemo(() => [orgData?.created_by ?? ""], [orgData?.created_by]));
 
   const handleTabChange = (value: OrganizationTab) => {
@@ -202,7 +205,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   <p>
                     Created By:{" "}
                     {orgData.created_by ? (
-                      <UserReference userId={orgData.created_by} displayName={createdByName} />
+                      <UserReference
+                        userId={orgData.created_by}
+                        displayName={createdByName}
+                        linkToUserPage={canListUsers(userRole)}
+                      />
                     ) : (
                       "-"
                     )}

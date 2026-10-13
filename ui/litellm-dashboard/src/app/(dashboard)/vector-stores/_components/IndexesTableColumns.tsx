@@ -11,12 +11,14 @@ import type { VectorStoreIndex } from "./IndexesTab";
 interface IndexesTableColumnsDeps {
   resolveVectorStoreId: (name: string) => string | undefined;
   resolveUserName?: (userId: string) => string | undefined;
+  linkToUserPage: boolean;
   onViewVectorStore: (vectorStoreId: string) => void;
 }
 
 export const getIndexesTableColumns = ({
   resolveVectorStoreId,
   resolveUserName = () => undefined,
+  linkToUserPage,
   onViewVectorStore,
 }: IndexesTableColumnsDeps): ColumnDef<VectorStoreIndex>[] => [
   {
@@ -87,7 +89,11 @@ export const getIndexesTableColumns = ({
       if (createdBy) {
         return (
           <span className="block max-w-48">
-            <UserReference userId={createdBy} displayName={resolveUserName(createdBy)} />
+            <UserReference
+              userId={createdBy}
+              displayName={resolveUserName(createdBy)}
+              linkToUserPage={linkToUserPage}
+            />
           </span>
         );
       }

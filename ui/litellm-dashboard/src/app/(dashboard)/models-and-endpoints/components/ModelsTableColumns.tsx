@@ -185,9 +185,11 @@ function CredentialsCell({ credentialName, label }: { credentialName: string | u
 function CreatedByCell({
   model,
   resolveUserName,
+  linkToUserPage,
 }: {
   model: ModelData;
   resolveUserName: (userId: string) => string | undefined;
+  linkToUserPage: boolean;
 }) {
   const isConfigModel = !model.model_info?.db_model;
   const createdAt = formatShortDate(model.model_info.created_at);
@@ -199,7 +201,7 @@ function CreatedByCell({
     <div className="flex min-w-0 flex-col gap-0.5">
       {!isConfigModel && createdBy ? (
         <span className="flex min-w-0 max-w-44 text-sm text-foreground">
-          <UserReference userId={createdBy} displayName={resolveUserName(createdBy)} />
+          <UserReference userId={createdBy} displayName={resolveUserName(createdBy)} linkToUserPage={linkToUserPage} />
         </span>
       ) : (
         <span className="max-w-44 truncate text-sm text-foreground" title={primary}>
@@ -383,6 +385,7 @@ export interface ModelsTableColumnDeps {
   pausingModelId?: string | null;
   credentialLabels?: ReadonlyMap<string, string>;
   resolveUserName?: (userId: string) => string | undefined;
+  linkToUserPage: boolean;
 }
 
 export const getModelsTableColumns = ({
@@ -396,6 +399,7 @@ export const getModelsTableColumns = ({
   pausingModelId,
   credentialLabels,
   resolveUserName = () => undefined,
+  linkToUserPage,
 }: ModelsTableColumnDeps): ColumnDef<ModelData>[] => [
   {
     id: MODEL_ID_COLUMN_ID,
@@ -451,7 +455,9 @@ export const getModelsTableColumns = ({
     enableSorting: true,
     size: 180,
     minSize: 110,
-    cell: ({ row }) => <CreatedByCell model={row.original} resolveUserName={resolveUserName} />,
+    cell: ({ row }) => (
+      <CreatedByCell model={row.original} resolveUserName={resolveUserName} linkToUserPage={linkToUserPage} />
+    ),
   },
   {
     id: UPDATED_AT_COLUMN_ID,

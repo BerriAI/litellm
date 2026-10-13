@@ -129,6 +129,21 @@ describe("ProjectDetail", () => {
       expect(screen.getByTestId("project-keys-section")).toHaveTextContent("proj-1");
     });
 
+    it("should not link the creator when the viewer cannot list users", () => {
+      mockUseAuthorized.mockReturnValue({ userId: "caller", userRole: "Internal User", isViewOnly: false });
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.getByText("user-1")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "user-1" })).not.toBeInTheDocument();
+    });
+
+    it("should link the creator to the users page for an admin", () => {
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.getByRole("link", { name: "user-1" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("users?user=user-1"),
+      );
+    });
+
     it("should display 'Active' for a non-blocked project", () => {
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByText("Active")).toBeInTheDocument();

@@ -6,6 +6,7 @@ import { resolveLogoSrc } from "@/lib/assetPaths";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { uiAuditLogsCall } from "../../networking";
 import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import { canListUsers } from "@/utils/roles";
 import { AuditLogEntry } from "./AuditLogsTableColumns";
 import { AuditLogsTable } from "./AuditLogsTable";
 import { AuditLogDrawer } from "./AuditLogDrawer/AuditLogDrawer";
@@ -135,6 +136,7 @@ export default function AuditLogsPanel({
     <>
       <AuditLogsTable
         resolveUserName={resolveUserName}
+        linkToUserPage={canListUsers(userRole)}
         data={query.data?.audit_logs ?? []}
         rowCount={query.data?.total ?? 0}
         isLoading={query.isLoading}

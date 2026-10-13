@@ -26,7 +26,7 @@ import {
 } from "@/components/networking";
 import PublicModelHub from "@/components/public_model_hub";
 import { copyToClipboard } from "@/utils/dataUtils";
-import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { canListUsers, isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { filterBySearchTerm } from "@/utils/searchUtils";
 import { SortingState } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
@@ -414,9 +414,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   );
   const resolveUserName = useCallback((userId: string) => displayNames?.[userId], [displayNames]);
 
+  const linkToUserPage = !publicPage && canListUsers(userRole);
   const mcpColumns = useMemo(
-    () => getMCPHubTableColumns({ onServerClick: showMcpModal, resolveUserName }),
-    [showMcpModal, resolveUserName],
+    () => getMCPHubTableColumns({ onServerClick: showMcpModal, resolveUserName, linkToUserPage }),
+    [showMcpModal, resolveUserName, linkToUserPage],
   );
 
   // If this is a public page, use the dedicated PublicModelHub component
@@ -1095,6 +1096,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                       <UserReference
                         userId={selectedMcpServer.created_by}
                         displayName={resolveUserName(selectedMcpServer.created_by)}
+                        linkToUserPage={linkToUserPage}
                       />
                     </p>
                   </div>
@@ -1104,6 +1106,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                       <UserReference
                         userId={selectedMcpServer.updated_by}
                         displayName={resolveUserName(selectedMcpServer.updated_by)}
+                        linkToUserPage={linkToUserPage}
                       />
                     </p>
                   </div>

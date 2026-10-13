@@ -42,11 +42,13 @@ export const auditActionLabel = (action: string): string => {
 interface AuditLogsTableColumnsDeps {
   onViewLog: (log: AuditLogEntry) => void;
   resolveUserName?: (userId: string) => string | undefined;
+  linkToUserPage: boolean;
 }
 
 export const getAuditLogsTableColumns = ({
   onViewLog,
   resolveUserName = () => undefined,
+  linkToUserPage,
 }: AuditLogsTableColumnsDeps): ColumnDef<AuditLogEntry>[] => [
   {
     id: "updated_at",
@@ -98,7 +100,11 @@ export const getAuditLogsTableColumns = ({
     size: 200,
     enableSorting: false,
     cell: ({ row }) => (
-      <UserReference userId={row.original.changed_by} displayName={resolveUserName(row.original.changed_by)} />
+      <UserReference
+        userId={row.original.changed_by}
+        displayName={resolveUserName(row.original.changed_by)}
+        linkToUserPage={linkToUserPage}
+      />
     ),
   },
   {

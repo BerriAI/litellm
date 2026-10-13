@@ -131,6 +131,32 @@ describe("ModelHubTable public access", () => {
     expect(networking.userListCall).not.toHaveBeenCalled();
   });
 
+  it("shows creator ids without user links for a viewer who cannot list users", async () => {
+    vi.mocked(networking.modelHubCall).mockResolvedValue({ data: [] });
+    vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
+    vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: "s1", server_name: "hub-server", created_by: "u-ada", updated_by: "u-bob" } as MCPServerData,
+    ]);
+
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelHubTable
+        accessToken="test-token"
+        publicPage={false}
+        premiumUser={false}
+        userRole="Internal User"
+        canOpenPlayground
+      />,
+    );
+
+    await user.click(await screen.findByRole("tab", { name: "MCP Hub" }));
+
+    expect(await screen.findByText("u-ada")).toBeInTheDocument();
+    expect(document.querySelector('a[href*="users?user="]')).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "u-ada" })).not.toBeInTheDocument();
+  });
+
   it("resolves creator display names on the admin MCP Hub tab", async () => {
     vi.mocked(networking.modelHubCall).mockResolvedValue({
       data: [{ model_group: "claude-opus-4-8", providers: ["anthropic"], mode: "chat" }],
@@ -160,6 +186,7 @@ describe("ModelHubTable public access", () => {
     );
 
     await user.click(await screen.findByRole("tab", { name: "MCP Hub" }));
-    expect(await screen.findByText("Ada")).toBeInTheDocument();
+    const link = await screen.findByRole("link", { name: "Ada" });
+    expect(link).toHaveAttribute("href", expect.stringContaining("users?user=u-ada"));
   });
 });

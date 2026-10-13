@@ -13,6 +13,7 @@ import {
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import { canListUsers } from "@/utils/roles";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
@@ -149,6 +150,7 @@ export function AllModelsTable({
       pausingModelId,
       credentialLabels,
       resolveUserName: (userId: string) => displayNames?.[userId],
+      linkToUserPage: canListUsers(userRole),
     };
     return getModelsTableColumns(columnDeps);
   }, [

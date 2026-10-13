@@ -9,6 +9,8 @@ import { DataTable } from "@/components/shared/DataTable";
 import type { VectorStoreIndex } from "./IndexesTab";
 import { getIndexesTableColumns } from "./IndexesTableColumns";
 import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { canListUsers } from "@/utils/roles";
 
 interface IndexesTableProps {
   data: VectorStoreIndex[];
@@ -39,6 +41,7 @@ const IndexesTable: React.FC<IndexesTableProps> = ({
 }) => {
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
+  const { userRole } = useAuthorized();
   const { data: displayNames } = useUserDisplayNames(
     useMemo(() => data.map((index) => index.created_by ?? ""), [data]),
   );
@@ -48,8 +51,9 @@ const IndexesTable: React.FC<IndexesTableProps> = ({
         resolveVectorStoreId,
         onViewVectorStore,
         resolveUserName: (userId) => displayNames?.[userId],
+        linkToUserPage: canListUsers(userRole),
       }),
-    [resolveVectorStoreId, onViewVectorStore, displayNames],
+    [resolveVectorStoreId, onViewVectorStore, displayNames, userRole],
   );
 
   return (

@@ -34,7 +34,7 @@ function renderTable(onServerClick = vi.fn(), servers = [mockServer]) {
   render(
     <DataTable
       data={servers}
-      columns={getMCPHubTableColumns({ onServerClick })}
+      columns={getMCPHubTableColumns({ onServerClick, linkToUserPage: true })}
       getRowId={(server) => server.server_id}
       sortingMode="client"
       size="compact"
@@ -85,7 +85,7 @@ describe("getMCPHubTableColumns", () => {
   it("does not expose a URL column", () => {
     renderTable();
     expect(screen.queryByText("URL")).not.toBeInTheDocument();
-    const columns = getMCPHubTableColumns({ onServerClick: vi.fn() });
+    const columns = getMCPHubTableColumns({ onServerClick: vi.fn(), linkToUserPage: true });
     expect(columns.some((c) => c.header === "URL" || c.meta?.title === "URL")).toBe(false);
   });
 

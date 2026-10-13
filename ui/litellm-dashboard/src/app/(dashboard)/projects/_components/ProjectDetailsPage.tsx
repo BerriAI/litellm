@@ -2,7 +2,7 @@ import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAc
 import { useProjectDetails } from "@/app/(dashboard)/hooks/projects/useProjectDetails";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
+import { canListUsers, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { BarChart } from "@/components/shared/charts";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -28,7 +28,8 @@ const utilisationTone = (percent: number) => (percent >= 90 ? "over" : percent >
 export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const { data: project, isLoading } = useProjectDetails(projectId);
   const { data: teamInfo } = useTeam(project?.team_id ?? undefined);
-  const { userId } = useAuthorized();
+  const { userId, userRole } = useAuthorized();
+  const linkToUserPage = canListUsers(userRole);
   const { data: displayNames } = useUserDisplayNames(
     useMemo(() => [project?.created_by ?? "", project?.updated_by ?? ""], [project]),
   );
@@ -120,7 +121,11 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
               {project.created_by && (
                 <span className="flex min-w-0 grow basis-24 items-center gap-1">
                   <span className="shrink-0">by</span>
-                  <UserReference userId={project.created_by} displayName={displayNames?.[project.created_by]} />
+                  <UserReference
+                    userId={project.created_by}
+                    displayName={displayNames?.[project.created_by]}
+                    linkToUserPage={linkToUserPage}
+                  />
                 </span>
               )}
             </dd>
@@ -130,7 +135,11 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
               {project.updated_by && (
                 <span className="flex min-w-0 grow basis-24 items-center gap-1">
                   <span className="shrink-0">by</span>
-                  <UserReference userId={project.updated_by} displayName={displayNames?.[project.updated_by]} />
+                  <UserReference
+                    userId={project.updated_by}
+                    displayName={displayNames?.[project.updated_by]}
+                    linkToUserPage={linkToUserPage}
+                  />
                 </span>
               )}
             </dd>

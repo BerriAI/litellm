@@ -112,6 +112,7 @@ function PromptRowActions({ prompt, isAdmin, onDeleteClick }: PromptRowActionsPr
 
 interface PromptTableColumnsDeps {
   resolveUserName?: (userId: string) => string | undefined;
+  linkToUserPage: boolean;
   modelHubData: Map<string, ModelGroupInfo>;
   isAdmin: boolean;
   onPromptClick?: (id: string, environment: string) => void;
@@ -120,6 +121,7 @@ interface PromptTableColumnsDeps {
 
 export const getPromptTableColumns = ({
   resolveUserName = () => undefined,
+  linkToUserPage,
   modelHubData,
   isAdmin,
   onPromptClick,
@@ -199,7 +201,7 @@ export const getPromptTableColumns = ({
       }
       return (
         <span className="block max-w-60">
-          <UserReference userId={createdBy} displayName={resolveUserName(createdBy)} />
+          <UserReference userId={createdBy} displayName={resolveUserName(createdBy)} linkToUserPage={linkToUserPage} />
         </span>
       );
     },

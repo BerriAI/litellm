@@ -19,9 +19,15 @@ function EntityCell({ value, href }: { value: string | null | undefined; href: s
   );
 }
 
-export const getDeletedTeamsTableColumns = (
-  resolveUserName: (userId: string) => string | undefined = () => undefined,
-): ColumnDef<DeletedTeam>[] => [
+interface DeletedTeamsTableColumnsDeps {
+  resolveUserName?: (userId: string) => string | undefined;
+  linkToUserPage: boolean;
+}
+
+export const getDeletedTeamsTableColumns = ({
+  resolveUserName = () => undefined,
+  linkToUserPage,
+}: DeletedTeamsTableColumnsDeps): ColumnDef<DeletedTeam>[] => [
   {
     id: "team_alias",
     accessorKey: "team_alias",
@@ -119,7 +125,9 @@ export const getDeletedTeamsTableColumns = (
       if (!deletedBy) {
         return <EntityCell value={deletedBy} href={undefined} />;
       }
-      return <UserReference userId={deletedBy} displayName={resolveUserName(deletedBy)} />;
+      return (
+        <UserReference userId={deletedBy} displayName={resolveUserName(deletedBy)} linkToUserPage={linkToUserPage} />
+      );
     },
   },
 ];

@@ -1,4 +1,5 @@
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { ArrowLeftIcon, BotIcon, EditIcon, KeyIcon, LayersIcon, ServerIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
 import { BadgeLink } from "@/components/shared/BadgeLink";
@@ -12,6 +13,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import type { components } from "@/lib/http/schema";
 import { keyDetailHref, teamDetailHref } from "@/utils/entityLinks";
+import { canListUsers } from "@/utils/roles";
 import { AccessGroupEditModal } from "./AccessGroupsModal/AccessGroupEditModal";
 
 type AccessGroupResource = components["schemas"]["AccessGroupResource"];
@@ -66,7 +68,9 @@ function ResourceBadge({
 }
 
 export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailProps) {
+  const { userRole } = useAuthorized();
   const { data: accessGroup, isLoading } = useAccessGroupDetails(accessGroupId);
+  const linkToUserPage = canListUsers(userRole);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
   const [showAllTeams, setShowAllTeams] = useState(false);
@@ -136,7 +140,11 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
               {accessGroup.created_by && (
                 <span className="flex min-w-0 grow basis-24 items-center gap-1">
                   <span className="shrink-0">by</span>
-                  <UserReference userId={accessGroup.created_by} displayName={accessGroup.created_by_user?.name} />
+                  <UserReference
+                    userId={accessGroup.created_by}
+                    displayName={accessGroup.created_by_user?.name}
+                    linkToUserPage={linkToUserPage}
+                  />
                 </span>
               )}
             </dd>
@@ -146,7 +154,11 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
               {accessGroup.updated_by && (
                 <span className="flex min-w-0 grow basis-24 items-center gap-1">
                   <span className="shrink-0">by</span>
-                  <UserReference userId={accessGroup.updated_by} displayName={accessGroup.updated_by_user?.name} />
+                  <UserReference
+                    userId={accessGroup.updated_by}
+                    displayName={accessGroup.updated_by_user?.name}
+                    linkToUserPage={linkToUserPage}
+                  />
                 </span>
               )}
             </dd>

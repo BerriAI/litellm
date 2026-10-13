@@ -23,7 +23,7 @@ import {
   isComplexityRouter as isComplexityRouterParams,
 } from "./add_model/auto_router_strategies";
 import { canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
-import { teamsUserCanAssign } from "@/utils/roles";
+import { canListUsers, teamsUserCanAssign } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
 import { UserReference } from "@/components/shared/EntityReference";
@@ -121,6 +121,7 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
   const createdBy = modelData?.model_info?.created_by;
+  const userLink = canListUsers(userRole);
   const { data: displayNames } = useUserDisplayNames(useMemo(() => [createdBy ?? ""], [createdBy]));
 
   const aliasForTeam = (teamId: string | null | undefined): string | null =>
@@ -708,7 +709,11 @@ export default function ModelInfoView({
                   />
                 </svg>
                 Created By{" "}
-                {createdBy ? <UserReference userId={createdBy} displayName={displayNames?.[createdBy]} /> : "Not Set"}
+                {createdBy ? (
+                  <UserReference userId={createdBy} displayName={displayNames?.[createdBy]} linkToUserPage={userLink} />
+                ) : (
+                  "Not Set"
+                )}
               </div>
             </div>
 

@@ -6,6 +6,8 @@ import { MemoryRow } from "@/components/networking";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { UserReference } from "@/components/shared/EntityReference";
 import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { canListUsers } from "@/utils/roles";
 
 interface MemoryDetailDrawerProps {
   row: MemoryRow | null;
@@ -27,9 +29,11 @@ function formatTimestamp(ts?: string): string {
 }
 
 export function MemoryDetailDrawer({ row, onClose }: MemoryDetailDrawerProps) {
+  const { userRole } = useAuthorized();
   const { data: displayNames } = useUserDisplayNames(
     React.useMemo(() => [row?.created_by ?? "", row?.updated_by ?? ""], [row]),
   );
+  const linkToUserPage = canListUsers(userRole);
   return (
     <Sheet
       open={!!row}
@@ -77,7 +81,11 @@ export function MemoryDetailDrawer({ row, onClose }: MemoryDetailDrawerProps) {
                 {row.created_by ? (
                   <>
                     {" by "}
-                    <UserReference userId={row.created_by} displayName={displayNames?.[row.created_by]} />
+                    <UserReference
+                      userId={row.created_by}
+                      displayName={displayNames?.[row.created_by]}
+                      linkToUserPage={linkToUserPage}
+                    />
                   </>
                 ) : (
                   ""
@@ -89,7 +97,11 @@ export function MemoryDetailDrawer({ row, onClose }: MemoryDetailDrawerProps) {
                 {row.updated_by ? (
                   <>
                     {" by "}
-                    <UserReference userId={row.updated_by} displayName={displayNames?.[row.updated_by]} />
+                    <UserReference
+                      userId={row.updated_by}
+                      displayName={displayNames?.[row.updated_by]}
+                      linkToUserPage={linkToUserPage}
+                    />
                   </>
                 ) : (
                   ""

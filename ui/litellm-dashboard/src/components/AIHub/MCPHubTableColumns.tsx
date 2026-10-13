@@ -90,11 +90,13 @@ function MCPHubRowActions({ server, onServerClick }: MCPHubRowActionsProps) {
 interface MCPHubTableColumnsDeps {
   onServerClick: (server: MCPServerData) => void;
   resolveUserName?: (userId: string) => string | undefined;
+  linkToUserPage: boolean;
 }
 
 export const getMCPHubTableColumns = ({
   onServerClick,
   resolveUserName = () => undefined,
+  linkToUserPage,
 }: MCPHubTableColumnsDeps): ColumnDef<MCPServerData>[] => [
   {
     id: "server_name",
@@ -202,7 +204,11 @@ export const getMCPHubTableColumns = ({
     cell: ({ row }) =>
       row.original.created_by ? (
         <span className="flex min-w-0 max-w-60 text-xs">
-          <UserReference userId={row.original.created_by} displayName={resolveUserName(row.original.created_by)} />
+          <UserReference
+            userId={row.original.created_by}
+            displayName={resolveUserName(row.original.created_by)}
+            linkToUserPage={linkToUserPage}
+          />
         </span>
       ) : (
         <span className="block max-w-60 truncate text-xs">-</span>
