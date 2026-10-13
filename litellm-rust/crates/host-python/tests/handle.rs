@@ -1,6 +1,6 @@
 mod support;
 
-use litellm_host_python::{Execution, ExecutionBody, ExecutionStep};
+use litellm_host_python::{Execution, ExecutionBody, ExecutionStep, Suspension};
 use pyo3::{
     exceptions::PyBaseException,
     gc::{PyTraverseError, PyVisit},
@@ -42,7 +42,7 @@ struct AwaitBody(Option<Py<PyAny>>);
 impl ExecutionBody for AwaitBody {
     fn resume(&mut self, result: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
         match self.0.take() {
-            Some(awaitable) => Ok(ExecutionStep::Await(awaitable)),
+            Some(awaitable) => Ok(ExecutionStep::Suspended(Suspension::Await(awaitable))),
             None => result
                 .expect("selected await completed")
                 .map(ExecutionStep::Return),

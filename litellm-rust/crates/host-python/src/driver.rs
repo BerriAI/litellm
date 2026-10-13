@@ -18,10 +18,10 @@ use litellm_host::{
 };
 
 use crate::PythonHostCalls;
-use crate::handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
+use crate::handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle, Suspension};
 use crate::hooks::{HookStep, PythonCallEvent, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
-use crate::task::{Answer, PythonTask, Suspension, Yielded};
+use crate::task::{Answer, PythonTask, Yielded};
 use crate::{InvokeError, PythonBinding, missing_state};
 
 type ProtocolOf<H> = <H as PythonBinding>::Protocol;
@@ -487,7 +487,7 @@ where
     }
 }
 
-struct PythonDriver<H, L>
+struct Driver<H, L>
 where
     H: PythonBinding,
     L: PythonCallHooks,
@@ -497,7 +497,7 @@ where
     parts: SharedParts<H, L>,
 }
 
-impl<H, L> PythonDriver<H, L>
+impl<H, L> Driver<H, L>
 where
     H: PythonBinding + 'static,
     L: PythonCallHooks + 'static,
@@ -527,7 +527,7 @@ where
     }
 }
 
-impl<H, L> ExecutionBody for PythonDriver<H, L>
+impl<H, L> ExecutionBody for Driver<H, L>
 where
     H: PythonBinding + 'static,
     L: PythonCallHooks + 'static,
@@ -552,11 +552,7 @@ where
         match step {
             Ok(CoroutineState::Yielded(Yielded { suspension, reply })) => {
                 self.reply = Some(reply);
-                Ok(match suspension {
-                    Suspension::Await(value) => ExecutionStep::Await(value),
-                    Suspension::Open(head) => ExecutionStep::Open(head),
-                    Suspension::Yield(value) => ExecutionStep::Yield(value),
-                })
+                Ok(ExecutionStep::Suspended(suspension))
             }
             Ok(CoroutineState::Complete(Ok(value))) => Ok(ExecutionStep::Return(value)),
             Ok(CoroutineState::Complete(Err(error))) => {
@@ -579,7 +575,7 @@ where
     }
 }
 
-impl<H, L> Drop for PythonDriver<H, L>
+impl<H, L> Drop for Driver<H, L>
 where
     H: PythonBinding,
     L: PythonCallHooks,
@@ -654,7 +650,7 @@ where
             .run()
         }
     });
-    let mut driver = PythonDriver {
+    let mut driver = Driver {
         body: Mutex::new(body),
         reply: None,
         parts,
@@ -666,10 +662,12 @@ where
     }
     match driver.resume(None)? {
         ExecutionStep::Return(value) => Ok(value),
-        ExecutionStep::Open(head) => Execution::suspended(driver, options.lifecycle)
-            .into_sync_stream(py, head)
-            .map(Bound::unbind),
-        ExecutionStep::Await(_) | ExecutionStep::Yield(_) => {
+        ExecutionStep::Suspended(Suspension::Open(head)) => {
+            Execution::suspended(driver, options.lifecycle)
+                .into_sync_stream(py, head)
+                .map(Bound::unbind)
+        }
+        ExecutionStep::Suspended(Suspension::Await(_) | Suspension::Yield(_)) => {
             Err(PyRuntimeError::new_err("sync call suspended"))
         }
     }

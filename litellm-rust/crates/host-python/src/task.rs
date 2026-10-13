@@ -1,17 +1,10 @@
 use litellm_coroutine::{Abandoned, Co, Reply};
 use pyo3::prelude::*;
 
+use crate::handle::Suspension;
 use crate::missing_state;
 
 pub(crate) type Answer = PyResult<Py<PyAny>>;
-
-/// What a suspended execution waits on: an awaitable the caller awaits, or a stream
-/// boundary the caller's stream reads past.
-pub(crate) enum Suspension {
-    Await(Py<PyAny>),
-    Open(Py<PyAny>),
-    Yield(Py<PyAny>),
-}
 
 pub(crate) struct Yielded {
     pub(crate) suspension: Suspension,
