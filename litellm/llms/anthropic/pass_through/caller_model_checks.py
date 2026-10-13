@@ -460,9 +460,10 @@ async def caller_within_model_rate_limit(
     This mirrors the read side of
     ``_PROXY_MaxParallelRequestsHandler_v3.async_pre_call_hook`` for ``model``:
     it builds the same descriptor set and runs the check in ``read_only`` mode
-    so no counter is reserved or incremented — the sub-call's actual usage is
-    still charged exactly once by the limiter's post-call success hook (via the
-    propagated ``litellm_metadata``). ``max_parallel_requests`` gauges are left
+    so no counter is reserved or incremented. The sub-call's tokens are still
+    charged once by the limiter's post-call success hook (via the propagated
+    ``litellm_metadata``), but it takes no request slot, so it does not count
+    toward the caller's RPM. ``max_parallel_requests`` gauges are left
     out of the check: the sub-call runs inside the caller's already admitted
     request, whose own slot would otherwise count against it.
 

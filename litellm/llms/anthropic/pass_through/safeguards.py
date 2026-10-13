@@ -324,23 +324,31 @@ def render_classifier_context(classifier_context: object) -> str:
 
 
 def render_transcript(messages: Sequence[Mapping[str, object]]) -> str:
-    lines: Final = tuple(chain.from_iterable(_transcript_lines(message) for message in messages))
-    return "\n".join(_lines_within_budget(lines))
+    opening: Final = tuple(chain.from_iterable(_transcript_lines(message) for message in messages[:1]))
+    later: Final = tuple(chain.from_iterable(_transcript_lines(message) for message in messages[1:]))
+    return "\n".join(_lines_within_budget(opening, later))
 
 
-def _lines_within_budget(lines: Sequence[str]) -> Sequence[str]:
-    """Keep the opening turn and the newest lines that fit, with a marker where older lines were dropped."""
-    sizes: Final = tuple(len(line) + 1 for line in lines)
-    if sum(sizes) <= TRANSCRIPT_CHAR_BUDGET:
-        return lines
-    opening: Final = lines[:1]
-    newest: Final = lines[1:]
-    budget_for_newest: Final = TRANSCRIPT_CHAR_BUDGET - sum(sizes[:1]) - len(_TRANSCRIPT_OMISSION_MARKER) - 1
-    excess: Final = sum(sizes[1:]) - budget_for_newest
-    last_dropped: Final = next(
-        (index for index, dropped in enumerate(accumulate(sizes[1:])) if dropped >= excess), len(newest) - 1
+def _lines_within_budget(opening: Sequence[str], later: Sequence[str]) -> Sequence[str]:
+    """Keep the opening message's newest lines within half the budget and the newest later lines that fit,
+    with a marker where lines were dropped. Claude Code puts the user's request after its reminders, so the
+    opening message is cut from its start."""
+    if _rendered_size(opening) + _rendered_size(later) <= TRANSCRIPT_CHAR_BUDGET:
+        return (*opening, *later)
+    kept_opening: Final = _newest_lines_within(opening, TRANSCRIPT_CHAR_BUDGET // 2)
+    budget_for_later: Final = (
+        TRANSCRIPT_CHAR_BUDGET - _rendered_size(kept_opening) - len(_TRANSCRIPT_OMISSION_MARKER) - 1
     )
-    return (*opening, _TRANSCRIPT_OMISSION_MARKER, *newest[last_dropped + 1 :])
+    return (*kept_opening, _TRANSCRIPT_OMISSION_MARKER, *_newest_lines_within(later, budget_for_later))
+
+
+def _newest_lines_within(lines: Sequence[str], budget: int) -> Sequence[str]:
+    kept: Final = sum(1 for size in accumulate(len(line) + 1 for line in reversed(lines)) if size <= budget)
+    return tuple(lines[len(lines) - kept :])
+
+
+def _rendered_size(lines: Sequence[str]) -> int:
+    return sum(len(line) + 1 for line in lines)
 
 
 def _transcript_lines(message: Mapping[str, object]) -> Sequence[str]:

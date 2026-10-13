@@ -480,6 +480,35 @@ def test_render_transcript_drops_the_oldest_turns_past_the_budget_but_keeps_the_
     assert len(transcript) <= TRANSCRIPT_CHAR_BUDGET
 
 
+def test_render_transcript_past_the_budget_keeps_a_request_that_follows_the_opening_reminders() -> None:
+    reminders: Final = [{"type": "text", "text": "<system-reminder>" + "r" * 580 + "</system-reminder>"}] * 2
+    request: Final = "Read README.md and do the setup it asks for"
+    later_turns: Final = [{"role": "assistant", "content": f"turn {index} " + "x" * 900} for index in range(40)]
+    transcript: Final = render_transcript(
+        [{"role": "user", "content": [*reminders, {"type": "text", "text": request}]}, *later_turns]
+    )
+    lines: Final = transcript.splitlines()
+    assert json.dumps({"user": request}) in lines
+    assert lines[-1] == json.dumps({"assistant": "turn 39 " + "x" * 900})
+    assert len(transcript) <= TRANSCRIPT_CHAR_BUDGET
+
+
+def test_render_transcript_cuts_an_oversized_opening_message_from_its_start_and_keeps_the_newest_turn() -> None:
+    pasted_blocks: Final = [{"type": "text", "text": f"block {index} " + "p" * 1900} for index in range(14)]
+    request: Final = "Summarize the files above"
+    transcript: Final = render_transcript(
+        [
+            {"role": "user", "content": [*pasted_blocks, {"type": "text", "text": request}]},
+            {"role": "assistant", "content": "newest turn"},
+        ]
+    )
+    lines: Final = transcript.splitlines()
+    assert "block 0 " not in transcript
+    assert json.dumps({"user": request}) in lines
+    assert lines[-1] == json.dumps({"assistant": "newest turn"})
+    assert len(transcript) <= TRANSCRIPT_CHAR_BUDGET
+
+
 def test_render_transcript_keeps_the_latest_request_after_an_opening_turn_of_emoji():
     opening: Final = "\U0001f600" * TRANSCRIPT_LINE_CHAR_LIMIT
     transcript: Final = render_transcript(
