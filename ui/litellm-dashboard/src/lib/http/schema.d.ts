@@ -13454,9 +13454,9 @@ export interface paths {
         };
         /**
          * Get Litellm Blog Posts
-         * @description Public endpoint to get the latest LiteLLM blog posts.
+         * @description Public endpoint to get the latest LiteLLM blog posts, each with its RSS categories as ``tags``.
          *
-         *     Fetches from GitHub with a 1-hour in-process cache.
+         *     Fetches the docs RSS feed with a 1-hour in-process cache.
          *     Falls back to the bundled local backup on any failure.
          */
         get: operations["get_litellm_blog_posts_public_litellm_blog_posts_get"];
@@ -13653,31 +13653,6 @@ export interface paths {
          *     ```
          */
         get: operations["public_model_hub_facet_public_v1_model_hub__facet__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/public/whats_new": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Public Whats New
-         * @description Return the launches the dashboard Home page shows under What's new.
-         *
-         *     Serves the list bundled with this release. Set ``LITELLM_WHATS_NEW_URL`` to fetch a remote list instead,
-         *     resolved once per process on the first request and falling back to the bundled list on any failure, so an
-         *     airgapped proxy serves the bundled list without retrying. ``LITELLM_LOCAL_WHATS_NEW=True`` forces the
-         *     bundled list even when a URL is set. A restart picks up a newly published list.
-         */
-        get: operations["get_public_whats_new_public_whats_new_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -27056,6 +27031,11 @@ export interface components {
             date: string;
             /** Description */
             description: string;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
             /** Title */
             title: string;
             /** Url */
@@ -37636,6 +37616,8 @@ export interface components {
             reasoning_content?: string | null;
             /** Reasoning Items */
             reasoning_items?: components["schemas"]["ChatCompletionReasoningItem"][] | null;
+            /** Refusal */
+            refusal?: string | null;
             /**
              * Role
              * @enum {string}
@@ -49280,30 +49262,6 @@ export interface components {
              */
             type: "web_search" | "web_search_2025_08_26";
             user_location?: components["schemas"]["openai__types__responses__web_search_tool_param__UserLocation"] | null;
-        };
-        /**
-         * WhatsNewLaunch
-         * @description One launch card in the dashboard Home page's What's new section.
-         */
-        WhatsNewLaunch: {
-            /** Description */
-            description: string;
-            /** Href */
-            href: string;
-            /** Icon */
-            icon: string;
-            /**
-             * Published On
-             * Format: date
-             */
-            published_on: string;
-            /** Title */
-            title: string;
-        };
-        /** WhatsNewResponse */
-        WhatsNewResponse: {
-            /** Launches */
-            launches: components["schemas"]["WhatsNewLaunch"][];
         };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
@@ -68721,26 +68679,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_public_whats_new_public_whats_new_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WhatsNewResponse"];
                 };
             };
         };

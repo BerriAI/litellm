@@ -697,6 +697,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model_response.model = f"{_custom_llm_provider}/{_response_model}"
         model_response.id = completion_response["id"]
         model_response.created = completion_response["created"]
+        if "system_fingerprint" in completion_response:
+            model_response.system_fingerprint = (  # rebind-ok: fills the caller's model_response like id above
+                completion_response["system_fingerprint"]
+            )
         setattr(model_response, "usage", Usage(**completion_response["usage"]))
         served_tier: Final = completion_response.get("service_tier")
         if isinstance(served_tier, str) and served_tier:
