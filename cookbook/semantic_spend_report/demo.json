@@ -1,0 +1,41 @@
+[
+  {
+    "name": "Build pipeline",
+    "prompts": [
+      "We maintain a fictional Python service. Its CI pipeline installs dependencies for every job and takes 12 minutes. Propose a dependency caching strategy and a small illustrative workflow snippet. This is a planning exercise, do not claim you changed or executed anything.",
+      "The cache you proposed sometimes restores stale dependencies after requirements.txt changes. Refine the cache key and explain how to handle a miss.",
+      "Now split that pipeline into lint and unit-test jobs running in parallel. Show the relevant illustrative YAML and explain when deployment should be allowed.",
+      "A test job passes alone but fails when run in parallel because it shares a database name. Suggest a minimal isolation fix and how we would verify it.",
+      "Switch to the application endpoint. A POST /jobs request can enqueue the same job twice when clients retry. Suggest an idempotency-key design and a minimal pseudocode example.",
+      "For that endpoint, handle two concurrent requests with the same key. Explain the database constraint and the response the second caller should receive.",
+      "Return to our CI pipeline. Add a manual approval before production deployment and an explicit rollback stage. Keep the example small.",
+      "Write a short contributor guide explaining the cache, parallel checks, deployment approval, and rollback procedure we discussed. Clearly label these as proposed steps, not executed changes."
+    ]
+  },
+  {
+    "name": "Application reliability",
+    "prompts": [
+      "For a fictional task API, GET /tasks gets slow as rows grow. The query filters by owner_id and sorts by created_at. Explain a suitable index and how to measure its effect. This is a planning exercise, do not claim you changed or executed anything.",
+      "Offset pagination still gets slow on later pages. Suggest cursor pagination for that same endpoint with a deterministic tiebreaker.",
+      "That cursor should not expose another user's tasks. Describe the authorization checks and a compact negative test case.",
+      "Clients now report duplicate tasks after retrying POST /tasks. Design an idempotency mechanism that also handles concurrent retries.",
+      "Give three meaningful regression tests for the pagination and idempotency behavior we just designed. State the observable expected result for each.",
+      "Switch to CI. How should we run those database integration tests in isolated parallel jobs with an ephemeral database per job? Give a short workflow outline.",
+      "Return to GET /tasks. Suggest structured logs and latency metrics to detect slow queries without recording task content or credentials.",
+      "Write a short API reference covering cursor pagination, authorization errors, and idempotency keys from our discussion. Mark any unspecified details as assumptions."
+    ]
+  },
+  {
+    "name": "Developer documentation",
+    "prompts": [
+      "Write a concise onboarding outline for a fictional task-management API. Include local setup, a first API request, and how to run tests. This is documentation planning only, do not claim any command was executed.",
+      "Expand the first-request section with a placeholder bearer token and a curl example for creating a task. Never use real credentials.",
+      "Add troubleshooting entries for 401, 429, and a database connection failure. Give one useful diagnostic step for each.",
+      "Now draft a migration guide from offset to cursor pagination, including what callers change and how to avoid missing records.",
+      "Switch to implementation. Show pseudocode for parsing a cursor with a timestamp and task ID, rejecting malformed input, and scoping the query to the authenticated owner.",
+      "Give boundary tests for that cursor parser, including malformed encoding, duplicate timestamps, and a cursor from another user.",
+      "Back to documentation. Write a release-note paragraph about the pagination change and a clear migration warning, without claiming a release date.",
+      "Propose a CI documentation check that fails for broken internal links and malformed examples. Explain what it can check offline without hitting real APIs."
+    ]
+  }
+]

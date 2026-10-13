@@ -1,0 +1,4 @@
+artifacts/
+scratch/
+__pycache__/
+.env
