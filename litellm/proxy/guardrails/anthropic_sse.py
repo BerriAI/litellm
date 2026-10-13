@@ -8,8 +8,10 @@ hook scan such a stream, and re-emit it when the guardrail rewrote the response.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Final
 
+from litellm.llms.anthropic.pass_through.stream_assembly import anthropic_message_delta_fields
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
 )
@@ -50,7 +52,8 @@ from litellm.llms.anthropic.pass_through.stream_assembly import (  # noqa: E402 
 )
 
 
-def anthropic_sse_chunks_from_response(assembled: ModelResponse) -> tuple[bytes, ...]:
+def anthropic_sse_chunks_from_response(assembled: ModelResponse, source_chunks: Sequence[object]) -> tuple[bytes, ...]:
+    """Re-emit a rewritten response as the SSE events of the ``source_chunks`` stream it replaces."""
     from litellm.llms.anthropic.pass_through.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
@@ -61,4 +64,8 @@ def anthropic_sse_chunks_from_response(assembled: ModelResponse) -> tuple[bytes,
     anthropic_response: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
         response=assembled
     )
-    return tuple(FakeAnthropicMessagesStreamIterator(response=anthropic_response).chunks)
+    return tuple(
+        FakeAnthropicMessagesStreamIterator(
+            response=anthropic_response, message_delta_fields=anthropic_message_delta_fields(source_chunks)
+        ).chunks
+    )

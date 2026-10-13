@@ -1523,7 +1523,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
         if model_response_text(assembled) == original_text:
             return chunks
-        return anthropic_sse_chunks_from_response(assembled)
+        return anthropic_sse_chunks_from_response(assembled, chunks)
 
     @staticmethod
     def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:

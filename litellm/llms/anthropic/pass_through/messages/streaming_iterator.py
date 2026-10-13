@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.llms.anthropic.pass_through.messages.utils import (
     INCOMPLETE_STREAM_ERROR_MESSAGE,
+    MESSAGE_DELTA_OPTIONAL_KEYS,
     anthropic_message_delta,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -274,17 +275,21 @@ def anthropic_messages_response_as_sse_events(response: AnthropicMessagesRespons
         event for index, block in enumerate(content_blocks) for event in _anthropic_content_block_events(index, block)
     )
     # A real message_start always carries a null stop_reason/stop_sequence and
-    # a zero output_tokens - those are only known once generation finishes, so
-    # copying the completed response's final values here would let a client
-    # treat the message as already finished, or double-count output tokens.
+    # a zero output_tokens, and no stop_details or safeguard_results - those are
+    # only known once generation finishes, so copying the completed response's
+    # final values here would let a client treat the message as already
+    # finished, or double-count output tokens.
     message_start_usage: Final = {
         **(response.get("usage") or {}),
         "output_tokens": 0,
     }
+    message_start_fields: Final = {
+        key: value for key, value in response.items() if key not in MESSAGE_DELTA_OPTIONAL_KEYS
+    }
     message_start_payload: Final = {
         "type": "message_start",
         "message": {
-            **response,
+            **message_start_fields,
             "content": [],
             "stop_reason": None,
             "stop_sequence": None,

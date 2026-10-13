@@ -3049,7 +3049,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             #########################################################################
             if raw_sse:
                 for sse_chunk in (
-                    anthropic_sse_chunks_from_response(assembled_model_response)
+                    anthropic_sse_chunks_from_response(assembled_model_response, all_chunks)
                     if model_response_text(assembled_model_response) != pre_guardrail_text
                     else all_chunks
                 ):

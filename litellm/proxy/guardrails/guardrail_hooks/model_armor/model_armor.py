@@ -1257,7 +1257,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
                 # Return sanitized stream
                 if surface is _StreamSurface.ANTHROPIC_MESSAGES:
-                    for sse_chunk in anthropic_sse_chunks_from_response(assembled_response):
+                    for sse_chunk in anthropic_sse_chunks_from_response(assembled_response, all_chunks):
                         yield sse_chunk
                     return
                 mock_response: Final = MockResponseIterator(model_response=assembled_response)

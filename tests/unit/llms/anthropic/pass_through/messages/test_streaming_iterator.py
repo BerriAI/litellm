@@ -1301,6 +1301,33 @@ def test_anthropic_messages_streaming_response_reports_withheld_output_of_its_st
     )
 
 
+def test_anthropic_messages_response_as_sse_events_keeps_message_delta_fields_out_of_message_start():
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
+    stop_details = {"type": "refusal", "category": "cyber", "explanation": "declined"}
+    response = {
+        "id": "msg_1",
+        "model": "claude-haiku",
+        "role": "assistant",
+        "type": "message",
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+        "safeguard_results": safeguard_results,
+        "content": [{"type": "text", "text": "no"}],
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+    decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
+    message_start = decoded[0][1]["message"]
+    assert "stop_details" not in message_start
+    assert "safeguard_results" not in message_start
+    assert decoded[-2][1]["delta"] == {
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+        "safeguard_results": safeguard_results,
+    }
+
+
 def test_anthropic_messages_response_as_sse_events_no_content_blocks():
     response = {"id": "msg_4", "content": [], "stop_reason": "end_turn"}
     decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))

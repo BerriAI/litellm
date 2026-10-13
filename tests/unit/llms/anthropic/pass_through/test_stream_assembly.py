@@ -4,6 +4,7 @@ from typing import Final
 import pytest
 
 from litellm.llms.anthropic.pass_through.stream_assembly import (
+    anthropic_message_delta_fields,
     assemble_anthropic_sse_stream,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
@@ -51,6 +52,27 @@ ANTHROPIC_STREAM: Final = (
     _frame(
         "message_delta",
         {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}},
+    ),
+    _frame("message_stop", {"type": "message_stop"}),
+)
+
+SAFEGUARD_RESULTS: Final = [
+    {"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {"toolu_01": {"verdict": "dangerous"}}}}
+]
+SAFEGUARDED_STREAM: Final = (
+    *ANTHROPIC_STREAM[:5],
+    _frame(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "stop_details": None,
+                "safeguard_results": SAFEGUARD_RESULTS,
+            },
+            "usage": {"output_tokens": 2},
+        },
     ),
     _frame("message_stop", {"type": "message_stop"}),
 )
@@ -106,6 +128,12 @@ def test_assemble_anthropic_sse_stream_restores_upstream_identity_only_when_aske
     assert plain is not None and restored is not None
     assert plain.id != MESSAGE_ID
     assert (restored.id, restored.model) == (MESSAGE_ID, MODEL)
+
+
+def test_anthropic_message_delta_fields_reads_the_fields_the_openai_shape_drops():
+    assert dict(anthropic_message_delta_fields(ANTHROPIC_STREAM)) == {}
+    assert dict(anthropic_message_delta_fields(SAFEGUARDED_STREAM)) == {"safeguard_results": SAFEGUARD_RESULTS}
+    assert dict(anthropic_message_delta_fields(GOOGLE_STREAM)) == {}
 
 
 @pytest.mark.parametrize(

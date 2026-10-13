@@ -949,7 +949,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return
 
         self._modify_response_with_permission_errors(anthropic_response, anthropic_denials)
-        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response):
+        for sse_chunk in anthropic_sse_chunks_from_response(anthropic_response, all_chunks):
             yield sse_chunk
 
     def _check_assembled_stream(

@@ -31,10 +31,12 @@ def _message_delta(response: dict) -> dict:
 
 
 def test_message_delta_carries_safeguard_results():
-    """Websearch interception, the MCP loop and the guardrail path render a
-    complete response as this stream for a client that asked to stream; a
-    Claude Code auto-mode client reads the classifier verdict from
-    message_delta.delta, where a real Anthropic stream puts it."""
+    """Websearch interception and the MCP loop render a complete response as
+    this stream for a client that asked to stream (the guardrail path does too,
+    after merging the upstream fields back in, which
+    tests/unit/proxy/guardrails/test_anthropic_sse.py covers); a Claude Code
+    auto-mode client reads the classifier verdict from message_delta.delta,
+    where a real Anthropic stream puts it."""
     response = {
         "id": "msg_1",
         "model": "claude-sonnet-4-6",
