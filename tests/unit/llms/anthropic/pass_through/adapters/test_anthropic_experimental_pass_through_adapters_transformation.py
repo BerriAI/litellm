@@ -5143,3 +5143,77 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+def test_document_pdf_raises_bad_request_error() -> None:
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/46117
+
+    An Anthropic document block with media_type='application/pdf' must raise
+    BadRequestError when translated to OpenAI format, not silently produce a
+    malformed image_url with a PDF MIME type that the downstream backend rejects.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQK",  # minimal synthetic PDF header
+                    },
+                },
+                {"type": "text", "text": "Summarize this document."},
+            ],
+        )
+    ]
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        adapter.translate_anthropic_messages_to_openai(
+            messages=messages,
+            model="chatgpt/gpt-6.1-sol",
+        )
+
+    assert "application/pdf" in str(exc_info.value)
+
+
+def test_document_image_jpeg_passes_through() -> None:
+    """
+    An Anthropic document block with media_type='image/jpeg' must still be
+    translated to image_url without raising an error.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": "/9j/4AAQSkZJRgAB",  # minimal JPEG header
+                    },
+                },
+                {"type": "text", "text": "Describe this image."},
+            ],
+        )
+    ]
+
+    # Should not raise
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=messages,
+        model="chatgpt/gpt-6.1-sol",
+    )
+    # The image document should be translated to an image_url content block
+    user_msg = next(m for m in result if m.get("role") == "user")
+    content = user_msg.get("content", [])
+    image_blocks = [c for c in content if isinstance(c, dict) and c.get("type") == "image_url"]
+    assert len(image_blocks) == 1
+    url = image_blocks[0]["image_url"]["url"]
+    assert url.startswith("data:image/jpeg;base64,")

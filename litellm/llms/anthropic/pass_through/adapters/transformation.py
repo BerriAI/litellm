@@ -515,8 +515,25 @@ class LiteLLMAnthropicMessagesAdapter:
                                     self._add_prompt_cache_breakpoint_if_present(content, image_obj)
                                 )
                         elif content.get("type") == "document":
-                            # Convert Anthropic document format (PDF, etc.) to OpenAI format
+                            # Convert Anthropic document format to OpenAI format.
+                            # Only image/* media types can be forwarded as image_url;
+                            # non-image documents (e.g. application/pdf) are not
+                            # accepted by image-only backends and must be rejected
+                            # with a clear error rather than silently producing a
+                            # malformed request.
                             source = content.get("source", {})
+                            media_type = source.get("media_type", "") if isinstance(source, dict) else ""
+                            if media_type and not str(media_type).startswith("image/"):
+                                raise litellm.BadRequestError(
+                                    message=(
+                                        f"Document content block with media_type='{media_type}' cannot be "
+                                        "forwarded to this model as an image_url. Only image/* documents "
+                                        "are supported. For PDF documents, convert the pages to images "
+                                        "before sending."
+                                    ),
+                                    model=model,
+                                    llm_provider="anthropic",
+                                )
                             openai_image_url = self._translate_anthropic_image_to_openai(cast(dict, source))
 
                             if openai_image_url:
