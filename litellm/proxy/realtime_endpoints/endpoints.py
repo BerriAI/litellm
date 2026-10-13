@@ -608,6 +608,7 @@ async def proxy_realtime_calls(
         # The token is bound to the minting virtual key: deleting that key
         # invalidates every still-outstanding realtime token (R2-21)
         owner_key_hash: Final = decoded_payload.get("owner_key_hash") or ""
+        owner_models: list[str] | None = None
         if owner_key_hash:
             from litellm.proxy.proxy_server import prisma_client as _prisma_client
 
@@ -628,8 +629,13 @@ async def proxy_realtime_calls(
                         status_code=http_status.HTTP_401_UNAUTHORIZED,
                         media_type="application/json",
                     )
+                owner_models: Final = getattr(owner_row, "models", None)
 
         openai_ephemeral_key = decoded_payload.get("ephemeral_key", "")
+        # Model comes from the payload signed at mint time; the query-param
+        # override is dropped (it re-enabled cross-model routing for tokens
+        # minted under ACL'd models) except for legacy compatibility tokens
+        # that carry no model_id in the payload (R1-H4).
         model = decoded_payload.get("model_id") or request.query_params.get("model") or _DEFAULT_REALTIME_MODEL
         user_id = decoded_payload.get("user_id") or None
         team_id = decoded_payload.get("team_id") or None
@@ -640,6 +646,28 @@ async def proxy_realtime_calls(
                 content=json.dumps({"error": "Token is not valid for this Realtime endpoint"}),
                 status_code=http_status.HTTP_401_UNAUTHORIZED,
                 media_type="application/json",
+            )
+
+        # Mint-time ACL is authoritative for v2 tokens: the mint route checked
+        # can_key_call_model on this model, so /v1/realtime/calls re-checks it
+        # (defense in depth against runtime model-list changes) (R1-H4).
+        if decoded_payload.get("v") == _REALTIME_TOKEN_VERSION and decoded_payload.get("model_id"):
+            from litellm.proxy.proxy_server import llm_router as _llm_router
+            from litellm.proxy.auth.auth_checks import can_key_call_model
+
+            verify_auth: Final = UserAPIKeyAuth(
+                user_id=user_id,
+                team_id=team_id,
+                api_key=owner_key_hash or None,
+                models=owner_models or [],
+                token=owner_key_hash or None,
+            )
+            await can_key_call_model(
+                model=model,
+                llm_model_list=llm_router.model_list if llm_router is not None else None,
+                valid_token=verify_auth,
+                llm_router=llm_router,
+
             )
     else:
         if is_translation_request:
