@@ -34,4 +34,4 @@ class ModelInfoResponse(TypedDict):
     max_input_tokens: NotRequired[int]
     max_output_tokens: NotRequired[int]
     metadata: NotRequired[ModelInfoMetadata]
-    pricing: NotRequired[ModelPricing]
+    pricing: NotRequired[ModelPricing]  # writable-ok: the listing builder assigns it

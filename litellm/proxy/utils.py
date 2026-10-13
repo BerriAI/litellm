@@ -9173,6 +9173,22 @@ def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field:
     return max(limits) if limits else None
 
 
+_COST_MAP_ENTRY: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _cost_map_entry(value: object) -> Mapping[str, object] | None:
+    """One cost-map entry as a typed mapping, or None when it is not a mapping at all."""
+    try:
+        return _COST_MAP_ENTRY.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _default_cost_map() -> Mapping[str, object]:
+    """``litellm.model_cost``, read per call so a price reload is picked up."""
+    return cast("Mapping[str, object]", litellm.model_cost)  # cast-ok: get_model_cost_map is annotated `-> dict`
+
+
 def _declared_price(info: ModelInfo, field: str, cost_map: Mapping[str, object]) -> float | None:
     """The price ``field`` carries, but only when the cost map actually declares it.
 
@@ -9185,11 +9201,10 @@ def _declared_price(info: ModelInfo, field: str, cost_map: Mapping[str, object])
     A model the catalog deliberately prices at 0.0 still reports 0.0; one it never priced
     reports None.
     """
-    key: Final = info.get("key")
-    raw: Final = cost_map.get(key) if isinstance(key, str) else None
-    if not isinstance(raw, Mapping) or field not in raw:
+    entry: Final = _cost_map_entry(cost_map.get(info["key"]))
+    if entry is None or field not in entry:
         return None
-    return coerce_token_price(info.get(field, raw[field]))
+    return coerce_token_price(info.get(field, entry[field]))
 
 
 def _first_price(candidates: tuple[ModelInfo, ...], field: str, cost_map: Mapping[str, object]) -> float | None:
@@ -9397,7 +9412,7 @@ def create_model_info_response(
             candidate_sets,
             deployment_models,
             _listing_deployment_prices(lookup_model, listing_info, llm_router),
-            cost_map if cost_map is not None else litellm.model_cost,
+            cost_map if cost_map is not None else _default_cost_map(),
         )
 
     if not include_metadata:

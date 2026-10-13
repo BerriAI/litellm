@@ -26306,3 +26306,45 @@ async def test_batch_completion_fastest_response_streams_mocked_chunks() -> None
 
     assert text == "stream answer"
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def test_deployment_section_gives_callers_a_mapping_even_when_the_block_is_absent():
+    """Every caller reads these blocks with `.get(...)`, so a deployment that configures
+    neither must still hand back something mapping-shaped rather than None."""
+    from litellm.router import _deployment_section
+
+    configured = {"model_info": {"id": "d1", "base_model": "openai/gpt-4o"}}
+
+    assert _deployment_section(configured, "model_info") == {"id": "d1", "base_model": "openai/gpt-4o"}
+    assert _deployment_section(configured, "litellm_params") == {}
+    assert _deployment_section({"litellm_params": None}, "litellm_params") == {}
+
+
+def test_discovered_info_key_treats_a_non_string_id_as_absent():
+    """`get_discovered_model_info` keys its cache on this, so anything that is not a usable
+    string id has to read as absent rather than keying the cache on it."""
+    from litellm.router import _discovered_info_key
+
+    assert _discovered_info_key({"model_info": {"id": "d1"}}) == "d1"
+    assert _discovered_info_key({"model_info": {"id": 17}}) is None
+    assert _discovered_info_key({"model_info": {}}) is None
+    assert _discovered_info_key({}) is None
+
+
+def test_pattern_route_deployments_returns_every_match_and_an_empty_tuple_for_none():
+    """`PatternMatchRouter.route` answers None when nothing matches, and the wildcard price
+    scan iterates the result, so it has to be a sequence either way."""
+    from litellm.router import _pattern_route_deployments
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "k", "input_cost_per_token": 7e-06},
+            },
+        ]
+    )
+
+    matched = _pattern_route_deployments(router.pattern_router, "openai/gpt-4o-mini")
+    assert [d["litellm_params"]["input_cost_per_token"] for d in matched] == [7e-06]
+    assert _pattern_route_deployments(router.pattern_router, "anthropic/claude-sonnet-5") == ()
