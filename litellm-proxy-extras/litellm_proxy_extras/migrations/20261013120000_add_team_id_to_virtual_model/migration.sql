@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_VirtualModelTable" ADD COLUMN "team_id" TEXT;
+ALTER TABLE "LiteLLM_VirtualModelTable" ADD COLUMN IF NOT EXISTS "team_id" TEXT;

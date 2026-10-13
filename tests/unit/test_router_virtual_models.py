@@ -1157,6 +1157,32 @@ def test_virtual_model_has_alternatives_contract():
     assert router.virtual_model_has_alternatives("dep1", "dep1-model") is False
 
 
+def test_deployment_in_multi_member_virtual_model_contract():
+    """deployment_in_multi_member_virtual_model is True for members of any multi-member virtual model, regardless of call path."""
+    multi = f"{VIRTUAL_MODEL_PREFIX}multi"
+    solo = f"{VIRTUAL_MODEL_PREFIX}solo"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key1"},
+                "model_info": {"id": "dep1"},
+            },
+        ],
+    )
+
+    router.set_virtual_models(
+        {
+            multi: VirtualModelRouterState(members={"dep1": 1, "dep2": 2}),
+            solo: VirtualModelRouterState(members={"dep3": 1}),
+        }
+    )
+
+    assert router.deployment_in_multi_member_virtual_model("dep1") is True
+    assert router.deployment_in_multi_member_virtual_model("dep3") is False
+    assert router.deployment_in_multi_member_virtual_model("no-such-dep") is False
+
+
 @pytest.mark.asyncio
 async def test_aembedding_routes_through_virtual_model_member():
     """router.aembedding routes through a virtual model member."""
