@@ -15,7 +15,7 @@ from e2e_http import NoBody, unwrap
 from idp import TESTS_CLIENT_ID, Keycloak
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, LiteLLMParamsBody, TeamNewBody, UserNewBody, UserNewResponse
-from perf_case import Guardrail, MockDeployment, PerformanceTestCase, ProviderKind
+from perf_base_case import Guardrail, MockDeployment, PerformanceTestCase, ProviderKind
 from perf_plan import Caller
 from perf_wire import TokenSource
 from proxy_client import ProxyClient

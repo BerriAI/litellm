@@ -13,7 +13,7 @@ from idp import Keycloak
 from lifecycle import ResourceManager
 from memory_readings import read_rss_everywhere
 from models import SpendLogsParams
-from perf_case import PerformanceTestCase
+from perf_base_case import PerformanceTestCase
 from perf_cases import CASES
 from perf_observe import (
     Observation,

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Final
 
 from e2e_config import PROXY_BASE_URL
-from perf_case import PerformanceTestCase
+from perf_base_case import PerformanceTestCase
 from perf_plan import PlannedRequest
 from perf_setup import CaseSetup
 from perf_wire import WireRecord, WireRequest

@@ -9,7 +9,7 @@ import random
 from dataclasses import dataclass
 from typing import Final, Literal
 
-from perf_case import Endpoint, PerformanceTestCase, Team
+from perf_base_case import Endpoint, PerformanceTestCase, Team
 
 Flag = Literal["n", "i", "b"]
 CallerKind = Literal["jwt", "key"]
