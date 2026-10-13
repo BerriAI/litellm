@@ -8334,18 +8334,9 @@ def test_completion_surfaces_response_citations_in_provider_specific_fields(resp
     ]
 
 
-def _anthropic_message_body(stop_reason: str, stop_details: dict | None) -> dict:
-    return {
-        "id": "msg_stop_details_test",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-sonnet-5-5",
-        "content": [{"type": "text", "text": "I can't help with that request."}],
-        "stop_reason": stop_reason,
-        "stop_sequence": None,
-        "stop_details": stop_details,
-        "usage": {"input_tokens": 12, "output_tokens": 9},
-    }
+def _refusal_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    content: Final = [{"type": "text", "text": "I can't help with that request."}]
+    return {**_anthropic_message_body(content, stop_reason), "stop_details": stop_details}
 
 
 def _transform_message_body(body: dict) -> litellm.ModelResponse:
@@ -8360,7 +8351,7 @@ def _transform_message_body(body: dict) -> litellm.ModelResponse:
 
 def test_refusal_stop_details_kept_in_provider_specific_fields():
     stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
-    result: Final = _transform_message_body(_anthropic_message_body("refusal", stop_details))
+    result: Final = _transform_message_body(_refusal_message_body("refusal", stop_details))
 
     assert result.choices[0].finish_reason == "content_filter"
     provider_fields: Final = result.choices[0].message.provider_specific_fields
@@ -8370,7 +8361,7 @@ def test_refusal_stop_details_kept_in_provider_specific_fields():
 
 
 def test_refusal_without_stop_details_keeps_the_native_stop_reason():
-    result: Final = _transform_message_body(_anthropic_message_body("refusal", None))
+    result: Final = _transform_message_body(_refusal_message_body("refusal", None))
 
     provider_fields: Final = result.choices[0].message.provider_specific_fields
     assert provider_fields["stop_reason"] == "refusal"
@@ -8378,9 +8369,21 @@ def test_refusal_without_stop_details_keeps_the_native_stop_reason():
 
 
 def test_end_turn_response_carries_no_stop_details():
-    result: Final = _transform_message_body(_anthropic_message_body("end_turn", None))
+    result: Final = _transform_message_body(_refusal_message_body("end_turn", None))
 
     assert result.choices[0].finish_reason == "stop"
     provider_fields: Final = result.choices[0].message.provider_specific_fields
     assert "stop_details" not in provider_fields
     assert "stop_reason" not in provider_fields
+
+
+def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> None:
+    result = AnthropicConfig().transform_parsed_response(
+        completion_response=MagicMock(),
+        raw_response=httpx.Response(200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    provider_specific_fields = result.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_specific_fields
