@@ -177,6 +177,37 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
         yield chunk
 
 
+def _maskable_text_slots(messages: list) -> list[tuple[dict, str]]:
+    """
+    ``(container, key)`` pairs whose string value is message text to scan.
+
+    Besides string content and ``text`` blocks this covers Anthropic
+    ``tool_result`` blocks, which carry their text under ``content`` (a string
+    or a list of text blocks). Without them, code-interpreter output such as
+    ``pdftotext`` of an attached file reaches the provider unmasked.
+    """
+    slots: list[tuple[dict, str]] = []
+    for m in messages:
+        content = m.get("content", None)
+        if isinstance(content, str):
+            slots.append((m, "content"))
+        elif isinstance(content, list):
+            for c in content:
+                if not isinstance(c, dict):
+                    continue
+                if isinstance(c.get("text"), str):
+                    slots.append((c, "text"))
+                elif c.get("type") == "tool_result":
+                    inner = c.get("content")
+                    if isinstance(inner, str):
+                        slots.append((c, "content"))
+                    elif isinstance(inner, list):
+                        slots.extend(
+                            (ic, "text") for ic in inner if isinstance(ic, dict) and isinstance(ic.get("text"), str)
+                        )
+    return slots
+
+
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
@@ -1053,52 +1084,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             messages: Final = data.get("messages", None)
             if messages is None:
                 return data
-            tasks: Final = []
-            task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
-
-            for msg_idx, m in enumerate(messages):
-                content = m.get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str):
-                    tasks.append(
-                        self.check_pii(
-                            text=content,
-                            output_parse_pii=self.output_parse_pii,
-                            presidio_config=presidio_config,
-                            request_data=data,
-                        )
+            slots: Final = _maskable_text_slots(messages)
+            responses: Final = await asyncio.gather(
+                *(
+                    self.check_pii(
+                        text=container[key],
+                        output_parse_pii=self.output_parse_pii,
+                        presidio_config=presidio_config,
+                        request_data=data,
                     )
-                    task_mappings.append((msg_idx, None))  # None indicates string content
-                elif isinstance(content, list):
-                    for content_idx, c in enumerate(content):
-                        text_str = c.get("text", None)
-                        if text_str is None:
-                            continue
-                        tasks.append(
-                            self.check_pii(
-                                text=text_str,
-                                output_parse_pii=self.output_parse_pii,
-                                presidio_config=presidio_config,
-                                request_data=data,
-                            )
-                        )
-                        task_mappings.append((msg_idx, int(content_idx)))
-
-            responses: Final = await asyncio.gather(*tasks)
-
-            # Map responses back to the correct message and content item
-            for task_idx, r in enumerate(responses):
-                mapping = task_mappings[task_idx]
-                msg_idx = cast(int, mapping[0])
-                content_idx_optional = cast(int | None, mapping[1])
-                content = messages[msg_idx].get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str) and content_idx_optional is None:
-                    messages[msg_idx]["content"] = r  # replace content with redacted string
-                elif isinstance(content, list) and content_idx_optional is not None:
-                    messages[msg_idx]["content"][content_idx_optional]["text"] = r
+                    for container, key in slots
+                )
+            )
+            for (container, key), r in zip(slots, responses):
+                container[key] = r
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", data["messages"])
             data["messages"] = messages
@@ -1140,57 +1139,25 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
             messages: Final[list | None] = kwargs.get("messages", None)
-            tasks: Final = []
-            task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
-
             if messages is None:
                 return kwargs, result
 
             presidio_config: Final = self.get_presidio_settings_from_request_data(kwargs)
 
-            for msg_idx, m in enumerate(messages):
-                content = m.get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str):
-                    tasks.append(
-                        self.check_pii(
-                            text=content,
-                            output_parse_pii=False,
-                            presidio_config=presidio_config,
-                            request_data=kwargs,
-                        )
-                    )  # need to pass separately b/c presidio has context window limits
-                    task_mappings.append((msg_idx, None))  # None indicates string content
-                elif isinstance(content, list):
-                    for content_idx, c in enumerate(content):
-                        text_str = c.get("text", None)
-                        if text_str is None:
-                            continue
-                        tasks.append(
-                            self.check_pii(
-                                text=text_str,
-                                output_parse_pii=False,
-                                presidio_config=presidio_config,
-                                request_data=kwargs,
-                            )
-                        )
-                        task_mappings.append((msg_idx, int(content_idx)))
-
-            responses: Final = await asyncio.gather(*tasks)
-
-            # Map responses back to the correct message and content item
-            for task_idx, r in enumerate(responses):
-                mapping = task_mappings[task_idx]
-                msg_idx = cast(int, mapping[0])
-                content_idx_optional = cast(int | None, mapping[1])
-                content = messages[msg_idx].get("content", None)
-                if content is None:
-                    continue
-                if isinstance(content, str) and content_idx_optional is None:
-                    messages[msg_idx]["content"] = r  # replace content with redacted string
-                elif isinstance(content, list) and content_idx_optional is not None:
-                    messages[msg_idx]["content"][content_idx_optional]["text"] = r
+            slots: Final = _maskable_text_slots(messages)
+            responses: Final = await asyncio.gather(
+                *(
+                    self.check_pii(
+                        text=container[key],
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=kwargs,
+                    )  # one call per slot b/c presidio has context window limits
+                    for container, key in slots
+                )
+            )
+            for (container, key), r in zip(slots, responses):
+                container[key] = r
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages

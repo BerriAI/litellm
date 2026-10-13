@@ -4830,3 +4830,51 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+def _anthropic_tool_result_messages() -> list:
+    return [
+        {"role": "user", "content": "Read the attached extract"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "stdout: John Smith, 555-123-4567"},
+                {"type": "tool_result", "tool_use_id": "toolu_2", "content": [{"type": "text", "text": "John Smith"}]},
+            ],
+        },
+    ]
+
+
+async def _mask_john_smith(text, output_parse_pii, presidio_config, request_data):
+    return text.replace("John Smith", "<PERSON>").replace("555-123-4567", "<PHONE_NUMBER>")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_masks_anthropic_tool_result_blocks(presidio_guardrail, mock_user_api_key, mock_cache):
+    """tool_result blocks carry their text under `content`, not `text`; code-interpreter
+    output (e.g. pdftotext of an attached file) must not reach the provider unmasked."""
+    presidio_guardrail.check_pii = _mask_john_smith
+
+    result = await presidio_guardrail.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data={"model": "claude-sonnet-4-5", "messages": _anthropic_tool_result_messages()},
+        call_type="anthropic_messages",
+    )
+
+    tool_results = result["messages"][2]["content"]
+    assert tool_results[0]["content"] == "stdout: <PERSON>, <PHONE_NUMBER>"
+    assert tool_results[1]["content"] == [{"type": "text", "text": "<PERSON>"}]
+    assert result["messages"][1]["content"][0] == {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}}
+
+
+@pytest.mark.asyncio
+async def test_logging_hook_masks_anthropic_tool_result_blocks(presidio_guardrail):
+    presidio_guardrail.check_pii = _mask_john_smith
+
+    kwargs, _ = await presidio_guardrail.async_logging_hook(
+        kwargs={"messages": _anthropic_tool_result_messages()}, result=None, call_type="completion"
+    )
+
+    assert "John Smith" not in json.dumps(kwargs["messages"])
