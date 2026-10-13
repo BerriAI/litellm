@@ -112,6 +112,8 @@ def _failed_call(provider: str = "anthropic", model_id: str = "deployment-1") ->
         (litellm.RateLimitError("429", "anthropic", "claude"), StatusClass.CLIENT_ERROR),
         (litellm.ServiceUnavailableError("503", "anthropic", "claude"), StatusClass.SERVER_ERROR),
         (ValueError("no status"), StatusClass.NONE),
+        (litellm.Timeout("timed out", "claude", "anthropic"), StatusClass.TIMEOUT),
+        (litellm.APIConnectionError("refused", "anthropic", "claude"), StatusClass.CONNECTION_ERROR),
     ],
 )
 @pytest.mark.asyncio

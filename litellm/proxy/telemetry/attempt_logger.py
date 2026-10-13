@@ -4,6 +4,7 @@ from typing import Final, TypeAlias
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import APIConnectionError, Timeout
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.telemetry.blocks import count_blocks
 from litellm.proxy.telemetry.request_context import AttemptObservation, RequestAccumulator, current_request
@@ -118,15 +119,23 @@ def observe(logged: _LoggedAttempt, *, hash_deployment: DeploymentHasher) -> Att
     )
 
 
+def _failure_status(exception: Exception) -> StatusClass:
+    if isinstance(exception, Timeout):
+        return StatusClass.TIMEOUT
+    if isinstance(exception, APIConnectionError):
+        return StatusClass.CONNECTION_ERROR
+    status_code: Final[object] = getattr(exception, "status_code", None)
+    return StatusClass.from_status_code(status_code if isinstance(status_code, int) else None)
+
+
 def observe_failure(
     call: _FailedCall, exception: Exception, *, hash_deployment: DeploymentHasher
 ) -> AttemptObservation:
-    status_code: Final[object] = getattr(exception, "status_code", None)
     model_id: Final = call.litellm_params.model_id
     return AttemptObservation(
         attempt=AttemptRecord(
             provider=call.custom_llm_provider or "unknown",
-            provider_status=StatusClass.from_status_code(status_code if isinstance(status_code, int) else None),
+            provider_status=_failure_status(exception),
             stream=call.stream is True,
             deployment_hash=hash_deployment(model_id) if model_id else None,
         ),
