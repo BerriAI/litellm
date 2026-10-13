@@ -2719,6 +2719,44 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
 
 
 @pytest.mark.asyncio
+async def test_collector_events_let_only_the_first_turn_settle_a_shared_reservation(tmp_path):
+    from litellm.litellm_core_utils.core_helpers import (
+        budget_reservation_from_metadata,
+        get_litellm_metadata_from_kwargs,
+    )
+    from litellm.proxy.spend_tracking.budget_reservation import claim_budget_reservation
+    from litellm.proxy.spend_tracking.spend_event import spend_event_callback_args
+
+    handler = _RecordingHandler()
+    consumer = SpendEventConsumer(handler)
+    address = UnixAddress(path=str(tmp_path / "spend.sock"))
+    server = await consumer.serve(address)
+    producer = SpendEventProducer(
+        address=address, on_unavailable="fallback", buffer_size=10, connect_timeout=1.0, fallback=_no_fallback
+    )
+    logger = ProxyDBLogger(producer)
+    connection_kwargs = _offload_kwargs()
+
+    for turn_call_id in ("turn-1", "turn-2", "turn-3"):
+        await logger.async_log_success_event(
+            {**connection_kwargs, "litellm_call_id": turn_call_id}, _offload_response(), datetime.now(), datetime.now()
+        )
+    await producer.close(drain_timeout=5.0)
+    server.close()
+    assert await consumer.drain(timeout=5.0) == 0
+
+    sidecar_kwargs = [spend_event_callback_args(decode_spend_event(line)).kwargs for line in handler.lines]
+    assert [
+        claim_budget_reservation(
+            budget_reservation=budget_reservation_from_metadata(get_litellm_metadata_from_kwargs(kwargs)),
+            litellm_call_id=kwargs["litellm_call_id"],
+        )
+        is not None
+        for kwargs in sidecar_kwargs
+    ] == [True, False, False]
+
+
+@pytest.mark.asyncio
 async def test_async_log_success_event_keeps_batch_retrieves_in_process():
     producer = SpendEventProducer(
         address=UnixAddress(path="/nonexistent/spend.sock"),

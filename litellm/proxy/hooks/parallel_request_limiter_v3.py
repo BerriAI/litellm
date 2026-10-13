@@ -742,15 +742,18 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
     return stash
 
 
-def _request_owner_call_id(data: Mapping[str, object]) -> str | None:
-    from litellm.proxy.common_request_processing import request_litellm_call_id
-
-    return request_litellm_call_id(data)
+def _tpm_limited_tags(call_stash: RequestRateLimiterStash | None) -> frozenset[str]:
+    if call_stash is not None:
+        return call_stash.tpm_limited_tags
+    connection: Final = get_request_stash()
+    return connection.tpm_limited_tags if connection is not None and connection.websocket_connection else frozenset()
 
 
 def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
+    from litellm.proxy.common_request_processing import request_litellm_call_id
+
     stash: Final = get_or_create_request_stash()
-    owner_call_id: Final = _request_owner_call_id(_REQUEST_RATE_LIMIT_DATA.validate_python(data))
+    owner_call_id: Final = request_litellm_call_id(_REQUEST_RATE_LIMIT_DATA.validate_python(data))
     if owner_call_id is not None:
         stash.owner_litellm_call_id = owner_call_id
     return stash
@@ -5067,7 +5070,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         targets: Final = self._collect_tpm_scope_targets(
             standard_logging_metadata=standard_logging_metadata,
             kwargs=kwargs,
-            tpm_limited_tags=stash.tpm_limited_tags if stash is not None else frozenset(),
+            tpm_limited_tags=_tpm_limited_tags(stash),
             model_group=reconcile_model.group if reconcile_model is not None else None,
         )
         targets.extend(
@@ -5458,12 +5461,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         both this hook and async_log_failure_event end up running in the same
         flow, only the first release/refund applies. A mid-stream failure
         relayed here with recovered partial usage settles the reservation at
-        that usage instead of refunding it.
+        that usage instead of refunding it. A native Responses WebSocket
+        connection keeps its slot and reservation through a failed turn, and
+        its disconnect releases them.
         """
         try:
-            failed_request: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(request_data)
-            stash: Final = get_request_stash_for_call(_request_owner_call_id(failed_request))
-            if stash is None:
+            stash: Final = get_request_stash()
+            if stash is None or stash.websocket_connection:
                 return
             await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
 

@@ -2007,7 +2007,9 @@ class ResponsesWebSocketStreaming:
     def _start_turn(self, client_frame: str | None) -> None:
         turn_start: Final = datetime.now()  # noqa: DTZ005  # logging pipeline uses naive datetimes
         turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
-            litellm_call_id=str(uuid.uuid4()), start_time=turn_start
+            litellm_call_id=str(uuid.uuid4()),
+            start_time=turn_start,
+            request_body=_json_object_or_none(client_frame) or {},
         )
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
@@ -2036,10 +2038,11 @@ class ResponsesWebSocketStreaming:
     def _turn_index_for_event(self, event_obj: Mapping[str, object]) -> int:
         """
         An event naming a response id belongs to the turn whose ``response.created``
-        carried it. The backend answers accepted turns strictly in order, so an
-        id-less event goes to the oldest turn still waiting for its ``response.created``,
-        except an id-less ``error``: that is the backend rejecting the newest pending
-        ``response.create`` at parse time while an earlier turn is still streaming.
+        carried it. The backend answers turns strictly in order, so an id-less event,
+        a rejected turn's ``error`` included, goes to the oldest turn still waiting for
+        its ``response.created``. The one exception is an id-less ``error`` while a turn
+        is streaming: the backend rejects a ``response.create`` it cannot parse as soon
+        as it reads it, so that error belongs to the newest pending turn.
         """
         response_id: Final = _ws_event_response_id(event_obj)
         turn_ids: Final = tuple(turn.response_id for turn in self._open_turns)
@@ -2048,7 +2051,7 @@ class ResponsesWebSocketStreaming:
         pending: Final = tuple(index for index, turn_id in enumerate(turn_ids) if turn_id is None)
         if not pending:
             return 0
-        if response_id is None and event_obj.get("type") == "error":
+        if response_id is None and event_obj.get("type") == "error" and len(pending) < len(turn_ids):
             return pending[-1]
         return pending[0]
 

@@ -1907,12 +1907,13 @@ class _TurnLoggingRecorder:
         self.connection = MagicMock()
         self.connection.copy_for_new_call = MagicMock(side_effect=self._copy_for_new_call)
 
-    def _copy_for_new_call(self, litellm_call_id: str, start_time: object) -> MagicMock:
+    def _copy_for_new_call(self, litellm_call_id: str, start_time: object, request_body: object) -> MagicMock:
         from unittest.mock import AsyncMock
 
         turn = MagicMock()
         turn.litellm_call_id = litellm_call_id
         turn.start_time = start_time
+        turn.request_body = request_body
         turn.model_call_details = {}
         turn.dispatch_success_handlers = AsyncMock()
         turn.dispatch_failure_handlers = AsyncMock()
@@ -3336,6 +3337,9 @@ class TestNativeWebSocketPerTurnLogging:
             [{"role": "user", "content": "two"}],
             [{"role": "user", "content": "three"}],
         ]
+        assert [turn.request_body for turn in recorder.turns] == [
+            json.loads(_response_create(text)) for text in ("one", "two", "three")
+        ]
         for turn in recorder.turns:
             turn.dispatch_failure_handlers.assert_not_awaited()
 
@@ -3401,6 +3405,47 @@ class TestNativeWebSocketPerTurnLogging:
         second.dispatch_failure_handlers.assert_awaited_once()
         assert "max_output_tokens" in str(second.dispatch_failure_handlers.await_args[0][0])
         assert second.record_partial_usage_for_failure.call_args[0][0].total_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_turn_answered_in_order_fails_and_the_next_turn_keeps_its_response(self):
+        """OpenAI answers a response.create it parses but rejects (previous_response_not_found) in order,
+        before it starts the next frame's response. With both turns still waiting, the id-less error is the
+        older turn's failure and the next response.created belongs to the newer turn."""
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        recorder = _TurnLoggingRecorder()
+        handler = _make_streaming(
+            websocket=MagicMock(),
+            backend_ws=MagicMock(),
+            logging_obj=recorder.connection,
+            request_data={},
+            authorized_model="gpt-5.4-mini",
+            custom_llm_provider="openai",
+        )
+        created, _delta, completed = _completed_turn("resp_2", 40, 4)
+        rejection = {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "previous_response_not_found",
+                "message": "Previous response with id 'resp_missing' not found.",
+            },
+        }
+
+        handler._record_client_frame(_response_create("first"))
+        handler._record_client_frame(_response_create("second"))
+        for event in (rejection, created, completed):
+            handler._record_backend_event(json.dumps(event))
+        assert await _until(lambda: recorder.logged_turns() == 2)
+
+        first, second = recorder.turns
+        first.dispatch_success_handlers.assert_not_awaited()
+        assert "resp_missing" in str(first.dispatch_failure_handlers.await_args[0][0])
+        second.dispatch_failure_handlers.assert_not_awaited()
+        assert [event["type"] for event in second.dispatch_success_handlers.await_args[0][0]] == [
+            "response.created",
+            "response.completed",
+        ]
 
     @pytest.mark.asyncio
     async def test_a_failed_turn_is_booked_alone_and_leaves_the_other_turns_successful(self):

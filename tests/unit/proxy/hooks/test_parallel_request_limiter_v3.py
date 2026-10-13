@@ -4383,9 +4383,11 @@ async def test_post_call_failure_hook_for_another_call_keeps_the_owner_slot_v3()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
-    connection_data: Dict[str, Any] = {"model": "gpt-4o-mini", "litellm_call_id": "socket-call"}
     await handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict, cache=local_cache, data=connection_data, call_type=""
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4o-mini", "litellm_call_id": "socket-call"},
+        call_type=CallTypes.aresponses_websocket.value,
     )
 
     await handler.async_post_call_failure_hook(
@@ -4393,14 +4395,10 @@ async def test_post_call_failure_hook_for_another_call_keeps_the_owner_slot_v3()
         original_exception=Exception("previous_response_not_found"),
         user_api_key_dict=user_api_key_dict,
     )
-    in_flight_after_turn_failure = handler._gauge_in_flight_from_cache_value(
+    in_flight_after_turn_failure: Final = handler._gauge_in_flight_from_cache_value(
         await local_cache.async_get_cache(key=counter_key)
     )
-    await handler.async_post_call_failure_hook(
-        request_data=connection_data,
-        original_exception=Exception("socket closed"),
-        user_api_key_dict=user_api_key_dict,
-    )
+    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     assert in_flight_after_turn_failure == 1
     assert handler._gauge_in_flight_from_cache_value(await local_cache.async_get_cache(key=counter_key)) == 0
@@ -4436,15 +4434,16 @@ async def _admit_pass_through_with_client_call_id(
 
 
 @pytest.mark.asyncio
-async def test_post_call_failure_hook_releases_the_slot_the_proxy_call_id_owns_v3():
+async def test_post_call_failure_hook_releases_the_slot_the_proxy_call_id_owns_v3(monkeypatch: pytest.MonkeyPatch):
     _api_key = hash_token("sk-passthrough-client-id-failure")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
     logging_obj = await _admit_pass_through_with_client_call_id(handler, local_cache, user_api_key_dict)
+    monkeypatch.setattr(litellm, "callbacks", [handler])
 
-    await handler.async_post_call_failure_hook(
+    await ProxyLogging(user_api_key_cache=UserApiKeyCache()).post_call_failure_hook(
         request_data={"litellm_call_id": "client-chosen-id", "litellm_logging_obj": logging_obj},
         original_exception=Exception("rejected by a pre-call hook"),
         user_api_key_dict=user_api_key_dict,
@@ -5222,6 +5221,41 @@ async def test_tag_429_names_the_tag_that_is_over_its_limit(monkeypatch):
         await call(["cell-ok", "cell-blocked"])
     assert exc_info.value.status_code == 429
     assert "cell-blocked" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_websocket_turns_count_toward_the_connection_tag_tpm_v3(monkeypatch):
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    _request_stash.set(None)
+    resolver, _ = _static_tag_limits({"cell-1": TagRateLimit(rpm_limit=None, tpm_limit=1_000)})
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache), tag_rate_limit_resolver=resolver
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-ws-tag-tpm"))
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"model": "gpt-4o-mini", "metadata": {"tags": ["cell-1"]}, "litellm_call_id": "socket-call"},
+        call_type=CallTypes.aresponses_websocket.value,
+    )
+    tokens_before_turns: Final = int(await local_cache.async_get_cache("{tag:cell-1}:tokens") or 0)
+
+    for turn_call_id in ("turn-1-call", "turn-2-call"):
+        await handler.async_log_success_event(
+            kwargs={
+                "litellm_call_id": turn_call_id,
+                "standard_logging_object": {"metadata": {"user_api_key_hash": user_api_key_dict.api_key}},
+                "model": "gpt-4o-mini",
+            },
+            response_obj=ModelResponse(usage=Usage(prompt_tokens=60, completion_tokens=60, total_tokens=120)),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    assert await local_cache.async_get_cache("{tag:cell-1}:tokens") == tokens_before_turns + 240
 
 
 @pytest.mark.asyncio

@@ -8267,10 +8267,12 @@ def test_copy_for_new_call_gives_each_call_its_own_id_clock_and_metadata():
     reservation = {"reserved_cost": 0.5, "finalized": False}
     connection = _responses_ws_logging_obj()
     connection_start = connection.start_time
+    connection_request = {"url": "ws://proxy/v1/responses", "body": {"first_message": "turn 1 frame"}}
     connection.litellm_params = {
         "metadata": {"user_api_key_alias": "codex", "budget_reservation": reservation},
         "litellm_metadata": {"model_info": {"id": "dep-1"}},
         "litellm_call_id": connection.litellm_call_id,
+        "proxy_server_request": connection_request,
     }
     connection.model_call_details = {
         **connection.model_call_details,
@@ -8279,7 +8281,8 @@ def test_copy_for_new_call_gives_each_call_its_own_id_clock_and_metadata():
     }
     turn_start = datetime.datetime(2026, 10, 9, 17, 24, 47)
 
-    turn = connection.copy_for_new_call(litellm_call_id="turn-1-call", start_time=turn_start)
+    turn_frame = {"type": "response.create", "input": "turn 2 frame"}
+    turn = connection.copy_for_new_call(litellm_call_id="turn-1-call", start_time=turn_start, request_body=turn_frame)
     turn.litellm_params["metadata"]["status"] = "failure"
     turn.litellm_params["litellm_metadata"]["model_group"] = "gpt-4o"
     turn.model_call_details["standard_logging_object"] = {"id": "resp_1"}
@@ -8290,6 +8293,14 @@ def test_copy_for_new_call_gives_each_call_its_own_id_clock_and_metadata():
     assert turn.model_call_details["litellm_params"]["litellm_call_id"] == "turn-1-call"
     assert turn.model_call_details["first_api_call_start_time"] is None
     assert turn.litellm_params["metadata"]["budget_reservation"] is reservation
+    assert turn.model_call_details["litellm_params"]["proxy_server_request"] == {
+        "url": "ws://proxy/v1/responses",
+        "body": turn_frame,
+    }
+    assert connection.litellm_params["proxy_server_request"] == {
+        "url": "ws://proxy/v1/responses",
+        "body": {"first_message": "turn 1 frame"},
+    }
     assert (connection.litellm_call_id, connection.start_time) == ("responses-ws-usage-test", connection_start)
     assert connection.litellm_params["litellm_call_id"] == "responses-ws-usage-test"
     assert "status" not in connection.litellm_params["metadata"]

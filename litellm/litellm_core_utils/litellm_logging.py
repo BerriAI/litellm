@@ -541,6 +541,17 @@ _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
+def _proxy_server_request_with_body(
+    litellm_params: Mapping[str, object], request_body: Mapping[str, object]
+) -> Mapping[str, object]:
+    proxy_server_request: Final = litellm_params.get("proxy_server_request")
+    return (
+        {"proxy_server_request": {**_LITELLM_PARAMS.validate_python(proxy_server_request), "body": dict(request_body)}}
+        if isinstance(proxy_server_request, Mapping)
+        else {}
+    )
+
+
 def _provider_response_id(source: object) -> str | None:
     candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
     return candidate if isinstance(candidate, str) and candidate else None
@@ -767,7 +778,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
-    def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
+    def copy_for_new_call(
+        self, litellm_call_id: str, start_time: datetime.datetime, request_body: Mapping[str, object]
+    ) -> "Logging":
         connection_params: Final = _LITELLM_PARAMS.validate_python(self.litellm_params)
         litellm_params: Final[dict[str, object]] = {
             **connection_params,
@@ -776,6 +789,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 for key, value in connection_params.items()
                 if key in _PER_CALL_LITELLM_PARAM_DICTS and isinstance(value, dict)
             },
+            **_proxy_server_request_with_body(connection_params, request_body),
             "litellm_call_id": litellm_call_id,
         }
         new_call: Final = copy.copy(self)
