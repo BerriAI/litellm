@@ -40,7 +40,7 @@ CASE: Final = PerformanceTestCase(
         User("judy", max_budget=1000.0),
     ),
     virtual_keys=(
-        VirtualKey("key-a1", team="team-a", models=("gpt-6-luna",), rpm_limit=120),
+        VirtualKey("key-a1", team="team-a", models=("gpt-6-luna",), rpm_limit=1200),
         VirtualKey("key-a2", team="team-a", user="alice"),
         VirtualKey("key-b1", team="team-b"),
         VirtualKey("key-b2", team="team-b", user="dave"),
