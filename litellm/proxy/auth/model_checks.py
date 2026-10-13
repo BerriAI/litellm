@@ -13,7 +13,7 @@ from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager, get_valid_models
+from litellm.utils import get_valid_models
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -45,14 +45,7 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if provider in litellm.models_by_provider:
         provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
         return provider_models
-
-    try:
-        llm_provider: Final = LlmProviders(provider)
-    except ValueError:
-        return None
-    if ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is None:
-        return None
-    return get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
+    return None
 
 
 def _get_models_from_access_groups(
@@ -324,10 +317,17 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
             # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
             # multiple instances), replace that existing provider prefix instead of stacking
             # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
-            # Only strip the leading segment when it is a known provider, so ids whose first
-            # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
+            # Only strip the leading segment when it names the *same* provider family as the
+            # one being expanded (the provider itself or one of its aliases, e.g. ollama_chat).
+            # Ids whose first segment is an upstream org namespace rather than the expanded
+            # provider (e.g. OpenRouter's catalog returns "openai/gpt-oss-120b") must keep the
+            # org: the expanded id is "openrouter/openai/gpt-oss-120b", not "openrouter/gpt-oss-120b".
             leading, sep, model_suffix = model.partition("/")
-            if sep and leading in known_providers:
+            if (
+                sep
+                and leading in known_providers
+                and (leading == provider or leading.startswith(f"{provider}_") or provider.startswith(f"{leading}_"))
+            ):
                 model = f"{wildcard_provider_prefix}/{model_suffix}"
             else:
                 model = f"{wildcard_provider_prefix}/{model}"
@@ -345,11 +345,11 @@ def expand_wildcard_deployments_for_model_info(
     on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
     becomes one entry per known openai model, matching /v1/models behaviour.
     """
-    expanded: Final[list[dict[str, object]]] = []
+    expanded: Final[list[dict[str, Any]]] = []
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
-        litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
+        litellm_params_dict: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
         litellm_model = str(litellm_params_dict.get("model") or "")
 
         # Determine the wildcard pattern to expand.
