@@ -1768,6 +1768,258 @@ class TestProxyInitializationHelpers:
             assert g_kwargs["max_requests_before_restart"] == 900
             assert g_kwargs["max_requests_before_restart_jitter"] == 75
 
+    @pytest.mark.parametrize("run_gunicorn", [False, True])
+    @pytest.mark.parametrize(
+        "num_workers,max_requests_before_restart",
+        [(1, None), (2, 5)],
+    )
+    def test_single_worker_max_requests_warning_returns_none(
+        self, num_workers, max_requests_before_restart, run_gunicorn
+    ):
+        """no warning when the flag is unset or more than one worker serves"""
+        warning = ProxyInitializationHelpers.single_worker_max_requests_warning(
+            num_workers=num_workers,
+            max_requests_before_restart=max_requests_before_restart,
+            run_gunicorn=run_gunicorn,
+        )
+        assert warning is None
+
+    def test_single_worker_max_requests_warning_uvicorn(self):
+        warning = ProxyInitializationHelpers.single_worker_max_requests_warning(
+            num_workers=1,
+            max_requests_before_restart=5,
+            run_gunicorn=False,
+        )
+        assert warning is not None
+        assert "--max_requests_before_restart 5" in warning
+        assert "--num_workers 1" in warning
+        assert "uvicorn exits the process" in warning
+
+    def test_single_worker_max_requests_warning_gunicorn(self):
+        warning = ProxyInitializationHelpers.single_worker_max_requests_warning(
+            num_workers=1,
+            max_requests_before_restart=5,
+            run_gunicorn=True,
+        )
+        assert warning is not None
+        assert "gunicorn accepts no connections" in warning
+        assert "uvicorn exits" not in warning
+
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_single_worker_max_requests_warning_printed_on_uvicorn(
+        self, mock_setup_db, mock_print, mock_uvicorn_run
+    ):
+        """uvicorn single-worker startup prints the does-not-recycle warning"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=MagicMock(),
+                        ProxyConfig=MagicMock(),
+                        KeyManagementSettings=MagicMock(),
+                        save_worker_config=MagicMock(),
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server, ["--local", "--max_requests_before_restart", "123"]
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            assert any(
+                "--max_requests_before_restart 123 with --num_workers 1" in str(c)
+                and "uvicorn exits the process" in str(c)
+                for c in mock_print.call_args_list
+            )
+
+    @patch("litellm.proxy.proxy_cli.start_query_engine_reaper")
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_single_worker_max_requests_no_warning_with_two_workers(
+        self, mock_setup_db, mock_print, mock_uvicorn_run, mock_start_reaper
+    ):
+        """num_workers 2 with --max_requests_before_restart prints no warning"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=MagicMock(),
+                        ProxyConfig=MagicMock(),
+                        KeyManagementSettings=MagicMock(),
+                        save_worker_config=MagicMock(),
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--num_workers", "2", "--max_requests_before_restart", "123"],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            assert not any(
+                "does not recycle a worker" in str(c) for c in mock_print.call_args_list
+            )
+
+    @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.run_gunicorn_server")
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_single_worker_max_requests_warning_printed_on_gunicorn(
+        self, mock_setup_db, mock_print, mock_uvicorn_run, mock_run_gunicorn
+    ):
+        """--run_gunicorn single-worker startup prints the gunicorn warning variant"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=MagicMock(),
+                        ProxyConfig=MagicMock(),
+                        KeyManagementSettings=MagicMock(),
+                        save_worker_config=MagicMock(),
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--run_gunicorn", "--max_requests_before_restart", "123"],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            assert any(
+                "--max_requests_before_restart 123 with --num_workers 1" in str(c)
+                and "gunicorn accepts no connections" in str(c)
+                for c in mock_print.call_args_list
+            )
+
+    @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.init_hypercorn_server")
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    def test_single_worker_max_requests_no_warning_on_hypercorn(
+        self, mock_setup_db, mock_print, mock_uvicorn_run, mock_init_hypercorn
+    ):
+        """hypercorn ignores --max_requests_before_restart, so no warning prints"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=MagicMock(),
+                        ProxyConfig=MagicMock(),
+                        KeyManagementSettings=MagicMock(),
+                        save_worker_config=MagicMock(),
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--run_hypercorn", "--max_requests_before_restart", "5"],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_init_hypercorn.assert_called_once()
+            assert not any(
+                "does not recycle a worker" in str(c) for c in mock_print.call_args_list
+            )
+
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     def test_gunicorn_options_include_max_requests_jitter(self):
         """_run_gunicorn_server puts max_requests_jitter into the gunicorn options"""
