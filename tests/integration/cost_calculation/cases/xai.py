@@ -19,7 +19,6 @@ XAI_GROK_4_7_STREAM: Final = CostTrackingTestCase(
     name="xai-grok-4.7-stream",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
     model="xai/grok-4.7",
-    known_bug="streamed xai responses bill the right total but the spend row splits it as input_cost 0 and output_cost = total: _stamp_streaming_usage_cost writes the stream total onto usage.cost and litellm/llms/xai/cost_calculator.py::cost_per_token reads usage.cost as an xAI reported price",
     endpoint="/v1/chat/completions",
     request={
         "model": "$MODEL",
