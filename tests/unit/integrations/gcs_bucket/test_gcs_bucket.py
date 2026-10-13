@@ -359,7 +359,7 @@ async def test_batch_line_items_are_one_ndjson_object_in_the_default_bucket(monk
 
 
 @pytest.mark.asyncio
-async def test_a_rejected_batch_line_items_write_raises_for_the_dispatcher_to_log(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_rejected_batch_line_items_write_raises_for_the_dispatcher(monkeypatch: pytest.MonkeyPatch) -> None:
     logger, uploads = _gcs_logger_with_upload_status(monkeypatch, 503)
 
     with pytest.raises(httpx.HTTPStatusError):

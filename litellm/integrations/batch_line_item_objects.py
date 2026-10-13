@@ -8,7 +8,7 @@ from litellm.types.utils import StandardBatchLineItemsPayload
 
 
 def batch_line_items_ndjson(payload: StandardBatchLineItemsPayload) -> str:
-    return "\n".join(json.dumps(line, default=str, ensure_ascii=False) for line in payload["lines"])
+    return "".join(f"{json.dumps(line, default=str, ensure_ascii=False)}\n" for line in payload["lines"])
 
 
 def batch_line_items_object_name(payload: StandardBatchLineItemsPayload) -> str:

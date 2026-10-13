@@ -205,7 +205,10 @@ async def test_redaction_drops_only_the_request_and_response():
 async def test_the_object_holds_one_json_line_per_batch_line_under_its_finished_day():
     payload = await _payload()
 
-    assert [json.loads(line) for line in batch_line_items_ndjson(payload).splitlines()] == list(payload["lines"])
+    ndjson = batch_line_items_ndjson(payload)
+
+    assert [json.loads(line) for line in ndjson.splitlines()] == list(payload["lines"])
+    assert ndjson.endswith("}\n")
     assert batch_line_items_object_name(payload) == "batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA.jsonl"
     assert (
         batch_line_items_object_name({**payload, "batch_id": "projects/p/locations/l/batchPredictionJobs/9"})

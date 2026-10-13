@@ -732,10 +732,10 @@ class CheckBatchCost:
         model_id: str,
         batch_id: str,
         prom_logger: Optional["PrometheusLogger"],
-    ) -> Optional[Tuple[Optional[str], Optional[str]]]:
+    ) -> tuple[str | None, str | None, bytes] | None:
         """
         Fetch a completed batch's results, compute cost/usage, and emit the
-        aretrieve_batch spend log. Returns (model_name, llm_provider) on
+        aretrieve_batch spend log. Returns (model_name, llm_provider, output file bytes) on
         success, None when the job can't be routed to a deployment or when
         another pod claimed it. Raises on results-fetch or cost-computation
         failures so the caller can leave the job unprocessed and retry it on a
@@ -962,9 +962,7 @@ class CheckBatchCost:
                     api_provider=str(llm_provider) if llm_provider else None,
                 )
 
-        await self._store_batch_line_items(job, response, model_id, batch_id, content_bytes)
-
-        return model_name, str(llm_provider) if llm_provider else None
+        return model_name, str(llm_provider) if llm_provider else None, content_bytes
 
     async def _store_batch_line_items(
         self,
@@ -974,8 +972,8 @@ class CheckBatchCost:
         batch_id: str,
         output_content: bytes,
     ) -> None:
-        """Send every line of a finished batch to batch_line_item_callbacks. Failures are logged, never raised,
-        so the batch stays billed whether or not its lines were stored."""
+        """Send every line of a finished batch to batch_line_item_callbacks. Failures are logged, never
+        raised, so the batch stays billed and retired whether or not its lines were stored."""
         if not litellm.batch_line_item_callbacks:
             return
         from litellm.batches.batch_line_items import (
@@ -1006,6 +1004,7 @@ class CheckBatchCost:
             error_content: Final = await self._batch_file_content(response.error_file_id, cost_provider, file_access)
             if not output_content and not error_content:
                 return
+            redact_bodies: Final = await self._creator_turned_off_message_logging(job)
             source: Final = BatchLineItemSource(
                 batch_id=job.unified_object_id,
                 finished_at=response.completed_at
@@ -1019,12 +1018,17 @@ class CheckBatchCost:
                 model_info=deployment_pricing_model_info(model_id=model_id, deployment_model=litellm_model_name),
                 metadata=line_item_metadata(await self._build_creator_attribution_metadata(job, batch_id)),
             )
-            payload: Final = await build_batch_line_items(
-                source,
-                await self._batch_file_content(response.input_file_id, cost_provider, file_access),
-                (output_content, error_content),
+            input_content: Final = (
+                b""
+                if redact_bodies
+                else await self._batch_file_content(response.input_file_id, cost_provider, file_access)
             )
-            await dispatch_batch_line_items(payload, redact_bodies=await self._creator_turned_off_message_logging(job))
+            payload: Final = await build_batch_line_items(source, input_content, (output_content, error_content))
+            await dispatch_batch_line_items(payload, redact_bodies=redact_bodies)
+            verbose_proxy_logger.info(
+                f"CheckBatchCost: sent the {len(payload['lines'])} line items of batch {batch_id} "
+                "to batch_line_item_callbacks"
+            )
         except Exception as error:  # noqa: BLE001  # storing the lines is best effort, the batch is already billed
             verbose_proxy_logger.exception(
                 f"CheckBatchCost: the line items of batch {batch_id} (job {job.id}) were not stored: {error}"
@@ -1198,6 +1202,7 @@ class CheckBatchCost:
                             f"CheckBatchCost: output file {response.output_file_id} of batch {batch_id} "
                             f"does not exist at the provider; retiring job {job.id} unbilled"
                         )
+                        await self._store_batch_line_items(job, response, model_id, batch_id, b"")
                         await self._finalize_unbilled_terminal_job(job, response)
                         continue
                     verbose_proxy_logger.error(
@@ -1208,9 +1213,10 @@ class CheckBatchCost:
                     continue
                 if tracked is None:
                     continue
+                tracked_model_name, tracked_provider, output_content = tracked
 
                 # Track this job for the final metrics summary
-                processed_models.append(tracked)
+                processed_models.append((tracked_model_name, tracked_provider))
 
                 # mark the job as complete
                 try:
@@ -1228,6 +1234,7 @@ class CheckBatchCost:
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
+                await self._store_batch_line_items(job, response, model_id, batch_id, output_content)
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
                 from litellm.proxy.openai_files_endpoints.common_utils import (

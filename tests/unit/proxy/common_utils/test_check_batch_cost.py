@@ -3225,7 +3225,7 @@ class TestMultiPodBatchCostClaim:
 
 class TestBatchLineItemsFromThePoller:
     """When batch_line_item_callbacks is set, the poller hands every line of a finished batch to those loggers
-    after the spend log is written, and a sink failure never unbills or re-polls the batch."""
+    once the batch is billed and retired, so a slow or failing sink never unbills or re-polls the batch."""
 
     _INPUT = b'{"custom_id":"ok-1","body":{"messages":[{"role":"user","content":"hi"}]}}\n'
     _OUTPUT = (
@@ -3271,6 +3271,12 @@ class TestBatchLineItemsFromThePoller:
 
         async def _afile_content(**kwargs):
             journal.append(f"read {kwargs['file_id']}")
+            if kwargs["file_id"] not in files:
+                from litellm.exceptions import NotFoundError
+
+                raise NotFoundError(
+                    message=f"No file found with id '{kwargs['file_id']}'.", model="gpt-4", llm_provider="openai"
+                )
             content = MagicMock()
             content.content = files[kwargs["file_id"]]
             return content
@@ -3298,7 +3304,7 @@ class TestBatchLineItemsFromThePoller:
             yield
 
     @pytest.mark.asyncio
-    async def test_lines_reach_the_callbacks_after_the_spend_log_of_the_claimed_batch(self, monkeypatch):
+    async def test_lines_reach_the_callbacks_after_the_claimed_batch_is_billed_and_retired(self, monkeypatch):
         import litellm
 
         journal: list = []
@@ -3309,14 +3315,7 @@ class TestBatchLineItemsFromThePoller:
         with self._provider(journal):
             await instance.check_batch_cost()
 
-        assert journal == [
-            f"read {_CLAIM_OUTPUT_FILE_ID}",
-            "claim",
-            "bill",
-            "read file-input-1",
-            "lines",
-            "finalize",
-        ]
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize", "lines"]
         (payload,) = logger.payloads
         assert payload["batch_id"] == _CLAIM_UNIFIED_BATCH_ID
         assert payload["finished_at"] == 2
@@ -3340,6 +3339,7 @@ class TestBatchLineItemsFromThePoller:
 
         (payload,) = logger.payloads
         assert [(line["request"], line["response"]) for line in payload["lines"]] == [(None, None)]
+        assert "read file-input-1" not in journal
 
     @pytest.mark.asyncio
     async def test_a_creator_with_logging_on_gets_the_request_and_response(self, monkeypatch):
@@ -3355,6 +3355,7 @@ class TestBatchLineItemsFromThePoller:
         with self._provider(journal):
             await instance.check_batch_cost()
 
+        assert journal[-3:] == ["finalize", "read file-input-1", "lines"]
         ((line,),) = [payload["lines"] for payload in logger.payloads]
         assert line["request"] == json.loads(self._INPUT)
         assert line["response"] == json.loads(self._OUTPUT)
@@ -3372,7 +3373,7 @@ class TestBatchLineItemsFromThePoller:
         with self._provider(journal):
             await instance.check_batch_cost()
 
-        assert [step for step in journal if not step.startswith("read")] == ["claim", "bill", "lines", "finalize"]
+        assert [step for step in journal if not step.startswith("read")] == ["claim", "bill", "finalize", "lines"]
         assert row.batch_processed is True
         assert row.status == "complete"
 
@@ -3401,11 +3402,30 @@ class TestBatchLineItemsFromThePoller:
         with self._provider(journal):
             await instance.check_batch_cost()
 
-        assert journal == ["read file-err-1", "read file-input-1", "lines", "finalize"]
+        assert journal == ["read file-err-1", "lines", "finalize"]
         (payload,) = logger.payloads
         assert [(line["custom_id"], line["status"], line["response_cost"]) for line in payload["lines"]] == [
             ("ok-1", "failure", 0.0)
         ]
+        assert row.batch_processed is True
+
+    @pytest.mark.asyncio
+    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_before_it_is_retired(
+        self, monkeypatch
+    ):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal, output_file_id="file-out-deleted", error_file_id="file-err-1")
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+
+        assert journal == ["read file-out-deleted", "read file-err-1", "lines", "finalize"]
+        (payload,) = logger.payloads
+        assert [(line["custom_id"], line["status"]) for line in payload["lines"]] == [("ok-1", "failure")]
         assert row.batch_processed is True
 
     @pytest.mark.asyncio

@@ -120,7 +120,7 @@ def without_request_and_response(payload: StandardBatchLineItemsPayload) -> Stan
 
 
 async def dispatch_batch_line_items(payload: StandardBatchLineItemsPayload, redact_bodies: bool) -> None:
-    """Hand the lines to every batch_line_item_callbacks logger. A logger that fails is logged and never stops the rest."""
+    """Hand the lines to every batch_line_item_callbacks logger. A failing logger is logged and never stops the rest."""
     await asyncio.gather(
         *(_deliver(callback, payload, redact_bodies) for callback in litellm.batch_line_item_callbacks)
     )
@@ -143,7 +143,7 @@ async def _deliver(
             if redact_bodies or _logger_turned_off_message_logging(logger)
             else payload
         )
-    except Exception as error:  # noqa: BLE001  # one sink failing must not stop the other sinks or the batch cost poller
+    except Exception as error:  # noqa: BLE001  # one failing sink must not stop the other sinks or the cost poller
         verbose_logger.exception(
             "batch_line_item_callbacks: %r failed to store the %d lines of batch %s: %s",
             callback,
