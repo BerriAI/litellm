@@ -194,8 +194,8 @@ export const matchPreset = (endpoint: PresetEndpoint, raw: string): DecisionPres
 export const emptyPayload = (endpoint: PresetEndpoint, model?: string): string =>
   JSON.stringify(
     endpoint === "/v1/decisions"
-      ? { model, input: "", questions: [{ type: "predicate", name: "question", instructions: "" }] }
-      : { model, state: "", questions: { question: blankQuestion() } },
+      ? { model, input: "", questions: [{ type: "predicate", name: "", instructions: "" }] }
+      : { model, state: "", questions: { "": blankQuestion() } },
     null,
     2,
   );

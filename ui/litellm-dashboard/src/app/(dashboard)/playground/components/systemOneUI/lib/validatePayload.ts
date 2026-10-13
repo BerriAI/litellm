@@ -76,19 +76,22 @@ function validatePayload<T>(raw: string, schema: z.ZodType<T>): PayloadValidatio
 const isBlankContext = (context: unknown): boolean =>
   (typeof context === "string" && context.trim() === "") || (Array.isArray(context) && context.length === 0);
 
-const requireContext = <T>(
-  result: PayloadValidation<T>,
-  path: "state" | "input",
-  context: unknown,
-  issues: SystemOnePayloadIssue[],
-): PayloadValidation<T> =>
-  isBlankContext(context)
+const isMissingContext = (raw: string, path: "state" | "input"): boolean => {
+  const json = parseJson(raw);
+  if (!json.ok || typeof json.value !== "object" || json.value === null) {
+    return false;
+  }
+  return isBlankContext((json.value as Record<string, unknown>)[path]);
+};
+
+const requireContext = <T>(raw: string, path: "state" | "input", result: PayloadValidation<T>): PayloadValidation<T> =>
+  isMissingContext(raw, path)
     ? {
         ...result,
         isValid: false,
-        issues: [{ path, message: "Add the text the model should decide about.", severity: "error" }, ...issues],
+        issues: [{ path, message: "Add the text the model should decide about.", severity: "error" }],
       }
-    : { ...result, issues };
+    : result;
 
 export function validateSystemOnePayload(
   raw: string,
@@ -96,12 +99,14 @@ export function validateSystemOnePayload(
 ): SystemOnePayloadValidation {
   const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
   const result = validatePayload<PlaygroundRequest>(raw, schema);
-  return result.payload
-    ? requireContext(result, "state", result.payload.state, scoreLevelWarnings(result.payload))
-    : result;
+  return requireContext(
+    raw,
+    "state",
+    result.payload ? { ...result, issues: scoreLevelWarnings(result.payload) } : result,
+  );
 }
 
 export function validateOpenAIDecisionsPayload(raw: string): PayloadValidation<OpenAIDecisionsRequest> {
   const result = validatePayload<OpenAIDecisionsRequest>(raw, openAIDecisionsRequestSchema);
-  return result.payload ? requireContext(result, "input", result.payload.input, result.issues) : result;
+  return requireContext(raw, "input", result);
 }

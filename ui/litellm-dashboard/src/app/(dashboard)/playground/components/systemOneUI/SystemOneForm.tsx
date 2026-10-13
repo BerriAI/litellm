@@ -211,14 +211,22 @@ interface QuestionCardProps extends QuestionEditorProps<FormQuestion> {
 
 function QuestionCard({ name, index, question, taken, onChange, onRename, onRemove }: QuestionCardProps) {
   const instructionsId = useId();
+  const title = name === "" ? String(index + 1) : name;
 
   return (
-    <fieldset aria-label={`Question ${name}`} className="grid gap-3 rounded-lg border bg-muted/30 p-3">
-      <QuestionCardHeader index={index} onRemove={onRemove} removeLabel={`Remove question ${name}`} />
+    <fieldset aria-label={`Question ${title}`} className="grid gap-3 rounded-lg border bg-muted/30 p-3">
+      <QuestionCardHeader index={index} onRemove={onRemove} removeLabel={`Remove question ${title}`} />
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
         <div className="grid gap-1.5">
           <span className="text-sm font-medium">Name</span>
-          <KeyInput key={name} label="Question name" value={name} taken={taken} onCommit={onRename} />
+          <KeyInput
+            key={name}
+            label="Question name"
+            value={name}
+            taken={taken}
+            onCommit={onRename}
+            placeholder="e.g. area"
+          />
         </div>
         <div className="grid gap-1.5">
           <span className="text-sm font-medium">Answer type</span>

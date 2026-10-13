@@ -341,6 +341,16 @@ describe("blank context", () => {
     expect(result.issues.map((issue) => issue.path)).toEqual(["state"]);
   });
 
+  it("reports only the missing state while the blank question is still invalid", () => {
+    const raw = JSON.stringify({ state: "", questions: { "": { type: "choice", instructions: "", criteria: {} } } });
+    expect(validateSystemOnePayload(raw, "/v1/systemone").issues.map((issue) => issue.path)).toEqual(["state"]);
+    const filled = validateSystemOnePayload(raw.replace('"state":""', '"state":"A ticket"'), "/v1/systemone");
+    expect(filled.isValid).toBe(false);
+    expect(filled.issues.map((issue) => issue.path)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^questions/)]),
+    );
+  });
+
   it("accepts /v1/systemone once the state carries text", () => {
     const raw = JSON.stringify({ state: "A customer wrote in", questions: { q: question } });
     expect(validateSystemOnePayload(raw, "/v1/systemone")).toMatchObject({ isValid: true, issues: [] });

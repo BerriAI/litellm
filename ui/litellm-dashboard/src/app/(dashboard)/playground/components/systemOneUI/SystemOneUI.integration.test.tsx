@@ -137,7 +137,10 @@ describe("SystemOneUI integration", () => {
     await user.click(clear);
     expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue("");
     expect(screen.getAllByRole("group", { name: /Question / })).toHaveLength(1);
+    expect(screen.getByRole("textbox", { name: "Question name" })).toHaveValue("");
     expect(screen.getByRole("textbox", { name: "Instructions" })).toHaveValue("");
+    expect(screen.queryByRole("textbox", { name: "Option label" })).not.toBeInTheDocument();
+    expect(screen.getByText("1 issue to fix")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(clear).toBeDisabled();
 
@@ -163,7 +166,7 @@ describe("SystemOneUI integration", () => {
     expect(await readCurlPayload()).toEqual({
       model: "pplx-decider",
       state: "",
-      questions: { question: { type: "choice", instructions: "", criteria: { option_1: "", option_2: "" } } },
+      questions: { "": { type: "choice", instructions: "", criteria: {} } },
     });
     await selectPreset("Score a sales lead");
     expect(await readCurlPayload()).toMatchObject({ model: "pplx-decider", questions: { fit: { type: "score" } } });
@@ -183,8 +186,9 @@ describe("SystemOneUI integration", () => {
     await user.click(screen.getByRole("button", { name: "Clear form" }));
     expect(await readCurlPayload()).toEqual({
       input: "",
-      questions: [{ type: "predicate", name: "question", instructions: "" }],
+      questions: [{ type: "predicate", name: "", instructions: "" }],
     });
+    expect(screen.getByRole("textbox", { name: "Question name" })).toHaveValue("");
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
@@ -877,6 +881,8 @@ describe("SystemOneUI integration", () => {
       await user.click(screen.getByRole("button", { name: "Add question" }));
       rename(question("question_1").getByRole("textbox", { name: "Question name" }), "team");
       fill(question("team").getByRole("textbox", { name: "Instructions" }), "Which team owns this?");
+      await user.click(question("team").getByRole("button", { name: "Add option" }));
+      await user.click(question("team").getByRole("button", { name: "Add option" }));
       const [first, second] = question("team").getAllByRole("textbox", { name: "Option label" });
       rename(first, "frontend");
       rename(second, "backend");
@@ -940,7 +946,7 @@ describe("SystemOneUI integration", () => {
       expect(sentBody().questions.has_repro_steps).toEqual({
         type: "choice",
         instructions: "Does the issue include steps someone could follow to reproduce it?",
-        criteria: { option_1: "", option_2: "", option_3: "" },
+        criteria: { option_1: "" },
       });
       expect(Object.keys(sentBody().questions.area.criteria)).toEqual(["backend", "sdk", "ui"]);
     });
