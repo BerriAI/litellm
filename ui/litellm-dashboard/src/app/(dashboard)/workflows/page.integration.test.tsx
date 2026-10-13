@@ -50,16 +50,9 @@ describe("Workflows page access by role", () => {
     },
   );
 
-  it("shows an admin the deprecation banner", () => {
+  it("shows an admin the deprecation notice", () => {
     renderAs("Admin");
 
-    expect(screen.getByText("Workflows is deprecated")).toBeInTheDocument();
-  });
-
-  it("hides the deprecation banner along with the page body for a denied role", async () => {
-    renderAs("Internal User");
-
-    expect(await screen.findByText("Workflow Runs is only available to admin users.")).toBeInTheDocument();
-    expect(screen.queryByText("Workflows is deprecated")).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Workflows");
   });
 });

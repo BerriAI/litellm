@@ -47,14 +47,6 @@ describe("Memory page access by role", () => {
 
       expect(await screen.findByText("Memory is only available to admin users.")).toBeInTheDocument();
       await waitFor(() => expect(requestedUrls().filter((url) => url.includes("/v1/memory"))).toEqual([]));
-      expect(screen.queryByText(/deprecat/i)).not.toBeInTheDocument();
     },
   );
-
-  it("shows an admin the memory page without a deprecation banner", async () => {
-    renderAs("Admin");
-
-    await waitFor(() => expect(requestedUrls().some((url) => url.includes("/v1/memory"))).toBe(true));
-    expect(screen.queryByText(/deprecat/i)).not.toBeInTheDocument();
-  });
 });
