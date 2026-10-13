@@ -6,15 +6,13 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from importlib.resources import files
 from typing import TYPE_CHECKING, Final, Protocol
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
-    BlogPost,
     BlogPostsResponse,
     GetBlogPosts,
     get_blog_posts,
@@ -38,7 +36,6 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
     ProviderCreateInfo,
     PublicModelHubInfo,
     SupportedEndpointsResponse,
-    WhatsNewResponse,
 )
 from litellm.types.utils import LlmProviders
 
@@ -479,21 +476,18 @@ async def get_litellm_model_cost_map(catalog_only: bool = False):
     tags=["public"],
     response_model=BlogPostsResponse,
 )
-async def get_litellm_blog_posts():
+async def get_litellm_blog_posts() -> BlogPostsResponse:
     """
-    Public endpoint to get the latest LiteLLM blog posts.
+    Public endpoint to get the latest LiteLLM blog posts, each with its RSS categories as ``tags``.
 
-    Fetches from GitHub with a 1-hour in-process cache.
+    Fetches the docs RSS feed with a 1-hour in-process cache.
     Falls back to the bundled local backup on any failure.
     """
     try:
-        posts_data = get_blog_posts(url=litellm.blog_posts_url)
+        return BlogPostsResponse(posts=get_blog_posts(url=litellm.blog_posts_url))
     except Exception as e:
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
-        posts_data = GetBlogPosts.load_local_blog_posts()
-
-    posts: Final = [BlogPost(**p) for p in posts_data]
-    return BlogPostsResponse(posts=posts)
+        return BlogPostsResponse(posts=GetBlogPosts.load_local_blog_posts())
 
 
 _AUTOROUTER_PRESETS_ADAPTER: Final = TypeAdapter(dict[str, AutoRouterPresetRecord])
@@ -579,70 +573,6 @@ async def get_public_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord
     to serve the bundled catalog only. A restart picks up a newly published catalog.
     """
     return await get_autorouter_presets(url=litellm.autorouter_presets_url)
-
-
-def _load_bundled_whats_new() -> WhatsNewResponse:
-    return WhatsNewResponse.model_validate_json(
-        files("litellm.proxy.public_endpoints").joinpath("whats_new.json").read_text(encoding="utf-8")
-    )
-
-
-async def _fetch_remote_whats_new(url: str) -> WhatsNewResponse:
-    return WhatsNewResponse.model_validate_json(await _fetch_remote_bytes(url))
-
-
-async def _resolve_whats_new(url: str | None, fetch: Callable[[str], Awaitable[WhatsNewResponse]]) -> WhatsNewResponse:
-    if url is None or os.getenv("LITELLM_LOCAL_WHATS_NEW", "").lower() == "true":
-        return _load_bundled_whats_new()
-    try:
-        return await fetch(url)
-    except (httpx.HTTPError, ValidationError, OSError) as e:
-        verbose_logger.warning(
-            "LiteLLM: failed to fetch What's new launches from %s: %s. Serving the bundled list for the life of this process.",
-            url,
-            str(e),
-        )
-        return _load_bundled_whats_new()
-
-
-class _WhatsNewCache:
-    launches: WhatsNewResponse | None = None
-    lock: asyncio.Lock | None = None
-
-
-async def get_whats_new(
-    url: str | None,
-    fetch: Callable[[str], Awaitable[WhatsNewResponse]] = _fetch_remote_whats_new,
-) -> WhatsNewResponse:
-    cached: Final = _WhatsNewCache.launches
-    if cached is not None:
-        return cached
-    if _WhatsNewCache.lock is None:
-        _WhatsNewCache.lock = asyncio.Lock()
-    async with _WhatsNewCache.lock:
-        held: Final = _WhatsNewCache.launches
-        if held is not None:
-            return held
-        resolved: Final = await _resolve_whats_new(url=url, fetch=fetch)
-        _WhatsNewCache.launches = resolved
-        return resolved
-
-
-@router.get(
-    "/public/whats_new",
-    tags=["public"],
-    response_model=WhatsNewResponse,
-)
-async def get_public_whats_new() -> WhatsNewResponse:
-    """
-    Return the launches the dashboard Home page shows under What's new.
-
-    Serves the list bundled with this release. Set ``LITELLM_WHATS_NEW_URL`` to fetch a remote list instead,
-    resolved once per process on the first request and falling back to the bundled list on any failure, so an
-    airgapped proxy serves the bundled list without retrying. ``LITELLM_LOCAL_WHATS_NEW=True`` forces the
-    bundled list even when a URL is set. A restart picks up a newly published list.
-    """
-    return await get_whats_new(url=litellm.whats_new_url)
 
 
 @router.get(

@@ -6,6 +6,7 @@ export interface BlogPost {
   description: string;
   date: string;
   url: string;
+  tags: string[];
 }
 
 export interface BlogPostsResponse {
