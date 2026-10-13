@@ -3319,3 +3319,69 @@ def test_deployment_id_matching_its_own_providers_catalog_key_still_merges() -> 
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize("base_location", ("model_info", "litellm_params", None))
+@pytest.mark.parametrize("explicit_limit", (None, 4096))
+def test_bedrock_router_capacity_uses_explicit_base_model(
+    monkeypatch: pytest.MonkeyPatch, base_location: str | None, explicit_limit: int | None
+) -> None:
+    route: Final = "bedrock/converse/global.anthropic.claude-router-capacity-test"
+    base: Final = "bedrock/anthropic.claude-router-capacity-test@global:us-east-1"
+    metadata: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "max_output_tokens": 512,
+        "max_tokens": 512,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            route: {**metadata, "max_input_tokens": 1024},
+            base: {**metadata, "max_input_tokens": 8192},
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "capacity-test",
+                "litellm_params": {
+                    "model": route,
+                    **({"base_model": base} if base_location == "litellm_params" else {}),
+                },
+                "model_info": {
+                    "id": "capacity-test",
+                    **({"base_model": base} if base_location == "model_info" else {}),
+                    **({"max_input_tokens": explicit_limit} if explicit_limit is not None else {}),
+                },
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    effective: Final = router.get_router_model_info(
+        id="capacity-test", deployment=None, received_model_name="capacity-test"
+    )
+    expected: Final = explicit_limit if explicit_limit is not None else (8192 if base_location else 1024)
+    assert effective["max_input_tokens"] == expected
+    if expected < 2048:
+        with pytest.raises(litellm.ContextWindowExceededError):
+            router._pre_call_checks(
+                model="capacity-test",
+                healthy_deployments=router.model_list,
+                input="synthetic input",
+                input_token_count=2048,
+            )
+    else:
+        allowed: Final = router._pre_call_checks(
+            model="capacity-test",
+            healthy_deployments=router.model_list,
+            input="synthetic input",
+            input_token_count=2048,
+        )
+        assert len(allowed) == 1
+    _invalidate_model_cost_lowercase_map()

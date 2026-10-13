@@ -11220,7 +11220,9 @@ class Router:
                     "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
                     _model,
                 )
-        elif custom_llm_provider != "azure":
+        elif custom_llm_provider != "azure" and not (
+            custom_llm_provider in ("bedrock", "bedrock_converse") and base_model is not None and "*" not in base_model
+        ):
             model = _model
 
             if "*" in model:  # only call pattern_router for wildcard models
