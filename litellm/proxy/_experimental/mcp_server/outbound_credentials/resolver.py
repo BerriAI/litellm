@@ -70,16 +70,15 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthSpecKind,
     AwsSigV4Config,
     Byok,
+    ClientAuth,
     ClientCredentialsConfig,
     ClientSecretAuth,
     CredError,
     IdJagConfig,
-    NoClientAuth,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
     ResolvedCredential,
-    ResourceClientAuth,
     ServerSpec,
     SharedKey,
     Subject,
@@ -443,7 +442,7 @@ def _id_jag_fingerprint(subject_token: str, server_id: str, config: IdJagConfig)
     return hashlib.sha256(material.encode()).hexdigest()
 
 
-def _client_auth_fingerprint(client_auth: ResourceClientAuth) -> str:
+def _client_auth_fingerprint(client_auth: ClientAuth) -> str:
     match client_auth:
         case PrivateKeyJwtAuth() as auth:
             return "\x00".join(
@@ -451,8 +450,6 @@ def _client_auth_fingerprint(client_auth: ResourceClientAuth) -> str:
             )
         case ClientSecretAuth() as auth:
             return "\x00".join(("client_secret", auth.client_secret.get_secret_value()))
-        case NoClientAuth():
-            return "none"
     assert_never(client_auth)
 
 

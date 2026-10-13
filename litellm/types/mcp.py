@@ -252,9 +252,6 @@ class MCPCredentials(TypedDict, total=False):
     id_jag_resource_client_secret: str | None  # writable-ok: encrypt_credentials updates this field
     """OAuth client secret used at the ID-JAG resource authorization server."""
 
-    id_jag_resource_token_endpoint_auth_method: ReadOnly[Literal["client_secret_post", "none"] | None]
-    """Client authentication method used at the ID-JAG resource authorization server."""
-
     upstream_resource: str | None
     """
     Optional RFC 8707 resource indicator sent on the upstream oauth2 legs (authorize, both token

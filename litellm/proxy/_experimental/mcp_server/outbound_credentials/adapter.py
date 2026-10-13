@@ -34,7 +34,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     IdJagConfig,
     IdJagResourceClient,
-    NoClientAuth,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
@@ -258,26 +257,16 @@ def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
 
 
 def _id_jag_resource_client(server: MCPServer, client_id: str, client_auth: ClientAuth) -> IdJagResourceClient | None:
-    match server.id_jag_resource_token_endpoint_auth_method:
-        case None:
-            if server.id_jag_resource_client_id is not None or server.id_jag_resource_client_secret is not None:
-                return None
+    match (server.id_jag_resource_client_id, server.id_jag_resource_client_secret):
+        case (None, None):
             return IdJagResourceClient(client_id=client_id, client_auth=client_auth)
-        case "none":
-            if not server.id_jag_resource_client_id or server.id_jag_resource_client_secret is not None:
-                return None
+        case (resource_client_id, resource_client_secret) if resource_client_id and resource_client_secret:
             return IdJagResourceClient(
-                client_id=server.id_jag_resource_client_id,
-                client_auth=NoClientAuth(),
+                client_id=resource_client_id,
+                client_auth=ClientSecretAuth(client_secret=SecretStr(resource_client_secret)),
             )
-        case "client_secret_post":
-            if not server.id_jag_resource_client_id or not server.id_jag_resource_client_secret:
-                return None
-            return IdJagResourceClient(
-                client_id=server.id_jag_resource_client_id,
-                client_auth=ClientSecretAuth(client_secret=SecretStr(server.id_jag_resource_client_secret)),
-            )
-    assert_never(server.id_jag_resource_token_endpoint_auth_method)
+        case _:
+            return None
 
 
 def _id_jag_client_auth(server: MCPServer) -> ClientAuth | None:

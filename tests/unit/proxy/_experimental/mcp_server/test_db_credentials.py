@@ -452,9 +452,7 @@ def _stored_value(prisma) -> str:
 
 def test_id_jag_client_secrets_encrypted_at_rest():
     """ID-JAG client secrets must be encrypted in the stored credentials blob and round-trip on load."""
-    private_key = (
-        "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
-    )
+    private_key = "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
     resource_client_secret: Final = "resource-client-secret"
     credentials = {
         "client_secret": "shh",
@@ -482,13 +480,24 @@ def map_algorithm(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
 
 
 def _prisma_map_row(data: dict[str, object], quoted: bool = False) -> PrismaMCPServer:
-    return PrismaMCPServer.model_validate({
-        "transport": "http", "mcp_access_groups": [], "allowed_tools": [], "extra_headers": [], "args": [],
-        "allow_all_keys": False, "available_on_public_internet": True, "delegate_auth_to_upstream": False,
-        "oauth_passthrough": False, "per_server_oauth_discovery": False, "is_byok": False, "byok_description": [],
-        **data,
-        **{field: json.dumps(data[field]) for field in ("static_headers", "env") if quoted and data.get(field)},
-    })
+    return PrismaMCPServer.model_validate(
+        {
+            "transport": "http",
+            "mcp_access_groups": [],
+            "allowed_tools": [],
+            "extra_headers": [],
+            "args": [],
+            "allow_all_keys": False,
+            "available_on_public_internet": True,
+            "delegate_auth_to_upstream": False,
+            "oauth_passthrough": False,
+            "per_server_oauth_discovery": False,
+            "is_byok": False,
+            "byok_description": [],
+            **data,
+            **{field: json.dumps(data[field]) for field in ("static_headers", "env") if quoted and data.get(field)},
+        }
+    )
 
 
 class _MapTable:
@@ -512,11 +521,20 @@ class _MapTable:
 @pytest.mark.parametrize("quoted", [False, True])
 async def test_secret_maps_create_update_round_trip(map_algorithm: str, field: str, quoted: bool) -> None:
     table: Final = _MapTable(quoted=quoted)
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
+    prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
+        )
+    )
     original: Final = {"TOKEN": "  sensitive-secret\n", "PREFIX": "v2:gcm:literal", "TEMPLATE": "Bearer ${TOKEN}"}
-    create: Final = NewMCPServerRequest.model_validate({
-        "server_id": "srv-map", "transport": "http", "url": "https://up.example.com/mcp", field: original,
-    })
+    create: Final = NewMCPServerRequest.model_validate(
+        {
+            "server_id": "srv-map",
+            "transport": "http",
+            "url": "https://up.example.com/mcp",
+            field: original,
+        }
+    )
     created: Final = await create_mcp_server(prisma, create, touched_by="test")
     first: Final = table.rows["srv-map"][field]
     assert isinstance(first, str) and isinstance(json.loads(first), str)
@@ -545,7 +563,9 @@ async def test_secret_maps_create_update_round_trip(map_algorithm: str, field: s
 def test_secret_map_legacy_model_read_preserves_exact_values(field: str, as_json: bool) -> None:
     original: Final = {"PREFIX": "v2:gcm:literal", "SPACE": "  secret\n", "TEMPLATE": "${TOKEN}", "B64": "YWJjZA=="}
     incoming: Final = {
-        "server_id": "srv-map", "transport": "http", field: json.dumps(original) if as_json else original,
+        "server_id": "srv-map",
+        "transport": "http",
+        field: json.dumps(original) if as_json else original,
     }
     snapshot: Final = json.dumps(incoming)
     parsed: Final = LiteLLM_MCPServerTable.model_validate(incoming)
@@ -559,8 +579,11 @@ def test_secret_map_legacy_model_read_preserves_exact_values(field: str, as_json
 @pytest.mark.parametrize("field", ["static_headers", "env"])
 @pytest.mark.parametrize("failure", ["wrong-key", "corrupt", "invalid-values", "invalid-shape", "invalid-json"])
 def test_secret_map_model_read_fails_closed(map_algorithm: str, field: str, failure: str) -> None:
-    plaintext: Final = {"invalid-values": '{"TOKEN": ["sensitive-secret"]}', "invalid-shape": '["sensitive-secret"]',
-                       "invalid-json": "sensitive-secret"}.get(failure, '{"TOKEN": "sensitive-secret"}')
+    plaintext: Final = {
+        "invalid-values": '{"TOKEN": ["sensitive-secret"]}',
+        "invalid-shape": '["sensitive-secret"]',
+        "invalid-json": "sensitive-secret",
+    }.get(failure, '{"TOKEN": "sensitive-secret"}')
     ciphertext: Final = encrypt_value_helper(
         plaintext, new_encryption_key="wrong-map-key" if failure == "wrong-key" else None
     )
@@ -584,9 +607,13 @@ async def test_secret_map_rotation_migrates_rekeys_and_preserves_corrupt(
         {"server_id": "legacy", field: json.dumps(values), other: "{}"},
         {"server_id": "encrypted", field: old, other: None},
     )
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(
-        litellm_mcpservertable=table, litellm_mcpserveroauthclient=SimpleNamespace(find_many=AsyncMock(return_value=[])), litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
-    ))
+    prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=table,
+            litellm_mcpserveroauthclient=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+        )
+    )
     await rotate_mcp_server_credentials_master_key(prisma, touched_by="test", new_master_key="rotated-map-key")
     assert table.rows["broken"][field] == corrupt
     assert table.rows["legacy"][other] == "{}" and table.rows["encrypted"][other] is None
@@ -613,7 +640,11 @@ async def test_bulk_reads_isolate_corrupt_secret_maps(reader, field, map_algorit
     ]
     snapshot = [row.model_dump() for row in rows]
     table = SimpleNamespace(find_many=AsyncMock(return_value=rows))
-    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
+    prisma = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
+        )
+    )
     result = await reader(prisma, ["broken", "healthy"]) if reader is get_mcp_servers else await reader(prisma)
     items = result.items if reader is get_mcp_submissions else result
     assert [row.server_id for row in items] == ["healthy"]
@@ -632,7 +663,11 @@ async def test_bulk_reads_do_not_swallow_unrelated_validation_errors(reader):
 
     row = _prisma_map_row({"server_id": "invalid", "transport": "unsupported"})
     table = SimpleNamespace(find_many=AsyncMock(return_value=[row]))
-    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
+    prisma = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
+        )
+    )
     request = reader(prisma, ["invalid"]) if reader is get_mcp_servers else reader(prisma)
     with pytest.raises(ValidationError, match="transport"):
         await request
@@ -1718,13 +1753,20 @@ async def test_enforcement_rejects_preexisting_unverified_credential():
     from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
 
     server = MCPServer(
-        server_id="srv-1", name="srv-1", url="https://mcp.example.com", transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+        server_id="srv-1",
+        name="srv-1",
+        url="https://mcp.example.com",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
         oauth_identity_binding=MCPOAuthIdentityBinding(
-            mode="enforce", issuer="https://idp.example.com", audiences=["client"],
+            mode="enforce",
+            issuer="https://idp.example.com",
+            audiences=["client"],
         ),
     )
     result = await resolve_valid_user_oauth_token(
-        user_id="alice", server=server,
+        user_id="alice",
+        server=server,
         cred={"access_token": "belongs-to-bob", "refresh_token": "bobs-refresh-token"},
     )
     assert result is None
@@ -1808,7 +1850,9 @@ async def test_unverified_legacy_cache_cannot_bypass_enforcement(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("owner", ["native", "legacy"])
 @pytest.mark.parametrize("capability", [None, False])
-async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_replica(monkeypatch, respx_mock, owner, capability):
+async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_replica(
+    monkeypatch, respx_mock, owner, capability
+):
     from urllib.parse import parse_qs
 
     from litellm.proxy import proxy_server
@@ -1825,13 +1869,19 @@ async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_repl
     prisma = _make_prisma_with_existing(row=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     server = MCPServer(
-        server_id="saved-cimd", name="saved_cimd", transport="http", auth_type="oauth2",
+        server_id="saved-cimd",
+        name="saved_cimd",
+        transport="http",
+        auth_type="oauth2",
         client_id_metadata_document_supported=capability,
-        oauth2_flow="authorization_code", authorization_url="https://idp.example.com/authorize",
+        oauth2_flow="authorization_code",
+        authorization_url="https://idp.example.com/authorize",
         token_url="https://idp.example.com/token",
     )
     await _store_per_user_token_server_side(
-        server, "alice", {"access_token": "old", "refresh_token": "old-refresh", "expires_in": -10},
+        server,
+        "alice",
+        {"access_token": "old", "refresh_token": "old-refresh", "expires_in": -10},
         cimd_client_id=identity,
     )
 
@@ -1868,8 +1918,12 @@ async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_repl
 async def test_silent_refresh_preserves_omitted_scope_but_accepts_explicit_grant(monkeypatch, provider_scope, expected):
     import litellm.proxy._experimental.mcp_server.db as db_mod
 
-    await _run_refresh(monkeypatch, _refresh_server(), {
-        "access_token": "new-access",
-        **({"scope": provider_scope} if provider_scope is not None else {}),
-    })
+    await _run_refresh(
+        monkeypatch,
+        _refresh_server(),
+        {
+            "access_token": "new-access",
+            **({"scope": provider_scope} if provider_scope is not None else {}),
+        },
+    )
     assert db_mod.store_user_oauth_credential.await_args.kwargs["scopes"] == expected

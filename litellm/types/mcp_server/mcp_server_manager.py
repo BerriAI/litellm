@@ -190,10 +190,6 @@ class MCPServer(LiteLLMBaseModel):
         default=None,
         description="OAuth client secret used at the ID-JAG resource authorization server.",
     )
-    id_jag_resource_token_endpoint_auth_method: Literal["client_secret_post", "none"] | None = Field(
-        default=None,
-        description="Client authentication method used at the ID-JAG resource authorization server.",
-    )
     client_private_key: str | None = None
     client_private_key_id: str | None = None
     client_assertion_signing_alg: str = "RS256"

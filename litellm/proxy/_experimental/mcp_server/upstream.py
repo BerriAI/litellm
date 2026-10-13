@@ -87,8 +87,7 @@ def to_server_spec_fail_closed(server: MCPServer) -> ServerSpec | None:
             CredError.of_misconfigured(
                 "oauth2_id_jag requires token_exchange_endpoint, id_jag_resource_token_endpoint, "
                 "client_id, and a client_secret or client_private_key; id_jag_resource_client_* "
-                "overrides require id_jag_resource_token_endpoint_auth_method and "
-                "id_jag_resource_client_id, plus id_jag_resource_client_secret for client_secret_post. "
+                "overrides must set both id_jag_resource_client_id and id_jag_resource_client_secret, or neither. "
                 "Refusing to fall back to a static credential."
             )
         )

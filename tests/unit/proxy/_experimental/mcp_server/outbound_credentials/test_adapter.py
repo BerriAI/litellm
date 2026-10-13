@@ -31,7 +31,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientSecretAuth,
     CredError,
     IdJagConfig,
-    NoClientAuth,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
@@ -42,35 +41,46 @@ from litellm.types.mcp import MCPAuth, MCPAuthType, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
-@pytest.mark.parametrize("auth_type,header,value", [
-    (MCPAuth.api_key, "Authorization", "Bearer fixture-key"),
-    (MCPAuth.api_key, "Authorization", "ApiKey fixture-key"),
-    (MCPAuth.api_key, "Authorization", "token fixture-key"),
-    (MCPAuth.api_key, "Authorization", "Bearer token"),
-    (MCPAuth.api_key, "Authorization", "opaque-key"),
-    (MCPAuth.api_key, "Authorization", "Custom Custom"),
-    (MCPAuth.api_key, "X-API-Key", "Bearer Bearer"),
-    (MCPAuth.api_key, "X-Custom", "ApiKey ApiKey"),
-    (MCPAuth.authorization, "Authorization", "opaque-secret-value"),
-])
+@pytest.mark.parametrize(
+    "auth_type,header,value",
+    [
+        (MCPAuth.api_key, "Authorization", "Bearer fixture-key"),
+        (MCPAuth.api_key, "Authorization", "ApiKey fixture-key"),
+        (MCPAuth.api_key, "Authorization", "token fixture-key"),
+        (MCPAuth.api_key, "Authorization", "Bearer token"),
+        (MCPAuth.api_key, "Authorization", "opaque-key"),
+        (MCPAuth.api_key, "Authorization", "Custom Custom"),
+        (MCPAuth.api_key, "X-API-Key", "Bearer Bearer"),
+        (MCPAuth.api_key, "X-Custom", "ApiKey ApiKey"),
+        (MCPAuth.authorization, "Authorization", "opaque-secret-value"),
+    ],
+)
 def test_static_credential_preserves_supported_api_key_and_raw_headers(
-    auth_type: MCPAuthType, header: str, value: str,
+    auth_type: MCPAuthType,
+    header: str,
+    value: str,
 ) -> None:
     result: Final = validate_static_credential(auth_type, {header: value}, upstream_token_header=header)
     assert isinstance(result, Ok)
 
 
-@pytest.mark.parametrize("auth_type,headers,static_header_names,expected", [
-    (MCPAuth.api_key, {"apikey": "static-key"}, ("apikey",), Ok),
-    (MCPAuth.api_key, {"apikey": "static-key", "X-API-Key": ""}, ("apikey",), Ok),
-    (MCPAuth.api_key, {"apikey": ""}, ("apikey",), Error),
-    (MCPAuth.api_key, {"apikey": "static-key"}, (), Error),
-    (MCPAuth.api_key, {"apikey": "static-key"}, ("X-Tenant",), Error),
-    (MCPAuth.bearer_token, {"apikey": "static-key"}, ("apikey",), Error),
-    (MCPAuth.token, {"apikey": "static-key"}, ("apikey",), Error),
-])
+@pytest.mark.parametrize(
+    "auth_type,headers,static_header_names,expected",
+    [
+        (MCPAuth.api_key, {"apikey": "static-key"}, ("apikey",), Ok),
+        (MCPAuth.api_key, {"apikey": "static-key", "X-API-Key": ""}, ("apikey",), Ok),
+        (MCPAuth.api_key, {"apikey": ""}, ("apikey",), Error),
+        (MCPAuth.api_key, {"apikey": "static-key"}, (), Error),
+        (MCPAuth.api_key, {"apikey": "static-key"}, ("X-Tenant",), Error),
+        (MCPAuth.bearer_token, {"apikey": "static-key"}, ("apikey",), Error),
+        (MCPAuth.token, {"apikey": "static-key"}, ("apikey",), Error),
+    ],
+)
 def test_static_credential_counts_api_key_static_headers_only(
-    auth_type: MCPAuthType, headers: dict[str, str], static_header_names: tuple[str, ...], expected: type,
+    auth_type: MCPAuthType,
+    headers: dict[str, str],
+    static_header_names: tuple[str, ...],
+    expected: type,
 ) -> None:
     result: Final = validate_static_credential(auth_type, headers, static_header_names=static_header_names)
     assert isinstance(result, expected)
@@ -172,9 +182,10 @@ def test_shared_key_authorization_matches_v1(auth_type, authentication_token):
     client = MCPClient(server_url="https://x", auth_type=auth_type)
     client.update_auth_value(authentication_token)
 
-    assert spec.config.header(spec.config.key_source.value.get_secret_value())[1] == client._get_auth_headers()[
-        "Authorization"
-    ]
+    assert (
+        spec.config.header(spec.config.key_source.value.get_secret_value())[1]
+        == client._get_auth_headers()["Authorization"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -709,49 +720,56 @@ def test_id_jag_private_key_wins_over_client_secret():
 
 
 @pytest.mark.parametrize(
-    "server, expected_auth",
+    ("server", "expected_resource_client_id", "expected_secret", "expected_private_key"),
     [
-        (_id_jag_server(), "legacy"),
-        (_id_jag_server(client_secret=None, client_private_key="LEG1-PRIVATE-KEY"), "legacy"),
         (
-            _id_jag_server(
-                id_jag_resource_client_id="resource-public-client",
-                id_jag_resource_token_endpoint_auth_method="none",
-            ),
-            "none",
+            _id_jag_server(),
+            "litellm-client-id",
+            "litellm-client-secret",
+            None,
+        ),
+        (
+            _id_jag_server(client_secret=None, client_private_key="LEG1-PRIVATE-KEY"),
+            "litellm-client-id",
+            None,
+            "LEG1-PRIVATE-KEY",
         ),
         (
             _id_jag_server(
                 id_jag_resource_client_id="resource-confidential-client",
                 id_jag_resource_client_secret="resource-client-secret",
-                id_jag_resource_token_endpoint_auth_method="client_secret_post",
             ),
-            "client_secret_post",
+            "resource-confidential-client",
+            "resource-client-secret",
+            None,
         ),
     ],
-    ids=["legacy-client-secret", "legacy-private-key", "public-client", "client-secret-post"],
+    ids=["legacy-client-secret", "legacy-private-key", "confidential-override"],
 )
-def test_id_jag_resource_client_uses_its_configured_identity_and_auth(server: MCPServer, expected_auth: str) -> None:
+def test_id_jag_resource_client_uses_its_configured_identity_and_auth(
+    server: MCPServer,
+    expected_resource_client_id: str,
+    expected_secret: str | None,
+    expected_private_key: str | None,
+) -> None:
     spec: Final = to_server_spec(server)
 
     assert spec is not None and isinstance(spec.config, IdJagConfig)
     resource_client: Final = spec.config.resource_client
-    if expected_auth == "legacy":
-        assert resource_client.client_id == spec.config.client_id
-        assert resource_client.client_auth == spec.config.client_auth
-    elif expected_auth == "none":
-        assert resource_client.client_id == "resource-public-client"
-        assert isinstance(resource_client.client_auth, NoClientAuth)
-    else:
-        assert expected_auth == "client_secret_post"
-        assert resource_client.client_id == "resource-confidential-client"
+    assert resource_client.client_id == expected_resource_client_id
+    if expected_secret is not None:
         assert isinstance(resource_client.client_auth, ClientSecretAuth)
-        assert isinstance(spec.config.client_auth, ClientSecretAuth)
-        assert resource_client.client_auth.client_secret.get_secret_value() == "resource-client-secret"
-        assert (
-            resource_client.client_auth.client_secret.get_secret_value()
-            != spec.config.client_auth.client_secret.get_secret_value()
-        )
+        assert resource_client.client_auth.client_secret.get_secret_value() == expected_secret
+        if server.id_jag_resource_client_id is not None:
+            assert isinstance(spec.config.client_auth, ClientSecretAuth)
+            assert (
+                resource_client.client_auth.client_secret.get_secret_value()
+                != spec.config.client_auth.client_secret.get_secret_value()
+            )
+        return
+    assert expected_private_key is not None
+    assert isinstance(resource_client.client_auth, PrivateKeyJwtAuth)
+    assert resource_client.client_auth.private_key.get_secret_value() == expected_private_key
 
 
 @pytest.mark.parametrize(
@@ -759,31 +777,11 @@ def test_id_jag_resource_client_uses_its_configured_identity_and_auth(server: MC
     [
         _id_jag_server(id_jag_resource_client_id="resource-client"),
         _id_jag_server(id_jag_resource_client_secret="resource-secret"),
-        _id_jag_server(
-            id_jag_resource_client_id="resource-client",
-            id_jag_resource_client_secret="resource-secret",
-            id_jag_resource_token_endpoint_auth_method="none",
-        ),
-        _id_jag_server(id_jag_resource_token_endpoint_auth_method="none"),
-        _id_jag_server(
-            id_jag_resource_client_secret="resource-secret",
-            id_jag_resource_token_endpoint_auth_method="client_secret_post",
-        ),
-        _id_jag_server(
-            id_jag_resource_client_id="resource-client",
-            id_jag_resource_token_endpoint_auth_method="client_secret_post",
-        ),
+        _id_jag_server(id_jag_resource_client_id="", id_jag_resource_client_secret="resource-secret"),
     ],
-    ids=[
-        "id-without-method",
-        "secret-without-method",
-        "none-with-secret",
-        "none-without-id",
-        "client-secret-post-without-id",
-        "client-secret-post-without-secret",
-    ],
+    ids=["id-only", "secret-only", "empty-id-with-secret"],
 )
-def test_id_jag_incomplete_resource_client_overrides_defer_to_v1(server: MCPServer) -> None:
+def test_id_jag_incomplete_resource_client_overrides_return_none(server: MCPServer) -> None:
     assert to_server_spec(server) is None
 
 
@@ -918,8 +916,11 @@ def test_a_blank_header_name_means_unset_rather_than_an_error(blank):
 @pytest.mark.parametrize("client_secret", [None, ""])
 @pytest.mark.parametrize("is_byok", [False, True])
 def test_incomplete_obo_keeps_exchange_ownership(client_secret: str | None, is_byok: bool) -> None:
-    spec = to_server_spec(_server(auth_type=MCPAuth.oauth2_token_exchange, client_id="client",
-                                  client_secret=client_secret, is_byok=is_byok))
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange, client_id="client", client_secret=client_secret, is_byok=is_byok
+        )
+    )
     assert spec is not None
     assert isinstance(spec.config, TokenExchangeConfig)
     assert spec.config.client_id == "client"

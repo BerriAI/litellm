@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Annotated, Final, Literal, TypeAlias
+from typing import Annotated, Final, Literal
 
 import httpx2
 from expression import case, tag, tagged_union
@@ -341,25 +341,12 @@ class ClientSecretAuth(LiteLLMBaseModel):
 ClientAuth = Annotated[PrivateKeyJwtAuth | ClientSecretAuth, Field(discriminator="source")]
 
 
-class NoClientAuth(LiteLLMBaseModel):
-    """RFC 6749 public client (`token_endpoint_auth_method: none`): `client_id` only, no client credential."""
-
-    model_config = ConfigDict(frozen=True)
-    source: Literal["none"] = "none"
-
-
-ResourceClientAuth: TypeAlias = Annotated[
-    PrivateKeyJwtAuth | ClientSecretAuth | NoClientAuth,
-    Field(discriminator="source"),
-]
-
-
 class IdJagResourceClient(LiteLLMBaseModel):
     """The identity the gateway presents to the resource AS on leg 2."""
 
     model_config = ConfigDict(frozen=True)
     client_id: str
-    client_auth: ResourceClientAuth
+    client_auth: ClientAuth
 
 
 class IdJagConfig(HeaderCarrier):
