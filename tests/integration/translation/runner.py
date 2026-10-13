@@ -5,6 +5,9 @@ from typing import Final
 
 from pydantic import JsonValue
 
+from openai.lib.streaming.chat import ChatCompletionStreamState
+from openai.types.chat import ChatCompletionChunk
+
 from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.provider import SharedProvider
 from integration._support.wire import Reply, Request
@@ -100,6 +103,18 @@ def parse_sse_frames(body: str) -> tuple[SSEFrame, ...]:
     return tuple(frame for frame in blocks if frame is not None)
 
 
+def _join_stream_frames(endpoint: str, frames: tuple[SSEFrame, ...]) -> Mapping[str, JsonValue]:
+    match endpoint:
+        case "/v1/chat/completions":
+            state: Final = ChatCompletionStreamState()
+            for frame in frames:
+                if frame.data != "[DONE]":
+                    state.handle_chunk(ChatCompletionChunk.model_validate(frame.data))
+            return JSON_OBJECT.validate_python(state.get_final_completion().model_dump(mode="json", exclude_none=True))
+        case _:
+            raise AssertionError(f"no stream accumulator for {endpoint}")
+
+
 def assert_streaming_translation(
     case: StreamingTranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
@@ -117,4 +132,6 @@ def assert_streaming_translation(
         case.expected_provider_request,
     )
     assert response.status_code == 200, response.text
-    assert parse_sse_frames(response.text) == case.expected_litellm_frames
+    frames: Final = parse_sse_frames(response.text)
+    assert frames == case.expected_litellm_frames
+    assert _join_stream_frames(case.litellm_endpoint, frames) == case.expected_litellm_response

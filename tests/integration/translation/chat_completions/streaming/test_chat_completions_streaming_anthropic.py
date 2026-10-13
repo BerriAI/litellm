@@ -103,6 +103,13 @@ CLAUDE_SONNET_5_5_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         ),
         SSEFrame(data="[DONE]"),
     ),
+    expected_litellm_response={
+        "id": ANY,
+        "object": "chat.completion",
+        "created": ANY,
+        "model": "anthropic/claude-sonnet-5-5",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello."}, "finish_reason": "stop"}],
+    },
 )
 
 
