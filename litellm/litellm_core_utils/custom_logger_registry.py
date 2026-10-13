@@ -8,6 +8,8 @@ Example:
     "prometheus" -> PrometheusLogger
 """
 
+import functools
+from collections.abc import Mapping
 from typing import Final
 
 from litellm import _custom_logger_compatible_callbacks_literal
@@ -54,22 +56,46 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     VectorStorePreCallHook,
 )
 from litellm.integrations.zerobus import ZerobusLogger
-from litellm.proxy.hooks.dynamic_rate_limiter import (  # noqa: F401  # legacy module exports
-    PROXY_DynamicRateLimitHandler,
-    _PROXY_DynamicRateLimitHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-)
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (  # noqa: F401  # legacy module exports
-    PROXY_DynamicRateLimitHandlerV3,
-    _PROXY_DynamicRateLimitHandlerV3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-)
 
 
-class CustomLoggerRegistry:
-    """
-    Registry mapping the callback class string to the class type.
-    """
+def _enterprise_callback_classes() -> Mapping[str, type]:
+    try:
+        from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
+            PagerDutyAlerting,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
+            ResendEmailLogger,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+            SendGridEmailLogger,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
+            SMTPEmailLogger,
+        )
 
-    CALLBACK_CLASS_STR_TO_CLASS_TYPE = {
+        from litellm.integrations.generic_api.generic_api_callback import (
+            GenericAPILogger,
+        )
+    except ImportError:
+        return {}
+    return {
+        "pagerduty": PagerDutyAlerting,
+        "generic_api": GenericAPILogger,
+        "resend_email": ResendEmailLogger,
+        "sendgrid_email": SendGridEmailLogger,
+        "smtp_email": SMTPEmailLogger,
+    }
+
+
+_ENTERPRISE_CALLBACK_CLASSES: Final = _enterprise_callback_classes()
+
+
+@functools.cache
+def _callback_class_str_to_class_type() -> Mapping[str, type]:
+    from litellm.proxy.hooks.dynamic_rate_limiter import PROXY_DynamicRateLimitHandler
+    from litellm.proxy.hooks.dynamic_rate_limiter_v3 import PROXY_DynamicRateLimitHandlerV3
+
+    return {
         "lago": LagoLogger,
         "openmeter": OpenMeterLogger,
         "braintrust": BraintrustLogger,
@@ -121,36 +147,39 @@ class CustomLoggerRegistry:
         "ternary": TernaryLogger,
         "posthog": PostHogLogger,
         "newrelic": NewRelicLogger,
+        **_ENTERPRISE_CALLBACK_CLASSES,
     }
 
-    try:
-        from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
-            PagerDutyAlerting,
-        )
-        from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
-            ResendEmailLogger,
-        )
-        from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
-            SendGridEmailLogger,
-        )
-        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
-            SMTPEmailLogger,
-        )
 
-        from litellm.integrations.generic_api.generic_api_callback import (
-            GenericAPILogger,
-        )
+class _LazyCallbackClassMap:
+    def __get__(self, instance: object, owner: type | None = None) -> Mapping[str, type]:
+        return _callback_class_str_to_class_type()
 
-        enterprise_loggers = {
-            "pagerduty": PagerDutyAlerting,
-            "generic_api": GenericAPILogger,
-            "resend_email": ResendEmailLogger,
-            "sendgrid_email": SendGridEmailLogger,
-            "smtp_email": SMTPEmailLogger,
-        }
-        CALLBACK_CLASS_STR_TO_CLASS_TYPE.update(enterprise_loggers)
-    except ImportError:
-        pass  # enterprise not installed
+
+_LEGACY_RATE_LIMITER_EXPORTS: Final = frozenset(("PROXY_DynamicRateLimitHandler", "_PROXY_DynamicRateLimitHandler"))
+_LEGACY_RATE_LIMITER_V3_EXPORTS: Final = frozenset(
+    ("PROXY_DynamicRateLimitHandlerV3", "_PROXY_DynamicRateLimitHandlerV3")
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _LEGACY_RATE_LIMITER_EXPORTS:
+        from litellm.proxy.hooks import dynamic_rate_limiter
+
+        return getattr(dynamic_rate_limiter, name)
+    if name in _LEGACY_RATE_LIMITER_V3_EXPORTS:
+        from litellm.proxy.hooks import dynamic_rate_limiter_v3
+
+        return getattr(dynamic_rate_limiter_v3, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+class CustomLoggerRegistry:
+    """
+    Registry mapping the callback class string to the class type.
+    """
+
+    CALLBACK_CLASS_STR_TO_CLASS_TYPE = _LazyCallbackClassMap()
 
     @classmethod
     def get_callback_str_from_class_type(cls, class_type: type) -> str | None:
