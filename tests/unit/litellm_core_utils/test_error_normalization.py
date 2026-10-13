@@ -222,6 +222,17 @@ def test_a_529_the_anthropic_routes_answered_is_an_overload() -> None:
     assert StandardLoggingPayloadSetup.get_error_information(paused)["normalized_error"] == "503_PROVIDER_OVERLOADED"
 
 
+@pytest.mark.parametrize("body", ["", "<html>bad gateway</html>", '{"type":"error","error":{"type":"api_error"}}'])
+def test_an_internal_server_error_answered_as_529_is_an_overload_whatever_its_body_says(body: str) -> None:
+    overloaded = litellm.InternalServerError(body, llm_provider="anthropic", model="claude", provider_status_code=529)
+    overloaded.status_code = 529
+    internal = litellm.InternalServerError(body, llm_provider="anthropic", model="claude")
+    assert (
+        StandardLoggingPayloadSetup.get_error_information(overloaded)["normalized_error"],
+        StandardLoggingPayloadSetup.get_error_information(internal)["normalized_error"],
+    ) == ("503_PROVIDER_OVERLOADED", "500_PROVIDER_INTERNAL_ERROR")
+
+
 def test_budget_exceeded_error_with_custom_wording_is_still_a_budget_error() -> None:
     exc = litellm.BudgetExceededError(current_cost=2.0, max_budget=1.0, message="Spending cap reached for key")
     assert StandardLoggingPayloadSetup.get_error_information(exc)["normalized_error"] == "429_BUDGET_EXCEEDED"

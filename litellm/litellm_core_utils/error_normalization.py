@@ -130,9 +130,10 @@ _STATUS_CODE_MAP: Final[Mapping[str, str]] = MappingProxyType(
         "502": PROVIDER_INTERNAL_ERROR,
         "503": PROVIDER_OVERLOADED,
         "504": UPSTREAM_TIMEOUT,
-        "529": PROVIDER_OVERLOADED,
     }
 )
+
+_OVERLOADED_STATUS_CODE: Final = "529"
 
 _INTERNAL_STATE_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
     TypeError,
@@ -202,6 +203,8 @@ def normalize_error(exc: Exception | None, status_code: str, message: str) -> st
     )
     if by_message is not None:
         return by_message
+    if status_code == _OVERLOADED_STATUS_CODE:
+        return PROVIDER_OVERLOADED
     by_class: Final = _classify_by_class(exc)
     if by_class is not None:
         return by_class

@@ -997,6 +997,18 @@ def test_an_anthropic_529_stays_an_internal_server_error_that_carries_the_529(me
     )
 
 
+@pytest.mark.parametrize("status_code", [400, 404])
+def test_an_anthropic_client_error_naming_overloaded_carries_no_overload_status(status_code, quiet_exception_mapping):
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=status_code, message="model: claude-Overloaded"),
+            custom_llm_provider="anthropic",
+        )
+
+    assert raised.value.provider_status_code is None
+
+
 def test_an_anthropic_500_carries_its_own_status_as_the_provider_status(quiet_exception_mapping):
     with pytest.raises(litellm.InternalServerError) as raised:
         exception_type(

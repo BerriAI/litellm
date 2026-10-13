@@ -1005,6 +1005,21 @@ def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
     return f"data: {json.dumps({'error': error_obj})}\n\n", "data: [DONE]\n\n"
 
 
+def _openai_late_failure_frames(exc: Exception) -> tuple[str, ...]:
+    _, error_obj = sse_error_payload(exc)
+    return _sse_error_frames(error_obj)
+
+
+def _anthropic_late_failure_frames(exc: Exception) -> tuple[str, ...]:
+    answered: Final = proxy_exception_from_route_error(with_answered_status(exc))
+    return (
+        anthropic_error_sse_frame(
+            status_code=error_status_code(answered, status.HTTP_500_INTERNAL_SERVER_ERROR),
+            raw_message=answered.message,
+        ),
+    )
+
+
 def _sse_stream_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     """`headers` plus the two that stop reverse proxies from buffering SSE (issue #28384)."""
     return MappingProxyType({**headers, **_TTFT_KEEPALIVE_HEADERS})
@@ -1264,6 +1279,7 @@ async def open_sse_before_first_byte(
     ping_interval_seconds: float | str | None,
     media_type: str = "text/event-stream",
     on_late_failure: Callable[[Exception], Awaitable[HTTPException | None]] | None = None,
+    late_failure_frames: Callable[[Exception], tuple[str, ...]] = _openai_late_failure_frames,
 ) -> _LateResponseT | StreamingResponse:
     """Write SSE keepalive comments while the upstream LLM call is still in flight.
 
@@ -1307,8 +1323,7 @@ async def open_sse_before_first_byte(
                 # would never fire and the failure would go unaudited. The hook
                 # also gets to sanitize what reaches the client, by returning or
                 # raising a replacement, so its answer decides the frame.
-                _, error_obj = sse_error_payload(await _sanitized_late_failure(exc, on_late_failure))
-                for frame in _sse_error_frames(error_obj):
+                for frame in late_failure_frames(await _sanitized_late_failure(exc, on_late_failure)):
                     yield frame.encode()
                 return
             async for chunk in _relay_late_response(produced):
@@ -2628,12 +2643,14 @@ class ProxyBaseLLMRequestProcessing:
         ``litellm_settings.sse_keepalive_ping_interval_seconds``.
         """
 
+        answers_as_anthropic: Final = route_type == "anthropic_messages"
+
         async def _audit_late_failure(exc: Exception) -> HTTPException | None:
             # Once a keepalive is on the wire this can no longer raise, so the
             # caller's `except` never runs its own post_call_failure_hook.
             return await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
-                original_exception=exc,
+                original_exception=with_answered_status(exc) if answers_as_anthropic else exc,
                 request_data=self.data,
             )
 
@@ -2661,6 +2678,7 @@ class ProxyBaseLLMRequestProcessing:
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
+            late_failure_frames=_anthropic_late_failure_frames if answers_as_anthropic else _openai_late_failure_frames,
         )
 
     async def _process_llm_request(
@@ -4133,25 +4151,25 @@ class ProxyBaseLLMRequestProcessing:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
             )
+            answered: Final = e if answer_status is None else answer_status(e)
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
-                original_exception=e if answer_status is None else answer_status(e),
+                original_exception=answered,
                 request_data=request_data,
             )
-            if transformed_exception is not None:
-                e = transformed_exception
+            failure: Final = answered if transformed_exception is None else transformed_exception
             verbose_proxy_logger.debug(
                 "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
-                e,
+                failure,
             )
 
-            if isinstance(e, HTTPException):
-                raise e
-            stream_error_status: Final = error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
+            if isinstance(failure, HTTPException):
+                raise failure
+            stream_error_status: Final = error_status_code(failure, status.HTTP_500_INTERNAL_SERVER_ERROR)
             proxy_exception: Final = ProxyException(
-                message=redact_internal_details_from_client_message(getattr(e, "message", str(e))),
-                type=openai_error_type(e, stream_error_status),
-                param=openai_error_param(e),
+                message=redact_internal_details_from_client_message(getattr(failure, "message", str(failure))),
+                type=openai_error_type(failure, stream_error_status),
+                param=openai_error_param(failure),
                 code=stream_error_status,
             )
             stream_completed = True

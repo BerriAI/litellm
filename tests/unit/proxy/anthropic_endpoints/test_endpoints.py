@@ -247,11 +247,13 @@ class TestProxyExceptionAnthropicEnvelope:
     async def test_anthropic_response_hands_the_failure_hook_the_529_it_answers(self, unavailable):
         """The failure hook ends the OTel server span and counts the failed request from the exception's status
         before the route answers, so the route hands it the 529 the client gets, not the deployment's 503 or the
-        500 an Anthropic overload keeps on the OpenAI-shaped routes."""
+        500 an Anthropic overload keeps on the OpenAI-shaped routes. The raised exception keeps its own status for
+        the deployment-level recorders that already hold it."""
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
 
+        raised_status = unavailable.status_code
         request = MagicMock()
         request.headers = {}
 
@@ -276,13 +278,15 @@ class TestProxyExceptionAnthropicEnvelope:
             )
 
         recorded = mock_logging.post_call_failure_hook.await_args.kwargs["original_exception"]
-        assert recorded is unavailable
-        assert recorded.status_code == 529
+        assert (type(recorded), recorded.status_code) == (type(unavailable), 529)
+        assert unavailable.status_code == raised_status
         assert response.status_code == 529
         assert json.loads(response.body)["error"]["type"] == "overloaded_error"
 
     @pytest.mark.asyncio
     async def test_count_tokens_answers_a_503_as_529_overloaded_error(self):
+        from fastapi import HTTPException
+
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -303,13 +307,13 @@ class TestProxyExceptionAnthropicEnvelope:
                 proxy_server, "token_counter", new=AsyncMock(side_effect=unavailable)
             ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
         ):
-            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            with pytest.raises(HTTPException) as raised:
+                await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
-        assert response.status_code == 529
-        body = json.loads(response.body)
-        assert body["type"] == "error"
-        assert body["error"]["type"] == "overloaded_error"
-        assert "detail" not in body
+        assert raised.value.status_code == 529
+        assert raised.value.detail["type"] == "error"
+        assert raised.value.detail["error"]["type"] == "overloaded_error"
+        assert raised.value.detail["error"]["message"] == "Bedrock is unable to process your request."
 
     @staticmethod
     def _call_id_error_response(general_settings, provider_specific_fields=None):
@@ -553,6 +557,8 @@ class TestErrorLogCarriesCallId:
 
     @pytest.mark.asyncio
     async def test_count_tokens_failure_log_carries_callers_call_id(self, caplog: pytest.LogCaptureFixture):
+        from fastapi import HTTPException
+
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
         from litellm.proxy._types import UserAPIKeyAuth
@@ -567,15 +573,13 @@ class TestErrorLogCarriesCallId:
                 "read_request_body",
                 new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
             ),
-            patch.object(
-                proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))
-            ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+            pytest.raises(HTTPException) as raised,
         ):
-            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
-        assert response.status_code == 500
-        assert json.loads(response.body)["error"]["type"] == "api_error"
+        assert raised.value.status_code == 500
         record = self._error_record(caplog)
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()

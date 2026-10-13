@@ -21,23 +21,28 @@ from integration._support.anthropic_sse import (
     stream_reply,
     user_prompt,
 )
-from integration._support.client import Gateway, JsonValue, gateway_from_environment, object_value
-from integration._support.process import owned_proxy
+from integration._support.client import Gateway, JsonValue, gateway_from_environment, object_value, string_value
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 _OVERLOADED: Final = "claude-overloaded"
 _HEALTHY: Final = "claude-healthy"
 _COUNTED: Final = "claude-counted"
+_COUNTED_OVERLOADED: Final = "claude-counted-overloaded"
+_COUNTED_RATE_LIMITED: Final = "claude-counted-rate-limited"
 _CHAT_ONLY_BACKEND: Final = "audit-chat-only"
 _API_KEY: Final = "synthetic-anthropic-key"
 _TEXT: Final = "Hello"
 _COOLDOWN_GROUP: Final = "audit-overloaded-cooldown"
 _COUNT_DISABLED_GROUP: Final = "audit-count-tokens-disabled"
 _COUNT_UPSTREAM_GROUP: Final = "audit-count-tokens-upstream-503"
+_COUNT_OVERLOADED_GROUP: Final = "audit-count-tokens-upstream-529"
+_COUNT_RATE_LIMITED_GROUP: Final = "audit-count-tokens-upstream-429"
+_COUNT_STATUSES: Final = {_COUNTED: 503, _COUNTED_OVERLOADED: 529, _COUNTED_RATE_LIMITED: 429}
 _COUNT_TOKENS_TARGET: Final = "/v1/messages/count_tokens"
 _UPSTREAM_URL_PLACEHOLDER: Final = "upstream-url"
 
-pytestmark = pytest.mark.timeout(240)
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 
 def _served_id(marker: str) -> str:
@@ -45,10 +50,11 @@ def _served_id(marker: str) -> str:
 
 
 def _respond(request: Request) -> Reply:
-    if unquote(request.target) == _COUNT_TOKENS_TARGET:
-        return Reply(status=503, body=error_body(503, "scripted 503"))
     body: Final = object_value(json.loads(request.body))
     backend: Final = str(body["model"])
+    if unquote(request.target) == _COUNT_TOKENS_TARGET:
+        status: Final = _COUNT_STATUSES[backend]
+        return Reply(status=status, body=error_body(status, f"scripted {status}"))
     if backend == _OVERLOADED:
         return status_reply(529)
     if backend == _HEALTHY:
@@ -72,6 +78,10 @@ def _config(wire: Wire, directory: Path) -> Path:
             "synthetic-vllm-key",
         ),
         _deployment(_COUNT_UPSTREAM_GROUP, f"anthropic/{_COUNTED}", _UPSTREAM_URL_PLACEHOLDER, _API_KEY),
+        _deployment(_COUNT_OVERLOADED_GROUP, f"anthropic/{_COUNTED_OVERLOADED}", _UPSTREAM_URL_PLACEHOLDER, _API_KEY),
+        _deployment(
+            _COUNT_RATE_LIMITED_GROUP, f"anthropic/{_COUNTED_RATE_LIMITED}", _UPSTREAM_URL_PLACEHOLDER, _API_KEY
+        ),
     ]
     config["router_settings"] = {
         "num_retries": 0,
@@ -140,6 +150,13 @@ def _assert_overloaded_json(response: httpx.Response) -> None:
     assert object_value(payload["error"])["type"] == "overloaded_error", response.text
 
 
+def _count_tokens_error(response: httpx.Response, status: int) -> dict[str, JsonValue]:
+    assert response.status_code == status, response.text
+    detail: Final = object_value(object_value(json.loads(response.content))["detail"])
+    assert detail["type"] == "error", response.text
+    return object_value(detail["error"])
+
+
 def test_an_overloaded_deployment_is_cooled_down_by_the_internal_server_error_allowed_fails_policy(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     first: Final = rig.messages("/v1/messages", _COOLDOWN_GROUP, marker, num_retries=0, disable_fallbacks=True)
@@ -155,15 +172,34 @@ def test_an_overloaded_deployment_is_cooled_down_by_the_internal_server_error_al
 
 def test_count_tokens_disabled_without_a_provider_counter_answers_529_overloaded_error(rig: _Rig) -> None:
     response: Final = rig.count_tokens(_COUNT_DISABLED_GROUP)
-    _assert_overloaded_json(response)
-    assert "Token counting is disabled" in response.text, response.text
+    error: Final = _count_tokens_error(response, 529)
+    assert error["type"] == "overloaded_error", response.text
+    assert "Token counting is disabled" in string_value(error["message"]), response.text
     assert rig.targets_called() == ()
 
 
 def test_count_tokens_whose_upstream_answers_503_answers_529_overloaded_error(rig: _Rig) -> None:
     response: Final = rig.count_tokens(_COUNT_UPSTREAM_GROUP)
-    _assert_overloaded_json(response)
-    assert "scripted 503" in response.text, response.text
+    error: Final = _count_tokens_error(response, 529)
+    assert error["type"] == "overloaded_error", response.text
+    assert "scripted 503" in string_value(error["message"]), response.text
+    assert rig.targets_called() == (_COUNT_TOKENS_TARGET,)
+
+
+@pytest.mark.parametrize(
+    ("group", "status", "error_type"),
+    (
+        pytest.param(_COUNT_OVERLOADED_GROUP, 529, "overloaded_error", id="529"),
+        pytest.param(_COUNT_RATE_LIMITED_GROUP, 429, "rate_limit_error", id="429"),
+    ),
+)
+def test_count_tokens_keeps_other_upstream_statuses_and_their_detail_body(
+    rig: _Rig, group: str, status: int, error_type: str
+) -> None:
+    response: Final = rig.count_tokens(group)
+    error: Final = _count_tokens_error(response, status)
+    assert error["type"] == error_type, response.text
+    assert f"scripted {status}" in string_value(error["message"]), response.text
     assert rig.targets_called() == (_COUNT_TOKENS_TARGET,)
 
 

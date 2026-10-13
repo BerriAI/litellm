@@ -3,7 +3,8 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
 from typing import Final, Literal
 from urllib.parse import unquote
 
@@ -14,6 +15,7 @@ import pytest
 from integration._support.anthropic_sse import (
     LIFECYCLE,
     error_frame,
+    event_type,
     event_types,
     message_id,
     message_json,
@@ -23,9 +25,18 @@ from integration._support.anthropic_sse import (
     stream_reply,
     user_prompt,
 )
-from integration._support.client import Gateway, JsonValue, eventually, object_value, string_value
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    JsonValue,
+    Scenario,
+    eventually,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
 from integration._support.openai_wire import openai_error
+from integration._support.upstream import aws_event_stream_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 from redis import Redis
 
@@ -34,12 +45,15 @@ _API_KEY: Final = "synthetic-anthropic-key"
 _BEDROCK_MODEL: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 _BEDROCK_TOKEN: Final = "synthetic-bedrock-bearer"
 _BEDROCK_503: Final = b'{"message": "Bedrock is unable to process your request."}'
+_CONVERSE_MODEL: Final = f"bedrock/converse/{_BEDROCK_MODEL}"
+_CONVERSE_STREAM_TARGET: Final = f"/model/{_BEDROCK_MODEL}/converse-stream"
 _OPENAI_BACKEND: Final = "gpt-4o-mini"
 _CHAT_ONLY_BACKEND: Final = "audit-chat-only"
 _CODEX_BACKEND: Final = "gpt-5.3-codex"
 _TEXT: Final = "Hello"
 _KEEPALIVE_SECONDS: Final = 0.2
 _LATE_ANSWER_SECONDS: Final = 1.0
+_OVERLOAD_CLASS: Final = "503_PROVIDER_OVERLOADED"
 
 Shape = Literal["stream", "non-stream"]
 
@@ -123,11 +137,12 @@ def _one_post(wire: Wire, target: str) -> None:
     assert [(request.method, unquote(request.target)) for request in wire.drain()] == [("POST", target)]
 
 
-def _failure_rows(model: str, expected: int) -> list[dict[str, JsonValue]]:
+def _spend_rows(model: str, expected: int) -> list[dict[str, JsonValue]]:
     return eventually(
         lambda: read_rows(
             "SELECT status, metadata->'error_information'->>'error_code' AS code, "
-            "metadata->'error_information'->>'error_class' AS error_class "
+            "metadata->'error_information'->>'error_class' AS error_class, "
+            "metadata->'error_information'->>'normalized_error' AS normalized_error "
             'FROM "LiteLLM_SpendLogs" WHERE model_group=%s',
             (model,),
         ),
@@ -137,7 +152,10 @@ def _failure_rows(model: str, expected: int) -> list[dict[str, JsonValue]]:
 
 
 def _assert_logged_failure(model: str, *, rows: int, error_class: str, code: str = "529") -> None:
-    assert _failure_rows(model, rows) == [{"status": "failure", "code": code, "error_class": error_class}] * rows
+    assert (
+        _spend_rows(model, rows)
+        == [{"status": "failure", "code": code, "error_class": error_class, "normalized_error": _OVERLOAD_CLASS}] * rows
+    )
 
 
 def test_messages_529_answers_overloaded_error_to_the_sync_sdk_and_logs_each_call_once(gateway: Gateway) -> None:
@@ -212,7 +230,9 @@ def _error_frames(text: str) -> tuple[dict[str, JsonValue], ...]:
     )
 
 
-def test_messages_529_after_the_keepalive_opened_the_response_ends_with_a_500_error_frame(gateway: Gateway) -> None:
+def test_messages_529_after_the_keepalive_opened_the_response_ends_with_an_overloaded_error_event(
+    gateway: Gateway,
+) -> None:
     with (
         wire_server(_late(status_reply(529), _LATE_ANSWER_SECONDS)) as wire,
         gateway.scenario() as scenario,
@@ -223,10 +243,11 @@ def test_messages_529_after_the_keepalive_opened_the_response_ends_with_a_500_er
         response: Final = gateway.request("POST", "/v1/messages", _messages_body(model, _prompt(), stream=True))
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream"), dict(response.headers)
-        assert "message_start" not in response.text, response.text
-        (frame,) = _error_frames(response.text)
-        error: Final = object_value(frame["error"])
-        assert error["code"] == "500", response.text
+        assert response.text.startswith(":"), response.text
+        (failure,) = (event for event in parse_sse(response.text) if event.data and event.event != "ping")
+        assert failure.event == "error", response.text
+        assert object_value(failure.data["error"])["type"] == "overloaded_error", response.text
+        assert "[DONE]" not in response.text, response.text
         _one_post(wire, "/v1/messages")
 
 
@@ -245,6 +266,41 @@ def test_chat_completions_overloaded_frame_after_content_ends_with_a_500_error_f
         (frame,) = _error_frames(response.text)
         error: Final = object_value(frame["error"])
         assert error["code"] == "500", response.text
+        _one_post(wire, "/v1/messages")
+
+
+def _overloaded_before_content(prompt: str) -> Reply:
+    return stream_reply((*message_stream(prompt, _MODEL, _TEXT)[:1], error_frame(529, "Overloaded")))
+
+
+def test_messages_overloaded_frame_before_content_without_a_retry_budget_is_relayed_as_an_overloaded_event(
+    gateway: Gateway,
+) -> None:
+    prompt: Final = _prompt()
+    with wire_server(_always(_overloaded_before_content(prompt))) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request("POST", "/v1/messages", _messages_body(model, prompt, stream=True))
+        assert response.status_code == 200, response.text
+        events: Final = parse_sse(response.text)
+        assert event_types(events) == ("message_start", "error"), response.text
+        assert message_id(events) == prompt, response.text
+        assert events[1].data == {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+        _one_post(wire, "/v1/messages")
+        assert _spend_rows(model, 1) == [
+            {"status": "success", "code": None, "error_class": None, "normalized_error": None}
+        ]
+
+
+def test_chat_completions_overloaded_frame_before_content_answers_500(gateway: Gateway) -> None:
+    prompt: Final = _prompt()
+    with wire_server(_always(_overloaded_before_content(prompt))) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": True, "num_retries": 0},
+        )
+        _assert_internal_server_error(response)
         _one_post(wire, "/v1/messages")
 
 
@@ -302,6 +358,69 @@ def test_messages_bedrock_503_answers_529_overloaded_error(gateway: Gateway, sha
         _assert_logged_failure(model, rows=1, error_class="ServiceUnavailableError")
 
 
+def _converse_event(event: str, payload: Mapping[str, JsonValue]) -> bytes:
+    return aws_event_stream_frame(
+        {":event-type": event, ":content-type": "application/json", ":message-type": "event"},
+        json.dumps(payload).encode(),
+    )
+
+
+def _converse_503_after_text() -> Reply:
+    unavailable: Final = aws_event_stream_frame(
+        {
+            ":exception-type": "serviceUnavailableException",
+            ":content-type": "application/json",
+            ":message-type": "exception",
+        },
+        _BEDROCK_503,
+    )
+    frames: Final = (
+        _converse_event("messageStart", {"role": "assistant"}),
+        _converse_event("contentBlockDelta", {"delta": {"text": _TEXT}, "contentBlockIndex": 0}),
+        unavailable,
+    )
+    return Reply(body=b"".join(frames), content_type="application/vnd.amazon.eventstream")
+
+
+def _converse_deployment(scenario: Scenario, wire: Wire) -> str:
+    return scenario.model(model=_CONVERSE_MODEL, api_key=_BEDROCK_TOKEN, aws_region_name="us-east-1", api_base=wire.url)
+
+
+def test_messages_bedrock_stream_503_after_text_ends_with_an_overloaded_error_event(gateway: Gateway) -> None:
+    with wire_server(_always(_converse_503_after_text())) as wire, gateway.scenario() as scenario:
+        model: Final = _converse_deployment(scenario, wire)
+        response: Final = gateway.request("POST", "/v1/messages", _messages_body(model, _prompt(), stream=True))
+        assert response.status_code == 200, response.text
+        events: Final = parse_sse(response.text)
+        types: Final = event_types(events)
+        assert "message_stop" not in types, response.text
+        assert types.index("content_block_delta") < types.index("error"), response.text
+        assert _TEXT in response.text, response.text
+        (failure,) = (event for event in events if event_type(event) == "error")
+        error: Final = object_value(failure.data["error"])
+        assert error["type"] == "overloaded_error", response.text
+        assert "Bedrock is unable to process your request." in string_value(error["message"]), response.text
+        _one_post(wire, _CONVERSE_STREAM_TARGET)
+        _assert_logged_failure(model, rows=1, error_class="ServiceUnavailableError")
+
+
+def test_chat_completions_bedrock_stream_503_after_text_ends_with_a_503_error_frame(gateway: Gateway) -> None:
+    with wire_server(_always(_converse_503_after_text())) as wire, gateway.scenario() as scenario:
+        model: Final = _converse_deployment(scenario, wire)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": _prompt()}], "stream": True, "num_retries": 0},
+        )
+        assert response.status_code == 200, response.text
+        assert _TEXT in response.text, response.text
+        (frame,) = _error_frames(response.text)
+        error: Final = object_value(frame["error"])
+        assert error["code"] == "503", response.text
+        _one_post(wire, _CONVERSE_STREAM_TARGET)
+        _assert_logged_failure(model, rows=1, error_class="ServiceUnavailableError", code="503")
+
+
 @pytest.mark.parametrize("shape", ("non-stream", "stream"))
 def test_chat_bridge_503_answers_529_overloaded_error_on_messages(gateway: Gateway, shape: Shape) -> None:
     with wire_server(_always(openai_error(503))) as wire, gateway.scenario() as scenario:
@@ -326,6 +445,79 @@ def test_responses_bridge_503_answers_529_overloaded_error_on_messages(gateway: 
         )
         _assert_overloaded(response, message="scripted 503")
         _one_post(wire, "/v1/responses")
+
+
+_SETTLED_ANSWERS: Final = 4
+
+
+def _messages_to(gateway: Gateway, model: str) -> tuple[tuple[str, httpx.Response], ...]:
+    prompts: Final = tuple(_prompt() for _ in range(_SETTLED_ANSWERS))
+    return tuple(
+        (prompt, gateway.request("POST", "/v1/messages", _messages_body(model, prompt, stream=False)))
+        for prompt in prompts
+    )
+
+
+def _failure_rows_of(models: tuple[str, str], expected: int) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: read_rows(
+            "SELECT metadata->'error_information'->>'error_code' AS code, "
+            "metadata->'error_information'->>'error_class' AS error_class, "
+            "metadata->'error_information'->>'normalized_error' AS normalized_error "
+            'FROM "LiteLLM_SpendLogs" WHERE status = %s AND model_group IN (%s, %s)',
+            ("failure", *models),
+        ),
+        lambda rows: len(rows) >= expected,
+        seconds=70,
+    )
+
+
+@contextmanager
+def _paused_deployment(gateway: Gateway) -> Generator[tuple[Wire, str, str]]:
+    unpaused: Final = Reply(body=message_json("msg_unpaused", _MODEL, _TEXT))
+    with wire_server(_always(unpaused)) as wire, gateway.scenario() as scenario:
+        identity: Final = f"audit-paused-{uuid.uuid4().hex}"
+        name: Final = scenario.model(
+            model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, model_info={"id": identity}
+        )
+        paused: Final = gateway.request("PATCH", f"/model/{identity}/update", {"blocked": True})
+        assert paused.status_code == 200, paused.text
+        yield wire, identity, name
+
+
+def _assert_refused_without_an_upstream_call(
+    gateway: Gateway, wire: Wire, target: str, *, status: int, error_type: str, message: str
+) -> None:
+    answers: Final = eventually(
+        lambda: _messages_to(gateway, target),
+        lambda settled: all(response.status_code != 200 for _, response in settled),
+        seconds=90,
+    )
+    texts: Final = [response.text for _, response in answers]
+    assert [response.status_code for _, response in answers] == [status] * _SETTLED_ANSWERS, texts
+    errors: Final = [_anthropic_error(response) for _, response in answers]
+    assert [error["type"] for error in errors] == [error_type] * _SETTLED_ANSWERS, texts
+    assert all(message in string_value(error["message"]) for error in errors), texts
+    reached: Final = {user_prompt(JSON_OBJECT.validate_json(request.body)) for request in wire.drain()}
+    assert reached.isdisjoint(prompt for prompt, _ in answers), reached
+
+
+def test_messages_to_a_paused_deployment_named_by_its_id_answer_529_overloaded_error(gateway: Gateway) -> None:
+    with _paused_deployment(gateway) as (wire, identity, name):
+        _assert_refused_without_an_upstream_call(
+            gateway, wire, identity, status=529, error_type="overloaded_error", message="is currently paused"
+        )
+        rows: Final = _failure_rows_of((identity, name), _SETTLED_ANSWERS)
+        assert {(row["code"], row["error_class"], row["normalized_error"]) for row in rows} == {
+            ("529", "ServiceUnavailableError", _OVERLOAD_CLASS)
+        }, rows
+
+
+def test_messages_to_a_paused_model_group_named_by_its_name_answer_403_permission_error(gateway: Gateway) -> None:
+    with _paused_deployment(gateway) as (wire, _, name):
+        _assert_refused_without_an_upstream_call(
+            gateway, wire, name, status=403, error_type="permission_error", message="Model is blocked"
+        )
 
 
 _MALFORMED_529_BODIES: Final = {
@@ -360,9 +552,14 @@ def test_messages_529_with_a_malformed_body_still_answers_overloaded_error_and_u
         assert healthy.status_code == 200, healthy.text
         assert object_value(json.loads(healthy.content))["id"] == f"msg_{prompt}", healthy.text
         assert [unquote(request.target) for request in wire.drain()] == ["/v1/messages"] * 2
-        assert sorted(_failure_rows(model, 2), key=lambda row: str(row["status"])) == [
-            {"status": "failure", "code": "529", "error_class": "InternalServerError"},
-            {"status": "success", "code": None, "error_class": None},
+        assert sorted(_spend_rows(model, 2), key=lambda row: str(row["status"])) == [
+            {
+                "status": "failure",
+                "code": "529",
+                "error_class": "InternalServerError",
+                "normalized_error": _OVERLOAD_CLASS,
+            },
+            {"status": "success", "code": None, "error_class": None, "normalized_error": None},
         ]
 
 

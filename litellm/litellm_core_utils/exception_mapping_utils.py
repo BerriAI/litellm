@@ -552,6 +552,11 @@ def _map_openai_exception(
         )
 
 
+def _anthropic_overload_status(original_exception: _ProviderHTTPException) -> int | None:
+    upstream_status: Final = getattr(original_exception, "status_code", None)
+    return 529 if isinstance(upstream_status, int) and upstream_status >= 500 else None
+
+
 def _map_anthropic_exception(
     *,
     model: str,
@@ -577,7 +582,7 @@ def _map_anthropic_exception(
             message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
-            provider_status_code=529,
+            provider_status_code=_anthropic_overload_status(original_exception),
         )
     if "Invalid API Key" in error_str:
         raise AuthenticationError(

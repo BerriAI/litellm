@@ -51,6 +51,7 @@ const STATUS_LABELS: Record<number, string> = {
   502: "Bad Gateway",
   503: "Service Unavailable",
   504: "Gateway Timeout",
+  529: "Overloaded",
 };
 
 export const statusCodeLabel = (code: number): string => {

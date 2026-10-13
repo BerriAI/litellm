@@ -9585,6 +9585,43 @@ async def test_base_process_llm_request_audits_a_failure_that_lands_after_its_ke
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_answers_a_late_overload_after_its_keepalive_as_an_overloaded_error_event():
+    async def slow_overload(self, **kwargs):
+        await asyncio.sleep(0.25)
+        raise litellm.ServiceUnavailableError(
+            message='BedrockException - {"message": "Bedrock is unable to process your request."}',
+            llm_provider="bedrock",
+            model="global.anthropic.claude-opus-5-5",
+        )
+
+    proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    processor = ProxyBaseLLMRequestProcessing(data={"model": "global.anthropic.claude-opus-5-5", "stream": True})
+
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", slow_overload):
+            response = await processor.base_process_llm_request(
+                request=MagicMock(spec=Request),
+                fastapi_response=Response(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                route_type="anthropic_messages",
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+            )
+        collected = await _drain(response)
+
+    assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"].status_code == 529
+    assert collected[0] == TTFT_PING
+    event_line, data_line = collected[-1].decode().strip().split("\n")
+    assert event_line == "event: error"
+    error = json.loads(data_line.removeprefix("data: "))
+    assert error["type"] == "error"
+    assert error["error"]["type"] == "overloaded_error"
+    assert "Bedrock is unable to process your request." in error["error"]["message"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "deployment_keepalive, expect_ping",
     [(0, False), (None, True)],

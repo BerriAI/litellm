@@ -28,7 +28,6 @@ from litellm.proxy.common_request_processing import (
     create_response,
     log_llm_api_exception,
     proxy_exception_from_http_exception,
-    proxy_exception_from_route_error,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
@@ -369,10 +368,20 @@ async def count_tokens(
     except HTTPException:
         raise
     except ProxyException as e:
-        return _anthropic_error_json_response(e, request)
+        status_code: Final = AnthropicExceptionMapping.get_status_code(
+            int(e.code) if e.code and e.code.isdigit() else 500
+        )
+        detail: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=status_code,
+            raw_message=e.message,
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=detail,
+        )
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)
-        return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
+        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"}) from e
 
 
 @router.post(

@@ -20,7 +20,10 @@ def _anthropic_internal_server_error(provider_status_code: int | None) -> litell
 def test_a_proxy_exception_answers_its_503_as_529_and_keeps_every_other_code(code: int, answered: str) -> None:
     exc = ProxyException(message="budget service unavailable", type="None", param=None, code=code)
 
-    assert with_answered_status(exc).code == answered
+    answered_exc = with_answered_status(exc)
+
+    assert (type(answered_exc), answered_exc.code, answered_exc.message) == (ProxyException, answered, exc.message)
+    assert exc.code == str(code)
 
 
 @pytest.mark.parametrize(
@@ -52,8 +55,31 @@ def test_a_proxy_exception_answers_its_503_as_529_and_keeps_every_other_code(cod
 def test_a_litellm_exception_answers_the_status_anthropic_gives_its_failure(
     exc: openai.APIStatusError, answered: int
 ) -> None:
-    assert with_answered_status(exc) is exc
-    assert exc.status_code == answered
+    raised_status = exc.status_code
+
+    answered_exc = with_answered_status(exc)
+
+    assert (type(answered_exc), answered_exc.status_code, str(answered_exc)) == (type(exc), answered, str(exc))
+    assert exc.status_code == raised_status
+
+
+def _raise_a_bedrock_overload_caused_by_a_reset() -> None:
+    try:
+        raise ConnectionError("upstream reset")
+    except ConnectionError as upstream:
+        raise litellm.ServiceUnavailableError(
+            message="BedrockException", llm_provider="bedrock", model="m"
+        ) from upstream
+
+
+def test_the_answered_copy_keeps_the_raised_exceptions_cause_and_traceback() -> None:
+    with pytest.raises(litellm.ServiceUnavailableError) as raised:
+        _raise_a_bedrock_overload_caused_by_a_reset()
+
+    answered_exc = with_answered_status(raised.value)
+
+    assert isinstance(raised.value.__cause__, ConnectionError)
+    assert (answered_exc.__cause__, answered_exc.__traceback__) == (raised.value.__cause__, raised.value.__traceback__)
 
 
 def test_an_exception_without_a_status_passes_through_unchanged() -> None:
