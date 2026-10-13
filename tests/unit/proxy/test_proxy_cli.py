@@ -1,5 +1,9 @@
 import inspect
 import os
+import runpy
+import sys
+import types
+import urllib.parse as urlparse
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,18 +11,10 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
-import fastapi
 import pytest
-
-
-import builtins
-import runpy
-import sys
-import types
-import urllib.parse as urlparse
-
 import uvicorn
 import yaml
+from click.testing import CliRunner
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
@@ -1964,7 +1960,6 @@ class TestProxyInitializationHelpers:
     @patch("builtins.print")
     def test_run_server_no_config_passed(self, mock_print, mock_uvicorn_run):
         """Test that run_server properly handles the case when no config is passed"""
-        import asyncio
 
         from click.testing import CliRunner
 
@@ -3615,3 +3610,64 @@ class TestValidateConfigFlag:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         assert "config OK" in result.output
         mock_popen.assert_not_called()
+
+
+class TestControlPlaneFlag:
+    """`--control-plane` swaps the app served from the existing image, but migration jobs must still win."""
+
+    @patch("litellm.proxy.control_plane.main.serve")
+    def test_control_plane_flag_serves_the_control_plane_with_the_worker_count(self, mock_serve):
+        from litellm.proxy.proxy_cli import run_server
+
+        result = CliRunner().invoke(run_server, ["--control-plane", "--port", "8100", "--num_workers", "3"])
+        assert result.exit_code == 0, result.output
+        mock_serve.assert_called_once()
+        assert mock_serve.call_args.kwargs["port"] == 8100
+        assert mock_serve.call_args.kwargs["workers"] == 3
+
+    @pytest.mark.parametrize(
+        ("control_plane", "skip_server_startup", "utility_command", "expected"),
+        [
+            (True, False, False, True),
+            (True, True, False, False),
+            (True, False, True, False),
+            (False, False, False, False),
+            (False, True, True, False),
+        ],
+    )
+    def test_migrations_and_utility_commands_win_over_an_inherited_control_plane_flag(
+        self, control_plane: bool, skip_server_startup: bool, utility_command: bool, expected: bool
+    ):
+        """A migration job or `litellm --version` shares the deployment's env, LITELLM_CONTROL_PLANE=true must not
+        turn either into a server."""
+        from litellm.proxy.proxy_cli import control_plane_requested
+
+        assert control_plane_requested(control_plane, skip_server_startup, utility_command) is expected
+
+    @patch("litellm.proxy.control_plane.main.serve")
+    def test_version_prints_the_version_even_with_the_control_plane_flag(self, mock_serve):
+        from litellm.proxy.proxy_cli import run_server
+
+        result = CliRunner().invoke(run_server, ["--control-plane", "--version"])
+        assert result.exit_code == 0, result.output
+        assert "version" in result.output.lower() and mock_serve.call_count == 0
+
+    @pytest.mark.parametrize("flag", ["--run_hypercorn", "--run_gunicorn", "--run_granian", "--reload"])
+    def test_other_servers_and_reload_are_a_usage_error_with_the_control_plane_flag(self, flag: str):
+        from litellm.proxy.proxy_cli import run_server
+
+        result = CliRunner().invoke(run_server, ["--control-plane", flag])
+        assert result.exit_code == 2 and "plain uvicorn" in result.output
+
+    @patch("litellm.proxy.control_plane.main.serve")
+    def test_tls_flags_reach_the_control_plane_and_a_lone_one_is_a_usage_error(self, mock_serve):
+        from litellm.proxy.control_plane.main import Tls
+        from litellm.proxy.proxy_cli import run_server
+
+        both = CliRunner().invoke(
+            run_server, ["--control-plane", "--ssl_keyfile_path", "/c/tls.key", "--ssl_certfile_path", "/c/tls.crt"]
+        )
+        assert both.exit_code == 0, both.output
+        assert mock_serve.call_args.kwargs["tls"] == Tls(keyfile="/c/tls.key", certfile="/c/tls.crt")
+        lone = CliRunner().invoke(run_server, ["--control-plane", "--ssl_keyfile_path", "/c/tls.key"])
+        assert lone.exit_code == 2 and "both" in lone.output
