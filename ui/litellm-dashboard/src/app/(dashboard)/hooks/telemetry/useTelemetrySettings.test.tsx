@@ -80,7 +80,9 @@ describe("useUpdateTelemetrySettings", () => {
     await recordUiEvent({ page: "telemetry", action: "view" });
     const { result } = renderHook(() => useUpdateTelemetrySettings(), { wrapper: wrapperFor(new QueryClient()) });
 
-    await act(() => result.current.mutateAsync(["heartbeat", "page_navigation"]));
+    await act(() =>
+      result.current.mutateAsync({ groups: ["heartbeat", "page_navigation"], destination: "local_table" }),
+    );
     await recordUiEvent({ page: "telemetry", action: "click", target: "tab=ui" });
 
     expect(post).not.toHaveBeenCalled();
