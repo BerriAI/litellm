@@ -8,7 +8,7 @@ _EXPECTED_FIELDS: Final = frozenset(ExactExpected.model_fields)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class ProviderQuirk:
+class ProviderCostQuirk:
     """A provider-level reason the bridged leg legitimately bills a different row: the `ExactExpected` fields that
     differ, why, and the provider document that says so."""
 
@@ -25,13 +25,13 @@ class ProviderQuirk:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BridgeParityTestCase:
+class BridgeCostParityTestCase:
     """One stored provider response billed through the provider's own API (`native`) and through a client API that
     LiteLLM bridges into it (`bridged`). Both legs bill the one row unless `quirk` names the fields that differ."""
 
     native: CostTrackingTestCase
     bridged: CostTrackingTestCase
-    quirk: ProviderQuirk | None = None
+    quirk: ProviderCostQuirk | None = None
 
     def __post_init__(self) -> None:
         if self.native.endpoint == self.bridged.endpoint:

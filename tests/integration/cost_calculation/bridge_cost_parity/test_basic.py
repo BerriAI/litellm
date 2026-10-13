@@ -8,12 +8,14 @@ case's row, and they must agree with each other except where a documented provid
 
 import pytest
 from integration._support.client import Gateway
-from integration.cost_calculation.bridge_parity.case import BridgeParityTestCase
-from integration.cost_calculation.bridge_parity.runner import assert_bridge_parity
-from integration.cost_calculation.catalog import BRIDGE_PARITY_CASES
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.runner import assert_bridge_cost_parity
+from integration.cost_calculation.catalog import BRIDGE_COST_PARITY_CASES
 
 
-@pytest.mark.parametrize("case", BRIDGE_PARITY_CASES, ids=[case.id for case in BRIDGE_PARITY_CASES])
+@pytest.mark.parametrize("case", BRIDGE_COST_PARITY_CASES, ids=[case.id for case in BRIDGE_COST_PARITY_CASES])
 @pytest.mark.timeout(180)
-def test_bridged_request_bills_the_same_row_as_the_native_request(case: BridgeParityTestCase, gateway: Gateway) -> None:
-    assert_bridge_parity(case, gateway)
+def test_bridged_request_bills_the_same_row_as_the_native_request(
+    case: BridgeCostParityTestCase, gateway: Gateway
+) -> None:
+    assert_bridge_cost_parity(case, gateway)

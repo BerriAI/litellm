@@ -13,7 +13,7 @@ from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase, ExactExpected, JsonResponse
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
-from integration.cost_calculation.bridge_parity.case import BridgeParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 
 
 # gpt-6-luna
@@ -529,4 +529,4 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = ()
 
-BRIDGE_PARITY: Final[tuple[BridgeParityTestCase, ...]] = ()
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = ()

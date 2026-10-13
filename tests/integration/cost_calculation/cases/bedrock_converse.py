@@ -15,7 +15,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountRates,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
-from integration.cost_calculation.bridge_parity.case import BridgeParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 
 
 # anthropic.claude-sonnet-5-v1:0
@@ -4860,4 +4860,4 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM),
 )
 
-BRIDGE_PARITY: Final[tuple[BridgeParityTestCase, ...]] = ()
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = ()
