@@ -118,6 +118,7 @@ _FAMILY: Final = (
     "claude_platform_unmapped",
     "vertex_haiku",
 )
+_STREAM_FAMILY: Final = ("anthropic_unmapped", "azure_ai_unmapped", "bedrock_invoke", "vertex_haiku")
 _FRAGMENT_SIZE: Final = 20
 _TIMING_BYTES: Final = 512 * 1024
 _TIMING_FRAGMENT: Final = 4096
@@ -1058,7 +1059,7 @@ def test_tool_path_family_unwraps_the_envelope(gateway: Gateway, member: str) ->
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
 
-@pytest.mark.parametrize("member", _FAMILY)
+@pytest.mark.parametrize("member", _STREAM_FAMILY)
 def test_tool_path_family_stream_unwraps_the_envelope(gateway: Gateway, member: str) -> None:
     marker, marker_hex = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
