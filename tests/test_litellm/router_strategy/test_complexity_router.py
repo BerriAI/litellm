@@ -16879,3 +16879,31 @@ class TestNonReasoningTier:
             "complex",
             "reasoning",
         )
+
+
+class TestPython315SreCompat:
+    """Verify that the complexity router config loads without the sre_* stdlib modules.
+
+    Python 3.15 removed sre_constants and sre_parse from the public API.
+    The compatibility shim in config.py must fall back to re._constants and
+    re._parser so the module imports and custom_pattern_work still works.
+    """
+
+    def test_config_imports_without_sre_standalone_modules(self) -> None:
+        import importlib
+        import sys
+        from unittest.mock import patch
+
+        config_key = "litellm.router_strategy.complexity_router.config"
+        saved = sys.modules.pop(config_key, None)
+        try:
+            # Block the standalone sre_* names to simulate Python 3.15+.
+            with patch.dict(sys.modules, {"sre_constants": None, "sre_parse": None}):
+                mod = importlib.import_module(config_key)
+                result = mod.custom_pattern_work(r"\bfoo\b")
+            assert isinstance(result, int), f"expected int, got {result!r}"
+        finally:
+            if saved is not None:
+                sys.modules[config_key] = saved
+            else:
+                sys.modules.pop(config_key, None)

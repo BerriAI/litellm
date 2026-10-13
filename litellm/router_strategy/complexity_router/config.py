@@ -24,10 +24,15 @@ from pydantic import (
     model_validator,
 )
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-    import sre_constants
-    import sre_parse
+try:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        import sre_constants
+        import sre_parse
+except ImportError:
+    # Python 3.15+ removed the standalone sre_* modules; use the re sub-modules.
+    import re._constants as sre_constants  # type: ignore[no-redef]
+    import re._parser as sre_parse  # type: ignore[no-redef]
 
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
