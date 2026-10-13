@@ -1002,7 +1002,9 @@ AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_WEB_SEARCH: Final = CostTrackingT
     request={
         "model": "$MODEL",
         "max_tokens": 412,
-        "messages": [{"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_messages_web_search_two_requests"}],
+        "messages": [
+            {"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_messages_web_search_two_requests"}
+        ],
         "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
     },
     response=JsonResponse(
@@ -1037,7 +1039,12 @@ AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_STREAM: Final = CostTr
     request={
         "model": "$MODEL",
         "max_tokens": 412,
-        "messages": [{"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_messages_web_search_two_requests_stream"}],
+        "messages": [
+            {
+                "role": "user",
+                "content": "azure-ai-claude-sonnet-4-5-deployment_rates_messages_web_search_two_requests_stream",
+            }
+        ],
         "stream": True,
         "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
     },
@@ -1090,7 +1097,9 @@ AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_ZERO_RATE: Final = Cos
     request={
         "model": "$MODEL",
         "max_tokens": 412,
-        "messages": [{"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_zero_search_rate_messages_two_requests"}],
+        "messages": [
+            {"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_zero_search_rate_messages_two_requests"}
+        ],
         "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
     },
     response=JsonResponse(
@@ -1124,7 +1133,9 @@ AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_NO_SEARCH: Final = CostTrackingTe
     request={
         "model": "$MODEL",
         "max_tokens": 412,
-        "messages": [{"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_messages_no_server_tool_use"}],
+        "messages": [
+            {"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_messages_no_server_tool_use"}
+        ],
         "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
     },
     response=JsonResponse(
@@ -1156,7 +1167,9 @@ AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_CHAT_WEB_SEARCH: Final = CostTrackingTestC
     deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01),
     request={
         "model": "$MODEL",
-        "messages": [{"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_chat_web_search_three_requests"}],
+        "messages": [
+            {"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_chat_web_search_three_requests"}
+        ],
         "stream": False,
         "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
         "allowed_openai_params": ["web_search_options"],
@@ -1190,7 +1203,12 @@ AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_CHAT_WEB_SEARCH_STREAM: Final = CostTracki
     deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01),
     request={
         "model": "$MODEL",
-        "messages": [{"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_chat_web_search_two_requests_stream"}],
+        "messages": [
+            {
+                "role": "user",
+                "content": "azure-ai-claude-sonnet-4-5-deployment_rates_chat_web_search_two_requests_stream",
+            }
+        ],
         "stream": True,
         "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
         "allowed_openai_params": ["web_search_options"],

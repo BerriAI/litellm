@@ -5,6 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_usage,
     CostTrackingTestCase,
     Deployment,
     EventStreamEvent,
@@ -5981,6 +5982,79 @@ US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON: Final = US_ANTHROPIC_CLAUD
     }
 )
 
+US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = with_usage(
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "us.anthropic.claude-haiku-5-5-tiered_input_above_100k",
+    {
+        "inputTokens": 150000,
+        "outputTokens": 480,
+        "totalTokens": 150480,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+    },
+    ExactExpected(spend=0.36576, input_cost=0.36, output_cost=0.00576, prompt_tokens=150000, completion_tokens=480),
+)
+
+US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_AT_100K_BOUNDARY: Final = with_usage(
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "us.anthropic.claude-haiku-5-5-tiered_at_100k_boundary",
+    {
+        "inputTokens": 100000,
+        "outputTokens": 480,
+        "totalTokens": 100480,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+    },
+    ExactExpected(spend=0.12288, input_cost=0.12, output_cost=0.00288, prompt_tokens=100000, completion_tokens=480),
+)
+
+US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K: Final = with_usage(
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_CACHE_READ,
+    "us.anthropic.claude-haiku-5-5-tiered_cache_read_above_100k",
+    {
+        "inputTokens": 4096,
+        "outputTokens": 480,
+        "totalTokens": 115168,
+        "cacheReadInputTokens": 110592,
+        "cacheWriteInputTokens": 0,
+    },
+    ExactExpected(
+        spend=0.04213248, input_cost=0.03637248, output_cost=0.00576, prompt_tokens=114688, completion_tokens=480
+    ),
+)
+
+US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_5M_ABOVE_100K: Final = with_usage(
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
+    "us.anthropic.claude-haiku-5-5-tiered_cache_write_5m_above_100k",
+    {
+        "inputTokens": 4096,
+        "outputTokens": 480,
+        "totalTokens": 115168,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 110592,
+        "cacheDetails": [{"ttl": "5m", "inputTokens": 110592}],
+    },
+    ExactExpected(
+        spend=0.3473664, input_cost=0.3416064, output_cost=0.00576, prompt_tokens=114688, completion_tokens=480
+    ),
+)
+
+US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_1H_ABOVE_100K: Final = with_usage(
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
+    "us.anthropic.claude-haiku-5-5-tiered_cache_write_1h_above_100k",
+    {
+        "inputTokens": 4096,
+        "outputTokens": 480,
+        "totalTokens": 115168,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 110592,
+        "cacheDetails": [{"ttl": "1h", "inputTokens": 110592}],
+    },
+    ExactExpected(
+        spend=0.546432, input_cost=0.540672, output_cost=0.00576, prompt_tokens=114688, completion_tokens=480
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     US_ANTHROPIC_CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON,
     US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
@@ -5989,6 +6063,11 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
     US_ANTHROPIC_CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON,
     US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K,
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_AT_100K_BOUNDARY,
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K,
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_5M_ABOVE_100K,
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_1H_ABOVE_100K,
     ANTHROPIC_CLAUDE_SONNET_5_V1_0_INPUT_TEXT,
     ANTHROPIC_CLAUDE_SONNET_5_V1_0_CACHE_READ,
     ANTHROPIC_CLAUDE_SONNET_5_V1_0_CACHE_WRITE_5M,
