@@ -1270,9 +1270,9 @@ def get_provider_specific_geo_multiplier(model_info: ModelInfo, usage: Usage) ->
 
 
 def get_provider_specific_speed_multiplier(model_info: ModelInfo, usage: Usage) -> float:
-    if getattr(usage, "speed", None) != "fast":
+    provider_specific_entry: Final = model_info.get("provider_specific_entry")
+    if getattr(usage, "speed", None) != "fast" or not provider_specific_entry:
         return 1.0
-    provider_specific_entry: Final[dict[str, float]] = model_info.get("provider_specific_entry") or {}
     return float(provider_specific_entry.get("fast", 1.0))
 
 
