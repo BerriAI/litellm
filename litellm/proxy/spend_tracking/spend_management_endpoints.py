@@ -3540,11 +3540,13 @@ async def view_spend_logs(
     from litellm.proxy.proxy_server import prisma_client
 
     validate_no_null_bytes(
-        api_key=api_key,
-        user_id=user_id,
-        request_id=request_id,
-        start_date=start_date,
-        end_date=end_date,
+        {
+            "api_key": api_key,
+            "user_id": user_id,
+            "request_id": request_id,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
     )
 
     if (

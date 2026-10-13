@@ -25,7 +25,7 @@ def validate_finite_spend(spend: float | None) -> None:
         )
 
 
-def validate_no_null_bytes(**params: str | None) -> None:
+def validate_no_null_bytes(params: Mapping[str, str | None]) -> None:
     """Reject null bytes in string params before they reach the DB.
 
     Postgres rejects strings containing ``\\x00`` outright, and the raw
