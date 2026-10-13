@@ -346,9 +346,11 @@ describe("blank context", () => {
     expect(validateSystemOnePayload(raw, "/v1/systemone").issues.map((issue) => issue.path)).toEqual(["state"]);
     const filled = validateSystemOnePayload(raw.replace('"state":""', '"state":"A ticket"'), "/v1/systemone");
     expect(filled.isValid).toBe(false);
-    expect(filled.issues.map((issue) => issue.path)).toEqual(
-      expect.arrayContaining([expect.stringMatching(/^questions/)]),
-    );
+    expect(filled.issues).toContainEqual({
+      path: "questions",
+      message: "Give every question a name.",
+      severity: "error",
+    });
   });
 
   it("accepts /v1/systemone once the state carries text", () => {

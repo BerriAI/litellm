@@ -26,6 +26,11 @@ export type SystemOnePayloadValidation = PayloadValidation<PlaygroundRequest>;
 export const errorCount = (validation: PayloadValidation<unknown>): number =>
   validation.issues.filter((issue) => issue.severity === "error").length;
 
+const toIssue = (path: PropertyKey[], message: string): SystemOnePayloadIssue =>
+  path[0] === "questions" && path[1] === ""
+    ? { path: "questions", message: "Give every question a name.", severity: "error" }
+    : { path: path.length > 0 ? path.join(".") : "root", message, severity: "error" };
+
 const invalid = (path: string, message: string) => ({
   isValid: false,
   issues: [{ path, message, severity: "error" as const }],
@@ -62,11 +67,7 @@ function validatePayload<T>(raw: string, schema: z.ZodType<T>): PayloadValidatio
   if (!result.success) {
     return {
       isValid: false,
-      issues: result.error.issues.map((issue) => ({
-        path: issue.path.length > 0 ? issue.path.join(".") : "root",
-        message: issue.message,
-        severity: "error",
-      })),
+      issues: result.error.issues.map((issue) => toIssue(issue.path, issue.message)),
     };
   }
 
