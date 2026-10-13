@@ -1,5 +1,4 @@
 import json
-import signal
 import threading
 import uuid
 from collections.abc import Callable
@@ -8,7 +7,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.process import owned_proxy_process
 from integration._support.redis_process import owned_redis
@@ -239,14 +237,13 @@ def test_worker_kill_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path) 
     with _rig(gateway, tmp_path, marker, workers=2) as rig:
         bodies: Final = _burst_bodies(rig, marker, None)
         _warm(rig, bodies)
-        children: Final = psutil.Process(rig.process.pid).children(recursive=True)
-        assert children, "no uvicorn worker children found"
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        workers: Final = eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2)
+        with rig.owned.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=8) as pool:
             futures: Final = tuple(
                 pool.submit(lambda b: rig.candidate.request("POST", b[0], b[1]), body) for body in bodies
             )
             eventually(lambda: rig.policy.received.qsize() >= 3, bool, seconds=30)
-            children[0].send_signal(signal.SIGKILL)
+            kill()
             statuses: list[int] = []  # mutable-ok: collect per-request outcomes from concurrent futures
             for future in futures:
                 try:
