@@ -371,8 +371,9 @@ def _video_object_from_task(
 
 
 def _video_url_from_task(task: _TaskResponse, raw_response: httpx.Response) -> str:
-    """A download that cannot be served yet raises inside the 4xx range: a 5xx would have the proxy
-    retry a job that is simply not finished."""
+    """A download that cannot be served yet answers the status the OpenAI videos API documents for
+    content that is not ready. A 5xx, or a 409, which litellm's retry predicate also treats as
+    retryable, would have the proxy retry a job that is simply not finished."""
     output: Final = _task_output(task, raw_response)
     if output.video_url:
         return output.video_url
@@ -380,7 +381,7 @@ def _video_url_from_task(task: _TaskResponse, raw_response: httpx.Response) -> s
     if output.task_status in _PENDING_STATUSES:
         raise _video_error(
             raw_response,
-            409,
+            404,
             f"Video is still processing (status: {output.task_status}). Please wait and try again.",
         )
     if output.code or output.message:

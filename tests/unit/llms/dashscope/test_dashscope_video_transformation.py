@@ -13,6 +13,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+import litellm
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.dashscope.qwen_ai_platform import QwenAIPlatformVideoConfig
@@ -634,14 +635,15 @@ class TestDashScopeVideoContent:
 
     @pytest.mark.parametrize("task_status", ["PENDING", "RUNNING"])
     def test_pending_task_raises_still_processing(self, task_status):
-        """A 4xx, so the proxy reports the caller's timing mistake instead of
-        retrying a job that is simply not finished."""
+        """404, which is what the OpenAI videos API documents for content that is not
+        ready, and which litellm's retry predicate leaves alone. A 409 also reads as a
+        client error but is retried, so the proxy would poll twice more."""
         response = _mock_response({"output": {"task_id": "t1", "task_status": task_status}})
 
         with pytest.raises(DashScopeVideoError, match="still processing") as raised:
             _video_url_from_task(_parse_task_response(response), response)
 
-        assert raised.value.status_code == 409
+        assert raised.value.status_code == 404
 
     def test_failed_task_surfaces_the_upstream_message(self):
         response = _mock_response(
@@ -695,6 +697,25 @@ class TestDashScopeVideoContentDownload:
 
         assert content == VIDEO_BYTES
         assert sent == [f"{API_BASE}/api/v1/tasks/{TASK_ID}", OSS_URL]
+
+    @pytest.mark.asyncio
+    async def test_downloading_a_running_task_is_a_client_error_not_a_server_error(self):
+        """Regression: the caller-visible status used to be a synthesized 500, so the
+        proxy retried the same poll twice and counted the caller's own early download
+        against the model's error rate."""
+        encoded = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3.0-video")
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "RUNNING"}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            with pytest.raises(litellm.NotFoundError) as raised:
+                await avideo_content(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
+
+        assert raised.value.status_code == 404
 
     def test_sync_download_reuses_the_client_that_served_the_task_lookup(self):
         encoded = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3.0-video")
