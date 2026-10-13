@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
 from litellm.router import Router
+from litellm.types.utils import CallTypesLiteral
 from litellm.utils import get_formatted_prompt
 
 HEURISTICS_EXECUTOR: Final = ThreadPoolExecutor(
@@ -146,12 +147,27 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
                     return True  # Found a highly similar substring
         return False  # No substring crossed the threshold
 
+    def _formatted_prompt(self, data: dict[str, object], call_type: CallTypesLiteral) -> str | None:
+        if call_type in ("completion", "acompletion"):
+            return get_formatted_prompt(data=data, call_type="completion")
+        if call_type in ("text_completion", "atext_completion"):
+            return get_formatted_prompt(data=data, call_type="text_completion")
+        if call_type in ("embedding", "aembedding"):
+            return get_formatted_prompt(data=data, call_type="embedding")
+        if call_type in ("moderation", "amoderation"):
+            return get_formatted_prompt(data=data, call_type="moderation")
+        if call_type in ("image_generation", "aimage_generation"):
+            return get_formatted_prompt(data=data, call_type="image_generation")
+        if call_type in ("transcription", "atranscription"):
+            return get_formatted_prompt(data=data, call_type="audio_transcription")
+        return None
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict[str, object],
-        call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
+        call_type: CallTypesLiteral,
     ) -> dict[str, object] | str | None:
         try:
             """
@@ -159,22 +175,10 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             - check if user id part of blocked list
             """
             self.print_verbose("Inside Prompt Injection Detection Pre-Call Hook")
-            try:
-                assert call_type in [
-                    "acompletion",
-                    "completion",
-                    "text_completion",
-                    "embeddings",
-                    "image_generation",
-                    "moderation",
-                    "audio_transcription",
-                ]
-            except Exception:
-                self.print_verbose(
-                    f"Call Type - {call_type}, not in accepted list - ['completion','embeddings','image_generation','moderation','audio_transcription']"
-                )
+            formatted_prompt: Final = self._formatted_prompt(data=data, call_type=call_type)
+            if formatted_prompt is None:
+                self.print_verbose(f"Call Type - {call_type}, carries no prompt text to scan")
                 return data
-            formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
 
             is_prompt_attack = False
 
@@ -218,23 +222,16 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "acompletion",
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-        ],
+        call_type: CallTypesLiteral,
     ) -> bool | None:
         self.print_verbose(f"IN ASYNC MODERATION HOOK - self.prompt_injection_params = {self.prompt_injection_params}")
 
         if self.prompt_injection_params is None:
             return None
 
-        formatted_prompt: Final = get_formatted_prompt(data=data, call_type=call_type)
+        formatted_prompt: Final = self._formatted_prompt(data=data, call_type=call_type)
         if not formatted_prompt:
             return None
         is_prompt_attack = False
