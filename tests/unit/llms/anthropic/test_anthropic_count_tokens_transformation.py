@@ -441,3 +441,151 @@ async def test_handler_sends_the_leading_system_run_as_system_not_as_a_message(h
         "system": [{"type": "text", "text": "Be terse"}],
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
+
+
+@pytest.mark.parametrize("config_type", (AnthropicCountTokensConfig, AzureAIAnthropicCountTokensConfig))
+def test_count_translates_chat_tool_turns_and_function_tools(
+    config_type: type[AnthropicCountTokensConfig],
+) -> None:
+    """``acount_tokens`` takes chat-completions messages and tools. count_tokens answers 400 on
+    ``role: "tool"`` and ``type: "function"`` tools, so chat tool turns and function tools get the chat
+    path's translation, and an Anthropic server tool next to them is sent as is."""
+    cache_control: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
+    web_search: Final[dict[str, JsonValue]] = {"type": "web_search_20260209", "name": "web_search", "max_uses": 2}
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": [{"type": "text", "text": "Weather in SF?", "cache_control": cache_control}]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call-1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "SF"}'}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": '{"temp_f": 72}'},
+    ]
+    tools: Final[list[dict[str, JsonValue]]] = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Current weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+        },
+        web_search,
+    ]
+    original: Final = deepcopy((messages, tools))
+    result: Final = config_type().transform_request_to_count_tokens(
+        model="claude-opus-5-5", messages=messages, tools=tools
+    )
+
+    assert result == {
+        "model": "claude-opus-5-5",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Weather in SF?", "cache_control": cache_control}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "call-1", "name": "get_weather", "input": {"city": "SF"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": '{"temp_f": 72}'}],
+            },
+        ],
+        "tools": [
+            {
+                "type": "custom",
+                "name": "get_weather",
+                "description": "Current weather",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+            web_search,
+        ],
+    }
+    assert (messages, tools) == original
+
+
+def test_count_maps_only_function_tools_and_sends_the_rest_as_sent() -> None:
+    """Only a chat ``function`` tool goes through the chat tool mapping, so a native computer tool next to
+    it, which that mapping only reads from a ``function`` wrapper, still reaches count_tokens as sent."""
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": "Open the settings page"}]
+    native_tools: Final[list[dict[str, JsonValue]]] = [
+        {"name": "read_file", "input_schema": {"type": "object"}},
+        {"type": "computer_20250124", "name": "computer", "display_width_px": 1280, "display_height_px": 800},
+    ]
+    function_tool: Final[dict[str, JsonValue]] = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+    result: Final = AnthropicCountTokensConfig().transform_request_to_count_tokens(
+        model="claude-opus-5-5", messages=messages, tools=[native_tools[0], function_tool, native_tools[1]]
+    )
+
+    assert result == {
+        "model": "claude-opus-5-5",
+        "messages": messages,
+        "tools": [
+            native_tools[0],
+            {"type": "custom", "name": "get_weather", "input_schema": {"type": "object", "properties": {}}},
+            native_tools[1],
+        ],
+    }
+
+
+def test_count_translates_a_dumped_sdk_message_without_tool_calls() -> None:
+    """An OpenAI SDK message dumped into the history carries ``tool_calls: None`` and other chat-only keys
+    on a plain assistant turn, so it is translated too and only role and content reach count_tokens."""
+    result: Final = AnthropicCountTokensConfig().transform_request_to_count_tokens(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "Weather in SF?"},
+            {"role": "assistant", "content": "72F", "tool_calls": None, "function_call": None, "refusal": None},
+        ],
+    )
+
+    assert result == {
+        "model": "claude-opus-5-5",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Weather in SF?"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "72F"}]},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+async def test_handler_counts_a_tool_call_turn_without_content() -> None:
+    """OpenAI makes ``content`` optional on an assistant ``tool_calls`` turn and SDK dumps that drop None
+    leave it out, so the request still reaches count_tokens instead of failing validation and falling back."""
+    with respx.mock:
+        route: Final = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 42})
+        )
+        result: Final = await AnthropicCountTokensHandler().handle_count_tokens_request(
+            model="claude-opus-5-5",
+            messages=[
+                {"role": "user", "content": "Weather in SF?"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": "call-1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call-1", "content": "72F"},
+            ],
+            auth_header={"x-api-key": "sk-ant-api03-test-key"},
+            api_base="https://gateway.example",
+        )
+
+    assert result == {"input_tokens": 42}
+    assert TypeAdapter(dict[str, JsonValue]).validate_json(route.calls.last.request.content) == {
+        "model": "claude-opus-5-5",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Weather in SF?"}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "call-1", "name": "get_weather", "input": {}}],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "72F"}]},
+        ],
+    }
