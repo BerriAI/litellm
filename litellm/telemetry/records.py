@@ -24,6 +24,8 @@ class StatusClass(str, Enum):
     REDIRECT = "3xx"
     CLIENT_ERROR = "4xx"
     SERVER_ERROR = "5xx"
+    TIMEOUT = "timeout"
+    CONNECTION_ERROR = "connection_error"
 
     @classmethod
     def from_status_code(cls, status_code: int | None) -> "StatusClass":

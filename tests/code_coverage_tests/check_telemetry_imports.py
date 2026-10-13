@@ -11,12 +11,20 @@ PACKAGE: Final = "litellm.telemetry"
 PACKAGE_DIR: Final = Path(__file__).resolve().parents[2] / "litellm" / "telemetry"
 
 
-def _imported_modules(tree: ast.AST) -> Iterator[tuple[int, str]]:
+def _resolved(package: tuple[str, ...], node: ast.ImportFrom) -> Iterator[str]:
+    base: Final = package[: len(package) - node.level + 1] if node.level else ()
+    if node.module is not None:
+        yield ".".join((*base, node.module))
+        return
+    yield from (".".join((*base, alias.name)) for alias in node.names)
+
+
+def _imported_modules(tree: ast.AST, package: tuple[str, ...]) -> Iterator[tuple[int, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             yield from ((node.lineno, alias.name) for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module is not None:
-            yield (node.lineno, node.module)
+        elif isinstance(node, ast.ImportFrom):
+            yield from ((node.lineno, module) for module in _resolved(package, node))
 
 
 def _is_forbidden(module: str) -> bool:
@@ -25,13 +33,20 @@ def _is_forbidden(module: str) -> bool:
     return is_litellm and not is_own_package
 
 
-def _violations_in(path: Path) -> Iterator[str]:
+def _violations_in(path: Path, package: tuple[str, ...]) -> Iterator[str]:
     tree: Final = ast.parse(path.read_text(), filename=str(path))
-    return (f"{path}:{lineno} imports {module}" for lineno, module in _imported_modules(tree) if _is_forbidden(module))
+    modules: Final = _imported_modules(tree, package)
+    return (f"{path}:{lineno} imports {module}" for lineno, module in modules if _is_forbidden(module))
 
 
 def find_violations(package_dir: Path) -> tuple[str, ...]:
-    return tuple(chain.from_iterable(_violations_in(path) for path in sorted(package_dir.rglob("*.py"))))
+    root: Final = tuple(PACKAGE.split("."))
+    paths: Final = sorted(package_dir.rglob("*.py"))
+    return tuple(
+        chain.from_iterable(
+            _violations_in(path, (*root, *path.relative_to(package_dir).parent.parts)) for path in paths
+        )
+    )
 
 
 def main() -> int:
