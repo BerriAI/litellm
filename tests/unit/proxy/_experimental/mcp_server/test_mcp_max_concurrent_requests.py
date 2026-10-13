@@ -166,7 +166,11 @@ async def test_persistent_tool_call_with_limit_one_completes_without_nested_admi
     oauth2_headers: Final = (
         {"Authorization": "Bearer subject-token"} if auth_type == MCPAuth.oauth2_token_exchange else None
     )
-    context_token: Final = active_mcp_request_ctx_var.set(cast(ServerRequestContext, object()))
+    context_token: Final = active_mcp_request_ctx_var.set(
+        ServerRequestContext(
+            session=AsyncMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=None
+        )
+    )
     manager.track_gateway_session(gateway_session_id)
     try:
         with patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=client)):
@@ -209,7 +213,11 @@ async def test_persistent_session_admission_uses_updated_server_limit() -> None:
         submitted=second_submitted,
         release=release_second,
     )
-    context_token: Final = active_mcp_request_ctx_var.set(cast(ServerRequestContext, object()))
+    context_token: Final = active_mcp_request_ctx_var.set(
+        ServerRequestContext(
+            session=AsyncMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=None
+        )
+    )
     manager.track_gateway_session(gateway_session_id)
 
     async def dispatch() -> CallToolResult:
@@ -275,7 +283,11 @@ async def test_queued_persistent_call_survives_header_change_while_waiting_for_a
     second_client: Final = _AdmissionProbeClient(
         server.server_id, "second-fingerprint", tracker, submitted=second_submitted
     )
-    context_token: Final = active_mcp_request_ctx_var.set(cast(ServerRequestContext, object()))
+    context_token: Final = active_mcp_request_ctx_var.set(
+        ServerRequestContext(
+            session=AsyncMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=None
+        )
+    )
     manager.track_gateway_session(gateway_session_id)
 
     async def hold_slot() -> None:

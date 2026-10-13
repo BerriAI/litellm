@@ -1007,6 +1007,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.sailresearch.com/v1",
     "https://api.cognition.ai/v1",
+    "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
@@ -1083,6 +1084,7 @@ openai_compatible_providers: Final[list] = [
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
+    "coralbricks",
     "cortecs",
     "scx-ai",
     "prism",
@@ -1962,6 +1964,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "openai_system_messages_first",
     "max_ui_session_budget",
     "budget_rollover",
+    "personal_key_model_access_from_teams",
     "mcp_tool_search",
     "turn_off_message_logging",
     "datadog_params",

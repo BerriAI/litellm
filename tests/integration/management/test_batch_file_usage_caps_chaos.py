@@ -1,6 +1,5 @@
 import asyncio
 import re
-import signal
 import time
 from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import contextmanager
@@ -220,8 +219,7 @@ async def test_downloads_keep_answering_while_redis_hangs(chaos: Chaos) -> None:
         key: Final = _key(scenario, **{DOWNLOADS: DOWNLOAD_CAP})
         file_id: Final = f"file-{marker()}"
         minute_ends: Final = window_end(MINUTE_SECONDS, MINUTE_ROOM_SECONDS)
-        chaos.redis.signal(signal.SIGSTOP)
-        try:
+        with chaos.redis.paused():
             burst: Final = asyncio.create_task(
                 _download_burst(str(chaos.candidate.client.base_url), key, file_id, BURST)
             )
@@ -229,8 +227,6 @@ async def test_downloads_keep_answering_while_redis_hangs(chaos: Chaos) -> None:
                 timed, partial(chaos.candidate.request, "GET", "/health/liveliness")
             )
             during: Final = await burst
-        finally:
-            chaos.redis.signal(signal.SIGCONT)
         assert time.time() < minute_ends
         assert liveliness.response.status_code == 200, liveliness.response.text
         assert liveliness.after - liveliness.before < 5, liveliness
@@ -305,21 +301,24 @@ async def test_a_killed_worker_keeps_its_upload_slots_used_and_the_sibling_servi
             held_by: Final = {pid: _open_upstream_connections(pid, files.url) for pid in workers}
             assert sum(held_by.values()) == HELD_UPLOADS, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert _statuses(served) == [200] * held_by[survivor_pid], (held_by, [response.text for response in served])
-            assert_upload_limited(
-                timed(partial(upload, candidate, key, batch_file(marker(), 1))),
-                day_ends,
-                HELD_UPLOADS,
-                THIS_KEY,
-                IN_KEY,
-            )
-            assert len(uploads_seen(files.drain(), mark)) == HELD_UPLOADS
-            assert candidate.request("GET", "/health/liveliness").status_code == 200
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert _statuses(served) == [200] * held_by[survivor_pid], (
+                    held_by,
+                    [response.text for response in served],
+                )
+                assert_upload_limited(
+                    timed(partial(upload, candidate, key, batch_file(marker(), 1))),
+                    day_ends,
+                    HELD_UPLOADS,
+                    THIS_KEY,
+                    IN_KEY,
+                )
+                assert len(uploads_seen(files.drain(), mark)) == HELD_UPLOADS
+                assert candidate.request("GET", "/health/liveliness").status_code == 200
 
 
 def test_the_daily_count_survives_a_proxy_restart(chaos: Chaos) -> None:

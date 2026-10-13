@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import secrets
-import signal
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -523,7 +521,6 @@ def test_login_survives_a_worker_kill(idp: Idp, tmp_path: Path) -> None:
             link: Final = browser.get(_cli_link(proxy, session.login_id))
             at_idp: Final = browser.get(_assert_idp_redirect(proxy, idp, link, session.login_id))
             assert at_idp.status_code == 302, f"{at_idp.status_code} {at_idp.text}"
-            os.kill(victim, signal.SIGKILL)
 
             def callback_attempt() -> httpx.Response | None:
                 try:
@@ -531,9 +528,11 @@ def test_login_survives_a_worker_kill(idp: Idp, tmp_path: Path) -> None:
                 except httpx.TransportError:
                     return None
 
-            callback: Final = eventually(
-                callback_attempt, lambda response: response is not None and response.status_code == 200, seconds=60
-            )
+            with owned.replacing_worker(victim) as kill:
+                kill()
+                callback: Final = eventually(
+                    callback_attempt, lambda response: response is not None and response.status_code == 200, seconds=60
+                )
             assert callback is not None
             done: Final = _complete_in_browser(browser, callback, session.user_code)
             assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"
