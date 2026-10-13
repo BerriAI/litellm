@@ -7,7 +7,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+litellm-auth.workspace = true
 futures-util.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true
 litellm-secrets.workspace = true
+tokio.workspace = true

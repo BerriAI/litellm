@@ -26,6 +26,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 tracing.workspace = true
 
 [dev-dependencies]
+litellm-framer = { workspace = true, features = ["sse"] }
 litellm-cache-memory.workspace = true
 litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }

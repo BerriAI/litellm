@@ -4024,6 +4024,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-framer",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",
@@ -4107,9 +4108,11 @@ name = "litellm-inference-testing"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "litellm-auth",
  "litellm-http",
  "litellm-inference",
  "litellm-secrets",
+ "tokio",
 ]
 
 [[package]]
