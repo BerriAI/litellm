@@ -1534,6 +1534,36 @@ def test_create_model_info_response_ignores_malformed_price():
     }, f"malformed and negative values must be dropped, got {response['pricing']}"
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param("gpt-4o", id="string"),
+        pytest.param(["input_cost_per_token"], id="list"),
+        pytest.param(7, id="number"),
+        pytest.param(None, id="null"),
+    ],
+)
+def test_create_model_info_response_reports_a_non_mapping_cost_map_entry_as_unpriced(entry):
+    """The cost map is loaded from a remote JSON document, so an entry is not guaranteed to
+    be an object. One that is not has no prices to read, and must report null rather than
+    raising and taking the whole listing down with it."""
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        llm_router=None,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o", input_cost_per_token=1.5e-07, output_cost_per_token=6e-07
+        ),
+        cost_map={"gpt-4o": entry},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": None,
+        "output_cost_per_token": None,
+    }, f"a {type(entry).__name__} entry declares no price, got {response['pricing']}"
+
+
 def test_create_model_info_response_accepts_string_price():
     """A price configured as a string still reaches the listing as a number."""
     response = create_model_info_response(
