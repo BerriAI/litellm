@@ -73,7 +73,7 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
         wall_seconds=outcome.wall_seconds,
         extra={} if spend_share is None else {"spend_logged_share": spend_share},
     )
-    rows, problems = evaluate(case, observation)
+    rows, exceeded_limits = evaluate(case, observation)
     print(render(case, observation, rows))
     print(
         f"  phases: setup {run_started - setup_started:.0f}s, locust {run_finished - run_started:.0f}s, "
@@ -82,4 +82,4 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
     assert len(outcome.records) == len(plan), (
         f"{len(plan)} planned, {len(outcome.records)} recorded; locust said:\n{outcome.locust_output}"
     )
-    assert not problems, "\n".join(problems)
+    assert not exceeded_limits, "limits exceeded (observed > max):\n" + "\n".join(exceeded_limits)

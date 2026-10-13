@@ -18,7 +18,7 @@ from typing import Final, cast
 import gevent
 from locust import FastHttpUser, constant_throughput, task
 from locust.contrib.fasthttp import FastResponse, ResponseContextManager
-from setup.wire import Endpoint, WireRecord, WireRequest
+from setup.wire import Endpoint, WireRecord, WireRequest, request_body
 from pydantic import TypeAdapter
 
 _PLAN_ADAPTER: Final = TypeAdapter(list[WireRequest])
@@ -201,7 +201,7 @@ class PlanUser(FastHttpUser):
             with self.client.request(  # pyright: ignore[reportUnknownMemberType]
                 "POST",
                 item.path,
-                json=item.body,
+                json=request_body(item),
                 headers=headers,
                 stream=item.stream,
                 catch_response=True,

@@ -77,7 +77,9 @@ class Guardrail:
 class RequestShape:
     """What one request looks like on the wire, in tokens: an optional system prompt, `history_turns`
     earlier user and assistant turns of about `turn_tokens` each, the final user message of
-    `user_tokens`, tool definitions when `tools` is set, and the output cap the mock fills."""
+    `user_tokens`, tool definitions when `tools` is set, and the output cap the mock fills. The stock
+    shapes follow what agent traffic looks like today: a short chat is a few tens of thousands of
+    tokens, a tool-calling turn around 60k, a long context over 300k."""
 
     name: str
     system_tokens: int = 0
@@ -92,12 +94,20 @@ class RequestShape:
         return self.system_tokens + self.history_turns * self.turn_tokens + self.user_tokens
 
 
-SHORT_CHAT: Final = RequestShape("short_chat", system_tokens=40, user_tokens=20, output_tokens=48)
-LONG_CONTEXT: Final = RequestShape(
-    "long_context", system_tokens=400, history_turns=24, turn_tokens=110, user_tokens=60, output_tokens=200
+SHORT_CHAT: Final = RequestShape(
+    "short_chat", system_tokens=2_000, history_turns=30, turn_tokens=1_200, user_tokens=500, output_tokens=400
 )
 TOOL_CALL: Final = RequestShape(
-    "tool_call", system_tokens=120, history_turns=4, turn_tokens=80, user_tokens=30, tools=True, output_tokens=96
+    "tool_call",
+    system_tokens=3_000,
+    history_turns=40,
+    turn_tokens=1_500,
+    user_tokens=600,
+    tools=True,
+    output_tokens=300,
+)
+LONG_CONTEXT: Final = RequestShape(
+    "long_context", system_tokens=4_000, history_turns=150, turn_tokens=2_200, user_tokens=1_000, output_tokens=600
 )
 
 

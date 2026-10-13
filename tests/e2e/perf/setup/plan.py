@@ -1,12 +1,12 @@
 """The deterministic request plan of a `PerformanceTestCase`: every request the run sends, in order,
 drawn once from the case's seed so two runs of the same case send the same traffic. Each request
-carries a marker (`perfreq-000123-n`) in its final user message that the mock providers and the
-mock guardrail read back, so the test can join what the client saw against what each mock received,
-and a `RequestShape` that sizes its system prompt, history, tools and output cap."""
+carries a marker (`perfreq-000123-n`) that the runner puts in the final user message and the mock
+providers and the mock guardrail read back, so the test can join what the client saw against what
+each mock received, and a `RequestShape` the runner expands into the system prompt, history, tools
+and output cap."""
 
 from __future__ import annotations
 
-import hashlib
 import random
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -18,41 +18,6 @@ from setup.performance_test_case import Endpoint, PerformanceTestCase, RequestSh
 Flag = Literal["n", "i", "b"]
 CallerKind = Literal["jwt", "key"]
 T = TypeVar("T")
-
-_WORDS: Final = (
-    "customer",
-    "order",
-    "invoice",
-    "shipment",
-    "returns",
-    "policy",
-    "account",
-    "balance",
-    "ticket",
-    "status",
-    "update",
-    "region",
-    "warehouse",
-    "support",
-    "agent",
-    "summary",
-    "quarter",
-    "report",
-    "renewal",
-    "contract",
-    "delivery",
-    "address",
-    "payment",
-    "refund",
-)
-_WORDS_PER_TOKEN: Final = 0.75
-
-
-def filler_text(seed: str, tokens: int) -> str:
-    """About `tokens` tokens of plain prose, the same text for the same seed on every run."""
-    count: Final = max(1, round(tokens * _WORDS_PER_TOKEN))
-    start: Final = int.from_bytes(hashlib.sha1(seed.encode()).digest()[:4], "big")
-    return " ".join(_WORDS[(start + index * 5) % len(_WORDS)] for index in range(count))
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,9 +40,6 @@ class PlannedRequest:
     stream: bool
     flag: Flag
     shape: RequestShape
-    system: str
-    history: tuple[str, ...]
-    prompt: str
 
     @property
     def max_tokens(self) -> int:
@@ -143,15 +105,6 @@ def _pick_flag(rng: random.Random, case: PerformanceTestCase, *, stream: bool) -
     return "n"
 
 
-def _shaped(marker: str, shape: RequestShape) -> tuple[str, tuple[str, ...], str]:
-    system: Final = filler_text(f"{marker}:system", shape.system_tokens) if shape.system_tokens else ""
-    history: Final = tuple(
-        filler_text(f"{marker}:turn{index}", shape.turn_tokens) for index in range(2 * shape.history_turns)
-    )
-    prompt: Final = f"{marker} {filler_text(f'{marker}:user', shape.user_tokens)}"
-    return system, history, prompt
-
-
 def build_plan(case: PerformanceTestCase) -> tuple[PlannedRequest, ...]:
     case.validate()
     rng: Final = random.Random(case.traffic.seed)
@@ -163,21 +116,16 @@ def build_plan(case: PerformanceTestCase) -> tuple[PlannedRequest, ...]:
         stream = rng.random() < case.traffic.stream_share
         flag = _pick_flag(rng, case, stream=stream)
         shape = _pick(rng, case.traffic.shapes)
-        marker = f"perfreq-{seq:06d}-{flag}"
-        system, history, prompt = _shaped(marker, shape)
         planned.append(
             PlannedRequest(
                 seq=seq,
-                marker=marker,
+                marker=f"perfreq-{seq:06d}-{flag}",
                 caller=rng.choice(callers[group]),
                 endpoint=endpoint,
                 model_group=group,
                 stream=stream,
                 flag=flag,
                 shape=shape,
-                system=system,
-                history=history,
-                prompt=prompt,
             )
         )
     return tuple(planned)

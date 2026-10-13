@@ -17,29 +17,13 @@ from pydantic import TypeAdapter
 from setup.performance_test_case import PerformanceTestCase
 from setup.plan import PlannedRequest
 from setup.provision import CaseSetup
-from setup.wire import WireRecord, WireRequest
+from setup.wire import WireRecord, WireRequest, WireShape
 
 _LOCUSTFILE: Final = Path(__file__).with_name("locustfile.py")
 _PERF_DIR: Final = Path(__file__).resolve().parents[1]
 _PLAN_ADAPTER: Final = TypeAdapter(list[WireRequest])
 _RECORD_ADAPTER: Final = TypeAdapter(WireRecord)
 _PATHS: Final = {"chat_completions": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"}
-_TOOLS: Final[tuple[tuple[str, str, dict[str, object]], ...]] = (
-    (
-        "get_weather",
-        "Current weather for a city",
-        {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
-    ),
-    (
-        "search_orders",
-        "Find a customer's orders, optionally by status",
-        {
-            "type": "object",
-            "properties": {"customer_id": {"type": "string"}, "status": {"type": "string"}},
-            "required": ["customer_id"],
-        },
-    ),
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,64 +41,6 @@ class RunOutcome:
         return last - first
 
 
-def _openai_tools() -> list[dict[str, object]]:
-    return [
-        {"type": "function", "function": {"name": name, "description": description, "parameters": parameters}}
-        for name, description, parameters in _TOOLS
-    ]
-
-
-def _responses_tools() -> list[dict[str, object]]:
-    return [
-        {"type": "function", "name": name, "description": description, "parameters": parameters}
-        for name, description, parameters in _TOOLS
-    ]
-
-
-def _anthropic_tools() -> list[dict[str, object]]:
-    return [
-        {"name": name, "description": description, "input_schema": parameters}
-        for name, description, parameters in _TOOLS
-    ]
-
-
-def _turns(item: PlannedRequest) -> list[dict[str, object]]:
-    """The history as alternating user and assistant turns, then the final user message."""
-    earlier: Final[list[dict[str, object]]] = [
-        {"role": "user" if index % 2 == 0 else "assistant", "content": text} for index, text in enumerate(item.history)
-    ]
-    return [*earlier, {"role": "user", "content": item.prompt}]
-
-
-def request_body(item: PlannedRequest) -> dict[str, object]:
-    """The request in the endpoint's own wire format, sized by the planned `RequestShape`."""
-    if item.endpoint == "responses":
-        return {
-            "model": item.model_group,
-            "input": _turns(item),
-            "max_output_tokens": item.max_tokens,
-            "stream": item.stream,
-            **({"instructions": item.system} if item.system else {}),
-            **({"tools": _responses_tools()} if item.shape.tools else {}),
-        }
-    if item.endpoint == "messages":
-        return {
-            "model": item.model_group,
-            "messages": _turns(item),
-            "max_tokens": item.max_tokens,
-            "stream": item.stream,
-            **({"system": item.system} if item.system else {}),
-            **({"tools": _anthropic_tools()} if item.shape.tools else {}),
-        }
-    return {
-        "model": item.model_group,
-        "messages": [*([{"role": "system", "content": item.system}] if item.system else []), *_turns(item)],
-        "max_tokens": item.max_tokens,
-        "stream": item.stream,
-        **({"tools": _openai_tools()} if item.shape.tools else {}),
-    }
-
-
 def wire_request(item: PlannedRequest, setup: CaseSetup, *, post_guardrail: bool) -> WireRequest:
     return WireRequest(
         seq=item.seq,
@@ -122,7 +48,15 @@ def wire_request(item: PlannedRequest, setup: CaseSetup, *, post_guardrail: bool
         caller=item.caller.label,
         endpoint=item.endpoint,
         path=_PATHS[item.endpoint],
-        body=request_body(item),
+        model=item.model_group,
+        shape=WireShape(
+            system_tokens=item.shape.system_tokens,
+            history_turns=item.shape.history_turns,
+            turn_tokens=item.shape.turn_tokens,
+            user_tokens=item.shape.user_tokens,
+            tools=item.shape.tools,
+            output_tokens=item.shape.output_tokens,
+        ),
         authorization=setup.authorization(item.caller),
         token_source=setup.token_source(item.caller),
         stream=item.stream,
