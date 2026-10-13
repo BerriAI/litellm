@@ -105,6 +105,29 @@ def test_cli_jwt_expiration_hours_from_environment(
         importlib.reload(litellm.constants)
 
 
+
+@pytest.mark.parametrize(
+    "env_value, expected",
+    [("-5", 0), ("0", 0), ("7", 7)],
+    ids=("negative-clamped", "zero", "positive"),
+)
+def test_spend_log_cleanup_startup_timing_is_never_negative(
+    monkeypatch: pytest.MonkeyPatch,
+    env_value: str,
+    expected: int,
+) -> None:
+    try:
+        monkeypatch.setenv("SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS", env_value)
+        monkeypatch.setenv("SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS", env_value)
+
+        importlib.reload(litellm.constants)
+        assert litellm.constants.SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS == expected
+        assert litellm.constants.SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS == expected
+    finally:
+        monkeypatch.delenv("SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS", raising=False)
+        monkeypatch.delenv("SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS", raising=False)
+        importlib.reload(litellm.constants)
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
