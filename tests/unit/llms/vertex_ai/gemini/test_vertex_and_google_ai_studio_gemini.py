@@ -1486,7 +1486,7 @@ def test_vertex_ai_streaming_usage_calculation():
         iterator.chunk_parser(chunk)
 
         # Verify calculate_usage was called with correct parameters
-        mock_calculate_usage.assert_called_once_with(completion_response=chunk)
+        mock_calculate_usage.assert_called_once_with(completion_response=chunk, cache_creation_tokens=0)
 
     # Test non-streaming response parsing
     with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
@@ -1512,6 +1512,7 @@ def test_vertex_ai_streaming_usage_calculation():
         # Verify _calculate_usage was called with correct parameters
         mock_calculate_usage.assert_called_once_with(
             completion_response=completion_response,
+            cache_creation_tokens=0,
         )
 
 
@@ -9598,3 +9599,56 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
         drop_params=False,
     )
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+_CACHED_PROMPT_USAGE_METADATA = {
+    "promptTokenCount": 1536,
+    "candidatesTokenCount": 40,
+    "totalTokenCount": 1576,
+    "cachedContentTokenCount": 1280,
+    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1536}],
+}
+
+
+def test_calculate_usage_bills_context_cache_creation_tokens_once():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    usage = VertexGeminiConfig._calculate_usage(
+        {"candidates": [], "usageMetadata": _CACHED_PROMPT_USAGE_METADATA}, cache_creation_tokens=1280
+    )
+
+    assert usage.prompt_tokens == 1536 + 1280
+    assert usage.total_tokens == 1576 + 1280
+    assert usage.cache_creation_input_tokens == 1280
+    assert usage.cache_read_input_tokens == 1280
+    assert usage.prompt_tokens_details.text_tokens == 256
+    assert usage.prompt_tokens_details.cache_creation_tokens == 1280
+
+
+def test_calculate_usage_without_cache_creation_leaves_usage_unchanged():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    usage = VertexGeminiConfig._calculate_usage({"candidates": [], "usageMetadata": _CACHED_PROMPT_USAGE_METADATA})
+
+    assert usage.prompt_tokens == 1536
+    assert usage.total_tokens == 1576
+    assert usage.cache_creation_input_tokens is None
+
+
+def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+    from litellm.types.llms.vertex_ai import VERTEX_AI_CACHE_CREATION_TOKENS_KEY
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {VERTEX_AI_CACHE_CREATION_TOKENS_KEY: 1280}
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=logging_obj)
+
+    chunk = iterator.chunk_parser(
+        {
+            "candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP", "index": 0}],
+            "usageMetadata": _CACHED_PROMPT_USAGE_METADATA,
+        }
+    )
+
+    assert chunk.usage.prompt_tokens == 1536 + 1280
+    assert chunk.usage.cache_creation_input_tokens == 1280
