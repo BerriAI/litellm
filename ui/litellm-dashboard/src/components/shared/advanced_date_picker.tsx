@@ -2,6 +2,7 @@ import { Calendar, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import type { DateRangePickerValue } from "./date_picker_types";
+import { getInclusiveDayRange } from "./advanced_date_picker_utils";
 import moment from "moment";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
@@ -32,18 +33,12 @@ const relativeTimeOptions: RelativeTimeOption[] = [
   {
     label: "Last 7 days",
     shortLabel: "7d",
-    getValue: () => ({
-      from: moment().subtract(6, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
+    getValue: () => getInclusiveDayRange(7),
   },
   {
     label: "Last 30 days",
     shortLabel: "30d",
-    getValue: () => ({
-      from: moment().subtract(29, "days").startOf("day").toDate(),
-      to: moment().endOf("day").toDate(),
-    }),
+    getValue: () => getInclusiveDayRange(30),
   },
   {
     label: "Month to date",
