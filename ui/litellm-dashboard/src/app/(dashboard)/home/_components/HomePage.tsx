@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Page } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { uiHref } from "@/utils/uiHref";
+import { LiteAdminHome } from "@/components/liteadmin/LiteAdmin";
 import { Leaderboard, useBreakdown } from "@/app/(dashboard)/usage/_components/components/overview/BreakdownChart";
 import { Panel } from "@/app/(dashboard)/usage/_components/components/overview/Primitives";
 import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overview/UsageStatStrip";
@@ -37,6 +38,8 @@ export default function HomePage() {
           </PageHeaderControls>
         )}
       </PageHeader>
+
+      <LiteAdminHome />
 
       <section aria-label={`Usage, last ${HOME_USAGE_DAYS} days`}>
         {usage.failed ? (

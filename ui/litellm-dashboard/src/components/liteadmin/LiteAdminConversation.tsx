@@ -99,8 +99,7 @@ function ActionCard({
   useEffect(() => {
     if (!open || !review) return;
     scrollToEnd();
-    reviewRef.current?.focus({ preventScroll: true });
-  }, [entry.id, open, review, reviewRef, scrollToEnd]);
+  }, [entry.id, open, review, scrollToEnd]);
   const answer = (approved: boolean) => {
     scrollToEnd();
     onAnswer(entry.id, approved);
