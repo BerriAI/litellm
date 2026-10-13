@@ -16,6 +16,7 @@ longer signal it.
 
 ### Added
 
+- **team**: Optional `team_member_model_max_budget` argument on `litellm_team`, a JSON string of per-model budgets applied to every team member and sent as `team_member_model_max_budget` on `/team/new` and `/team/update`; read back from `team_member_budget_table.model_max_budget` on `/team/info` so out-of-band changes show as drift, with `budget_limit`/`time_period` treated as equal to the `max_budget`/`budget_duration` spelling the proxy stores; removing it sends `{}`, which clears every per-model member budget
 - **model**: Optional `display_name` argument on `litellm_model`, sent as `model_info.display_name` and returned as `display_name` by `/v1/models`, so client model pickers show a readable name; changes are persisted through `/model/{id}/update` since `/model/update` ignores `model_info`; also exported by the `litellm_model` and `litellm_models` data sources
 - **key**: Computed `server_metadata` attribute on `litellm_key` exposing every metadata entry the proxy stores, so metadata created outside Terraform is visible in state and drift on it shows on refresh, while `metadata` keeps tracking only the declared entries and updates keep preserving undeclared ones
 - **team_member_add**: `tpm_limit`, `rpm_limit`, `budget_duration`, and `allowed_models` attributes on `litellm_team_member_add`, applied to every member of the resource; `budget_duration` and `allowed_models` ride on `/team/member_add`, while the limits are sent through `/team/member_update`, which is where the proxy accepts them

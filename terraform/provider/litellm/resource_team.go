@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -134,6 +135,13 @@ func ResourceLiteLLMTeam() *schema.Resource {
 			"team_member_key_duration": {
 				Type:     schema.TypeString,
 				Optional: true,
+			},
+			"team_member_model_max_budget": {
+				Type:             schema.TypeString,
+				Optional:         true,
+				ValidateFunc:     validateKeyModelMaxBudget,
+				DiffSuppressFunc: teamMemberModelMaxBudgetEquivalent,
+				Description:      "JSON string of per-model budgets applied to every team member (e.g. '{\"claude-opus\": {\"budget_limit\": 400, \"time_period\": \"1d\"}}'). Requires a LiteLLM Enterprise license on the proxy",
 			},
 			"model_rpm_limit": {
 				Type:     schema.TypeMap,
@@ -280,6 +288,11 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	if teamResp.AllowedPassthroughRoutes != nil {
 		d.Set("allowed_passthrough_routes", teamResp.AllowedPassthroughRoutes)
 	}
+	var memberModelMaxBudget map[string]interface{}
+	if teamResp.TeamMemberBudgetTable != nil {
+		memberModelMaxBudget = teamResp.TeamMemberBudgetTable.ModelMaxBudget
+	}
+	d.Set("team_member_model_max_budget", keyModelMaxBudgetJSON(memberModelMaxBudget))
 
 	// Explicitly fetch the current permissions from the API
 	permResp, err := getTeamPermissions(client, d.Id())
@@ -362,6 +375,48 @@ func resourceLiteLLMTeamDelete(d *schema.ResourceData, m interface{}) error {
 	return nil
 }
 
+// The proxy stores budget_limit/time_period as max_budget/budget_duration, so both spellings must compare equal.
+var modelBudgetFieldAliases = map[string]string{
+	"budget_limit": "max_budget",
+	"time_period":  "budget_duration",
+}
+
+func normalizeModelMaxBudget(raw string) (map[string]interface{}, bool) {
+	if raw == "" {
+		return map[string]interface{}{}, true
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, false
+	}
+	normalized := make(map[string]interface{}, len(parsed))
+	for model, cfg := range parsed {
+		budget, ok := cfg.(map[string]interface{})
+		if !ok {
+			normalized[model] = cfg
+			continue
+		}
+		entry := make(map[string]interface{}, len(budget))
+		for field, value := range budget {
+			if value == nil {
+				continue
+			}
+			if canonical, isAlias := modelBudgetFieldAliases[field]; isAlias {
+				field = canonical
+			}
+			entry[field] = value
+		}
+		normalized[model] = entry
+	}
+	return normalized, true
+}
+
+func teamMemberModelMaxBudgetEquivalent(k, oldValue, newValue string, d *schema.ResourceData) bool {
+	oldParsed, okOld := normalizeModelMaxBudget(oldValue)
+	newParsed, okNew := normalizeModelMaxBudget(newValue)
+	return okOld && okNew && reflect.DeepEqual(oldParsed, newParsed)
+}
+
 func resolveTeamID(d *schema.ResourceData) string {
 	if v, ok := d.GetOk("team_id"); ok {
 		return v.(string)
@@ -400,6 +455,11 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 
 	if v, ok := d.GetOk("tags"); ok || d.HasChange("tags") {
 		teamData["tags"] = v
+	}
+
+	// An empty object clears the member budgets; the proxy treats a missing field as "leave unchanged".
+	if v, ok := d.GetOk("team_member_model_max_budget"); ok || d.HasChange("team_member_model_max_budget") {
+		teamData["team_member_model_max_budget"] = parseKeyModelMaxBudget(v.(string))
 	}
 
 	if metadata := buildTeamMetadata(d); metadata != nil {
