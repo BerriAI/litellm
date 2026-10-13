@@ -13,6 +13,7 @@ bytes.workspace = true
 futures-util.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
+static_assertions.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 pyo3.workspace = true

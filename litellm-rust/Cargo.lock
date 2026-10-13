@@ -3931,6 +3931,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "static_assertions",
  "tokio",
 ]
 

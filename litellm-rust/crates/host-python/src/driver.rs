@@ -105,6 +105,9 @@ struct Parts<H, L> {
 
 type SharedParts<H, L> = Arc<Mutex<Parts<H, L>>>;
 
+// parking_lot's send_guard would let the body keep parts locked while suspended, hiding them from GC traverse
+static_assertions::assert_not_impl_any!(MutexGuard<'static, ()>: Send);
+
 enum Setup<E> {
     Host(PyErr),
     Decode(InvokeError<E>),
