@@ -10,11 +10,14 @@ Validates that:
 """
 
 import copy
+import importlib.util
 import json
+import sys
+import types
 from datetime import datetime
 from collections.abc import Callable, Mapping
 from typing import Literal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -26,6 +29,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.conduct import conduct as conduct_module
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr import CrowdStrikeAIDRHandler
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
@@ -2780,6 +2784,28 @@ class TestConverseToolDefinitionRewrites:
         assert "tools" not in headroom.received[-1]
 
 
+class _ConductPluginGuard(CustomGuardrail):
+    def __init__(self, *, guardrail_name: str, unreachable_fallback: str | None = None) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.unreachable_fallback = unreachable_fallback
+
+
+def _conduct_with_its_plugin() -> CustomGuardrail:
+    plugin = types.ModuleType("conduct_litellm_guard.guardrail")
+    plugin.__dict__.update(ConductGuard=_ConductPluginGuard, ConductGuardBlocked=RuntimeError)
+    spec = importlib.util.spec_from_file_location("conduct_with_its_plugin", conduct_module.__file__)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(
+        sys.modules,
+        {"conduct_litellm_guard": types.ModuleType("conduct_litellm_guard"), "conduct_litellm_guard.guardrail": plugin},
+    ):
+        spec.loader.exec_module(module)
+    guardrail = vars(module)["ConductGuardrail"](guardrail_name="conduct")
+    assert isinstance(guardrail, CustomGuardrail)
+    return guardrail
+
+
 _FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
     lambda: OpenAIModerationGuardrail(guardrail_name="moderation", api_key="sk-test"),
     lambda: LLMAsAJudgeGuardrail(
@@ -2810,6 +2836,7 @@ _FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
     lambda: QualifireGuardrail(
         guardrail_name="qualifire", api_key="qf-test", api_base="http://127.0.0.1:9", evaluation_id="eval-test"
     ),
+    _conduct_with_its_plugin,
 )
 
 
@@ -2863,6 +2890,7 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
             "promptguard",
             "singulr",
             "qualifire",
+            "conduct",
         ],
     )
     async def test_guardrail_gets_every_flat_text_and_its_mask_reaches_every_turn(self, make_guardrail, monkeypatch):
