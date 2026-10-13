@@ -27,7 +27,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         additional_provider_specific_params=getattr(litellm_params, "additional_provider_specific_params", None),
         headers=getattr(litellm_params, "headers", None),
         extra_headers=getattr(litellm_params, "extra_headers", None),
-        guardrail_name=guardrail.get("guardrail_name", ""),
+        guardrail_name=guardrail["guardrail_name"],
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

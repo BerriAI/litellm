@@ -15,6 +15,8 @@ from collections.abc import Sequence
 from enum import Enum, auto
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.proxy.guardrails.anthropic_sse import (
     is_anthropic_sse_stream,
     is_raw_sse_stream,
@@ -23,6 +25,8 @@ from litellm.proxy.guardrails.anthropic_sse import (
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
 
 _RESPONSES_EVENT_TYPE_PREFIX: Final = "response."
+
+_OBJECT_MAP_ADAPTER: Final = TypeAdapter(dict[object, object])
 
 # Only these carry the finished output; response.created also carries a body, but an empty one
 _RESPONSES_TERMINAL_EVENT_TYPES: Final = frozenset(
@@ -54,7 +58,9 @@ class StreamSurface(Enum):
 
 
 def _stream_item_field(item: object, field: str) -> object | None:
-    return item.get(field) if isinstance(item, dict) else getattr(item, field, None)
+    return (
+        _OBJECT_MAP_ADAPTER.validate_python(item).get(field) if isinstance(item, dict) else getattr(item, field, None)
+    )
 
 
 def _stream_item_type(item: object) -> str | None:

@@ -76,6 +76,8 @@ class ThirdlawGuardrailResponse(BaseModel):
 
 
 class ThirdlawGuardrailConfigModelOptionalParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     additional_headers: str | None = Field(
         default=None,
         description="Comma-separated list of inbound request header names whose RAW values ThirdLaw should receive. Every inbound header is always forwarded; credential headers (authorization, x-api-key, cookie) are forwarded as ***REDACTED*** unless listed here. Example: authorization,x-request-id.",

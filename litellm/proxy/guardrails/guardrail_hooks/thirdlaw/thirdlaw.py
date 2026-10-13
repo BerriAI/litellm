@@ -4,7 +4,6 @@ from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
-    TYPE_CHECKING,
     Final,
     Literal,
     TypeAlias,
@@ -22,11 +21,11 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
-    log_guardrail_information,
+    log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped in custom_guardrail
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
-    get_async_httpx_client,
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # helper is untyped in http_handler
     httpxSpecialProvider,
 )
 from litellm.proxy._types import (
@@ -55,6 +54,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.guardrails.guardrail_hooks.thirdlaw import (
+    ThirdlawGuardrailConfigModel,
     ThirdlawGuardrailRequest,
     ThirdlawGuardrailRequestMetadata,
     ThirdlawGuardrailResponse,
@@ -66,9 +66,6 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
 )
-
-if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "thirdlaw"
 
@@ -192,6 +189,8 @@ _AssembledStream: TypeAlias = ModelResponse | ResponsesAPIResponse | Mapping[str
 _RESPONSE_WRITE_BACK_DENY_KEYS: Final = frozenset({"id"})
 
 _JSON_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_OBJECT_MAP_ADAPTER: Final = TypeAdapter(dict[object, object])
+_STR_MAP_ADAPTER: Final = TypeAdapter(dict[str, str])
 
 # tags metadata rides in as an untyped list; validating through a TypeAdapter (its
 # `validate_python` parameter is `Any`, so it accepts an untyped value without complaint)
@@ -359,13 +358,13 @@ def _response_headers(response: object) -> Mapping[str, str] | None:
     """
     hidden_params: Final[object] = getattr(response, "_hidden_params", None)
     headers: Final[object] = (
-        hidden_params.get("additional_headers")
+        _OBJECT_MAP_ADAPTER.validate_python(hidden_params).get("additional_headers")
         if isinstance(hidden_params, Mapping)
         else getattr(hidden_params, "additional_headers", None)
     )
     if not isinstance(headers, Mapping) or not headers:
         return None
-    return MappingProxyType({str(k): str(v) for k, v in headers.items()})
+    return MappingProxyType({str(k): str(v) for k, v in _OBJECT_MAP_ADAPTER.validate_python(headers).items()})
 
 
 # Where async_post_call_response_headers_hook stashes response headers for the
@@ -376,7 +375,7 @@ _RESPONSE_HEADERS_STASH_KEY: Final = "_thirdlaw_response_headers"
 
 def _stashed_response_headers(request_data: Mapping[str, object]) -> Mapping[str, str] | None:
     stashed: Final = request_data.get(_RESPONSE_HEADERS_STASH_KEY)
-    return stashed if isinstance(stashed, Mapping) else None
+    return _STR_MAP_ADAPTER.validate_python(stashed) if isinstance(stashed, Mapping) else None
 
 
 def _request_body(request_data: Mapping[str, object], prefer_snapshot: bool) -> Mapping[str, object] | None:
@@ -502,7 +501,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         headers: Mapping[str, str] | None = None,
         extra_headers: Sequence[str] | None = None,
         async_handler: AsyncHTTPHandler | None = None,
-        **kwargs,  # noqa: ANN003  # kwargs-ok: forwarded verbatim to CustomGuardrail, which owns their types
+        **kwargs: object,  # kwargs-ok: forwarded verbatim to CustomGuardrail, which owns their types
     ) -> None:
         resolved_base: Final = api_base or get_secret_str("THIRDLAW_API_BASE")
         if not resolved_base:
@@ -541,7 +540,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         )
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        super().__init__(**kwargs)
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # untyped base
 
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -557,11 +556,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         ]
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
-        from litellm.types.proxy.guardrails.guardrail_hooks.thirdlaw import (
-            ThirdlawGuardrailConfigModel,
-        )
-
+    def get_config_model() -> type[ThirdlawGuardrailConfigModel] | None:
         return ThirdlawGuardrailConfigModel
 
     def _build_wire_request(
@@ -736,9 +731,9 @@ class ThirdlawGuardrail(CustomGuardrail):
         attributes -- ``_hidden_params`` (which carries ``additional_headers`` for response-
         header forwarding) is one of those, so copy it across explicitly.
         """
-        hidden_params = getattr(source, "_hidden_params", None)
+        hidden_params: Final = getattr(source, "_hidden_params", None)
         if hidden_params is not None:
-            setattr(target, "_hidden_params", hidden_params)  # target's concrete type varies by call site
+            setattr(target, "_hidden_params", hidden_params)  # noqa: B010  # target is typed object; the type varies by call site
 
     def _without_response_id(self, replacement: Mapping[str, object]) -> Mapping[str, object]:
         """Drop ``id`` from a modify_response write-back.
@@ -806,7 +801,7 @@ class ThirdlawGuardrail(CustomGuardrail):
 
     def _mark_applied(self, request_data: dict[str, object]) -> None:  # mutable-ok: header helper appends to metadata
         from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
+            add_guardrail_to_applied_guardrails_header,  # pyright: ignore[reportUnknownVariableType]  # helper is untyped
         )
 
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
@@ -818,18 +813,17 @@ class ThirdlawGuardrail(CustomGuardrail):
         response: object,
         request_headers: Mapping[str, str] | None = None,
         litellm_call_info: Mapping[str, object] | None = None,
-    ) -> Mapping[str, str] | None:
+    ) -> None:
         """Capture the provider's response headers off the true, unwrapped response.
 
         A guardrail chained ahead of ThirdLaw can obscure ``_hidden_params`` on the
         ``response`` the streaming hook later receives (``ResponsesIDSecurity``, e.g.,
         hands back a bare generator with none); this hook always gets the real thing.
-        Always returns None -- it only stashes for ThirdLaw's own later use.
+        It only stashes them for ThirdLaw's own later use.
         """
         headers: Final = _response_headers(response)
         if headers is not None:
-            data[_RESPONSE_HEADERS_STASH_KEY] = headers
-        return None
+            data[_RESPONSE_HEADERS_STASH_KEY] = headers  # rebind-ok: only channel to the stream hook
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -992,7 +986,9 @@ class ThirdlawGuardrail(CustomGuardrail):
 
     @staticmethod
     def _assembled_chat_stream_response(collected: Sequence[object]) -> ModelResponse | None:
-        from litellm.main import stream_chunk_builder
+        from litellm.main import (
+            stream_chunk_builder,  # pyright: ignore[reportUnknownVariableType]  # builder is partially untyped
+        )
 
         try:
             assembled: Final = stream_chunk_builder(chunks=list(collected))
