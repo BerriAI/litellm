@@ -41,18 +41,37 @@ pub fn interpreter() -> Interpreter {
     Interpreter(guard)
 }
 
-pub fn lifecycle_binding(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+pub fn lifecycle_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     py.import("host_test_lifecycle")
 }
 
+/// Hands a call's execution to its caller the way the product entrypoints do: an async call
+/// gets the coroutine from `drive`, a sync call the value or stream `run` settles to.
+pub fn handed(
+    py: Python<'_>,
+    execution: PyResult<Py<PyAny>>,
+    asynchronous: bool,
+) -> PyResult<Py<PyAny>> {
+    let execution = execution?;
+    let module = lifecycle_module(py)?;
+    let handed = if asynchronous {
+        module.getattr("drive")?.call1((execution,))?
+    } else {
+        module
+            .getattr("run")?
+            .call1((execution, module.getattr("SyncStream")?))?
+    };
+    Ok(handed.unbind())
+}
+
 pub fn call_options(asynchronous: bool) -> CallOptions {
-    CallOptions::new(asynchronous, lifecycle_binding)
+    CallOptions::new(asynchronous, lifecycle_module)
 }
 
 pub fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
     let source = std::ffi::CString::new(concat!(
         include_str!("../../../../../litellm/rust_bridge/lifecycle.py"),
-        "\n_drive = drive\n\n\nasync def drive(execution):\n    return await _drive(execution, Stream)\n",
+        "\n_drive = drive\n\n\nasync def drive(execution):\n    return await _drive(execution, AsyncStream)\n",
     ))
     .unwrap();
     PyModule::from_code(
@@ -512,13 +531,17 @@ pub fn run_composed<L: PythonCallHooks + 'static>(
     let log = binding.log.clone();
     let arguments = PyDict::new(py);
     arguments.set_item("model", "m").unwrap();
-    let result = run_call(
+    let result = handed(
         py,
-        move |_, _, request| Ok(machine(request)),
-        binding,
-        compose(hooks),
-        arguments.unbind(),
-        options,
+        run_call(
+            py,
+            move |_, _, request| Ok(machine(request)),
+            binding,
+            compose(hooks),
+            arguments.unbind(),
+            options,
+        ),
+        asynchronous,
     );
     (settled(py, result, asynchronous), log.entries())
 }
@@ -615,13 +638,17 @@ pub fn open_stream(
     options: CallOptions,
 ) -> Bound<'_, PyAny> {
     let asynchronous = options.asynchronous;
-    let handed = run_call(
+    let handed = handed(
         py,
-        |_, _, request| Ok(streaming_machine()(request)),
-        StreamingBinding,
-        hooks,
-        PyDict::new(py).unbind(),
-        options,
+        run_call(
+            py,
+            |_, _, request| Ok(streaming_machine()(request)),
+            StreamingBinding,
+            hooks,
+            PyDict::new(py).unbind(),
+            options,
+        ),
+        asynchronous,
     )
     .unwrap();
     if asynchronous {
@@ -632,7 +659,7 @@ pub fn open_stream(
     }
 }
 
-/// Drives a `Stream` (async) or `SyncStream` to completion from a sync test.
+/// Drives an `AsyncStream` or `SyncStream` to completion from a sync test.
 pub fn read_all(py: Python<'_>, stream: &Bound<'_, PyAny>, asynchronous: bool) -> Vec<String> {
     if !asynchronous {
         return stream

@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Mapping
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRResponse
+from litellm.rust_bridge import public_execution
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
 
@@ -25,13 +26,15 @@ class NativeAocr(Protocol):
 def _ocr_binding(value: object) -> NativeOcr | None:
     if not callable(value):
         return None
-    return cast("NativeOcr", value)  # cast-ok: callable validated at the native binding boundary
+    native: Final = public_execution.synchronous(value)
+    return cast("NativeOcr", native)  # cast-ok: the public execution adapter returns the route's result
 
 
 def _aocr_binding(value: object) -> NativeAocr | None:
     if not callable(value):
         return None
-    return cast("NativeAocr", value)  # cast-ok: callable validated at the native binding boundary
+    native: Final = public_execution.asynchronous(value)
+    return cast("NativeAocr", native)  # cast-ok: the public execution adapter returns the route's result
 
 
 class NativeOcrHealthCheckDocument(Protocol):

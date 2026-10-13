@@ -6,7 +6,7 @@ This crate owns CPython execution mechanics for generic `litellm-host` machines 
 
 `src/native.rs` belongs here: it runs a generic machine through the Python runtime and owns its pending execution and abort handle. Keep provider selection, request projection and public exception policy out of it. A rename to `machine_runner.rs` is optional and must not change behavior
 
-The execution handle receives its Python lifecycle binding from its consumer through `PythonLifecycle` rather than import a fixed `litellm.rust_bridge` module. Generic suspension and execution state validation belong here. Public stream wrappers and `_hidden_params` conventions belong to the consumer
+`run_call` returns the unstarted `Execution` and never names a Python stream class or driver. The consumer drives it from Python and supplies the step classes through `StepTypes` rather than have this crate import a fixed `litellm.rust_bridge` module. Generic suspension and execution state validation belong here. Public stream wrappers and `_hidden_params` conventions belong to the consumer
 
 Creating a resolved asyncio Future from an already constructed Python value belongs here, alongside runtime waiting, interpreter detachment and panic containment. Choosing which callable exceptions become a public `RuntimeError` belongs to the consumer. `python-bridge::callable::wrap_failure` owns that policy
 

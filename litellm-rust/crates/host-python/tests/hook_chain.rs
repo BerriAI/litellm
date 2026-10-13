@@ -560,9 +560,13 @@ second = Hooks('b', invoke)
             },
             lifecycle,
         );
-        locals
-            .set_item("call", execution.into_coroutine(py).unwrap())
+        let module = lifecycle(py).unwrap();
+        let call = module
+            .getattr("drive")
+            .unwrap()
+            .call1((Py::new(py, execution).unwrap(), module.getattr("Stream").unwrap()))
             .unwrap();
+        locals.set_item("call", call).unwrap();
         py.run(
             c"
 async def exercise():

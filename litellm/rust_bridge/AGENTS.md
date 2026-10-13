@@ -4,7 +4,7 @@ This package owns native rollout and fallback selection, Python public API compa
 
 `host/` holds the Python modules Rust imports by name to read Python-owned state (provider resolution, model capabilities, settings, caches, diagnostics, legacy callbacks, the secret manager, transport and timeout conversions). Its AGENTS.md states that contract
 
-`lifecycle.py` owns generic inline execution and stream iteration. `streams.py` supplies the product binding and public stream wrappers through the bridge rather than let the generic Rust host import this package by name. Keep one driver implementing generator-style `send` (`send(None)` starts), `throw` and idempotent `close`. Do not create a second implementation
+`lifecycle.py` owns generic inline execution and stream iteration, plus the step classes Rust constructs. Native entrypoints return an unstarted `Execution`, and `public_execution.py` hands it to the public caller through `lifecycle.run` or `lifecycle.drive` with the product stream wrappers, so Rust never names a Python driver or stream class. Keep one driver implementing generator-style `send` (`send(None)` starts), `throw` and idempotent `close`. Do not create a second implementation
 
 Generic execution steps and inline suspension handling must not depend on LiteLLM response metadata. Public stream construction, `_hidden_params` and header compatibility remain product responsibilities. Keep generic stream heads opaque and preserve public header behavior in the product wrappers
 

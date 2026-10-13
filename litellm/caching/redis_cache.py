@@ -103,7 +103,7 @@ _GENERIC_CALLER_MODULES: Final = frozenset(
         "litellm.caching.dual_cache",
         "litellm.caching.caching",
         "litellm.rust_bridge.lifecycle",
-        "litellm.rust_bridge.streams",
+        "litellm.rust_bridge.public_execution",
         "contextlib",
     }
 )
