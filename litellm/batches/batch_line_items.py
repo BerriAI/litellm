@@ -1,6 +1,7 @@
 """Per-line records of a finished batch for the loggers listed in batch_line_item_callbacks."""
 
 import asyncio
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from itertools import chain
@@ -60,13 +61,21 @@ def build_batch_line_items(
     source: BatchLineItemSource, input_content: bytes, result_contents: Iterable[bytes]
 ) -> StandardBatchLineItemsPayload:
     """Pair every output and error line with the input line that shares its custom_id, priced one line at a time."""
-    requests: Final = {_line_key(entry): entry for entry in get_file_content_as_dictionary(input_content)}
+    requests: Final = _requests_by_custom_id(input_content)
     results: Final = chain.from_iterable(map(get_file_content_as_dictionary, result_contents))
     return StandardBatchLineItemsPayload(
         batch_id=source.batch_id,
         finished_at=source.finished_at,
         lines=tuple([_line_item(source, requests, entry) for entry in results]),
     )
+
+
+def _requests_by_custom_id(input_content: bytes) -> Mapping[str | None, Mapping[str, object]]:
+    """Each input line by its custom_id. A custom_id that several input lines share, as when a Vertex AI embeddings
+    entry is split into one row per input, is paired with none of them."""
+    keyed: Final = tuple((_line_key(entry), entry) for entry in get_file_content_as_dictionary(input_content))
+    counts: Final = Counter(key for key, _ in keyed)
+    return {key: entry for key, entry in keyed if counts[key] == 1}
 
 
 def _line_item(

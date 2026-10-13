@@ -1278,6 +1278,10 @@ class CheckBatchCost:
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
+                    if not self._has_batch_processed_column:
+                        # nothing claimed the row, so it stays in the poll page and its lines wait for that retry
+                        del tracked, output_content
+                        continue
                 self._store_batch_line_items_in_background(job, response, model_id, batch_id, output_content)
                 # release this batch's output before the next batch's output is read
                 del tracked, output_content

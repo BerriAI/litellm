@@ -212,6 +212,33 @@ def test_vertex_lines_pair_with_the_input_row_that_carries_their_custom_id():
     ]
 
 
+def test_a_vertex_embeddings_entry_split_into_several_rows_pairs_with_none_of_them():
+    embeddings = {
+        "custom_id": "emb-1",
+        "method": "POST",
+        "url": "/v1/embeddings",
+        "body": {"model": "gemini-embedding-001", "input": ["first", "second"]},
+    }
+    vertex_input = b"\n".join(
+        _OpenAIToVertexBatchUploadStream(
+            _jsonl(embeddings, _request("vx-0", "chat")), VertexAIFilesConfig()._map_openai_to_vertex_params
+        ).iter_bytes()
+    )
+    vertex_rows = get_file_content_as_dictionary(vertex_input)
+    assert [row.get("key") for row in vertex_rows] == ["emb-1#0/2", "emb-1#1/2", None]
+
+    payload = build_batch_line_items(
+        _source(model="gemini-2.5-flash", custom_llm_provider="vertex_ai", cost_provider="vertex_ai"),
+        vertex_input,
+        (_jsonl(_success("emb-1", 2, 0), _success("vx-0", 3, 1)),),
+    )
+
+    assert [(line["custom_id"], line["request"]) for line in payload["lines"]] == [
+        ("emb-1", None),
+        ("vx-0", vertex_rows[2]),
+    ]
+
+
 def test_a_vertex_input_row_without_a_custom_id_pairs_with_nothing():
     unlabeled = {"request": {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}}
 
