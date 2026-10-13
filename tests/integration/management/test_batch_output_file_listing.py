@@ -21,7 +21,15 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
-from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    Scenario,
+    eventually,
+    list_value,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
@@ -728,7 +736,10 @@ class _BedrockLineBatch:
     def body(self, content: str) -> dict[str, JsonValue]:
         if self.endpoint == "/v1/embeddings":
             return {"input": content}
-        return {"messages": [{"role": "user", "content": content}], "max_tokens": 8}
+        return {
+            "messages": [{"role": "system", "content": "answer briefly"}, {"role": "user", "content": content}],
+            "max_tokens": 8,
+        }
 
 
 _BEDROCK_CHAT_BATCH: Final = _BedrockLineBatch(BEDROCK_MODEL_ID, "/v1/chat/completions", _bedrock_line_output)
@@ -862,6 +873,9 @@ def test_a_bedrock_batch_the_poller_logs_emits_its_lines_from_the_deployment_buc
         ("req-1", "success", 200, "acompletion"),
         ("req-2", "failure", 400, "acompletion"),
     ], delivered
+    first_messages: Final = [object_value(list_value(event["messages"])[0]) for event in delivered]
+    assert [message["role"] for message in first_messages] == ["system", "system"], delivered
+    assert all("answer briefly" in json.dumps(message["content"]) for message in first_messages), delivered
 
 
 def test_a_failed_line_of_a_bedrock_embedding_batch_is_logged_as_an_embedding(gateway: Gateway, tmp_path: Path) -> None:

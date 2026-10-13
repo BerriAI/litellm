@@ -636,7 +636,10 @@ BEDROCK_INPUT_JSONL = b"\n".join(
         json.dumps(
             {
                 "recordId": "br-anth",
-                "modelInput": {"messages": [{"role": "user", "content": "hi br-anth"}]},
+                "modelInput": {
+                    "system": [{"type": "text", "text": "answer like claude"}],
+                    "messages": [{"role": "user", "content": "hi br-anth"}],
+                },
             }
         ).encode(),
         json.dumps(
@@ -648,7 +651,10 @@ BEDROCK_INPUT_JSONL = b"\n".join(
         json.dumps(
             {
                 "recordId": "br-conv",
-                "modelInput": {"messages": [{"role": "user", "content": "hi br-conv"}]},
+                "modelInput": {
+                    "system": [{"text": "answer like nova"}],
+                    "messages": [{"role": "user", "content": "hi br-conv"}],
+                },
             }
         ).encode(),
         json.dumps(
@@ -1013,7 +1019,10 @@ async def test_line_items_bedrock_shapes(recorder):
     assert anthropic_event["call_type"] == "acompletion"
     assert _hidden(anthropic_event)["batch_custom_id"] == "br-anth"
     anthropic_line = _payload(anthropic_event)
-    assert any(m.get("content") == "hi br-anth" for m in anthropic_line["messages"])
+    assert anthropic_line["messages"] == [
+        {"role": "system", "content": [{"type": "text", "text": "answer like claude"}]},
+        {"role": "user", "content": "hi br-anth"},
+    ]
     assert anthropic_line["response"]["choices"][0]["message"]["content"] == "bedrock claude hi"
     assert anthropic_line["prompt_tokens"] == 2
     assert anthropic_line["completion_tokens"] == 3
@@ -1029,7 +1038,10 @@ async def test_line_items_bedrock_shapes(recorder):
     converse_event = by_id["br-conv"]
     assert converse_event["call_type"] == "acompletion"
     converse_line = _payload(converse_event)
-    assert any(m.get("content") == "hi br-conv" for m in converse_line["messages"])
+    assert converse_line["messages"] == [
+        {"role": "system", "content": [{"text": "answer like nova"}]},
+        {"role": "user", "content": "hi br-conv"},
+    ]
     assert converse_line["response"]["choices"][0]["message"]["content"] == "converse hi"
     assert converse_line["prompt_tokens"] == 5
     assert converse_line["completion_tokens"] == 6

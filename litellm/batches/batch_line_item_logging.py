@@ -245,7 +245,12 @@ def _call_type_for_line(
 
 
 def _line_messages(request_body: Mapping[str, object]) -> object:
-    return request_body.get("messages") or request_body.get("input") or request_body.get("inputText") or ()
+    messages: Final = request_body.get("messages") or request_body.get("input") or request_body.get("inputText") or ()
+    system: Final = request_body.get("system")
+    # Bedrock input records hold the system prompt as content blocks, and logging reads it off the kwargs only as text
+    if not isinstance(system, list) or not isinstance(messages, list):
+        return messages
+    return [{"role": "system", "content": system}, *messages]  # pyright: ignore[reportUnknownVariableType]  # JSONL values stay unknown, logging takes them as written
 
 
 def _line_model(
