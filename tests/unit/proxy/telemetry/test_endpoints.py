@@ -124,7 +124,8 @@ def test_any_signed_in_ui_user_records_ui_events_into_the_sink(role: LitellmUser
     response: Final = _ui_client(role, sink).post(
         "/telemetry/ui_events", json={"page": "models-and-endpoints", "action": "click", "target": "tab=health"}
     )
-    assert response.status_code == 204, response.text
+    assert response.status_code == 200, response.text
+    assert response.json() == {"accepted": True}
     assert sink.events == [UIEvent(page="models-and-endpoints", action=UIAction.CLICK, target="tab=health")]
 
 
@@ -155,7 +156,8 @@ def test_ui_events_are_accepted_and_dropped_while_telemetry_is_off() -> None:
     response: Final = _ui_client(LitellmUserRoles.PROXY_ADMIN, None).post(
         "/telemetry/ui_events", json={"page": "teams", "action": "view"}
     )
-    assert response.status_code == 204, response.text
+    assert response.status_code == 200, response.text
+    assert response.json() == {"accepted": True}
 
 
 def test_the_proxy_app_serves_the_export_route_from_its_own_telemetry_runtime() -> None:
@@ -180,7 +182,8 @@ def test_the_proxy_app_accepts_ui_events_while_its_telemetry_runtime_is_off() ->
         response: Final = TestClient(app).post("/telemetry/ui_events", json={"page": "teams", "action": "view"})
     finally:
         _ = app.dependency_overrides.pop(user_api_key_auth)
-    assert response.status_code == 204, response.text
+    assert response.status_code == 200, response.text
+    assert response.json() == {"accepted": True}
 
 
 async def _settings_client(

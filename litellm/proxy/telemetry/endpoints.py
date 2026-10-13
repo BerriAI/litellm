@@ -27,6 +27,12 @@ class TelemetryReportsResponse(BaseModel):
     next_after_id: str | None
 
 
+class UIEventAccepted(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    accepted: Literal[True] = True
+
+
 class UIEventBody(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -53,14 +59,20 @@ def telemetry_sink() -> TelemetrySink | None:
     return telemetry_runtime.sink
 
 
-@router.post("/telemetry/ui_events", tags=["Telemetry"], status_code=204)
+@router.post(
+    "/telemetry/ui_events",
+    tags=["Telemetry"],
+    response_model=UIEventAccepted,
+    description="Count one Admin UI page view or tab click. Events are dropped unless Page navigation is on",
+)
 async def record_ui_event(
     body: UIEventBody,
     _user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     sink: Annotated[TelemetrySink | None, Depends(telemetry_sink)],
-) -> None:
+) -> UIEventAccepted:
     if sink is not None:
         sink.record_ui_event(UIEvent(page=body.page, action=body.action, target=body.target))
+    return UIEventAccepted()
 
 
 @router.get("/telemetry/reports", tags=["Telemetry"], response_model=TelemetryReportsResponse)
