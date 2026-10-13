@@ -37,7 +37,7 @@ const Navbar: React.FC<NavbarProps> = ({
   onToggleSidebar,
 }) => {
   const baseUrl = getProxyBaseUrl();
-  const { logoUrl } = useTheme();
+  const { logoUrl, logoUrlDark } = useTheme();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
@@ -45,8 +45,12 @@ const Navbar: React.FC<NavbarProps> = ({
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
+  // Same precedence as the leftnav: an explicit dark logo wins, then the
+  // light logo, then the server default (which honors UI_LOGO_PATH_DARK via
+  // ?theme=dark). Using logoUrl for the dark variant silently dropped the
+  // dark logo on the Connect/Chat pages (#46316).
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
-  const darkImageUrl = logoUrl || `${baseUrl}/get_image?theme=dark`;
+  const darkImageUrl = logoUrlDark || logoUrl || `${baseUrl}/get_image?theme=dark`;
 
   const handleLogout = useLogout(accessToken);
 

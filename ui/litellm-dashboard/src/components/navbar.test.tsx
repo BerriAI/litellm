@@ -261,6 +261,43 @@ describe("Navbar", () => {
     mockUseThemeImpl = () => ({ logoUrl: null });
   });
 
+  it("should use the dark logo for the dark variant when one is configured", () => {
+    // Regression test for #46316: the Connect/Chat navbar used the light
+    // logo for both variants, so UI_LOGO_PATH_DARK never showed there.
+    mockUseThemeImpl = () => ({
+      logoUrl: "https://example.com/custom-logo.png",
+      logoUrlDark: "https://example.com/custom-logo-dark.png",
+    });
+
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    const logoImg = screen.getByAltText("LiteLLM Brand");
+    expect(logoImg).toHaveAttribute("src", "https://example.com/custom-logo.png");
+    const darkLogoImg = Array.from(document.querySelectorAll("img")).find(
+      (img) => img.getAttribute("aria-hidden") === "true"
+    );
+    expect(darkLogoImg).toBeDefined();
+    expect(darkLogoImg).toHaveAttribute("src", "https://example.com/custom-logo-dark.png");
+
+    // Reset mock
+    mockUseThemeImpl = () => ({ logoUrl: null });
+  });
+
+  it("should fall back to the light logo for the dark variant when no dark logo is configured", () => {
+    mockUseThemeImpl = () => ({ logoUrl: "https://example.com/custom-logo.png" });
+
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    const darkLogoImg = Array.from(document.querySelectorAll("img")).find(
+      (img) => img.getAttribute("aria-hidden") === "true"
+    );
+    expect(darkLogoImg).toBeDefined();
+    expect(darkLogoImg).toHaveAttribute("src", "https://example.com/custom-logo.png");
+
+    // Reset mock
+    mockUseThemeImpl = () => ({ logoUrl: null });
+  });
+
   it("should hide user dropdown and notifications on public pages", () => {
     const publicPageProps = { ...defaultProps, isPublicPage: true };
     renderWithProviders(<Navbar {...publicPageProps} />);
