@@ -84,8 +84,9 @@ def is_unbilled_non_inference_call(
 
     A background response is the exception, since its create billed nothing. When the proxy
     tracks it as a managed object, the read is marked with
-    ``MANAGED_BACKGROUND_RESPONSE_METADATA_KEY`` and stays free, because the cost poll's read
-    stamped with ``BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN`` bills the job once. Any other
+    ``MANAGED_BACKGROUND_RESPONSE_METADATA_KEY`` and stays free, because the one billing event
+    the proxy logs from the finished response, stamped with
+    ``BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN``, bills the job. Any other
     read of a background response (the SDK, a proxy without a database) is the only place its
     spend is ever visible, so it prices normally.
     """

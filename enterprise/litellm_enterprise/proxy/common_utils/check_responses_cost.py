@@ -1,14 +1,15 @@
 """
 Polls LiteLLM_ManagedObjectTable to check if the response is complete.
 A background response is billed exactly once: whichever client read or poll first sees it
-finished moves its row out of a pending status, then re-reads it stamped with
-BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN and the creating key's attribution, the only read
-that prices normally. The poll's status checks are stamped with
-BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN and client reads are marked managed by the managed
-files hook, so both stay free.
+finished moves its row out of a pending status, then logs the body that read already fetched as
+one spend event stamped with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN and the creating key's
+attribution, priced against the deployment that served it. The poll's status checks are stamped
+with BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN and client reads are marked managed by the
+managed files hook, so both stay free, and billing never fetches the response a second time.
 """
 
-from collections.abc import Mapping
+import uuid
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
@@ -33,6 +34,7 @@ from litellm.proxy.hooks.responses_id_security import decrypted_response_id
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.router import Deployment
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
@@ -46,13 +48,69 @@ if TYPE_CHECKING:
 TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
 PENDING_RESPONSE_STATUSES: Final = ("queued", "in_progress")
 _STORED_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_RETRIEVE_RESPONSE_CALL_TYPE: Final = "aget_responses"
 
 
 @dataclass(frozen=True, slots=True)
 class _PollTarget:
     response_id: str
     model_metadata: Mapping[str, object]
-    via_router: bool
+    deployment: Deployment | None
+
+
+@dataclass(frozen=True, slots=True)
+class BilledBackgroundResponse:
+    response: ResponsesAPIResponse
+    model: str
+    custom_llm_provider: str | None
+    litellm_params: Mapping[str, object]
+    metadata: Mapping[str, object]
+
+
+BilledResponseLogger = Callable[[BilledBackgroundResponse], Awaitable[None]]
+
+
+def _without_read_price(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
+    unpriced: Final = response.model_copy(deep=True)
+    unpriced.hidden_params = {key: value for key, value in response.hidden_params.items() if key != "response_cost"}
+    return unpriced
+
+
+async def log_billed_background_response(billed: BilledBackgroundResponse) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    logging_obj: Final = LiteLLMLogging(
+        model=billed.model,
+        messages=[{"role": "user", "content": "<retrieve_response>"}],
+        stream=False,
+        call_type=_RETRIEVE_RESPONSE_CALL_TYPE,
+        start_time=datetime.now(),
+        litellm_call_id=str(uuid.uuid4()),
+        function_id=str(uuid.uuid4()),
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={**billed.litellm_params, "metadata": dict(billed.metadata)},
+        optional_params={},
+        custom_llm_provider=billed.custom_llm_provider,
+    )
+    await logging_obj.async_success_handler(result=_without_read_price(billed.response))
+
+
+def _deployment_litellm_params(deployment: Deployment) -> Mapping[str, object]:
+    from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
+
+    api_base: Final = deployment.litellm_params.api_base
+    return MappingProxyType({"api_base": mask_api_base_credentials(api_base)} if api_base else {})
+
+
+def _deployment_metadata(deployment: Deployment) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "model_info": deployment.model_info.model_dump(exclude_none=True),
+            "model_group": deployment.model_name,
+            "deployment": deployment.litellm_params.model,
+        }
+    )
 
 
 def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[ManagedObjectRow]":
@@ -69,6 +127,7 @@ class CheckResponsesCost:
         proxy_logging_obj: "ProxyLogging",
         prisma_client: "PrismaClient",
         llm_router: "Router",
+        log_billed_response: BilledResponseLogger = log_billed_background_response,
     ):
         from litellm.proxy.utils import PrismaClient, ProxyLogging
         from litellm.router import Router
@@ -77,10 +136,11 @@ class CheckResponsesCost:
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
         self._creator_attribution: Final = ManagedObjectCreatorAttribution(prisma_client, "CheckResponsesCost")
+        self._log_billed_response: Final = log_billed_response
 
-    def _resolve_deployment(self, response_id: str) -> bool:
+    def _resolve_deployment(self, response_id: str) -> Deployment | None:
         model_id: str | None = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
-        return model_id is not None and self.llm_router.get_deployment(model_id=model_id) is not None
+        return self.llm_router.get_deployment(model_id=model_id) if model_id is not None else None
 
     async def _get_response(
         self,
@@ -160,7 +220,7 @@ class CheckResponsesCost:
         return _PollTarget(
             response_id=response_id,
             model_metadata=MappingProxyType({"model": model_name, "model_group": model_name} if model_name else {}),
-            via_router=self._resolve_deployment(response_id),
+            deployment=self._resolve_deployment(response_id),
         )
 
     async def _claim_for_billing(self, job: ManagedObjectRow) -> bool:
@@ -176,25 +236,53 @@ class CheckResponsesCost:
             data={"status": job.status or PENDING_RESPONSE_STATUSES[0]},
         )
 
-    async def _bill_once(self, job: ManagedObjectRow, target: _PollTarget, end_user_id: str | None = None) -> None:
+    async def _billed_response(
+        self,
+        job: ManagedObjectRow,
+        target: _PollTarget,
+        response: ResponsesAPIResponse,
+        end_user_id: str | None,
+    ) -> BilledBackgroundResponse:
+        deployment: Final = target.deployment
+        return BilledBackgroundResponse(
+            response=response,
+            model=deployment.litellm_params.model if deployment is not None else (response.model or ""),
+            custom_llm_provider=ResponsesAPIRequestUtils.decode_responses_api_response_id(target.response_id).get(
+                "custom_llm_provider"
+            ),
+            litellm_params=_deployment_litellm_params(deployment) if deployment is not None else MappingProxyType({}),
+            metadata=MappingProxyType(
+                {
+                    **(await self._creator_attribution.build(job, job.unified_object_id)),
+                    **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
+                    INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+                    **target.model_metadata,
+                    **(_deployment_metadata(deployment) if deployment is not None else {}),
+                }
+            ),
+        )
+
+    async def _bill_once(
+        self,
+        job: ManagedObjectRow,
+        target: _PollTarget,
+        response: ResponsesAPIResponse,
+        end_user_id: str | None = None,
+    ) -> None:
         if not await self._claim_for_billing(job):
             verbose_proxy_logger.info(f"Response {job.unified_object_id} was already billed elsewhere, skipping")
             return
-        billed_read_metadata: Final[dict[str, object]] = {
-            **(await self._creator_attribution.build(job, job.unified_object_id)),
-            **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
-            INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
-            **target.model_metadata,
-        }
         try:
-            await self._get_response(target.response_id, billed_read_metadata, target.via_router)
+            await self._log_billed_response(await self._billed_response(job, target, response, end_user_id))
         except BaseException:
             await self._release_billing_claim(job)
             raise
         verbose_proxy_logger.info(f"Response {job.unified_object_id} reached a terminal status and was billed")
 
-    async def bill_if_finished(self, response_id: str, status: str, end_user_id: str | None = None) -> None:
-        if status not in TERMINAL_RESPONSE_STATUSES:
+    async def bill_if_finished(
+        self, response_id: str, response: ResponsesAPIResponse, end_user_id: str | None = None
+    ) -> None:
+        if response.status not in TERMINAL_RESPONSE_STATUSES:
             return
         job: Final = await _managed_object_table(self.prisma_client).find_first(
             where={
@@ -205,15 +293,15 @@ class CheckResponsesCost:
         )
         if job is None:
             return
-        await self._bill_once(job, self._poll_target(job), end_user_id)
+        await self._bill_once(job, self._poll_target(job), response, end_user_id)
 
     async def check_responses_cost(self):
         """
         Check if background responses are complete and track their cost.
         - Get all status="queued" or "in_progress" and file_purpose="response" jobs
         - Query the provider, unbilled, to check if the response is complete
-        - Claim each terminal job by moving its row to completed, then bill it with one stamped read,
-          so two pollers racing over the same job bill it once
+        - Claim each terminal job by moving its row to completed, then log the body that check fetched
+          as its one billed event, so two pollers racing over the same job bill it once
         - Mark responses the provider no longer has (404 through a resolved
           deployment) as stale_expired
         """
@@ -257,17 +345,17 @@ class CheckResponsesCost:
                         **target.model_metadata,
                         INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
                     },
-                    via_router=target.via_router,
+                    via_router=target.deployment is not None,
                 )
 
                 verbose_proxy_logger.debug(
                     f"Response {unified_object_id} status: {response.status}"
                 )
                 if response.status in TERMINAL_RESPONSE_STATUSES:
-                    await self._bill_once(job, target)
+                    await self._bill_once(job, target, response)
 
             except Exception as e:
-                if target.via_router and _is_response_gone_at_provider(e, provider_response_id):
+                if target.deployment is not None and _is_response_gone_at_provider(e, provider_response_id):
                     verbose_proxy_logger.info(
                         f"Response {unified_object_id} no longer available at provider (404), marking stale_expired: {e}"
                     )

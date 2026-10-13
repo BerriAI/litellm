@@ -334,30 +334,55 @@ async def test_responses_api_background_create_persists_the_creating_keys_attrib
     )
 
 
+class _SpendEvents:
+    def __init__(self) -> None:
+        self.payloads: tuple[Mapping[str, object], ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload = kwargs["standard_logging_object"]
+        assert isinstance(payload, Mapping)
+        self.payloads = (*self.payloads, payload)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "background, stored, status, expected_billed_reads",
+    "background, stored, status, expected_billed_events",
     [(True, True, "completed", 1), (True, True, "in_progress", 0), (True, False, "completed", 0), (False, True, "completed", 0)],
 )
 async def test_reading_a_finished_background_response_bills_it(
-    background: bool, stored: bool, status: str, expected_billed_reads: int
+    monkeypatch: pytest.MonkeyPatch, background: bool, stored: bool, status: str, expected_billed_events: int
 ):
-    """The read that first sees a background response finished bills it, since the provider may drop
-    a store=false response before the hourly cost poll reaches it; other reads stay free."""
+    """The read that first sees a background response finished bills it from the body it fetched,
+    since the provider may drop a store=false response before the hourly cost poll reaches it.
+    Billing never reads the provider a second time, and other reads stay free."""
     from types import SimpleNamespace
 
-    from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.response_api_endpoints.endpoints import _bill_finished_background_response
 
+    class _CapturingLogger(_SpendEvents, CustomLogger):
+        pass
+
+    spend_events = _CapturingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [spend_events])
     read = ResponsesAPIResponse(
-        id="resp_read", object="response", status=status, created_at=1, output=[], usage=None, background=background
+        id="resp_read",
+        object="response",
+        status=status,
+        created_at=1,
+        model="gpt-5.6",
+        output=[],
+        usage=None,
+        background=background,
     )
     stored_row = SimpleNamespace(
         id="job-read",
         unified_object_id="resp_read",
         status="queued",
-        file_object={"model": "gpt-5"},
+        file_object={"model": "gpt-5.6"},
         created_by=None,
         api_key=None,
         team_id=None,
@@ -371,19 +396,14 @@ async def test_reading_a_finished_background_response_bills_it(
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.aget_responses", new_callable=AsyncMock, return_value=read) as provider_read,
+        patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")),
     ):
         await _bill_finished_background_response(
             response=read, response_id="resp_read", user_api_key_dict=UserAPIKeyAuth(end_user_id="customer-42")
         )
 
-    billed_reads = [
-        call.kwargs["litellm_metadata"]
-        for call in provider_read.call_args_list
-        if not is_unbilled_non_inference_call("aget_responses", call.kwargs["litellm_metadata"], read)
-    ]
-    assert len(billed_reads) == expected_billed_reads
-    assert all(metadata["user_api_key_end_user_id"] == "customer-42" for metadata in billed_reads)
+    assert len(spend_events.payloads) == expected_billed_events
+    assert all(payload["metadata"]["user_api_key_end_user_id"] == "customer-42" for payload in spend_events.payloads)
 
 
 @pytest.mark.asyncio

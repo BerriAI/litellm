@@ -835,7 +835,7 @@ async def _bill_finished_background_response(
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma_client,
             llm_router=llm_router,
-        ).bill_if_finished(response_id=response_id, status=response.status, end_user_id=user_api_key_dict.end_user_id)
+        ).bill_if_finished(response_id=response_id, response=response, end_user_id=user_api_key_dict.end_user_id)
     except Exception as e:
         verbose_proxy_logger.warning("Billing a finished background response on read failed: %s", e)
 
