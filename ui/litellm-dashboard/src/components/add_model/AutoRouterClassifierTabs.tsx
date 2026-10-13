@@ -185,7 +185,11 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
 
   const changeFamily = (next: unknown) => {
     if (next === family) return;
-    const previous = value.previous_classifier_types?.find((type) => familyByType[type] === next);
+    const previous = value.previous_classifier_types?.find((type) => {
+      if (familyByType[type] !== next) return false;
+      if (hasCustomTiers && type !== "llm" && type !== "jev") return false;
+      return !isAllowanceExhausted(availability.data?.allowances.find((entry) => entry.key === type));
+    });
     if (previous) return changeType(previous);
     if (next === "heuristics") changeType("heuristic");
     if (next === "llm") changeType("llm");

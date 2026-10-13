@@ -11,14 +11,19 @@ import {
   usesClassifierContext,
 } from "./ComplexityRouterConfig";
 import { defaultJevClassifierConfig } from "./jev_classifier_config";
-import { prepareForecastClassifier } from "./forecast_classifier_config";
+import { isForecastClassifier, prepareForecastClassifier } from "./forecast_classifier_config";
 import { nonReasoningTierFields } from "./nonReasoningTierFields";
 
 export const transitionClassifierType = (
   value: ComplexityRouterConfigValue,
   classifierType: ClassifierType,
 ): ComplexityRouterConfigValue => {
-  const startsLlmRubric = !value.classifier_llm_config;
+  const hasComplexityDraft =
+    value.classifier_llm_config?.classification_rubric !== undefined ||
+    [value.classifier_type, ...(value.previous_classifier_types ?? [])].some(
+      (type) => usesLlmClassifier(type) && !isForecastClassifier(type),
+    );
+  const startsLlmRubric = !value.classifier_llm_config || !hasComplexityDraft;
   const judgeConfig = value.classifier_llm_config ?? { model: "", timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS };
   const nextValue: ComplexityRouterConfigValue = {
     ...value,

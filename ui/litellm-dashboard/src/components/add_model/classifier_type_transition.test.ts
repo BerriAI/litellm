@@ -103,6 +103,37 @@ describe("transitionClassifierType", () => {
     expect(buildUpdatedComplexityRouterConfig({}, result).llm_v2_config).toBeUndefined();
   });
 
+  it.each(["capability", "llm_v2"] as const)("preserves an existing implicit rubric after visiting %s", (target) => {
+    const initial: ComplexityRouterConfigValue = {
+      ...standard,
+      classifier_llm_config: { model: "judge", timeout_ms: 20000 },
+    };
+    const forecast = transitionClassifierType(initial, target);
+    const restored = transitionClassifierType(forecast, "llm");
+    expect(restored.classifier_llm_config).toEqual(initial.classifier_llm_config);
+    expect(buildUpdatedComplexityRouterConfig({}, restored).classifier_llm_config).toEqual(
+      initial.classifier_llm_config,
+    );
+  });
+
+  it.each(["heuristic", "jev"] as const)(
+    "initializes the first complexity rubric after visiting %s",
+    (intermediate) => {
+      const initial: ComplexityRouterConfigValue = {
+        ...standard,
+        classifier_type: "capability",
+        classifier_llm_config: { model: "judge", timeout_ms: 20000 },
+        capability_classifier_config: { efficient_tier: "SIMPLE", capable_tier: "REASONING", base_threshold: 0.7 },
+      };
+      const other = transitionClassifierType(initial, intermediate);
+      const complexity = transitionClassifierType(other, "llm");
+      expect(complexity.classifier_llm_config).toEqual({
+        ...initial.classifier_llm_config,
+        classification_rubric: "agentic",
+      });
+    },
+  );
+
   it("clears the inactive non-reasoning pool and plan floor when switching to local classification", () => {
     const initial: ComplexityRouterConfigValue = {
       ...standard,

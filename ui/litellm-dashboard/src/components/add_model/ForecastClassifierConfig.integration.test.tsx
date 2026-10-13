@@ -331,6 +331,7 @@ describe("forecast classifier form", () => {
       />,
     );
     await selectAutoRouterApproach("Capability");
+    fireEvent.click(screen.getByRole("button", { name: "Change method" }));
     fireEvent.change(screen.getByLabelText("Solve probability threshold"), { target: { value: "0.7" } });
     expect(screen.getByRole("button", { name: "Save configuration" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
