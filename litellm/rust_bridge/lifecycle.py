@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Final, Protocol
 
@@ -64,22 +65,18 @@ def _settled(step: Step) -> Settled:
     return step
 
 
-async def drive(execution: Execution, stream_factory: Callable[[Execution, object], object] | None = None) -> object:
-    handed_off = False  # rebind-ok: set once the execution belongs to the returned stream
-    try:
+async def drive(execution: Execution, open_stream: Callable[[Execution, object], object]) -> object:
+    with ExitStack() as cleanup:
+        cleanup.callback(execution.close)
         match await _settle(execution, execution.send(None)):
             case Complete(value):
                 return value
             case StreamOpen(head):
-                factory: Final = Stream if stream_factory is None else stream_factory
-                stream: Final = factory(execution, head)
-                handed_off = True
+                stream: Final = open_stream(execution, head)
+                cleanup.pop_all()
                 return stream
             case StreamChunk():
                 raise RuntimeError("execution yielded a chunk before opening a stream")
-    finally:
-        if not handed_off:
-            execution.close()
 
 
 class Stream(AsyncIterator[object]):

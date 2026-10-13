@@ -50,7 +50,7 @@ async def failing() -> object:
 def test_drive_resumes_each_await_with_its_result_or_error_and_returns_the_completed_value() -> None:
     execution: Final = ScriptedExecution([Await(ready(1)), Await(failing()), Complete("done")])
 
-    assert asyncio.run(drive(execution)) == "done"
+    assert asyncio.run(drive(execution, Stream)) == "done"
 
     assert execution.resumed == [("value", None), ("value", 1), ("error", ValueError)]
     assert execution.closed
@@ -85,7 +85,7 @@ def test_drive_rejects_a_chunk_before_the_stream_opens_and_closes_the_execution(
     execution: Final = ScriptedExecution([StreamChunk("chunk")])
 
     with pytest.raises(RuntimeError, match="chunk before opening a stream"):
-        asyncio.run(drive(execution))
+        asyncio.run(drive(execution, Stream))
 
     assert execution.closed
 
