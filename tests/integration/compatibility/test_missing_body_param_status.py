@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import signal
 import socket
 import subprocess
 import sys
@@ -20,7 +19,7 @@ import psutil
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process
+from integration._support.process import owned_proxy_process, paused, stop_child
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from openai import AsyncOpenAI, BadRequestError, OpenAI
 from pydantic import JsonValue
@@ -1455,10 +1454,7 @@ def _upstream(directory: Path) -> Iterator[tuple[subprocess.Popen[bytes], str]]:
         eventually(lambda: _healthy(url), lambda status: status == 200, seconds=30)
         yield process, url
     finally:
-        if process.poll() is None:
-            process.send_signal(signal.SIGCONT)
-            process.terminate()
-            process.wait(timeout=10)
+        stop_child(process)
 
 
 def _register_owned(url: str, identity: str, scripted: JsonResponse) -> ScenarioHandle:
@@ -1478,22 +1474,11 @@ def _delete_owned(handle: ScenarioHandle) -> None:
     ).raise_for_status()
 
 
-def _workers(process: subprocess.Popen[bytes]) -> tuple[psutil.Process, ...]:
-    return tuple(psutil.Process(process.pid).children(recursive=True))
-
-
 def _process_tree_line(process: psutil.Process) -> str:
     try:
         return f"{process.pid} {' '.join(process.cmdline())}"
     except psutil.Error:
         return f"{process.pid} <exited>"
-
-
-def _worker_alive(worker: psutil.Process) -> bool:
-    try:
-        return worker.is_running() and worker.status() != psutil.STATUS_ZOMBIE
-    except psutil.NoSuchProcess:
-        return False
 
 
 def _chat_body(model: str, marker: str, valid: bool) -> dict[str, JsonValue]:
@@ -1556,11 +1541,7 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             processes: Final = (process_root, *process_root.children(recursive=True))
             process_tree: Final = "\n".join(_process_tree_line(process) for process in processes)
             record_property("owned_proxy_process_tree", process_tree)
-            workers: Final = eventually(
-                lambda: _workers(owned.process),
-                lambda children: len(children) >= 2,
-                seconds=30,
-            )
+            workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) >= 2, seconds=30)
             observations: Final = _Observations(url)
             missing_routes: Final = (
                 ("aspeech", "input"),
@@ -1585,26 +1566,22 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             valid_calls: Final = tuple(
                 ("/v1/chat/completions", _chat_body(chat_model, marker, True), marker) for marker in markers
             )
-            upstream.send_signal(signal.SIGSTOP)
-            try:
-                with ThreadPoolExecutor(max_workers=10) as pool:
-                    missing_futures: Final = tuple(
-                        pool.submit(_post, candidate, path, body) for path, body, _expected, _identity in missing_calls
-                    )
-                    missing: Final = tuple(
-                        (call, future.result(timeout=15)) for call, future in zip(missing_calls, missing_futures)
-                    )
-                    assert all(
-                        response.status_code == 400 and response.json() == expected
-                        for (_path, _body, expected, _identity), response in missing
-                    ), [response.text for _call, response in missing]
-                    paused_statuses: Final = tuple(response.status_code for _call, response in missing)
-                    record_property(
-                        "chaos_paused_missing_status_counts",
-                        str({status: paused_statuses.count(status) for status in sorted(set(paused_statuses))}),
-                    )
-            finally:
-                upstream.send_signal(signal.SIGCONT)
+            with paused(upstream), ThreadPoolExecutor(max_workers=10) as pool:
+                missing_futures: Final = tuple(
+                    pool.submit(_post, candidate, path, body) for path, body, _expected, _identity in missing_calls
+                )
+                missing: Final = tuple(
+                    (call, future.result(timeout=15)) for call, future in zip(missing_calls, missing_futures)
+                )
+                assert all(
+                    response.status_code == 400 and response.json() == expected
+                    for (_path, _body, expected, _identity), response in missing
+                ), [response.text for _call, response in missing]
+                paused_statuses: Final = tuple(response.status_code for _call, response in missing)
+                record_property(
+                    "chaos_paused_missing_status_counts",
+                    str({status: paused_statuses.count(status) for status in sorted(set(paused_statuses))}),
+                )
             with ThreadPoolExecutor(max_workers=20) as pool:
                 valid_futures: Final = tuple(
                     pool.submit(_post, candidate, path, body) for path, body, _marker in valid_calls
@@ -1650,14 +1627,14 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             record_property("chaos_spend_query", 'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id = %s')
             record_property("chaos_spend_response_id_count", len(request_ids))
             record_property("chaos_spend_row_counts", str(tuple(len(rows) for rows in spend_rows)))
-            workers[0].kill()
-            eventually(lambda: _worker_alive(workers[0]), lambda alive: not alive, seconds=10)
-            post_kill: Final = tuple(
-                _post(candidate, path, body) for path, body, _expected, _identity in missing_calls[:5]
-            )
-            assert all(
-                response.status_code == 400 and response.json() == expected
-                for response, (_path, _body, expected, _identity) in zip(post_kill, missing_calls[:5])
-            ), [response.text for response in post_kill]
-            recovered: Final = _post(candidate, "/v1/chat/completions", _chat_body(chat_model, "recovered", True))
-            assert recovered.status_code == 200, recovered.text
+            with owned.replacing_worker(min(workers)) as kill:
+                kill()
+                post_kill: Final = tuple(
+                    _post(candidate, path, body) for path, body, _expected, _identity in missing_calls[:5]
+                )
+                assert all(
+                    response.status_code == 400 and response.json() == expected
+                    for response, (_path, _body, expected, _identity) in zip(post_kill, missing_calls[:5])
+                ), [response.text for response in post_kill]
+                recovered: Final = _post(candidate, "/v1/chat/completions", _chat_body(chat_model, "recovered", True))
+                assert recovered.status_code == 200, recovered.text

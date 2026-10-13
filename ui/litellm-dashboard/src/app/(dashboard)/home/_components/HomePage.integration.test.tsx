@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DailyActivityAggregatedResponse } from "@/components/UsagePage/dailyActivityApi";
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import { all_admin_roles } from "@/utils/roles";
+import { LiteAdminFrame } from "@/components/liteadmin/LiteAdmin";
 import HomePage from "./HomePage";
 
 const auth = vi.hoisted(() => ({
@@ -12,6 +13,10 @@ const auth = vi.hoisted(() => ({
   userRole: "",
   userId: "u1",
   isViewOnly: false,
+  isAuthorized: true,
+  isLoading: false,
+  premiumUser: true,
+  token: "test-token",
 }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => auth }));
 
@@ -46,6 +51,12 @@ const requestUrl = (input: RequestInfo | URL): string => {
 };
 
 const fakeFetch = (input: RequestInfo | URL) => {
+  if (requestUrl(input).includes("/model_group/info")) {
+    return Promise.resolve(Response.json({ data: [{ model_group: "claude-sonnet-5-5", mode: "chat" }] }));
+  }
+  if (requestUrl(input).endsWith("/sso/get/ui_settings")) {
+    return Promise.resolve(Response.json({ PROXY_BASE_URL: "http://proxy.test" }));
+  }
   const body = requestUrl(input).endsWith("/public/whats_new") ? whatsNew : blogPosts;
   return Promise.resolve(
     new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }),
@@ -131,6 +142,20 @@ describe("HomePage", () => {
     auth.isViewOnly = true;
     renderHome();
     expect(screen.queryByRole("link", { name: /create new virtual key/i })).not.toBeInTheDocument();
+  });
+
+  it("offers LiteAdmin on Home inside the dashboard frame", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <LiteAdminFrame>
+          <HomePage />
+        </LiteAdminFrame>
+      </QueryClientProvider>,
+    );
+    const entry = screen.getByRole("region", { name: "Ask LiteAdmin" });
+    expect(await within(entry).findByPlaceholderText("Ask LiteAdmin…")).toBeInTheDocument();
+    expect(within(entry).getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(await screen.findByText("$501.74")).toBeInTheDocument();
   });
 
   it("shows an error with a retry instead of zero totals when the usage request fails", async () => {
