@@ -1,0 +1,26 @@
+{
+  "db_model": true,
+  "classifier_type": "llm",
+  "jev_classifier_config": null,
+  "classifier_llm_config": {
+    "model": "claude-fable-5-1",
+    "timeout_ms": 3000,
+    "classification_rubric": "agentic"
+  },
+  "classification_mode": "user_turn",
+  "tiers": {
+    "MEDIUM": [
+      "muse-spark-1.3"
+    ],
+    "SIMPLE": [
+      "deepseek-v4-flash"
+    ],
+    "COMPLEX": [
+      "kimi-k3"
+    ],
+    "REASONING": [
+      "claude-opus-5-5"
+    ]
+  },
+  "custom_tier_set": null
+}

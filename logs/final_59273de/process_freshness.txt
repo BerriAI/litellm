@@ -1,0 +1,12 @@
+source_root=/home/ubuntu/repos/litellm HEAD=59273de63fbd3502041141207da1a0e1c3d092b7 porcelain_lines=0 merge_base=2717b5f5971f701ab866e30ed91852239a8fea37
+ .../proxy/public_endpoints/autorouter_presets.json |   2 +-
+ .../add_auto_router_tab.integration.test.tsx       |  73 +++-
+ .../components/add_model/add_auto_router_tab.tsx   |  14 +-
+ .../src/lib/autorouter_presets.test.ts             | 376 +++++++++------------
+ ui/litellm-dashboard/src/lib/autorouter_presets.ts |  94 ++----
+ 5 files changed, 250 insertions(+), 309 deletions(-)
+ui/litellm-dashboard/.next absent before dashboard start (removed, then npm run dev)
+PID 3627 port *:3000 cwd /home/ubuntu/repos/litellm/ui/litellm-dashboard started 2026-10-13T13:09:16Z cmd next-server (v16.3.8)
+PID 4187 port 0.0.0.0:4000 cwd /home/ubuntu/repos/litellm started 2026-10-13T13:09:37Z cmd /home/ubuntu/repos/litellm/.venv/bin/python /home/ubuntu/repos/litellm/.venv/bin/litellm --config <disposable> --port 4000 --num_workers 1
+proxy env: STORE_MODEL_IN_DB=True LITELLM_LOCAL_AUTOROUTER_PRESETS=True LITELLM_CORS_ORIGINS=http://localhost:3000 LITELLM_CORS_ALLOW_CREDENTIALS=true, LITELLM_LICENSE not set (no gated capability used by these cases)
+database: fresh disposable litellm_qa_ar
