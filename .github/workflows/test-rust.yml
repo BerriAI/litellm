@@ -99,8 +99,6 @@ jobs:
     # Trim debuginfo to keep the job's target dir within the runner's disk
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
-      CARGO_PROFILE_TEST_DEBUG: "0"
-      CARGO_INCREMENTAL: "0"
     defaults:
       run:
         working-directory: litellm-rust

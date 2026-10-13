@@ -1,23 +1,175 @@
 import json
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
 import pytest
 import yaml
+from fastapi import FastAPI
 from openai import AsyncOpenAI
+from starlette.requests import Request
 
 import litellm
 from litellm.caching.caching import Cache, DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.model_offerings import ModelOfferingsManager
-from litellm.proxy.offering_router import OfferingAccessGuard
+from litellm.proxy.offering_router import OfferingAccessGuard, OfferingSnapshotMiddleware
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.utils import CallTypesLiteral
+
+
+@pytest.mark.parametrize("catalog_state", ("missing", "known", "different_route_provider"))
+async def test_wildcard_listing_tracks_selected_offerings_and_pinned_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog_state: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    path: Final = tmp_path / "offerings.yaml"
+    selected: Final = {
+        "model_name": "openrouter/org/new-model",
+        "source": "auto",
+        "provider": "supplier",
+        "upstream_model": "org/new-model",
+        "model_info": {"mode": "chat", "context_window": 4000},
+        "provider_policy": {"provider": "openrouter", "only": ["synthetic/fp8"]},
+    }
+    existing: Final = {
+        "model_name": "chatgpt/existing",
+        "source": "manual",
+        "provider": "secondary",
+        "upstream_model": "org/existing",
+    }
+    other_existing: Final = tuple(
+        {**existing, "model_name": name} for name in ("chatgpt/second", "chatgpt/third", "chatgpt/fourth")
+    )
+    existing_names: Final = frozenset((existing["model_name"], *(row["model_name"] for row in other_existing)))
+    denied: Final = {**existing, "model_name": "restricted/other"}
+    disabled: Final = {**selected, "model_name": "openrouter/org/disabled", "enabled": False}
+    absent: Final = {**selected, "model_name": "openrouter/org/absent", "upstream_model": "org/absent"}
+    config: Final = {
+        "version": 1,
+        "providers": {
+            "supplier": {
+                "provider": "openrouter",
+                "api_base": "https://supplier.test/v1",
+                "api_key": "private-fixture-key",
+            },
+            "secondary": {"provider": "openai", "api_base": "https://secondary.test/v1"},
+        },
+        "offerings": [existing, *other_existing, denied, disabled, absent],
+    }
+    path.write_text(yaml.safe_dump(config))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"data": [{"id": "org/new-model"}, {"id": "org/unselected"}]})
+        )
+    ) as client:
+        handler.client = client
+        template: Final = Router(
+            model_list=[],
+            model_group_alias={"openrouter/*": existing["model_name"]}
+            if catalog_state == "different_route_provider"
+            else {},
+        )
+        manager: Final = ModelOfferingsManager(path=path, template=template, client=handler, clock=lambda: 0.0)
+        assert await manager.reload(initial=True)
+        monkeypatch.setattr(proxy_server, "llm_router", manager.router)
+        monkeypatch.setattr(proxy_server, "llm_model_list", manager.router.model_list)
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        monkeypatch.setattr(proxy_server, "user_model", None)
+        monkeypatch.setattr(litellm, "callbacks", [OfferingAccessGuard(manager.router)])
+        monkeypatch.setattr(
+            litellm,
+            "models_by_provider",
+            {
+                "openrouter": ["org/catalog-only"] if catalog_state == "missing" else [selected["model_name"]],
+                "chatgpt": sorted(existing_names),
+                "openai": ["fixture/catalog-only"],
+            },
+        )
+        monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+        assert (selected["model_name"] in get_known_models_from_wildcard("openrouter/*")) == (
+            catalog_state != "missing"
+        )
+        wildcard: Final = UserAPIKeyAuth(
+            api_key="wildcard", user_role=LitellmUserRoles.INTERNAL_USER, models=["openrouter/*", "chatgpt/*"]
+        )
+        exact: Final = UserAPIKeyAuth(
+            api_key="exact", user_role=LitellmUserRoles.INTERNAL_USER, models=sorted(existing_names)
+        )
+        denied_key: Final = UserAPIKeyAuth(
+            api_key="denied", user_role=LitellmUserRoles.INTERNAL_USER, models=["denied/*"]
+        )
+        team_key: Final = UserAPIKeyAuth(
+            api_key="team", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team-one", team_models=["openrouter/*"]
+        )
+        alias_key: Final = UserAPIKeyAuth(
+            api_key="alias",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["shortcut"],
+            aliases={"shortcut": selected["model_name"]},
+        )
+        admin: Final = UserAPIKeyAuth(api_key="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        credentials: Final = MappingProxyType(
+            {auth.api_key: auth for auth in (wildcard, exact, denied_key, team_key, alias_key, admin)}
+        )
+        application: Final = FastAPI()
+        application.include_router(proxy_server.router)
+        application.add_middleware(OfferingSnapshotMiddleware, router_getter=lambda: manager.router)
+
+        async def scoped_auth(request: Request) -> UserAPIKeyAuth:
+            if edit := request.headers.get("x-fixture-offerings"):
+                path.write_text(yaml.safe_dump(json.loads(edit)))
+                assert await manager.reload()
+            return credentials[request.headers["authorization"].removeprefix("Bearer ")]
+
+        application.dependency_overrides[proxy_server.user_api_key_auth] = scoped_auth
+
+        async def listed(auth: UserAPIKeyAuth, edit: str | None = None) -> frozenset[str]:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=application), base_url="http://gateway.test"
+            ) as gateway:
+                response: Final = await gateway.get(
+                    "/v1/models",
+                    headers={
+                        "Authorization": f"Bearer {auth.api_key}",
+                        **({"x-fixture-offerings": edit} if edit is not None else {}),
+                    },
+                )
+            assert response.status_code == 200, response.text
+            assert "private-fixture-key" not in response.text
+            assert "supplier.test" not in response.text
+            assert "secondary.test" not in response.text
+            assert "org/existing" not in response.text
+            assert "synthetic/fp8" not in response.text
+            assert "offering-" not in response.text
+            return frozenset(row["id"] for row in response.json()["data"])
+
+        assert await listed(exact) == existing_names
+        assert await listed(admin) == existing_names | {"restricted/other"}
+        assert await listed(admin, json.dumps({**config, "offerings": [*config["offerings"], selected]})) == (
+            existing_names | {"restricted/other"}
+        )
+        assert await listed(admin) == existing_names | {"restricted/other", selected["model_name"]}
+        assert await listed(wildcard) == existing_names | {selected["model_name"]}
+        assert await listed(exact) == existing_names
+        assert await listed(denied_key) == set()
+        assert await listed(team_key) == {selected["model_name"]}
+        assert await listed(alias_key) == {"shortcut"}
+        assert await listed(wildcard, json.dumps(config)) == existing_names | {selected["model_name"]}
+        assert await listed(wildcard) == existing_names
+        assert await listed(alias_key) == set()
+        assert await listed(team_key) == set()
+        assert await listed(admin) == existing_names | {"restricted/other"}
 
 
 async def test_authoritative_inventory_failure_recovery_and_atomic_config_reload(tmp_path: Path) -> None:

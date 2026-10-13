@@ -8,6 +8,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
@@ -206,12 +207,12 @@ def get_complete_model_list(
     - If key list is empty -> defer to team list
     - If team list is empty -> defer to proxy model list
 
-    If list contains wildcard -> return known provider models
+    If list contains wildcard -> include matching proxy names and known provider models
     """
 
-    unique_models: Final = []
+    unique_models: Final[list[str]] = []
 
-    def append_unique(models):
+    def append_unique(models: Sequence[str]) -> None:
         for model in models:
             if model not in unique_models and model != SpecialModelNames.no_default_models.value:
                 unique_models.append(model)
@@ -239,6 +240,15 @@ def get_complete_model_list(
                 model_access_groups_to_return.append(model)
         return model_access_groups_to_return
 
+    granted_proxy_models: Final = tuple(
+        dict.fromkeys(
+            model
+            for model in proxy_model_list
+            if not _check_wildcard_routing(model)
+            and any(is_model_allowed_by_pattern(model, grant) for grant in unique_models)
+        )
+    )
+
     all_wildcard_models: Final = _get_wildcard_models(
         unique_models=unique_models,
         return_wildcard_routes=return_wildcard_routes,
@@ -248,7 +258,7 @@ def get_complete_model_list(
 
     complete_model_list: Final = unique_models + all_wildcard_models
 
-    return complete_model_list
+    return complete_model_list + [model for model in granted_proxy_models if model not in complete_model_list]
 
 
 def _hydrate_litellm_credential_name(

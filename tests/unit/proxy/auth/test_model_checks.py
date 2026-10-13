@@ -6,6 +6,38 @@ import pytest
 import respx
 
 
+@pytest.mark.parametrize(
+    "key_grants,team_grants,groups_only,expected",
+    (
+        (("public/*",), (), False, ("public/selected",)),
+        (("public/sel*",), (), False, ("public/selected",)),
+        (("*",), (), False, ("public/selected", "private/selected")),
+        ((), ("public/*",), False, ("public/selected",)),
+        (("private/selected",), ("public/*",), False, ("private/selected",)),
+        (("denied/*",), (), False, ()),
+        (("public/*",), (), True, ()),
+        (("no-default-models",), ("public/*",), False, ()),
+    ),
+)
+def test_wildcard_grants_list_deployed_public_names_without_provider_inventory(
+    key_grants: tuple[str, ...],
+    team_grants: tuple[str, ...],
+    groups_only: bool,
+    expected: tuple[str, ...],
+) -> None:
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result: Final = get_complete_model_list(
+        key_models=key_grants,
+        team_models=team_grants,
+        proxy_model_list=["public/selected", "public/selected", "private/selected", "public/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        only_model_access_groups=groups_only,
+    )
+    assert tuple(result) == expected
+
+
 def test_get_team_models_for_all_models_and_team_only_models():
     from litellm.proxy.auth.model_checks import get_team_models
 
