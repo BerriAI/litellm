@@ -19,6 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.internal_call_metadata import is_background_response
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
@@ -37,6 +38,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.hooks.responses_id_security import decrypted_response_id
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
 )
@@ -394,8 +396,7 @@ async def responses_api(
             version=version,
         )
 
-        # Store in managed objects table if background mode is enabled
-        if data.get("background") and isinstance(response, ResponsesAPIResponse):
+        if isinstance(response, ResponsesAPIResponse) and (data.get("background") or is_background_response(response)):
             if response.status in ["queued", "in_progress"]:
                 from litellm_enterprise.proxy.hooks.managed_files import (
                     PROXY_LiteLLMManagedFiles,
@@ -423,7 +424,7 @@ async def responses_api(
                             unified_object_id=response.id,
                             file_object=response,
                             litellm_parent_otel_span=None,
-                            model_object_id=response.id,
+                            model_object_id=decrypted_response_id(response.id),
                             file_purpose="response",
                             user_api_key_dict=user_api_key_dict,
                             request_tags=_background_response_spend_tags(processor.data),
@@ -799,7 +800,9 @@ async def get_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-    await _bill_finished_background_response(response=response, response_id=response_id)
+    await _bill_finished_background_response(
+        response=response, response_id=response_id, user_api_key_dict=user_api_key_dict
+    )
     return response
 
 
@@ -816,10 +819,12 @@ def _background_response_spend_tags(data: Mapping[str, object]) -> tuple[str, ..
     return tags or None
 
 
-async def _bill_finished_background_response(response: object, response_id: str) -> None:
+async def _bill_finished_background_response(
+    response: object, response_id: str, user_api_key_dict: UserAPIKeyAuth
+) -> None:
     from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj
 
-    if not isinstance(response, ResponsesAPIResponse):
+    if not isinstance(response, ResponsesAPIResponse) or not is_background_response(response):
         return
     if prisma_client is None or llm_router is None or response.status is None:
         return
@@ -830,7 +835,7 @@ async def _bill_finished_background_response(response: object, response_id: str)
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma_client,
             llm_router=llm_router,
-        ).bill_if_finished(unified_object_id=response_id, status=response.status)
+        ).bill_if_finished(response_id=response_id, status=response.status, end_user_id=user_api_key_dict.end_user_id)
     except Exception as e:
         verbose_proxy_logger.warning("Billing a finished background response on read failed: %s", e)
 
@@ -1331,7 +1336,7 @@ async def cancel_response(
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -1356,6 +1361,10 @@ async def cancel_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    await _bill_finished_background_response(
+        response=response, response_id=response_id, user_api_key_dict=user_api_key_dict
+    )
+    return response
 
 
 def _resolve_responses_ws_session_limit_seconds() -> float:

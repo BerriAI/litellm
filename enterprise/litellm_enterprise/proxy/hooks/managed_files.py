@@ -24,7 +24,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Unpack
 
 import litellm
@@ -35,6 +35,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import (
     BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS,
     BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     MAX_FILE_LIST_LIMIT,
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
@@ -86,7 +87,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_metadata,
 )
+from litellm.proxy.hooks.responses_id_security import decrypted_response_id
 from litellm.repositories.managed_file_repository import ManagedFileRepository
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
     AsyncCursorPage,
@@ -99,6 +102,7 @@ from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccess
     ResponsesAPIResponse,
 )
 from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
     CallTypesLiteral,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
@@ -358,6 +362,30 @@ def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, s
             if isinstance(value := hidden_params.get(key), str)
         }
     )
+
+
+_MANAGED_RESPONSE_READ_CALL_TYPES: Final = frozenset({"aget_responses", "acancel_responses"})
+_REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _addresses_a_proxy_issued_response(data: Mapping[str, object]) -> bool:
+    addressed_id: Final = data.get(ADDRESSED_RESPONSE_ID_FIELD) or data.get("response_id")
+    return (
+        isinstance(addressed_id, str)
+        and ResponsesAPIRequestUtils.get_model_id_from_response_id(decrypted_response_id(addressed_id)) is not None
+    )
+
+
+def _with_managed_background_read_marker(request: Mapping[str, object]) -> dict[str, object]:
+    metadata_field: Final = "litellm_metadata" if isinstance(request.get("litellm_metadata"), dict) else "metadata"
+    existing_metadata: Final = request.get(metadata_field)
+    return {
+        **request,
+        metadata_field: {
+            **(_REQUEST_FIELDS.validate_python(existing_metadata) if isinstance(existing_metadata, dict) else {}),
+            MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: True,
+        },
+    }
 
 
 _MANAGED_FILES_TARGET: Final = "managed_files"
@@ -1315,6 +1343,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 data[accessor_key] = get_batch_id_from_unified_batch_id(potential_llm_object_id)
             elif retrieve_object_id and accessor_key == "batch_id":
                 await self.enforce_batch_object_access(retrieve_object_id, user_api_key_dict)
+        elif call_type in _MANAGED_RESPONSE_READ_CALL_TYPES:
+            request: Final = _REQUEST_FIELDS.validate_python(data)
+            if _addresses_a_proxy_issued_response(request):
+                return _with_managed_background_read_marker(request)
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
             fine_tuning_file_ids: Final = tuple(
                 file_id

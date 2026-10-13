@@ -1856,7 +1856,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return 0.0
 
         if is_unbilled_non_inference_call(
-            self.call_type, StandardLoggingPayloadSetup.merge_litellm_metadata(self.litellm_params)
+            self.call_type, StandardLoggingPayloadSetup.merge_litellm_metadata(self.litellm_params), result
         ):
             return 0.0
 
@@ -2042,7 +2042,7 @@ class Logging(LiteLLMLoggingBaseClass):
         router_model_id: str | None,
     ) -> tuple[StandardLoggingZeroCostDiagnostic, str] | None:
         metadata: Final = StandardLoggingPayloadSetup.merge_litellm_metadata(self.litellm_params)
-        if response_cost or is_unbilled_non_inference_call(self.call_type, metadata):
+        if response_cost or is_unbilled_non_inference_call(self.call_type, metadata, result):
             return None
         usage: Final = get_usage_object(completion_response=result)
         if usage is None:
@@ -6646,7 +6646,7 @@ def get_standard_logging_object_payload(
         cache_hit: Final = kwargs.get("cache_hit", False)
         # Extract usage as a plain dict, avoiding Pydantic round-trip
         raw_usage_dict: Final = StandardLoggingPayloadSetup.get_usage_as_dict(
-            response_obj=None if is_unbilled_non_inference_call(call_type, metadata) else response_obj,
+            response_obj=None if is_unbilled_non_inference_call(call_type, metadata, response_obj) else response_obj,
             combined_usage_object=cast(Usage | None, kwargs.get("combined_usage_object")),
         )
         usage_dict: Final = (

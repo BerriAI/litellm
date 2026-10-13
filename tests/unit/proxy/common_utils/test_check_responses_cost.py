@@ -7,6 +7,7 @@ import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -34,6 +35,7 @@ class _StoredResponse:
     id: str
     unified_object_id: str
     status: str
+    model_object_id: str = ""
     file_purpose: str = "response"
     file_object: Mapping[str, object] = dataclasses.field(default_factory=lambda: {"model": "gpt-5"})
     created_by: str | None = None
@@ -55,10 +57,14 @@ class _InMemoryManagedObjectTable:
         def value_of(field: str) -> object:
             return self.statuses[row.id] if field == "status" else getattr(row, field)
 
-        return all(
-            value_of(field) in condition["in"] if isinstance(condition, dict) else value_of(field) == condition
-            for field, condition in where.items()
-        )
+        def holds(field: str, condition: object) -> bool:
+            if field == "OR" and isinstance(condition, list):
+                return any(self._matches(row, alternative) for alternative in condition)
+            if isinstance(condition, dict):
+                return value_of(field) in condition["in"]
+            return value_of(field) == condition
+
+        return all(holds(field, condition) for field, condition in where.items())
 
     def _current(self, where: Mapping[str, object]) -> list[_StoredResponse]:
         return [
@@ -104,10 +110,15 @@ def _claim(job_id: str) -> tuple[Mapping[str, object], Mapping[str, object]]:
     return ({"id": job_id, "status": {"in": ["queued", "in_progress"]}}, {"status": "completed"})
 
 
+_READ_OF_A_BACKGROUND_RESPONSE: Final = MappingProxyType({"background": True})
+
+
 def _is_billed(litellm_metadata: Mapping[str, object]) -> bool:
     from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 
-    return not is_unbilled_non_inference_call("aget_responses", dict(litellm_metadata))
+    return not is_unbilled_non_inference_call(
+        "aget_responses", dict(litellm_metadata), _READ_OF_A_BACKGROUND_RESPONSE
+    )
 
 
 class TestCheckResponsesCost:
@@ -1136,8 +1147,7 @@ class TestCheckResponsesCost:
 
         metadata = mock_aget.call_args[1]["litellm_metadata"]
         assert metadata[INTERNAL_CALL_ORIGIN_METADATA_KEY] == "background_response_cost_poll"
-        assert is_unbilled_non_inference_call("aget_responses", metadata) is False
-        assert is_unbilled_non_inference_call("aget_responses", None) is True
+        assert is_unbilled_non_inference_call("aget_responses", metadata, _READ_OF_A_BACKGROUND_RESPONSE) is False
 
     @pytest.mark.asyncio
     async def test_poll_bills_the_read_to_the_creating_key_team_org_and_tags(
@@ -1254,9 +1264,9 @@ async def test_only_the_first_read_that_sees_a_response_finished_bills_it():
     poller.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     with patch("litellm.aget_responses", new_callable=AsyncMock, return_value=_terminal_response()) as provider_read:
-        await poller.bill_if_finished(unified_object_id="resp_read", status="in_progress")
-        await poller.bill_if_finished(unified_object_id="resp_read", status="completed")
-        await poller.bill_if_finished(unified_object_id="resp_read", status="completed")
+        await poller.bill_if_finished(response_id="resp_read", status="in_progress")
+        await poller.bill_if_finished(response_id="resp_read", status="completed")
+        await poller.bill_if_finished(response_id="resp_read", status="completed")
         await poller.check_responses_cost()
 
     billed_reads: Final = [call.kwargs["litellm_metadata"] for call in provider_read.call_args_list]
@@ -1264,3 +1274,76 @@ async def test_only_the_first_read_that_sees_a_response_finished_bills_it():
     assert billed_reads[0]["user_api_key_hash"] == "hash-alice"
     assert billed_reads[0]["user_api_key_team_id"] == "team-alpha"
     assert table.statuses == {"job-read": "completed"}
+
+
+_ROTATION_SALT_KEY: Final = "check-responses-cost-unit-test-salt"
+
+
+@pytest.mark.asyncio
+async def test_a_read_through_a_reissued_response_id_bills_the_stored_response(monkeypatch: pytest.MonkeyPatch):
+    """The proxy re-encrypts a response id on every read, so a client polling with the id its last
+    read returned still bills the row stored under the id the create returned."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", _ROTATION_SALT_KEY)
+    issuer: Final = ResponsesIDSecurity(general_settings_reader=lambda: {}, signing_key_reader=lambda: _ROTATION_SALT_KEY)
+
+    def issued_id() -> str:
+        return issuer._encrypt_response_id(
+            ResponsesAPIResponse(id="resp_provider_job", created_at=1, output=[], status="queued"),
+            UserAPIKeyAuth(user_id="alice"),
+        ).id
+
+    created_id: Final = issued_id()
+    reissued_id: Final = issued_id()
+    assert created_id != reissued_id
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(
+            _StoredResponse(
+                id="job-rotated",
+                unified_object_id=created_id,
+                model_object_id="resp_provider_job",
+                status="queued",
+            ),
+        )
+    )
+
+    with patch("litellm.aget_responses", new_callable=AsyncMock, return_value=_terminal_response()) as provider_read:
+        await _poller_over(table).bill_if_finished(response_id=reissued_id, status="completed")
+
+    assert [_is_billed(call.kwargs["litellm_metadata"]) for call in provider_read.call_args_list] == [True]
+    assert provider_read.call_args.kwargs["response_id"] == "resp_provider_job"
+    assert table.statuses == {"job-rotated": "completed"}
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_billing_read_puts_the_response_back_for_the_next_poll():
+    """A client that disconnects mid-read cancels the billing read, so the claim is released and
+    the next poll still bills the response."""
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(_StoredResponse(id="job-cancelled", unified_object_id="resp_cancelled", status="in_progress"),)
+    )
+
+    with patch("litellm.aget_responses", new_callable=AsyncMock, side_effect=asyncio.CancelledError()):
+        with pytest.raises(asyncio.CancelledError):
+            await _poller_over(table).bill_if_finished(response_id="resp_cancelled", status="completed")
+
+    assert table.statuses == {"job-cancelled": "in_progress"}
+
+
+@pytest.mark.asyncio
+async def test_the_billing_read_carries_the_readers_end_user():
+    """The stored row has no end user, so the client read that bills the response passes its own,
+    keeping the charge on that customer's spend."""
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(_StoredResponse(id="job-end-user", unified_object_id="resp_end_user", status="queued"),)
+    )
+
+    with patch("litellm.aget_responses", new_callable=AsyncMock, return_value=_terminal_response()) as provider_read:
+        await _poller_over(table).bill_if_finished(
+            response_id="resp_end_user", status="completed", end_user_id="customer-42"
+        )
+
+    assert table.statuses == {"job-end-user": "completed"}
+    assert provider_read.call_args.kwargs["litellm_metadata"]["user_api_key_end_user_id"] == "customer-42"

@@ -6675,9 +6675,7 @@ class TestCostHeadersForCallsPricedAtZero:
             assert fastapi_response.headers[f"x-litellm-response-cost-{component}"] == "0.0"
 
     @pytest.mark.asyncio
-    async def test_reading_a_background_response_reports_zero_cost(self, monkeypatch):
-        """The background cost poll bills the response once, so a client's own read of it
-        advertises zero even though its usage would price at a real cost."""
+    async def test_reading_a_background_response_keeps_its_real_cost(self, monkeypatch):
         fastapi_response = await self._drive(
             monkeypatch=monkeypatch,
             response=self._responses_read(background=True),
@@ -6685,7 +6683,7 @@ class TestCostHeadersForCallsPricedAtZero:
             route_type="aget_responses",
         )
 
-        assert fastapi_response.headers["x-litellm-response-cost"] == "0.0"
+        assert float(fastapi_response.headers["x-litellm-response-cost"]) == pytest.approx(0.00042)
 
     @pytest.mark.asyncio
     async def test_an_inference_call_without_a_recorded_cost_still_omits_the_header(self, monkeypatch):
@@ -6718,8 +6716,9 @@ class TestCostHeadersForCallsPricedAtZero:
         assert breakdown == CostBreakdownHeaderValues()
 
     def test_cost_breakdown_never_zeroes_the_split_under_a_real_total(self):
-        """A breakdown that has not landed by the time headers are built is reported as absent
-        under a real total, rather than as a zero split contradicting that total."""
+        """Reading a background response prices normally, so a breakdown that has not landed by the
+        time headers are built is reported as absent rather than as a zero split contradicting the
+        real total alongside it."""
         breakdown = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=self._logging_obj(call_type="aget_responses"),
             response_cost=1.96e-05,

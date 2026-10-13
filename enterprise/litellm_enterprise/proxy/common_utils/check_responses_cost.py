@@ -3,7 +3,9 @@ Polls LiteLLM_ManagedObjectTable to check if the response is complete.
 A background response is billed exactly once: whichever client read or poll first sees it
 finished moves its row out of a pending status, then re-reads it stamped with
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN and the creating key's attribution, the only read
-that prices normally; every other read of the route is non-inference and free.
+that prices normally. The poll's status checks are stamped with
+BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN and client reads are marked managed by the managed
+files hook, so both stay free.
 """
 
 from collections.abc import Mapping
@@ -27,10 +29,14 @@ from litellm.constants import (
     MAX_OBJECTS_PER_POLL_CYCLE,
     STALE_OBJECT_CLEANUP_BATCH_SIZE,
 )
+from litellm.proxy.hooks.responses_id_security import decrypted_response_id
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+from litellm.types.utils import (
+    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -148,15 +154,13 @@ class CheckResponsesCost:
             )
 
     def _poll_target(self, job: ManagedObjectRow) -> _PollTarget:
-        from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
-
         stored_model: Final = _STORED_RESPONSE_ADAPTER.validate_python(job.file_object).get("model")
         model_name: Final = stored_model if isinstance(stored_model, str) else None
-        responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(job.unified_object_id)
+        response_id: Final = decrypted_response_id(job.unified_object_id)
         return _PollTarget(
-            response_id=responses_id_security,
+            response_id=response_id,
             model_metadata=MappingProxyType({"model": model_name, "model_group": model_name} if model_name else {}),
-            via_router=self._resolve_deployment(responses_id_security),
+            via_router=self._resolve_deployment(response_id),
         )
 
     async def _claim_for_billing(self, job: ManagedObjectRow) -> bool:
@@ -172,35 +176,36 @@ class CheckResponsesCost:
             data={"status": job.status or PENDING_RESPONSE_STATUSES[0]},
         )
 
-    async def _bill_once(self, job: ManagedObjectRow, target: _PollTarget) -> None:
+    async def _bill_once(self, job: ManagedObjectRow, target: _PollTarget, end_user_id: str | None = None) -> None:
         if not await self._claim_for_billing(job):
             verbose_proxy_logger.info(f"Response {job.unified_object_id} was already billed elsewhere, skipping")
             return
         billed_read_metadata: Final[dict[str, object]] = {
             **(await self._creator_attribution.build(job, job.unified_object_id)),
+            **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
             INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
             **target.model_metadata,
         }
         try:
             await self._get_response(target.response_id, billed_read_metadata, target.via_router)
-        except Exception:
+        except BaseException:
             await self._release_billing_claim(job)
             raise
         verbose_proxy_logger.info(f"Response {job.unified_object_id} reached a terminal status and was billed")
 
-    async def bill_if_finished(self, unified_object_id: str, status: str) -> None:
+    async def bill_if_finished(self, response_id: str, status: str, end_user_id: str | None = None) -> None:
         if status not in TERMINAL_RESPONSE_STATUSES:
             return
         job: Final = await _managed_object_table(self.prisma_client).find_first(
             where={
-                "unified_object_id": unified_object_id,
+                "OR": [{"unified_object_id": response_id}, {"model_object_id": decrypted_response_id(response_id)}],
                 "file_purpose": "response",
                 "status": {"in": list(PENDING_RESPONSE_STATUSES)},
             },
         )
         if job is None:
             return
-        await self._bill_once(job, self._poll_target(job))
+        await self._bill_once(job, self._poll_target(job), end_user_id)
 
     async def check_responses_cost(self):
         """
@@ -248,7 +253,10 @@ class CheckResponsesCost:
             try:
                 response = await self._get_response(
                     response_id=target.response_id,
-                    litellm_metadata=dict(target.model_metadata),
+                    litellm_metadata={
+                        **target.model_metadata,
+                        INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
+                    },
                     via_router=target.via_router,
                 )
 

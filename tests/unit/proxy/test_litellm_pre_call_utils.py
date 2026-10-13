@@ -1158,6 +1158,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_gateway_injected_cache": "forged-deployment-id",
         "_session_deployment_affinity_ttl": 999999,
         "internal_call_origin": "autorouter_classifier",
+        "_managed_background_response": True,
         "_guardrail_pipelines": [{"name": "spoofed"}],
         "_pipeline_managed_guardrails": ["evaded"],
         "safe_user_metadata": "kept",
@@ -1215,6 +1216,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_gateway_injected_cache",
         "_session_deployment_affinity_ttl",
         "internal_call_origin",
+        "_managed_background_response",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
     }

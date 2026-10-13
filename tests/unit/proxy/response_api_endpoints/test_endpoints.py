@@ -336,21 +336,22 @@ async def test_responses_api_background_create_persists_the_creating_keys_attrib
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "stored_as_background, status, expected_billed_reads",
-    [(True, "completed", 1), (True, "in_progress", 0), (False, "completed", 0)],
+    "background, stored, status, expected_billed_reads",
+    [(True, True, "completed", 1), (True, True, "in_progress", 0), (True, False, "completed", 0), (False, True, "completed", 0)],
 )
 async def test_reading_a_finished_background_response_bills_it(
-    stored_as_background: bool, status: str, expected_billed_reads: int
+    background: bool, stored: bool, status: str, expected_billed_reads: int
 ):
     """The read that first sees a background response finished bills it, since the provider may drop
     a store=false response before the hourly cost poll reaches it; other reads stay free."""
     from types import SimpleNamespace
 
     from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.response_api_endpoints.endpoints import _bill_finished_background_response
 
     read = ResponsesAPIResponse(
-        id="resp_read", object="response", status=status, created_at=1, output=[], usage=None
+        id="resp_read", object="response", status=status, created_at=1, output=[], usage=None, background=background
     )
     stored_row = SimpleNamespace(
         id="job-read",
@@ -364,9 +365,7 @@ async def test_reading_a_finished_background_response_bills_it(
         request_tags=None,
     )
     prisma_client = MagicMock()
-    prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
-        return_value=stored_row if stored_as_background else None
-    )
+    prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=stored_row if stored else None)
     prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
 
     with (
@@ -374,14 +373,87 @@ async def test_reading_a_finished_background_response_bills_it(
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: the endpoint reads the proxy singletons at call time
         patch("litellm.aget_responses", new_callable=AsyncMock, return_value=read) as provider_read,
     ):
-        await _bill_finished_background_response(response=read, response_id="resp_read")
+        await _bill_finished_background_response(
+            response=read, response_id="resp_read", user_api_key_dict=UserAPIKeyAuth(end_user_id="customer-42")
+        )
 
     billed_reads = [
-        call
+        call.kwargs["litellm_metadata"]
         for call in provider_read.call_args_list
-        if not is_unbilled_non_inference_call("aget_responses", call.kwargs["litellm_metadata"])
+        if not is_unbilled_non_inference_call("aget_responses", call.kwargs["litellm_metadata"], read)
     ]
     assert len(billed_reads) == expected_billed_reads
+    assert all(metadata["user_api_key_end_user_id"] == "customer-42" for metadata in billed_reads)
+
+
+@pytest.mark.asyncio
+async def test_background_create_the_provider_confirms_is_stored_under_its_provider_id(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A create that sets background through extra_body reaches the provider as a background job
+    all the same, so the proxy stores it off the response, keyed by the id every re-encryption of
+    the client's id decrypts to."""
+    from fastapi import Response as FastAPIResponse
+    from starlette.requests import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
+    from litellm.proxy.response_api_endpoints.endpoints import responses_api
+
+    salt_key = "background-create-unit-test-salt"
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    queued = ResponsesIDSecurity(
+        general_settings_reader=lambda: {}, signing_key_reader=lambda: salt_key
+    )._encrypt_response_id(
+        ResponsesAPIResponse(
+            id="resp_provider_job", object="response", status="queued", created_at=1, output=[], background=True
+        ),
+        UserAPIKeyAuth(user_id="alice"),
+    )
+    queued._hidden_params = {"model_id": "deployment-1"}
+    processor = MagicMock()
+    processor.data = {"model": "gpt-4o", "input": "hello", "extra_body": {"background": True}}
+    processor.base_process_llm_request = AsyncMock(return_value=queued)
+    managed_files = MagicMock()
+    managed_files.store_unified_object_id = AsyncMock()
+    proxy_logging = MagicMock()
+    proxy_logging.get_proxy_hook = MagicMock(return_value=managed_files)
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b'{"model":"gpt-4o","input":"hello","extra_body":{"background":true}}',
+            "more_body": False,
+        }
+
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/v1/responses", "headers": [(b"content-type", b"application/json")]},
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch(  # test-quality-ok: polling decision is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
+            return_value=False,
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy singletons at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy singletons at call time
+            "litellm.proxy.proxy_server.llm_router", MagicMock()
+        ),
+    ):
+        await responses_api(
+            request=request, fastapi_response=FastAPIResponse(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
+        )
+
+    store_kwargs = managed_files.store_unified_object_id.await_args.kwargs
+    assert store_kwargs["unified_object_id"] == queued.id
+    assert store_kwargs["model_object_id"] == "resp_provider_job"
 
 
 class TestResponsesAPIEndpoints(unittest.TestCase):

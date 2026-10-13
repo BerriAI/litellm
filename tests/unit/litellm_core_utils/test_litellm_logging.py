@@ -7038,16 +7038,15 @@ class TestNonInferenceCallTypesAreNotBilled:
         assert payload is not None
         assert payload["total_tokens"] == 6000
 
-    def test_reading_a_background_response_costs_nothing(self):
-        """A finished background job replays the same usage on every GET, so a user's read of it is
-        free whatever the response says about itself; the cost poll's stamped read above is the one
-        read that bills the job."""
+    def test_reading_a_background_response_is_still_priced(self):
+        """A background create answers queued with no usage at all, so whoever reads the finished
+        job is the first and only caller to see its tokens. Zeroing that read bills the job nothing."""
         cost = self._logging_obj("aget_responses").response_cost_calculator(
             result=self._retrieved_response(background=True)
         )
-        assert cost == 0.0
+        assert cost is not None and cost > 0
 
-    def test_reading_a_background_response_reports_no_usage_in_standard_logging_payload(self):
+    def test_reading_a_background_response_reports_usage_in_standard_logging_payload(self):
         from datetime import datetime
 
         from litellm.litellm_core_utils.litellm_logging import (
@@ -7070,8 +7069,30 @@ class TestNonInferenceCallTypesAreNotBilled:
         )
 
         assert payload is not None
-        assert payload["total_tokens"] == 0
-        assert payload["response_cost"] == 0.0
+        assert payload["total_tokens"] == 6000
+
+    @pytest.mark.parametrize(
+        "litellm_metadata",
+        [
+            {"_managed_background_response": True},
+            {"internal_call_origin": "background_response_status_poll"},
+        ],
+        ids=["managed_read", "status_poll"],
+    )
+    def test_managed_read_of_a_background_response_is_free(self, litellm_metadata):
+        """The proxy's cost poll bills a background response it tracks once, so a read the managed files
+        hook marks, or the poll's own status check, must not bill the same tokens again."""
+        logging_obj = self._logging_obj("aget_responses", litellm_metadata=litellm_metadata)
+        cost = logging_obj.response_cost_calculator(result=self._retrieved_response(background=True))
+        assert cost == 0.0
+
+    def test_reading_a_foreground_response_is_still_free(self):
+        """Guards the test above against a blanket exemption: an explicit background=false read was
+        already billed by its create and must stay at zero."""
+        cost = self._logging_obj("aget_responses").response_cost_calculator(
+            result=self._retrieved_response(background=False)
+        )
+        assert cost == 0.0
 
     def _read_call_messages(self):
         logging_obj, _ = litellm.utils.function_setup(

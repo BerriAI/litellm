@@ -4398,7 +4398,10 @@ def test_user_traffic_carries_no_internal_call_origin():
 
 
 def _spend_log_for_call_type(
-    call_type: str, internal_call_origin: str | None = None, background: bool | None = None
+    call_type: str,
+    internal_call_origin: str | None = None,
+    background: bool | None = None,
+    managed_read: bool = False,
 ) -> dict:
     from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -4413,6 +4416,7 @@ def _spend_log_for_call_type(
                     "metadata": {
                         "user_api_key": "test-key",
                         "internal_call_origin": internal_call_origin,
+                        **({"_managed_background_response": True} if managed_read else {}),
                     }
                 },
             },
@@ -4449,14 +4453,30 @@ def test_spend_log_for_background_response_cost_poll_counts_tokens():
     assert payload["total_tokens"] == 6000
 
 
-def test_spend_log_for_background_response_retrieval_counts_nothing():
-    """A finished background job replays the same usage on every GET, so a user's read of it writes
-    a zero-token, zero-spend row whatever the response says about itself; the cost poll's stamped
-    read above is the one read that bills the job."""
+def test_spend_log_for_background_response_retrieval_counts_tokens():
+    """A background create answers queued carrying no usage, so its retrieval is the first and only
+    place the job's tokens are ever visible. Zeroing that read bills the whole job nothing on any
+    proxy that is not running the enterprise cost poller."""
     payload = _spend_log_for_call_type("aget_responses", background=True)
+
+    assert payload["total_tokens"] == 6000
+
+
+def test_spend_log_for_managed_background_response_read_counts_nothing():
+    """A proxy that tracks a background response bills it once through the cost poll, so a client
+    read the managed files hook marked must not count the job's tokens a second time."""
+    payload = _spend_log_for_call_type("aget_responses", background=True, managed_read=True)
 
     assert payload["total_tokens"] == 0
     assert payload["spend"] == 0.0
+
+
+def test_spend_log_for_foreground_response_retrieval_still_counts_nothing():
+    """Guards the test above against a blanket exemption: an explicit background=false read was
+    already billed by its create and must stay at zero."""
+    payload = _spend_log_for_call_type("aget_responses", background=False)
+
+    assert payload["total_tokens"] == 0
 
 
 def test_spend_log_for_response_creation_still_counts_tokens():

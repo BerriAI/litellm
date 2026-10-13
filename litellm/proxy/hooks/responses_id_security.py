@@ -341,3 +341,9 @@ class ResponsesIDSecurity(CustomLogger):
             ):
                 chunk = self._encrypt_response_id(chunk, user_api_key_dict, request_encryption_cache)
             yield chunk
+
+
+def decrypted_response_id(response_id: str) -> str:
+    """The id a client-facing response id stands for, the same for every encryption of one response."""
+    original_response_id, _, _ = ResponsesIDSecurity()._decrypt_response_id(response_id)
+    return original_response_id

@@ -21,9 +21,17 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
+from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
+    NON_INFERENCE_CALL_TYPES,
+)
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
-from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, InternalCallOrigin
+from litellm.types.utils import (
+    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
+    InternalCallOrigin,
+)
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
 
@@ -54,28 +62,49 @@ budget-checked like the request that spawned it. Everything else on the parent's
 be a lie on a sub-call that runs after it returned."""
 
 
+def is_background_response(response: object) -> bool:
+    """Whether a retrieved object is a response created with ``background=true``.
+
+    Such a create returns ``status="queued"`` and no usage at all, so nothing has billed the
+    job by the time anyone reads it back. Accepts the response as a mapping or a model,
+    because the callers hold it in both shapes.
+    """
+    if isinstance(response, Mapping):
+        return "background" in response and response["background"] is True
+    return getattr(response, "background", None) is True
+
+
 def is_unbilled_non_inference_call(
     call_type: str | None,
     metadata: Mapping[str, object] | None,
+    response: object,
 ) -> bool:
     """A read/management route priced at zero, because the usage it reports belongs to the
     call that created the object it just read.
 
-    A background create answers queued with no usage, so its spend first shows up on a read of
-    the finished job. That read is billed once, by the enterprise cost poller, which stamps its
-    retrieval with ``BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN``; every other read of the same
-    job replays the same usage and stays free.
+    A background response is the exception, since its create billed nothing. When the proxy
+    tracks it as a managed object, the read is marked with
+    ``MANAGED_BACKGROUND_RESPONSE_METADATA_KEY`` and stays free, because the cost poll's read
+    stamped with ``BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN`` bills the job once. Any other
+    read of a background response (the SDK, a proxy without a database) is the only place its
+    spend is ever visible, so it prices normally.
     """
     if call_type not in NON_INFERENCE_CALL_TYPES:
         return False
-    if metadata is None:
+    origin: Final = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) if metadata is not None else None
+    if origin == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN:
+        return False
+    if not is_background_response(response):
         return True
-    return metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+    return origin == BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN or (
+        metadata is not None and metadata.get(MANAGED_BACKGROUND_RESPONSE_METADATA_KEY) is True
+    )
 
 
 def is_unbilled_non_inference_call_from_params(
     call_type: str | None,
     litellm_params: Mapping[str, object] | None,
+    response: object,
 ) -> bool:
     """:func:`is_unbilled_non_inference_call` for callers holding raw ``litellm_params``.
 
@@ -89,7 +118,7 @@ def is_unbilled_non_inference_call_from_params(
     metadata: Final = (
         StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params) if litellm_params is not None else None
     )
-    return is_unbilled_non_inference_call(call_type, metadata)
+    return is_unbilled_non_inference_call(call_type, metadata, response)
 
 
 def sanitize_user_api_key_auth(auth: object) -> object:
