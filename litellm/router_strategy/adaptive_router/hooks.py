@@ -28,7 +28,7 @@ from litellm.router_strategy.adaptive_router.config import (
 from litellm.router_strategy.adaptive_router.signals import Turn
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 # Identity fields hashed into a derived session key so the same conversation
 # from the same caller produces a stable key, while different keys/teams/users

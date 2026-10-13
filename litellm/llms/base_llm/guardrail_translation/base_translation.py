@@ -11,8 +11,8 @@ if TYPE_CHECKING:
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 @dataclass(slots=True)

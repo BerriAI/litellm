@@ -1,3 +1,4 @@
+import copy
 import json
 from collections.abc import Iterator
 from typing import Final
@@ -7,6 +8,7 @@ import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -32,6 +34,25 @@ DATABRICKS_API_BASE: Final = "https://my.workspace.cloud.databricks.com/serving-
 DATABRICKS_API_KEY: Final = "dapimykey"
 DATABRICKS_CHAT_COMPLETIONS_URL: Final = f"{DATABRICKS_API_BASE}/chat/completions"
 DATABRICKS_EMBEDDINGS_URL: Final = f"{DATABRICKS_API_BASE}/embeddings"
+JSON_SCHEMA_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "P",
+        "strict": True,
+        "schema": {
+            "$defs": {
+                "Person": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                }
+            },
+            "type": "object",
+            "properties": {"p": {"$ref": "#/$defs/Person"}},
+            "required": ["p"],
+        },
+    },
+}
 
 
 @pytest.fixture()
@@ -2088,3 +2109,149 @@ def mock_chat_streaming_response_chunks() -> List[str]:
             }
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "databricks-meta-llama-3-3-70b-instruct",
+        "databricks-qwen35-122b-a10b",
+        "databricks-gpt-oss-120b",
+    ),
+)
+def test_databricks_non_claude_json_schema_preserves_refs(model: str) -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+    )
+
+    assert optional_params["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
+
+
+def test_databricks_claude_json_schema_preserves_refs_in_tool_parameters() -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-claude-haiku-4-5",
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+    )
+
+    assert "response_format" not in optional_params
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "json_tool_call",
+                "parameters": JSON_SCHEMA_RESPONSE_FORMAT["json_schema"]["schema"],
+            },
+        }
+    ]
+
+
+def test_databricks_pydantic_json_schema_preserves_nested_refs() -> None:
+    class Person(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        name: str
+
+    class Order(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        person: Person
+
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-meta-llama-3-3-70b-instruct",
+        custom_llm_provider="databricks",
+        response_format=Order,
+    )
+    schema: Final = optional_params["response_format"]["json_schema"]["schema"]
+
+    assert schema["properties"]["person"] == {"$ref": "#/$defs/Person"}
+    assert schema["$defs"]["Person"] == {
+        "additionalProperties": False,
+        "properties": {"name": {"title": "Name", "type": "string"}},
+        "required": ["name"],
+        "title": "Person",
+        "type": "object",
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_with_prompt_caching_anthropic_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    route: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_databricks_anthropic_cache_response(cache_read_input_tokens=0, cache_creation_input_tokens=1545),
+        )
+    )
+    cached_block: Final = {"type": "text", "text": "example text" * 512, "cache_control": {"type": "ephemeral"}}
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are a helpful assistant that explains the content of the given text."}
+            ],
+        },
+        {"role": "user", "content": [cached_block]},
+    ]
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-claude-3-7-sonnet",
+        messages=messages,
+        temperature=0.5,
+    )
+
+    _assert_databricks_request(route.calls.last.request, DATABRICKS_CHAT_COMPLETIONS_URL, DATABRICKS_API_KEY)
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["model"] == "databricks-claude-3-7-sonnet"
+    assert "stream" not in request_body
+    assert request_body["messages"][1]["content"] == [cached_block]
+    assert response.model == "databricks/claude-3-7-sonnet"
+    assert response.usage.prompt_tokens == 1549
+    assert response.usage.completion_tokens == 117
+    assert response.usage.total_tokens == 1666
+    assert response.usage.cache_read_input_tokens == 0
+    assert response.usage.cache_creation_input_tokens == 1545
+
+
+def test_get_optional_params_keeps_service_tier_for_databricks() -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-claude-opus-5",
+        custom_llm_provider="databricks",
+        service_tier="priority",
+        drop_params=True,
+    )
+
+    assert optional_params["service_tier"] == "priority"
+
+
+@pytest.mark.parametrize("served_tier", ["priority", "default", None])
+def test_transform_response_carries_served_service_tier(served_tier: str | None) -> None:
+    raw_response: Final = MagicMock()
+    raw_response.json.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "dbrx",
+        **({"service_tier": served_tier} if served_tier is not None else {}),
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    result: Final = DatabricksConfig().transform_response(
+        model="databricks/dbrx",
+        raw_response=raw_response,
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.to_dict().get("service_tier") == served_tier
