@@ -77,6 +77,8 @@ _PASCAL_TO_WIRE: Final[Mapping[str, str]] = {
     "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
 }
 
+_WIRE_TO_PASCAL: Final[Mapping[str, str]] = MappingProxyType({wire: pascal for pascal, wire in _PASCAL_TO_WIRE.items()})
+
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -133,6 +135,20 @@ def _served_version(agent: "AgentResponse", request: Request, original_method: s
     if original_method in _PASCAL_TO_WIRE:
         return "1.0"
     return "1.0" if request.headers.get("a2a-version", "").startswith("1.") else "0.3"
+
+
+def _upstream_version(agent: "AgentResponse") -> A2AVersion:
+    """Protocol version forwarded requests must speak to the upstream agent.
+
+    Only an admin-pinned ``protocolVersion`` on the agent changes the forwarded
+    wire: a 1.0-configured upstream receives native 1.0 methods, params and
+    version headers (regression: #44531), while a 0.3-configured or unconfigured
+    agent keeps the historical 0.3 wire forwarding.
+    """
+    configured: Final = (agent.agent_card_params or {}).get("protocolVersion")
+    if configured in ("0.3", "1.0"):
+        return configured
+    return "0.3"
 
 
 def _validate_push_notification_url(url: str) -> None:
@@ -934,7 +950,8 @@ async def invoke_agent_a2a(
         }:
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if isinstance(params, dict):
+            upstream_version = _upstream_version(agent)
+            if isinstance(params, dict) and upstream_version == "0.3":
                 params = normalize_request_params(params, served_version, method=method)
             if method == "tasks/pushNotificationConfig/set":
                 if not isinstance(params, dict):
@@ -942,13 +959,13 @@ async def invoke_agent_a2a(
                         status_code=400,
                         detail="params must be an object",
                     )
-                push_config: Final = params.get("pushNotificationConfig", {})
-                if "pushNotificationConfig" in params and not isinstance(push_config, dict):
+                push_config: Final = params.get("pushNotificationConfig", params.get("config"))
+                if ("pushNotificationConfig" in params or "config" in params) and not isinstance(push_config, dict):
                     raise HTTPException(
                         status_code=400,
                         detail="pushNotificationConfig must be an object",
                     )
-                for callback_url in (params.get("url"), push_config.get("url")):
+                for callback_url in (params.get("url"), (push_config or {}).get("url")):
                     if not callback_url:
                         continue
                     if not isinstance(callback_url, str):
@@ -957,13 +974,24 @@ async def invoke_agent_a2a(
                             detail="Push notification URL must be a string",
                         )
                     _validate_push_notification_url(callback_url)
+            forward_method: str
+            forward_headers: Mapping[str, str] | None
+            if upstream_version == "1.0":
+                # A native 1.0 upstream must receive the PascalCase method,
+                # unlowered params and an explicit negotiated version header
+                # instead of the 0.3 wire (regression: #44531).
+                forward_method = _WIRE_TO_PASCAL.get(method, method)
+                forward_headers = {**(agent_extra_headers or {}), "A2A-Version": "1.0"}
+            else:
+                forward_method = method
+                forward_headers = agent_extra_headers
             forward_body: dict[str, object] = {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "method": method,
+                "method": forward_method,
                 "params": params,
             }
-            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=agent_extra_headers)
+            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=forward_headers)
             if method == "agent/getAuthenticatedExtendedCard":
                 card: Final = result.get("result")
                 if isinstance(card, dict):
@@ -996,19 +1024,26 @@ async def invoke_agent_a2a(
         elif method == "tasks/resubscribe":
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if isinstance(params, dict):
+            upstream_version = _upstream_version(agent)
+            if isinstance(params, dict) and upstream_version == "0.3":
                 params = normalize_request_params(params, served_version, method=method)
+            if upstream_version == "1.0":
+                forward_method = _WIRE_TO_PASCAL.get(method, method)
+                forward_headers = {**(agent_extra_headers or {}), "A2A-Version": "1.0"}
+            else:
+                forward_method = method
+                forward_headers = agent_extra_headers
             forward_body = {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "method": method,
+                "method": forward_method,
                 "params": params,
             }
             return await _forward_jsonrpc_sse(
                 agent_url,
                 forward_body,
                 request_id=request_id,
-                extra_headers=agent_extra_headers,
+                extra_headers=forward_headers,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
