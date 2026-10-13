@@ -721,6 +721,7 @@ class TestBedrockRealtimeResponseTransformation:
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""
         config = BedrockRealtimeConfig()
+        config._assistant_block_open = True
         logging_obj = MagicMock()
         logging_obj.litellm_trace_id = "trace_123"
 
@@ -1508,6 +1509,21 @@ class TestBedrockRealtimeUserEventsAndUsage:
         assert [e["response"]["id"] for e in next_events if e["type"] == "response.created"] != [
             e["response"]["id"] for e in events if e["type"] == "response.created"
         ]
+
+    def test_stray_non_assistant_content_end_emits_no_duplicate_done_events(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "Hi.", "PARTIAL_TURN")
+            + [
+                {"event": {"contentStart": {"role": "USER", "type": "AUDIO"}}},
+                {"event": {"contentEnd": {}}},
+            ],
+        )
+        assert len([e for e in events if e["type"] == "response.text.done"]) == 1
+        message_item_dones: Final = [
+            e for e in events if e["type"] == "response.output_item.done" and e["item"]["type"] == "message"
+        ]
+        assert len(message_item_dones) == 1
 
     def test_tool_call_without_assistant_message_stays_output_index_zero(self):
         events: Final = self._run(BedrockRealtimeConfig(), self._tool_block("tooluse_A"))

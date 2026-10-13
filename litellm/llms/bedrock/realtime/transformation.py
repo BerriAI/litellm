@@ -1066,6 +1066,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             return [], current_delta_chunks
         if not current_output_item_id or not current_response_id:
             return [], current_delta_chunks
+        if not self._assistant_block_open:
+            return [], current_delta_chunks
 
         self._assistant_block_open = False
         returned_messages: Final[list[OpenAIRealtimeEvents]] = []
