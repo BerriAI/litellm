@@ -6146,6 +6146,130 @@ class TestPanwAirsErrorDetailWithheldFields:
         assert detail["error"]["scan_id"] == "scan-2"
 
 
+class TestPanwAirsIncludeMaskedResponseOnBlock:
+    """LIT-9336: opt-in passthrough of AIRS ``response_masked_data`` in the 400 body.
+
+    With ``include_masked_response_on_block=True`` the withheld
+    ``_CLIENT_HIDDEN_SCAN_FIELDS`` lift, so the 400 detail carries the masked
+    text and ``pattern_detections`` exactly as AIRS returned them.
+    """
+
+    _CUSTOMER_BLOCK_RESPONSE = {
+        "action": "block",
+        "category": "malicious",
+        "error": False,
+        "errors": [],
+        "profile_id": "a6ecc0c6-9aee-41bf-b967-22c690a8b989",
+        "profile_name": "DLP_PII_NexusOS",
+        "prompt_detected": {},
+        "report_id": "Rec62eb82-78a5-43b6-b4fe-9e9dab03ff76",
+        "response_detected": {
+            "dlp": True,
+            "toxic_content": False,
+            "ungrounded": False,
+        },
+        "scan_id": "ec62eb82-78a5-43b6-b4fe-9e9dab03ff76",
+        "session_id": "2718c56e-a46d-47b1-afed-573c16c67d89",
+        "source": "AI-Runtime-API",
+        "timeout": False,
+        "tool_detected": {},
+        "tr_id": "2718c56e-a46d-47b1-afed-573c16c67d89",
+        "transaction_id": "pan_8e754890-5816-46dc-99ba-c881b7603a08",
+        "response_masked_data": {
+            "data": "Sample (fictional) values:\n\n- Email ID: `XXXXXXXXXXXXXXXXXXXXX`\n- SSN: `XXXXXXXXXXX`",
+            "pattern_detections": [
+                {"locations": [[72, 74], [76, 82]], "pattern": "License Plate Number - USA"},
+                {"locations": [[72, 74], [79, 82]], "pattern": "Credit Card CVV"},
+                {"locations": [[72, 82]], "pattern": "Driver License - US"},
+                {"locations": [[41, 61]], "pattern": "Internet - addr_email"},
+            ],
+        },
+    }
+
+    @pytest.mark.asyncio
+    async def test_block_includes_response_masked_data_when_opted_in(self):
+        handler = make_handler(include_masked_response_on_block=True)
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Sensitive response data"]}
+        request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4"}
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = copy.deepcopy(self._CUSTOMER_BLOCK_RESPONSE)
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="response",
+                )
+
+        assert exc_info.value.status_code == 400
+        error = exc_info.value.detail["error"]
+
+        assert error["response_masked_data"] == self._CUSTOMER_BLOCK_RESPONSE["response_masked_data"]
+
+        for field in self._CUSTOMER_BLOCK_RESPONSE:
+            if field == "category":
+                continue
+            assert error[field] == self._CUSTOMER_BLOCK_RESPONSE[field], f"{field} missing or altered"
+
+        assert error["code"] == "panw_prisma_airs_response_blocked"
+        assert error["type"] == "guardrail_violation"
+        assert error["guardrail"] == "test_panw_airs"
+        assert error["category"] == "malicious"
+
+    @pytest.mark.asyncio
+    async def test_block_without_response_masked_data_stays_400(self):
+        """The opt-in passes through what AIRS sent; it does not invent the key."""
+        handler = make_handler(include_masked_response_on_block=True)
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Sensitive response data"]}
+        request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4"}
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "malicious",
+                "scan_id": "scan-no-mask",
+            }
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="response",
+                )
+
+        assert exc_info.value.status_code == 400
+        error = exc_info.value.detail["error"]
+        assert "response_masked_data" not in error
+        assert error["scan_id"] == "scan-no-mask"
+        assert error["code"] == "panw_prisma_airs_response_blocked"
+
+    @pytest.mark.asyncio
+    async def test_mask_response_content_still_masks_when_flag_on(self):
+        """mask_response_content wins over the flag: masked text goes out as a 200."""
+        handler = make_handler(
+            include_masked_response_on_block=True,
+            mask_response_content=True,
+        )
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Sensitive response data"]}
+        request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4"}
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = {
+                "action": "block",
+                "category": "dlp",
+                "response_masked_data": {"data": "XXXXXXXXX response data"},
+            }
+
+            result = await handler.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+            )
+
+        assert result["texts"] == ["XXXXXXXXX response data"]
+
+
 class TestPanwAirsToolCallBlockMaskedDataRouting:
     """A tool-call block must withhold model output and keep caller input.
 

@@ -159,6 +159,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     #: back would hand the caller exactly the text the operator declined to deliver.
     #: ``prompt_masked_data`` is deliberately NOT withheld: it is the caller's own input,
     #: and it is one of the fields the ticket asks for.
+    #: The ``include_masked_response_on_block`` config opt-in lifts the withholding.
     _CLIENT_HIDDEN_SCAN_FIELDS: Final = frozenset({"response_masked_data"})
 
     def __init__(
@@ -171,6 +172,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         mask_on_block: bool = False,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
+        include_masked_response_on_block: bool = False,
         app_name: str | None = None,
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
@@ -225,6 +227,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         self.http_client = http_client
         self.fallback_on_error = fallback_on_error
+        self.include_masked_response_on_block = include_masked_response_on_block
         # Coerce defensively. The dashboard UI persists this field as a JSON
         # string, and Pydantic extras (the path that splats model_dump into
         # this handler) preserve whatever type the user supplied. A string
@@ -743,12 +746,15 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
+        hidden_fields: Final = (
+            frozenset[str]() if self.include_masked_response_on_block else self._CLIENT_HIDDEN_SCAN_FIELDS
+        )
         return {
             "error": {
                 **{
                     key: value
                     for key, value in scan_result.items()
-                    if not key.startswith("_") and key not in self._CLIENT_HIDDEN_SCAN_FIELDS
+                    if not key.startswith("_") and key not in hidden_fields
                 },
                 "message": error_msg,
                 "type": "guardrail_violation",

@@ -40,6 +40,11 @@ class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
         description="Apply masking to responses that would be blocked. When True, masked content is returned to the user instead of blocking the response.",
     )
 
+    include_masked_response_on_block: bool = Field(
+        default=False,
+        description="When a response is blocked, include AIRS response_masked_data (masked text and pattern_detections) in the 400 error body. Has no effect when mask_response_content is on, because that returns the masked text with a 200 instead.",
+    )
+
     fallback_on_error: Literal["block", "allow"] = Field(
         default="block",
         description="Action when PANW API is unavailable (timeout, rate limit, network error): 'block' (default, maximum security) rejects requests; 'allow' (high availability) proceeds without scanning. Authentication and configuration errors always block.",

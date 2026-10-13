@@ -17,14 +17,12 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if not guardrail_name:
         raise ValueError("PANW Prisma AIRS: guardrail_name is required")
 
-    _panw_callback: Final = PanwPrismaAirsHandler(
-        **{
-            **litellm_params.model_dump(exclude_unset=True),
-            "guardrail_name": guardrail_name,
-            "event_hook": litellm_params.mode,
-            "default_on": litellm_params.default_on or False,
-        }
-    )
+    litellm_params_dump: Final = litellm_params.model_dump(exclude_unset=True)
+    litellm_params_dump["guardrail_name"] = guardrail_name
+    litellm_params_dump["event_hook"] = litellm_params.mode
+    litellm_params_dump["default_on"] = litellm_params.default_on or False
+
+    _panw_callback: Final = PanwPrismaAirsHandler(**litellm_params_dump)
     litellm.logging_callback_manager.add_litellm_callback(_panw_callback)
 
     return _panw_callback
