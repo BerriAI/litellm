@@ -586,7 +586,7 @@ class OCIChatConfig(BaseConfig):
                 remaining_history, trailing_tool_results = split_trailing_tool_results(cohere_history)
                 chat_message: Final = ""
             else:
-                remaining_history, trailing_tool_results = cohere_history, []
+                remaining_history, trailing_tool_results = cohere_history, []  # rebind-ok: bound once per branch
                 chat_message = extract_text_content(user_messages[-1]["content"])
 
             chat_request: Final = CohereChatRequest(

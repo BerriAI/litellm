@@ -177,8 +177,8 @@ def _resolved_oci_parameter_schema(raw_parameters: dict[str, JsonValue]) -> Json
 
 
 def split_trailing_tool_results(
-    chat_history: list[CohereMessage],
-) -> tuple[list[CohereMessage], list[CohereToolResult]]:
+    chat_history: list[CohereMessage],  # mutable-ok: the caller's list is popped in place, so it must stay mutable
+) -> tuple[list[CohereMessage], list[CohereToolResult]]:  # mutable-ok: lists built by pop/prepend
     """Hoist trailing TOOL-role history entries into a top-level ``toolResults`` list.
 
     OCI's Cohere API rejects a request whose last ``chatHistory`` entry is a
@@ -192,7 +192,7 @@ def split_trailing_tool_results(
     not a TOOL message, ``trailing_results`` is empty and the history is
     returned unchanged.
     """
-    trailing: Final[list[CohereToolResult]] = []
+    trailing: Final[list[CohereToolResult]] = []  # mutable-ok: prepend-reassigned in the pop loop below
     while chat_history and isinstance(chat_history[-1], CohereToolMessage):
         trailing = chat_history.pop().toolResults + trailing
     return chat_history, trailing

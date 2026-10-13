@@ -307,7 +307,7 @@ class CohereChatRequest(LiteLLMBaseModel):
     # Tool results for a tool-result turn. OCI's Cohere API refuses a non-empty
     # top-level ``message`` when the last ``chatHistory`` entry is a TOOL result,
     # and requires the trailing results to be hoisted here instead.
-    toolResults: list[CohereToolResult] | None = None
+    toolResults: list[CohereToolResult] | None = None  # mutable-ok: mirror of OCI's toolResults list
     maxTokens: int | None = None
     temperature: float | None = None
     topP: float | None = None
@@ -365,7 +365,7 @@ class CohereCitation(LiteLLMBaseModel):
     start: int
     end: int
     text: str
-    document_ids: list[str] = Field(
+    document_ids: list[str] = Field(  # mutable-ok: wire mirror of OCI's documentIds list; owned by the citation model
         validation_alias=AliasChoices("documentIds", "document_ids"),
         serialization_alias="documentIds",
     )
