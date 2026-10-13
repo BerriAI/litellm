@@ -1,4 +1,5 @@
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import chain
 from typing import Final, TypeAlias
 
@@ -16,7 +17,15 @@ from litellm.llms.bedrock.chat.converse_to_openai import (
 )
 from litellm.types.llms.openai import ChatCompletionTextObject
 
-Edit: TypeAlias = tuple[JsonPath, str]
+
+@dataclass(frozen=True, slots=True)
+class ToolResultText:
+    content: JsonPath
+    indices: tuple[int, ...]
+    text: str
+
+
+Edit: TypeAlias = tuple[JsonPath, str] | ToolResultText
 _JsonPair: TypeAlias = tuple[JsonPath, object, object]
 _TEXT_PARTS: Final = TypeAdapter(tuple[ChatCompletionTextObject, ...])
 _PARSED_JSON: Final = TypeAdapter(object)
@@ -184,6 +193,28 @@ def _reproduces(expected: ConverseRow, returned: Mapping[str, object] | None) ->
     )
 
 
+def _tool_result_text(row: ConverseRow, returned: Mapping[str, object]) -> ToolResultText | None:
+    texts: Final = _text_parts(returned)
+    indices: Final = tuple(index for slot in row.content if isinstance(index := slot.path[-2], int))
+    if (
+        row.message["role"] != "tool"
+        or not indices
+        or texts is None
+        or _without_content(returned) != _without_content(row.message)
+    ):
+        return None
+    return ToolResultText(row.content[0].path[:-2], indices, "\n".join(texts))
+
+
+def _unmapped_edits(
+    row: ConverseRow, view: ConverseRow, returned: Mapping[str, object] | None
+) -> tuple[Edit, ...] | None:
+    if _reproduces(view, returned):
+        return ()
+    rewrite: Final = _tool_result_text(row, returned) if returned is not None and view == row else None
+    return None if rewrite is None else (rewrite,)
+
+
 def structured_edits(
     rows: Sequence[ConverseRow],
     scoped_indices: Sequence[int],
@@ -199,8 +230,8 @@ def structured_edits(
     unmapped: Final = tuple(
         (index, row) for index, row, edits in zip(scoped_indices, returned_rows, proposed) if edits is None
     )
-    if unmapped:
-        view: Final = texts_applied_rows()
-        if len(view) != len(rows) or not all(_reproduces(view[index], row) for index, row in unmapped):
-            return None
-    return tuple(chain.from_iterable(edits for edits in proposed if edits is not None))
+    view: Final = texts_applied_rows() if unmapped else ()
+    if unmapped and len(view) != len(rows):
+        return None
+    fallbacks: Final = tuple(_unmapped_edits(rows[index], view[index], row) for index, row in unmapped)
+    return _merged((*(edits for edits in proposed if edits is not None), *fallbacks))

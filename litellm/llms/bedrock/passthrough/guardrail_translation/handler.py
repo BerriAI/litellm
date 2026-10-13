@@ -25,7 +25,11 @@ from litellm.llms.bedrock.chat.converse_to_openai import (
     converse_tools,
     parse_converse_request,
 )
-from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits import Edit, structured_edits
+from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits import (
+    Edit,
+    ToolResultText,
+    structured_edits,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -61,6 +65,7 @@ def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
 
 
 _StringHolder = tuple[Any, str | int]
+_Write: TypeAlias = tuple[_StringHolder, object]
 _BODY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[dict[str, object]])
 
 
@@ -208,20 +213,40 @@ def _changed_leaves(
     )
 
 
+def _tool_result_write(body: Mapping[str, object], edit: ToolResultText) -> _Write | None:
+    container: Final = reduce(_child, edit.content[:-1], body)
+    blocks: Final = as_json_array(_child(container, edit.content[-1]))
+    if blocks is None:
+        return None
+    dropped: Final = frozenset(edit.indices[1:])
+    return (container, edit.content[-1]), [
+        {"text": edit.text} if index == edit.indices[0] else block
+        for index, block in enumerate(blocks)
+        if index not in dropped
+    ]
+
+
+def _resolved(body: Mapping[str, object], edit: Edit) -> _Write | None:
+    match edit:
+        case ToolResultText():
+            return _tool_result_write(body, edit)
+        case (path, text):
+            holder: Final = _holder(body, path)
+            return None if holder is None else (holder, text)
+
+
 def _holder_edits(
     body: Mapping[str, object], edits: Sequence[Edit], flat_changes: frozenset[tuple[int, str | int]]
-) -> tuple[tuple[_StringHolder, str], ...] | None:
-    resolved: Final = tuple((_holder(body, path), text) for path, text in edits)
-    if any(holder is None for holder, _ in resolved):
+) -> tuple[_Write, ...] | None:
+    resolved: Final = tuple(_resolved(body, edit) for edit in edits)
+    if any(write is None for write in resolved):
         return None
-    return tuple(
-        (holder, text) for holder, text in resolved if holder is not None and _leaf_identity(holder) not in flat_changes
-    )
+    return tuple(write for write in resolved if write is not None and _leaf_identity(write[0]) not in flat_changes)
 
 
-def _write_back_structured_texts(edits: Sequence[tuple[_StringHolder, str]]) -> None:
-    for (container, key), text in edits:
-        container[key] = text
+def _write_back_structured_edits(edits: Sequence[_Write]) -> None:
+    for (container, key), value in edits:
+        container[key] = value
 
 
 def _extract_converse_output_texts(
@@ -589,7 +614,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
         if applied_texts:
             _write_back_texts(applied_texts, holders)
-        _write_back_structured_texts(holder_edits)
+        _write_back_structured_edits(holder_edits)
 
         return data
 

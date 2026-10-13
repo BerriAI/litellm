@@ -41,6 +41,8 @@ class _Vendor(str, Enum):
     MASKS_TEXTS_ONLY = "masks-texts-only"
     BLOCKS = "blocks"
     DROPS_A_ROW = "drops-a-row"
+    COMPACTS_TOOL_RESULTS = "compacts-tool-results"
+    COMPACTS_RAW_TOOL_RESULTS = "compacts-raw-tool-results"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +78,10 @@ def _normalised_first_part(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]
 
 def _blank_content(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**row, "content": ""} if row.get("content") is None else dict(row)
+
+
+def _compacted(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {**row, "content": f"compacted: {row.get('content')}"} if row.get("role") == "tool" else dict(row)
 
 
 def _generic_verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
@@ -119,6 +125,14 @@ def _generic_verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str
             return {"action": "BLOCKED", "blocked_reason": "card number"}
         case _Vendor.DROPS_A_ROW:
             return {"action": "GUARDRAIL_INTERVENED", "texts": texts, "structured_messages": list(map(dict, rows[:-1]))}
+        case _Vendor.COMPACTS_TOOL_RESULTS:
+            return {"action": "GUARDRAIL_INTERVENED", "structured_messages": list(map(_compacted, rows))}
+        case _Vendor.COMPACTS_RAW_TOOL_RESULTS:
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": texts,
+                "structured_messages": list(map(_compacted, sent_rows)),
+            }
 
 
 def _akto_verdict(body: bytes) -> Reply:
@@ -337,6 +351,35 @@ def test_tool_result_with_text_and_image_parts_reaches_bedrock_masked_with_image
         _assistant(_tool_use("screenshot")),
         _user(_tool_result({"text": f"screenshot shows {_MASK}"}, image)),
     ]
+
+
+def test_compacted_tool_result_reaches_bedrock_as_one_text_block_with_the_image_in_place(rig: _Rig) -> None:
+    image: Final = {"image": {"format": "png", "source": {"bytes": _PNG}}}
+    body: Final = {
+        "messages": [
+            _user({"text": "Look up my card."}),
+            _assistant(_tool_use("last four 1111")),
+            _user(_tool_result({"text": f"found {_CARD}"}, image, {"json": {"card": _CARD, "status": "active"}})),
+        ]
+    }
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.COMPACTS_TOOL_RESULTS), body))
+    compacted: Final = f"compacted: found {_MASK}\n{json.dumps({'card': _MASK, 'status': 'active'})}"
+    assert sent["messages"] == [
+        _user({"text": "Look up my card."}),
+        _assistant(_tool_use("last four 1111")),
+        _user(_tool_result({"text": compacted}, image)),
+    ]
+
+
+def test_compacted_tool_result_that_drops_the_text_mask_is_refused_before_bedrock(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": "Look up my card."}),
+            _assistant(_tool_use("last four 1111")),
+            _user(_tool_result({"json": {"card": _CARD, "status": "active"}})),
+        ]
+    }
+    assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.COMPACTS_RAW_TOOL_RESULTS), body))
 
 
 def test_flat_text_mask_wins_over_an_unmasked_structured_leaf(rig: _Rig) -> None:

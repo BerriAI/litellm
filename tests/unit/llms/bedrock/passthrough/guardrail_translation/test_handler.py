@@ -2388,7 +2388,48 @@ class TestConverseRewriteRegressions:
             await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
 
     @pytest.mark.asyncio
-    async def test_joined_tool_result_row_the_flat_texts_do_not_reproduce_fails_closed(self):
+    @pytest.mark.parametrize(
+        ("content", "text"),
+        [
+            ('{"rows":"[1]{id}\\n1"}', '{"rows":"[1]{id}\\n1"}'),
+            ([{"type": "text", "text": "rows"}, {"type": "text", "text": "[1]{id}"}], "rows\n[1]{id}"),
+        ],
+    )
+    async def test_reshaped_tool_result_row_is_sent_as_one_text_block_where_its_parts_were(self, content, text):
+        image = {"image": {"format": "png", "source": {"bytes": "iVBORw0KGgo="}}}
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "toolResult": {
+                                    "toolUseId": "t1",
+                                    "content": [image, {"text": "found 4111"}, {"json": {"rows": [{"id": 1}]}}],
+                                    "status": "success",
+                                }
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+        guard = _replying({"structured_messages": [{"role": "tool", "tool_call_id": "t1", "content": content}]})
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [
+            {
+                "toolResult": {
+                    "toolUseId": "t1",
+                    "content": [image, {"text": text}],
+                    "status": "success",
+                }
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_joined_tool_result_row_is_sent_as_one_text_block(self):
         data = {
             "endpoint": "model/test/converse",
             "data": {
@@ -2402,10 +2443,66 @@ class TestConverseRewriteRegressions:
                 ]
             },
         }
-        original = copy.deepcopy(data["data"])
         guard = _replying(
             {"structured_messages": [{"role": "tool", "tool_call_id": "t1", "content": "found [CARD]\nok"}]}
         )
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [
+            {"toolResult": {"toolUseId": "t1", "content": [{"text": "found [CARD]\nok"}]}}
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("content", "texts", "row"),
+        [
+            pytest.param(
+                [{"json": {"card": "4111", "rows": [1, 2]}}],
+                ["[CARD]"],
+                {"role": "tool", "tool_call_id": "t1", "content": '{"card": "4111", "rows": "1,2"}'},
+                id="flat-mask-on-the-tool-result",
+            ),
+            pytest.param(
+                [{"json": {"rows": [1, 2]}}],
+                None,
+                {"role": "tool", "tool_call_id": "t2", "content": '{"rows": "1,2"}'},
+                id="changed-tool-call-id",
+            ),
+            pytest.param(
+                [{"image": {"format": "png", "source": {"bytes": "iVBORw0KGgo="}}}],
+                None,
+                {"role": "tool", "tool_call_id": "t1", "content": "an image"},
+                id="no-text-parts-to-replace",
+            ),
+        ],
+    )
+    async def test_tool_result_reshape_that_would_drop_a_mask_or_misplace_text_fails_closed(self, content, texts, row):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [{"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": content}}]}]
+            },
+        }
+        original = copy.deepcopy(data["data"])
+        guard = _replying({"structured_messages": [row], **({"texts": texts} if texts is not None else {})})
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert data["data"] == original
+
+    @pytest.mark.asyncio
+    async def test_joined_user_row_the_flat_texts_do_not_reproduce_fails_closed(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"text": "card 4111"}, {"cachePoint": {"type": "default"}}, {"text": "thanks"}],
+                    }
+                ]
+            },
+        }
+        original = copy.deepcopy(data["data"])
+        guard = _replying({"structured_messages": [{"role": "user", "content": "card [CARD]\nthanks"}]})
         with pytest.raises(UnappliableRequestRewrite):
             await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
         assert data["data"] == original
