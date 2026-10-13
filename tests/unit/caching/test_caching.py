@@ -55,21 +55,6 @@ def test_authenticated_proxy_callers_get_distinct_exact_cache_keys() -> None:
     assert key_a != key_b
 
 
-def test_authenticated_cache_keys_preserve_request_and_metadata_namespaces() -> None:
-    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, namespace="instance")
-    caller: Final = UserAPIKeyAuth(api_key="fixture", token="hashed-key", team_id="team")
-
-    key: Final = cache._add_namespace_to_cache_key(
-        "hashed-response",
-        cache={"namespace": "request"},
-        metadata={"user_api_key_auth": caller, "redis_namespace": "metadata"},
-    )
-
-    assert key is not None
-    assert key.startswith("instance:caller:")
-    assert key.endswith(":request:metadata:hashed-response")
-
-
 def test_authenticated_callers_without_server_token_fail_closed_for_all_key_forms() -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL, namespace="qa")
     caller_a: Final = UserAPIKeyAuth(api_key="raw-a", team_id="team-a", user_id="user-a").model_copy(

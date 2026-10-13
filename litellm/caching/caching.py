@@ -657,11 +657,7 @@ class Cache:
             metadata_namespace,
         )
         namespace: Final[str | None] = (
-            ":".join(
-                value
-                for value in namespace_parts
-                if isinstance(value, str) and value
-            )
+            ":".join(value for value in namespace_parts if isinstance(value, str) and value)
             if authenticated_namespace is not None
             else requested_namespace or metadata_namespace or self.namespace
         )
