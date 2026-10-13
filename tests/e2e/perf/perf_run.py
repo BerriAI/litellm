@@ -89,6 +89,7 @@ def run_plan(case: PerformanceTestCase, plan: tuple[PlannedRequest, ...], setup:
         completed: Final = subprocess.run(
             [
                 sys.executable,
+                "-P",
                 "-m",
                 "locust",
                 "--headless",
