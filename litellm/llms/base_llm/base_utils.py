@@ -163,6 +163,11 @@ _convert_tool_response_to_message = convert_tool_response_to_message
 class ResponseFormatSchema:
     property_names: frozenset[str]
     required_names: frozenset[str] = frozenset()
+    allows_undeclared_keys: bool = False
+
+    @property
+    def accepts_a_lone_undeclared_key(self) -> bool:
+        return self.allows_undeclared_keys and not self.required_names
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
@@ -183,6 +188,15 @@ def _names(value: object) -> frozenset[str]:
         return frozenset()
 
 
+def _allows_undeclared_keys(document: Mapping[str, JsonValue]) -> bool:
+    additional_properties: Final = document.get("additionalProperties")
+    return (
+        additional_properties is True
+        or as_json_object(additional_properties) is not None
+        or bool(as_json_object(document.get("patternProperties")))
+    )
+
+
 def response_format_schema(value: object) -> ResponseFormatSchema | None:
     document: Final = as_json_object(value)
     if document is None:
@@ -191,7 +205,9 @@ def response_format_schema(value: object) -> ResponseFormatSchema | None:
     if properties is None:
         return None
     return ResponseFormatSchema(
-        property_names=frozenset(properties), required_names=_names(document.get("required", ()))
+        property_names=frozenset(properties),
+        required_names=_names(document.get("required", ())),
+        allows_undeclared_keys=_allows_undeclared_keys(document),
     )
 
 
@@ -249,25 +265,28 @@ def _schema_object_inside_envelope(
 ) -> Mapping[str, JsonValue] | None:
     layers: Final = _envelope_layers(payload_object, schema, tool_name)
     candidates: Final = layers if schema.property_names else itertools.islice(layers, 1)
-    return next(
-        (
-            layer.inner
-            for layer in candidates
-            if layer.names_the_tool or not schema.property_names.isdisjoint(layer.inner)
-        ),
-        None,
-    )
+    return next((layer.inner for layer in candidates if _holds_the_schema_object(layer, schema)), None)
 
 
-def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
+def _holds_the_schema_object(layer: _EnvelopeLayer, schema: ResponseFormatSchema) -> bool:
+    if layer.names_the_tool:
+        return True
+    return not schema.accepts_a_lone_undeclared_key and not schema.property_names.isdisjoint(layer.inner)
+
+
+def response_format_envelope_contents(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object | None:
     payload_object: Final = as_json_object(payload)
     if payload_object is None:
-        return payload
+        return None
     schema_object: Final = _schema_object_inside_envelope(payload_object, schema, tool_name)
     if schema_object is not None:
         return schema_object
-    values: Final = None if "values" in schema.property_names else payload_object.get("values")
-    return payload if values is None else values
+    return None if "values" in schema.property_names else payload_object.get("values")
+
+
+def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
+    contents: Final = response_format_envelope_contents(payload, schema, tool_name)
+    return payload if contents is None else contents
 
 
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:

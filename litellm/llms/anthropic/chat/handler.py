@@ -22,7 +22,11 @@ from litellm.anthropic_beta_headers_manager import (
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
-from litellm.llms.base_llm.base_utils import RESPONSE_FORMAT_ENVELOPE_NAME_KEYS, ResponseFormatSchema
+from litellm.llms.base_llm.base_utils import (
+    RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
+    ResponseFormatSchema,
+    response_format_envelope_contents,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -112,9 +116,18 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
             return "hold"
         if first_value is None and _NAME_VALUE_PREFIX.match(buffered_json):
             return "undecided"
-    if first_key.group(1) in schema.property_names or not schema.property_names:
+    if first_key.group(1) in schema.property_names or not schema.property_names or schema.accepts_a_lone_undeclared_key:
         return "pass_through"
     return _first_value_verdict(buffered_json[first_key.end() :], schema)
+
+
+def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
+    try:
+        payload: Final[object] = json.loads(held)
+    except (json.JSONDecodeError, RecursionError):
+        return held
+    contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
+    return held if contents is None else json.dumps(contents)
 
 
 def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
@@ -1181,20 +1194,7 @@ class ModelResponseIterator:
         held: Final = self._response_format_buffer.getvalue()
         self._response_format_buffer = io.StringIO()
         self._response_format_verdict = "undecided"
-        if not held:
-            return ""
-        message: Final = AnthropicConfig.convert_tool_response_to_message(
-            tool_calls=[
-                ChatCompletionToolCallChunk(
-                    id=None,
-                    type="function",
-                    function=ChatCompletionToolCallFunctionChunk(name=None, arguments=held),
-                    index=self.tool_index,
-                )
-            ],
-            response_format_schema=self.response_format_schema,
-        )
-        return (message.content if message is not None else None) or held
+        return _held_answer(held, self.response_format_schema) if held else ""
 
     def _handle_message_delta(self, chunk: dict) -> tuple[str, Usage | None, dict[str, Any] | None]:
         """
