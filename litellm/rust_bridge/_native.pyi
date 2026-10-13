@@ -5,7 +5,7 @@ from typing import Never, final
 import httpx
 from pydantic import JsonValue
 
-from litellm.rust_bridge.lifecycle import Execution
+from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 
 class RustBridgeDeclined(Exception): ...

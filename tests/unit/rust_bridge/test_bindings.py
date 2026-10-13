@@ -9,7 +9,7 @@ import pytest
 from litellm.rust_bridge import bindings
 from litellm.rust_bridge.chat_completions import entrypoints as chat_completions
 from litellm.rust_bridge.embeddings import entrypoints as embeddings
-from litellm.rust_bridge.lifecycle import Complete, Step
+from litellm.rust_bridge.execution import Complete, Step
 from litellm.rust_bridge.messages import entrypoints as messages
 from litellm.rust_bridge.ocr import entrypoints as ocr
 from litellm.rust_bridge.public_call import NativeCall

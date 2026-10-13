@@ -393,7 +393,7 @@ fn a_stream_carries_its_head_before_the_first_chunk(
             call_options(asynchronous),
         );
         let hidden: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
-            stream.getattr("head").unwrap().extract().unwrap();
+            stream.getattr("_hidden_params").unwrap().extract().unwrap();
         assert_eq!(
             hidden["additional_headers"],
             std::collections::HashMap::from([("request-id".to_string(), "req_1".to_string())])
