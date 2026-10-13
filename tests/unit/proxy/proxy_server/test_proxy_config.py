@@ -3794,7 +3794,11 @@ def _unset_env_for_test(monkeypatch: pytest.MonkeyPatch, *keys: str) -> None:
 
 
 async def _sync_db_env_row(
-    monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, row: Mapping[str, JsonValue], config: Mapping[str, object]
+    monkeypatch: pytest.MonkeyPatch,
+    pc: ProxyConfig,
+    row: Mapping[str, JsonValue],
+    config: Mapping[str, object],
+    prisma_client: MagicMock | None = None,
 ) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
     stored: Final = {key: encrypt_value_helper(value) if isinstance(value, str) else value for key, value in row.items()}
@@ -3805,7 +3809,7 @@ async def _sync_db_env_row(
         return SimpleNamespace(param_name=param_name, param_value=stored)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
-    await pc._update_config_from_db(MagicMock(), dict(config), store_model_in_db=True)
+    await pc._update_config_from_db(prisma_client or MagicMock(), dict(config), store_model_in_db=True)
 
 
 @pytest.mark.asyncio
@@ -3840,10 +3844,9 @@ async def test_ProxyConfig_db_env_var_removed_from_row_falls_back_to_its_value_w
         monkeypatch.setenv(key, process_value)
     config: Final = {"environment_variables": {} if config_value is None else {key: config_value}}
     pc: Final = ProxyConfig()
-    pc._load_yaml_settings_stores(config)
-
-    await _sync_db_env_row(monkeypatch, pc, {key: "db-value", "LIT_DB_ENV_KEPT": "kept"}, config)
     pc._load_environment_variables(config)
+    pc.capture_environment_before_db()
+
     await _sync_db_env_row(monkeypatch, pc, {key: "db-value", "LIT_DB_ENV_KEPT": "kept"}, config)
     assert os.environ.get(key) == "db-value"
 
@@ -3851,6 +3854,26 @@ async def test_ProxyConfig_db_env_var_removed_from_row_falls_back_to_its_value_w
 
     assert os.environ.get(key) == expected_after_removal
     assert os.environ.get("LIT_DB_ENV_KEPT") == "kept"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_db_env_var_removed_with_its_config_reference_source_takes_the_resolved_startup_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "LIT_DB_ENV_ALIAS", "LIT_DB_ENV_SOURCE")
+    monkeypatch.setenv("LIT_DB_ENV_SOURCE", "process-source")
+    config: Final = {"environment_variables": {"LIT_DB_ENV_ALIAS": "os.environ/LIT_DB_ENV_SOURCE"}}
+    pc: Final = ProxyConfig()
+    pc._load_environment_variables(config)
+    pc.capture_environment_before_db()
+
+    await _sync_db_env_row(monkeypatch, pc, {"LIT_DB_ENV_ALIAS": "db-alias", "LIT_DB_ENV_SOURCE": "db-source"}, config)
+    await _sync_db_env_row(monkeypatch, pc, {}, config)
+
+    assert (os.environ.get("LIT_DB_ENV_ALIAS"), os.environ.get("LIT_DB_ENV_SOURCE")) == (
+        "process-source",
+        "process-source",
+    )
 
 
 @pytest.mark.asyncio
@@ -3908,6 +3931,120 @@ async def test_ProxyConfig_db_env_row_with_a_non_string_value_still_applies_the_
 
     assert os.environ.get("LIT_DB_ENV_TEXT") == "text"
     assert "LIT_DB_ENV_NUMBER" not in os.environ
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("set_by", ["cli-after-import", "config-file-at-startup"])
+async def test_ProxyConfig_db_env_var_removed_falls_back_to_the_value_the_pod_started_with(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, set_by: str
+) -> None:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    scheduler: Final = AsyncIOScheduler()
+    monkeypatch.setattr(proxy_server_module, "scheduler", scheduler)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    monkeypatch.delenv("WORKER_CONFIG", raising=False)
+    monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
+    _unset_env_for_test(monkeypatch, "LIT_DB_ENV_STARTUP_VALUE", "CONFIG_FILE_PATH")
+    if set_by == "cli-after-import":
+        monkeypatch.setenv("LIT_DB_ENV_STARTUP_VALUE", "pod-own-key")
+    else:
+        config_file: Final = tmp_path / "config.yaml"
+        config_file.write_text("environment_variables:\n  LIT_DB_ENV_STARTUP_VALUE: pod-own-key\n")
+        monkeypatch.setenv("CONFIG_FILE_PATH", str(config_file))
+    pc: Final = proxy_server_module.proxy_config
+
+    try:
+        async with proxy_server_module.proxy_startup_event(app=None):
+            await _sync_db_env_row(monkeypatch, pc, {"LIT_DB_ENV_STARTUP_VALUE": "db-key"}, {})
+            while_stored: Final = os.environ.get("LIT_DB_ENV_STARTUP_VALUE")
+            await _sync_db_env_row(monkeypatch, pc, {}, {})
+            after_removal: Final = os.environ.get("LIT_DB_ENV_STARTUP_VALUE")
+    finally:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+
+    assert (while_stored, after_removal) == ("db-key", "pod-own-key")
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_db_env_row_with_an_invalid_environment_entry_still_syncs_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "LIT_DB_ENV_GOOD", "LIT_DB_ENV_NUL")
+    invalid_entries: Final = {"LIT_DB_ENV=BAD": "value", "": "value", "LIT_DB_ENV_NUL": "a\0b"}
+    pc: Final = ProxyConfig()
+
+    for good_value in ("first", "second"):
+        await _sync_db_env_row(monkeypatch, pc, {**invalid_entries, "LIT_DB_ENV_GOOD": good_value}, {})
+        assert os.environ.get("LIT_DB_ENV_GOOD") == good_value
+
+    assert "LIT_DB_ENV_NUL" not in os.environ
+
+
+def _prisma_with_sso_table(sso_settings: Mapping[str, str | None] | None) -> MagicMock:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=None if sso_settings is None else SimpleNamespace(sso_settings=dict(sso_settings))
+    )
+    return prisma_client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sso_table_client_id", "expected_after_removal"),
+    [("sso-table-id", "sso-table-id"), (None, None)],
+    ids=["sso-table-sets-it", "no-sso-table-row"],
+)
+async def test_ProxyConfig_sso_key_removed_from_the_env_row_takes_its_sso_table_value(
+    monkeypatch: pytest.MonkeyPatch, sso_table_client_id: str | None, expected_after_removal: str | None
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    prisma_client: Final = _prisma_with_sso_table(
+        None if sso_table_client_id is None else {"google_client_id": encrypt_value_helper(sso_table_client_id)}
+    )
+    pc: Final = ProxyConfig()
+
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {}, prisma_client)
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "env-row-id"
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == expected_after_removal
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_non_sso_key_removed_from_the_env_row_skips_the_sso_table_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "LIT_DB_ENV_NOT_SSO")
+    prisma_client: Final = _prisma_with_sso_table({})
+    pc: Final = ProxyConfig()
+
+    await _sync_db_env_row(monkeypatch, pc, {"LIT_DB_ENV_NOT_SSO": "db-value"}, {}, prisma_client)
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+
+    prisma_client.db.litellm_ssoconfig.find_unique.assert_not_awaited()
+
+
+def test_ProxyConfig_sso_settings_with_unset_fields_apply_without_error_logs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID", "SAML_IDP_METADATA_URL")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    pc: Final = ProxyConfig()
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        applied: Final = pc.decrypt_and_set_db_env_variables(
+            {"GOOGLE_CLIENT_ID": encrypt_value_helper("sso-id"), "SAML_IDP_METADATA_URL": None}
+        )
+
+    assert applied == {"GOOGLE_CLIENT_ID": "sso-id"}
+    assert "SAML_IDP_METADATA_URL" not in os.environ
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
 
 # ---------------------------------------------------------------------------
