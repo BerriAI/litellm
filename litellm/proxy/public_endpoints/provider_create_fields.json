@@ -3342,6 +3342,34 @@
     "default_model_placeholder": "strands_decider/strands-decider-2B-hobson-v19"
   },
   {
+    "provider": "TEAMOROUTER",
+    "provider_display_name": "TeamoRouter",
+    "litellm_provider": "teamorouter",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.teamorouter.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "teamorouter/claude-sonnet-5-5"
+  },
+  {
     "provider": "Tencent",
     "provider_display_name": "Tencent",
     "litellm_provider": "tencent",
