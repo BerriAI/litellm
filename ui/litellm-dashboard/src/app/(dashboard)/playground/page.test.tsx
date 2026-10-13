@@ -96,6 +96,14 @@ describe("PlaygroundPage ?tab= deep link", () => {
     expect(screen.getByTestId("system-one-ui")).toBeInTheDocument();
   });
 
+  it("opens the Agent Builder tab from ?tab=agent-builder without a deprecation banner", () => {
+    renderWithProviders(<PlaygroundPage />, { searchParams: { tab: "agent-builder" } });
+
+    expect(screen.getByRole("tab", { name: /^Agent Builder/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("agent-builder")).toBeInTheDocument();
+    expect(screen.queryByText(/deprecat/i)).not.toBeInTheDocument();
+  });
+
   it("falls back to Chat when ?tab= is not a playground tab", () => {
     renderWithProviders(<PlaygroundPage />, { searchParams: { tab: "settings" } });
 
