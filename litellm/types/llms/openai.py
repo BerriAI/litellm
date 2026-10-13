@@ -1313,6 +1313,26 @@ class ResponsesAPIStreamOptions(TypedDict, total=False):
     include_obfuscation: bool
 
 
+class ResponsesAPIModerationPolicyEntry(TypedDict, total=False):
+    """Moderation policy for either the input or the output of a response."""
+
+    mode: Required[Literal["score", "block"]]
+
+
+class ResponsesAPIModerationPolicy(TypedDict, total=False):
+    """Policy applied to moderated response input and output."""
+
+    input: ResponsesAPIModerationPolicyEntry | None
+    output: ResponsesAPIModerationPolicyEntry | None
+
+
+class ResponsesAPIModeration(TypedDict, total=False):
+    """Configuration for running moderation on the input and output of a response."""
+
+    model: Required[str]
+    policy: ResponsesAPIModerationPolicy | None
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -1345,6 +1365,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     partial_images: int | None  # Number of partial images to generate (1-3) for streaming image generation
     context_management: list[ContextManagementEntry] | None
     """Context management configuration. E.g. [{\"type\": \"compaction\", \"compact_threshold\": 200000}] for server-side compaction (minimum 1000)."""
+    moderation: ResponsesAPIModeration | None
+    """Moderation configuration for the response input and output. E.g. {\"model\": \"omni-moderation-latest\"}."""
 
 
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
