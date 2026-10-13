@@ -13,10 +13,14 @@ _SUPPORTED_OPENAI_PARAMS: Final = (
     "frequency_penalty",
     "max_retries",
     "max_tokens",
+    "parallel_tool_calls",
     "presence_penalty",
     "response_format",
     "stream",
+    "stream_options",
     "temperature",
+    "tool_choice",
+    "tools",
     "top_p",
 )
 

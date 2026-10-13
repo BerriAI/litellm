@@ -131,15 +131,27 @@ class TestNadirParamMapping:
         assert params["temperature"] == 0.5
         assert params["max_tokens"] == 64
 
-    def test_streaming_is_advertised_and_tools_are_not(self):
+    def test_streaming_and_tool_calling_are_advertised(self):
         params = litellm.get_supported_openai_params(model="auto", custom_llm_provider="nadir")
-        assert "stream" in params
-        assert "tools" not in params
+        for name in ("stream", "stream_options", "tools", "tool_choice", "parallel_tool_calls"):
+            assert name in params
+
+    def test_tool_params_are_forwarded(self):
+        tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
+        params = litellm.get_optional_params(
+            model="auto",
+            custom_llm_provider="nadir",
+            tools=tools,
+            tool_choice="auto",
+            parallel_tool_calls=False,
+        )
+        assert params["tools"] == tools
+        assert params["tool_choice"] == "auto"
+        assert params["parallel_tool_calls"] is False
 
     @pytest.mark.parametrize(
         "unsupported",
         [
-            {"tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}]},
             {"stop": ["\n"]},
             {"seed": 7},
             {"n": 2},
