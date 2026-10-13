@@ -1393,7 +1393,12 @@ async def test_mcp_tool_search_leaves_the_listed_tools_slot_empty(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> None:
-    from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
+    import psutil
+
+    from litellm.proxy._experimental.mcp_server.tool_search import (
+        _MAX_VALIDATION_WORKERS,
+        _tool_argument_validation_error,
+    )
 
     schema: Final = {
         "type": "object",
@@ -1401,6 +1406,7 @@ async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> No
         "properties": {"amount": {"$ref": "#/$defs/amount"}},
     }
     original_affinity: Final = os.sched_getaffinity(0) if sys.platform == "linux" else None
+    existing_children: Final = frozenset(child.pid for child in psutil.Process().children())
     try:
         if original_affinity is not None:
             os.sched_setaffinity(0, {min(original_affinity)})
@@ -1409,6 +1415,14 @@ async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> No
                 *(_tool_argument_validation_error(schema, {"amount": 0.75}) for _ in range(8))
             )
             assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
+        workers: Final = tuple(
+            child
+            for child in psutil.Process().children()
+            if child.pid not in existing_children and "anyio.to_process" in child.cmdline()
+        )
+        assert 1 <= len(workers) <= (1 if original_affinity is not None else _MAX_VALIDATION_WORKERS), (
+            "Validation must not start more cold workers than the CPUs it can run on"
+        )
     finally:
         if original_affinity is not None:
             os.sched_setaffinity(0, original_affinity)

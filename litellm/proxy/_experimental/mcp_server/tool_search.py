@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
@@ -55,6 +56,7 @@ _MAX_VALIDATION_DEPTH: Final = 64
 _MAX_VALIDATION_NODES: Final = 10_000
 _MAX_VALIDATION_CHARACTERS: Final = 1_048_576
 _VALIDATION_TIMEOUT_SECONDS: Final = 30
+_MAX_VALIDATION_WORKERS: Final = 4
 
 
 def _validation_nodes(value: JsonValue | Mapping[str, JsonValue]) -> Iterator[tuple[int, int]]:
@@ -101,6 +103,11 @@ def _validate_tool_arguments(schema: Mapping[str, JsonValue], arguments: Mapping
     return None
 
 
+def _schema_validation_worker_count() -> int:
+    available: Final = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
+    return max(1, min(_MAX_VALIDATION_WORKERS, available))
+
+
 async def _tool_argument_validation_error(
     schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]
 ) -> str | None:
@@ -108,7 +115,7 @@ async def _tool_argument_validation_error(
     if limit_error is not None:
         return limit_error
     existing: Final = _SCHEMA_VALIDATION_LIMITER.get(None)
-    limiter: Final = existing if existing is not None else anyio.CapacityLimiter(4)
+    limiter: Final = existing if existing is not None else anyio.CapacityLimiter(_schema_validation_worker_count())
     if existing is None:
         _SCHEMA_VALIDATION_LIMITER.set(limiter)
     try:
