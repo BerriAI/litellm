@@ -273,6 +273,10 @@ def _number(value: JsonValue) -> float:
     return float(value)
 
 
+def _decisions_rate(prices: dict[str, JsonValue], field: str) -> float:
+    return _number(prices.get(f"{field}_decisions", prices[field]))
+
+
 def _expected_spend(provider: _Provider) -> float:
     if provider.provider_reported_cost is not None:
         return provider.provider_reported_cost
@@ -280,8 +284,8 @@ def _expected_spend(provider: _Provider) -> float:
         return 0.0
     cost_map: Final = _JSON_OBJECT.validate_json(Path("model_prices_and_context_window.json").read_bytes())
     prices: Final = object_value(cost_map[provider.cost_map_key])
-    return _INPUT_TOKENS * _number(prices["input_cost_per_token"]) + _OUTPUT_TOKENS * _number(
-        prices["output_cost_per_token"]
+    return _INPUT_TOKENS * _decisions_rate(prices, "input_cost_per_token") + _OUTPUT_TOKENS * _decisions_rate(
+        prices, "output_cost_per_token"
     )
 
 
