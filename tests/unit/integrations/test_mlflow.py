@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
@@ -8,6 +9,30 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from litellm.types.utils import CallTypes
+
+
+@pytest.mark.parametrize(
+    ("call_type", "is_embedding"),
+    (
+        (CallTypes.embedding.value, True),
+        (CallTypes.aembedding.value, True),
+        ("embeddings", True),
+        (CallTypes.completion.value, False),
+        (CallTypes.acompletion.value, False),
+        (None, False),
+        ("unknown", False),
+    ),
+)
+def test_mlflow_span_type_matches_call_type(call_type: str | None, is_embedding: bool) -> None:
+    modules: Final = _mock_mlflow_modules()
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        logger: Final = MlflowLogger()
+        span_types: Final = modules["mlflow.entities"].SpanType
+        expected: Final = span_types.EMBEDDING if is_embedding else span_types.LLM
+        assert logger._get_span_type(call_type) == expected
 
 
 @pytest.mark.asyncio
