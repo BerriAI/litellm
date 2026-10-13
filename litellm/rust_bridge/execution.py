@@ -5,8 +5,6 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Final, Protocol, TypeVar, cast  # noqa: TID251  # trusts the native stub at the binding boundary
 
-from pydantic import TypeAdapter
-
 _Call = TypeVar("_Call")
 
 
@@ -44,11 +42,10 @@ class Execution(Protocol):
 
 
 _REOPENED: Final = "execution opened a stream twice"
-_HEADERS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _headers(head: object) -> Mapping[str, object]:
-    return _HEADERS.validate_python(head)
+    return cast("Mapping[str, object]", head)  # cast-ok: encode_stream_head always builds a str-keyed dict
 
 
 class StreamClosed(Exception):
