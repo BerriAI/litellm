@@ -354,7 +354,7 @@ _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body
 _STR_DICT_ADAPTER: Final = TypeAdapter(dict[str, str])
 
 
-def _extra_headers_or_none(data: dict) -> Mapping[str, str] | None:
+def _extra_headers_or_none(data: Mapping) -> Mapping[str, str] | None:
     """This request's `extra_headers`, validated to a str-to-str mapping, or None
     if absent or malshaped."""
     try:
