@@ -105,6 +105,7 @@ class Deployment(BaseModel):
     base_model: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    search_cost_per_query: float | None = None
 
 
 class WavUpload(BaseModel):

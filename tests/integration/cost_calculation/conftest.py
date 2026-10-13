@@ -311,6 +311,17 @@ def register_scenario_deployment(
             else {}
         ),
         **(
+            {
+                "search_context_cost_per_query": {
+                    "search_context_size_low": case.deployment.search_cost_per_query,
+                    "search_context_size_medium": case.deployment.search_cost_per_query,
+                    "search_context_size_high": case.deployment.search_cost_per_query,
+                }
+            }
+            if case.deployment is not None and case.deployment.search_cost_per_query is not None
+            else {}
+        ),
+        **(
             {"vertex_credentials": _vertex_service_account_json(control_url)}
             if case.rates.litellm_provider.startswith("vertex_ai")
             else {}
