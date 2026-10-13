@@ -1,13 +1,16 @@
-import asyncio, importlib, json
+import asyncio
+import importlib
+import json
+from typing import Final, Optional, cast
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm import completion, embedding
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Optional
 
 
 @pytest.mark.parametrize("tokenizer_config_cached", [False, True], ids=["tokenizer_config", "cached_config_jinja"])
@@ -41,8 +44,10 @@ async def test_watsonx_text_gpt_oss_async_completion_fetches_hf_template_off_the
             return httpx.Response(200, content=chat_template.encode())
         return httpx.Response(200, json={"chat_template": chat_template, "bos_token": None, "eos_token": None})
 
-    monkeypatch.setattr(huggingface_template_handler, "_get_httpx_client", forbid_sync_client)
-    monkeypatch.setattr(huggingface_template_handler, "get_async_httpx_client", lambda **kwargs: Mock(get=serve_hf_file))
+    monkeypatch.setattr(huggingface_template_handler, "get_httpx_client", forbid_sync_client)
+    monkeypatch.setattr(
+        huggingface_template_handler, "get_async_httpx_client", lambda **kwargs: Mock(get=serve_hf_file)
+    )
 
     def handle(request):
         captured["body"] = json.loads(request.content)
@@ -301,6 +306,168 @@ def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):
 
     assert mock_post.call_count == 1
     assert "deployment" not in mock_post.call_args.kwargs["url"]
+
+
+@pytest.mark.parametrize("sync_mode", [True])
+def test_watsonx_tool_choice(sync_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
+    model: Final = "watsonx/meta-llama/llama-3-1-8b-instruct"
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages: Final = [{"role": "user", "content": "What is the weather in San Francisco?"}]
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        request_body: Final = cast(dict[str, object], json.loads(request.content))
+        assert request_body["tool_choice_option"] == "auto"
+        return httpx.Response(
+            200,
+            json={
+                "model_id": "meta-llama/llama-3-1-8b-instruct",
+                "results": [
+                    {
+                        "generated_text": "The weather is sunny.",
+                        "generated_token_count": 1,
+                        "input_token_count": 1,
+                        "stop_reason": "eos_token",
+                    }
+                ],
+            },
+            request=request,
+        )
+
+    transport: Final = httpx.MockTransport(handle_request)
+    with httpx.Client(transport=transport) as http_client:
+        client: Final = HTTPHandler(client=http_client)
+        response: Final = completion(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            client=client,
+        )
+
+    assert len(response.choices) == 1
+
+
+async def test_watsonx_async_streamed_tool_choice_reaches_the_stream_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
+    stream_chunks: Final = (
+        {
+            "id": "chatcmpl-watsonx",
+            "object": "chat.completion.chunk",
+            "created": 1760000000,
+            "model": "ibm/granite-3-8b-instruct",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "chatcmpl-tool-weather",
+                                "type": "function",
+                                "function": {"name": "get_current_weather", "arguments": ""},
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-watsonx",
+            "object": "chat.completion.chunk",
+            "created": 1760000000,
+            "model": "ibm/granite-3-8b-instruct",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{"index": 0, "function": {"arguments": '{"location": "San Francisco, CA"}'}}]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-watsonx",
+            "object": "chat.completion.chunk",
+            "created": 1760000000,
+            "model": "ibm/granite-3-8b-instruct",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        },
+    )
+    body: Final = "".join(
+        f"id: {index}\nevent: message\ndata: {json.dumps(chunk)}\n\n" for index, chunk in enumerate(stream_chunks)
+    )
+    requests: Final[list[httpx.Request]] = []
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handle_request))
+    response: Final = await litellm.acompletion(
+        model="watsonx/ibm/granite-3-8b-instruct",
+        messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        tool_choice="auto",
+        stream=True,
+        client=client,
+    )
+    chunks: Final = [chunk async for chunk in response]
+    tool_calls: Final = tuple(
+        chunk.choices[0].delta.tool_calls[0] for chunk in chunks if chunk.choices[0].delta.tool_calls
+    )
+    request_body: Final = cast(dict[str, object], json.loads(requests[0].content))
+
+    assert len(requests) == 1
+    assert requests[0].url.path == "/ml/v1/text/chat_stream"
+    assert request_body["tool_choice_option"] == "auto"
+    assert request_body["stream"] is True
+    assert tool_calls[0].id == "chatcmpl-tool-weather"
+    assert tool_calls[0].function.name == "get_current_weather"
+    assert json.loads("".join(tool_call.function.arguments or "" for tool_call in tool_calls)) == {
+        "location": "San Francisco, CA"
+    }
+    assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
 
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 def test_watsonx_chat_completions_endpoint_space_id(monkeypatch, watsonx_chat_completion_call):

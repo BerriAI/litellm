@@ -36,7 +36,7 @@ from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime
-from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
@@ -315,7 +315,7 @@ async def vertex_access_token_resolver(
     project_id: str | None,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> tuple[str, str]:
-    return await vertex_llm_base._ensure_access_token_async(
+    return await vertex_llm_base.ensure_access_token_async(
         credentials=credentials,
         project_id=project_id,
         custom_llm_provider=custom_llm_provider,
@@ -679,7 +679,7 @@ async def realtime_health_check(
             realtime_protocol=realtime_protocol,
             model_params=resolved_params,
         )
-        url = azure_realtime._construct_url(
+        url = azure_realtime.construct_url(
             api_base=resolved_api_base or "",
             model=model,
             api_version=resolved_api_version or "2024-10-01-preview",
@@ -687,12 +687,12 @@ async def realtime_health_check(
             query_params=azure_query_params,
         )
     elif custom_llm_provider == "openai":
-        url = openai_realtime._construct_url(
+        url = openai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.openai.com/",
             query_params={"model": model},
         )
     elif custom_llm_provider == "xai":
-        url = xai_realtime._construct_url(
+        url = xai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
         )
     elif custom_llm_provider == "vertex_ai":
@@ -721,23 +721,21 @@ async def realtime_health_check(
             location=resolved_location,
         )
         url = vertex_realtime_config.get_complete_url(api_base=resolved_api_base, model=model)
-        vertex_ssl_context: Final = get_shared_realtime_ssl_context()
         headers: Final = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
         async with websockets.connect(
             url,
             additional_headers=headers,
             max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-            ssl=vertex_ssl_context,
+            ssl=realtime_ssl_for_url(url),
         ):
             return True
     else:
         raise ValueError(f"Unsupported model: {model}")
-    ssl_context: Final = get_shared_realtime_ssl_context()
     async with websockets.connect(
         url,
         additional_headers=auth_headers,
         max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-        ssl=ssl_context,
+        ssl=realtime_ssl_for_url(url),
     ):
         return True
 

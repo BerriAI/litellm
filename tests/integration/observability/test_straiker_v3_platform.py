@@ -10,8 +10,6 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
-import os
-import signal
 import socket
 import threading
 import uuid
@@ -30,7 +28,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
+from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 
 V3_KEY: Final = "sk_agt_synthetic_integration_key"
@@ -436,7 +434,9 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     with gateway_from_environment() as gateway, wire_server(_provider) as provider:
         config: Final = _rig_config(sink.url, root)
         with (
-            owned_proxy_process(gateway, root, {}, config=config, workers=2) as owned,
+            owned_proxy_process(
+                gateway, root, {}, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT
+            ) as owned,
             owned.gateway.scenario() as scenario,
         ):
             chat: Final = scenario.model(
@@ -1070,23 +1070,30 @@ def test_burst_with_platform_outage_recovers_without_duplicate_spend(rig: Rig) -
 
 
 # C2: one proxy worker is killed during a burst; the other keeps serving and detect still runs for each call
-def _is_live_worker(child: psutil.Process, exclude: int) -> bool:
-    if child.pid == exclude:
-        return False
-    try:
-        return child.status() != psutil.STATUS_ZOMBIE and "spawn_main" in " ".join(child.cmdline())
-    except psutil.Error:
-        return False
-
-
-def _uvicorn_workers(parent: psutil.Process, *, exclude: int = 0) -> tuple[psutil.Process, ...]:
-    return tuple(c for c in parent.children() if _is_live_worker(c, exclude))
+def test_an_unreaped_worker_does_not_hide_the_surviving_proxy_worker(rig: Rig) -> None:
+    workers: Final = tuple(sorted(eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2)))
+    victim: Final = workers[0]
+    survivor: Final = workers[1]
+    marker: Final = rig.marker()
+    with rig.owned.replacing_worker(victim) as kill, rig.owned.suspended(rig.owned.process.pid):
+        kill()
+        assert eventually(psutil.Process(victim).status, lambda status: status == psutil.STATUS_ZOMBIE) == (
+            psutil.STATUS_ZOMBIE
+        )
+        assert rig.owned.worker_pids() == frozenset((survivor,))
+        with httpx.Client(base_url=rig._base(), timeout=15, trust_env=False) as client:
+            response: Final = client.post(
+                "/v1/chat/completions",
+                json={"model": rig.chat_model, "messages": _messages(marker)},
+                headers={"Authorization": f"Bearer {rig.proxy.key}"},
+            )
+        assert response.status_code == 200, response.text
+        assert len(_v3_request_calls(rig, marker)) == 1
+    assert len(rig.owned.worker_pids() - frozenset((victim,))) == 2
 
 
 def test_burst_survives_one_worker_kill(rig: Rig) -> None:
-    parent: Final = psutil.Process(rig.owned.process.pid)
-    workers: Final = eventually(lambda: _uvicorn_workers(parent), lambda c: len(c) >= 2)
-    victim: Final = workers[0].pid
+    workers: Final = tuple(sorted(eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2)))
     markers: Final = tuple(rig.marker() for _ in range(24))
 
     def fresh_chat(text: str) -> tuple[int, str]:
@@ -1101,18 +1108,19 @@ def test_burst_survives_one_worker_kill(rig: Rig) -> None:
                 return 0, repr(error)
         return response.status_code, response.text
 
-    def call(index: int) -> tuple[int, str]:
-        if index == 6:
-            os.kill(victim, signal.SIGKILL)
-        return fresh_chat("kill " + markers[index])
+    with rig.owned.replacing_worker(workers[0]) as kill:
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results: Final = tuple(pool.map(call, range(24)))
+        def call(index: int) -> tuple[int, str]:
+            if index == 6:
+                kill()
+            return fresh_chat("kill " + markers[index])
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results: Final = tuple(pool.map(call, range(24)))
     ok: Final = tuple(i for i, (status, _) in enumerate(results) if status == 200)
     assert len(ok) >= 20, results
     for index in ok:
         assert len(_v3_request_calls(rig, markers[index])) >= 1, markers[index]
-    eventually(lambda: _uvicorn_workers(parent, exclude=victim), lambda c: len(c) >= 2)
     after: Final = fresh_chat("after-kill " + rig.marker())
     assert after[0] == 200, after
 

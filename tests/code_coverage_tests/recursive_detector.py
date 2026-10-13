@@ -2,6 +2,7 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_format_type",
     "remove_additional_properties",
     "remove_strict_from_schema",
@@ -13,7 +14,7 @@ IGNORE_FUNCTIONS = [
     "convert_anyof_null_to_nullable",  # has a set max depth
     "add_object_type",
     "strip_field",
-    "_transform_prompt",
+    "transform_prompt",
     "mask_dict",
     "_serialize",  # we now set a max depth for this
     "_sanitize_request_body_for_spend_logs_payload",  # testing added for circular reference
@@ -57,6 +58,7 @@ IGNORE_FUNCTIONS = [
     "sanitize_oci_schema",  # OCI: bounded by JSON-schema tree depth.
     "_freeze_for_dedupe",  # OTEL: max depth set (default 16, _FREEZE_MAX_DEPTH); fails closed by returning repr(value) at the cap.
     "apply_json_merge_patch",  # max depth set (_MAX_MERGE_DEPTH=64); fails closed by raising ValueError at the cap.
+    "_inlined",  # max depth set (_MAX_INLINE_DEPTH=32); passes the schema node through untouched at the cap. Walks a Pydantic JSON schema once at import time.
     "_filter_argument_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by blocking the tool call at the cap.
     "_redact_scanned_content",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning "[REDACTED]" at the cap.
     "replace_ciphertexts",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); walks stored JSON, which has no cycles, and leaves values below the cap untouched.
@@ -66,6 +68,7 @@ IGNORE_FUNCTIONS = [
     "strict_json_schema",  # harness: max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by raising ValueError at the cap.
     "toml_value",  # harness/codex: max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by raising OptionsMismatch at the cap.
     "with_json_string_leaves",  # transitively bounded: only runs on a tree json_string_leaves already walked under the cap.
+    "_clean_extraction",  # ScaleDown: traverses the entity map built under MAX_SCHEMA_DEPTH=32 and MAX_ENTITIES=1000.
     "json_unrewritable_labels",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); returns the None sentinel at the cap so the caller blocks.
     "_flatten_form_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
     "_flatten_form_data_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).

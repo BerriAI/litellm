@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -90,8 +90,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
-from litellm.proxy.auth.auth_utils import (
-    _get_request_ip_address,
+from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
+    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_request_ip_address,
     has_user_setup_sso,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -236,6 +237,12 @@ class CliSsoTeamDetail(LiteLLMBaseModel):
 
 
 _CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[CliSsoTeamDetail, ...])
+_CLI_SSO_FLOW_JSON_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+_SSO_USERINFO_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(
+    dict[str, object] | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 _TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = CliSsoTeamDetail(team_models=())
 
 
@@ -318,7 +325,7 @@ def _cli_sso_start_response_body(
 
 
 def _get_cli_sso_start_rate_limit_cache_key(request: Request, use_x_forwarded_for: bool | None = False) -> str:
-    client_ip: Final = _get_request_ip_address(request=request, use_x_forwarded_for=use_x_forwarded_for) or "unknown"
+    client_ip: Final = get_request_ip_address(request=request, use_x_forwarded_for=use_x_forwarded_for) or "unknown"
     client_ip_hash: Final = _hash_cli_sso_secret(client_ip)
     return f"{_CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX}:{client_ip_hash}"
 
@@ -370,7 +377,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
     flow = _read_cli_sso_flow(cache, _get_cli_sso_flow_cache_key(cast(str, login_id)))
     if isinstance(flow, str):
         try:
-            flow = _as_object(json.loads(flow))
+            flow = _CLI_SSO_FLOW_JSON_ADAPTER.validate_python(json.loads(flow))
         except ValueError:
             flow = None
     if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
@@ -1060,7 +1067,7 @@ async def google_login(
         _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     # Store CLI login handle in state for OAuth flow
-    cli_state: Final[str | None] = SSOAuthenticationHandler._get_cli_state(
+    cli_state: Final[str | None] = SSOAuthenticationHandler.get_cli_state(
         source=source,
         key=key,
         user_code=(user_code if _cli_sso_verification_uri_complete_enabled() else None),
@@ -1626,7 +1633,7 @@ async def get_generic_sso_response(
                     param="code",
                     code=status.HTTP_400_BAD_REQUEST,
                 )
-            combined_response: Final = await SSOAuthenticationHandler._pkce_token_exchange(
+            combined_response: Final = await SSOAuthenticationHandler.pkce_token_exchange(
                 authorization_code=authorization_code,
                 code_verifier=code_verifier,
                 client_id=generic_client_id,
@@ -1664,7 +1671,7 @@ async def get_generic_sso_response(
         # successfully.  Deleting earlier would consume the verifier on a transient
         # failure, forcing the user to restart the entire OAuth flow from scratch.
         if pkce_cache_key:
-            await SSOAuthenticationHandler._delete_pkce_verifier(pkce_cache_key)
+            await SSOAuthenticationHandler.delete_pkce_verifier(pkce_cache_key)
 
     except Exception as e:
         _handle_generic_sso_error(
@@ -2214,7 +2221,7 @@ async def saml_callback(request: Request):
     relay_state: Final = post_data.get("RelayState")
     cp_return_to: Final[str | None] = (
         relay_state
-        if isinstance(relay_state, str) and SSOAuthenticationHandler._validate_return_to(relay_state)
+        if isinstance(relay_state, str) and SSOAuthenticationHandler.validate_return_to(relay_state)
         else None
     )
 
@@ -2433,7 +2440,7 @@ async def cli_sso_callback(
     result_non_none: Final[OpenID | dict] = cast(OpenID | dict, result)
 
     try:
-        parsed_openid_result: Final = SSOAuthenticationHandler._get_user_email_and_id_from_result(
+        parsed_openid_result: Final = SSOAuthenticationHandler.get_user_email_and_id_from_result(
             result=result_non_none,
             generic_client_id=os.getenv("GENERIC_CLIENT_ID", None),
         )
@@ -2808,7 +2815,7 @@ def _is_same_origin_return_path(return_to: str) -> bool:
 
 
 @with_service_target(SSO_SESSIONS_TARGET)
-async def _sso_return_to_redirect(
+async def sso_return_to_redirect(
     return_to: str | None,
     jwt_token: str,
     redis_usage_cache,
@@ -2836,7 +2843,7 @@ async def _sso_return_to_redirect(
         redirect_response.delete_cookie("litellm_cp_return_to")
         return redirect_response
 
-    if SSOAuthenticationHandler._validate_return_to(return_to):
+    if SSOAuthenticationHandler.validate_return_to(return_to):
         code: Final = secrets.token_urlsafe(32)
         cache_key: Final = f"login_code:{code}"
         cache_value: Final = {"token": jwt_token, "redirect_url": return_to}
@@ -2853,6 +2860,9 @@ async def _sso_return_to_redirect(
         return redirect_response
 
     return None
+
+
+_sso_return_to_redirect: Final = sso_return_to_redirect
 
 
 def set_session_token_cookie(response: Response, request: Request, jwt_token: str) -> None:
@@ -2884,7 +2894,7 @@ def _persist_return_to_cookie(response: Response, return_to: str | None, request
     if return_to is None:
         return
     try:
-        safe: Final = _is_same_origin_return_path(return_to) or SSOAuthenticationHandler._validate_return_to(return_to)
+        safe: Final = _is_same_origin_return_path(return_to) or SSOAuthenticationHandler.validate_return_to(return_to)
     except HTTPException:
         return  # a non-matching absolute return_to is ignored, never blocks sign-in
     if safe:
@@ -2904,7 +2914,7 @@ class SSOAuthenticationHandler:
     """
 
     @staticmethod
-    def _validate_return_to(return_to: str) -> bool:
+    def validate_return_to(return_to: str) -> bool:
         """
         Validate that return_to matches the configured control_plane_url origin.
 
@@ -2933,6 +2943,8 @@ class SSOAuthenticationHandler:
             )
 
         return True
+
+    _validate_return_to = validate_return_to
 
     @staticmethod
     async def get_sso_login_redirect(
@@ -3442,7 +3454,7 @@ class SSOAuthenticationHandler:
             _team_request: Final = deepcopy(default_team_params)
             _team_request["team_id"] = litellm_team_id
             _team_request["team_alias"] = litellm_team_name
-            team_request = NewTeamRequest(**_team_request)
+            team_request = NewTeamRequest.model_validate(_team_request)
         elif isinstance(litellm.default_team_params, DefaultTeamSSOParams):
             _default_team_params: Final = deepcopy(litellm.default_team_params)
             _new_team_request: Final = team_request.model_dump()
@@ -3451,7 +3463,7 @@ class SSOAuthenticationHandler:
         return team_request
 
     @staticmethod
-    def _get_cli_state(
+    def get_cli_state(
         source: str | None,
         key: str | None,
         existing_key: str | None = None,
@@ -3477,8 +3489,10 @@ class SSOAuthenticationHandler:
         else:
             return None
 
+    _get_cli_state = get_cli_state
+
     @staticmethod
-    def _get_user_email_and_id_from_result(
+    def get_user_email_and_id_from_result(
         result: OpenID | dict | None,
         generic_client_id: str | None = None,
     ) -> ParsedOpenIDResult:
@@ -3535,6 +3549,8 @@ class SSOAuthenticationHandler:
             user_role=user_role,
         )
 
+    _get_user_email_and_id_from_result = get_user_email_and_id_from_result
+
     @staticmethod
     async def get_redirect_response_from_openid(
         result: OpenID | dict | CustomOpenID,
@@ -3564,7 +3580,7 @@ class SSOAuthenticationHandler:
         prisma_client: Final = get_prisma_client_or_throw("Prisma client is None, connect a database to your proxy")
 
         # User is Authe'd in - generate key for the UI to access Proxy
-        parsed_openid_result: Final = SSOAuthenticationHandler._get_user_email_and_id_from_result(
+        parsed_openid_result: Final = SSOAuthenticationHandler.get_user_email_and_id_from_result(
             result=result, generic_client_id=generic_client_id
         )
         user_email: Final = parsed_openid_result.get("user_email")
@@ -3729,7 +3745,7 @@ class SSOAuthenticationHandler:
         # Post-SSO return_to handling (the same-origin DCR round-trip and the control-plane
         # cross-origin code exchange) lives in one shared helper so this method stays inside the
         # complexity budget. None falls through to the dashboard redirect below.
-        return_to_redirect: Final = await _sso_return_to_redirect(
+        return_to_redirect: Final = await sso_return_to_redirect(
             return_to=return_to,
             jwt_token=jwt_token,
             redis_usage_cache=redis_usage_cache,
@@ -3862,7 +3878,7 @@ class SSOAuthenticationHandler:
         strict_cache_miss: Final = os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
         if strict_cache_miss:
             if empty_value_in_dict:
-                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                await SSOAuthenticationHandler.delete_pkce_verifier(cache_key)
                 raise ProxyException(
                     message=(
                         f"PKCE verifier for state '{state}' was found in cache but "
@@ -3873,7 +3889,7 @@ class SSOAuthenticationHandler:
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
             elif cached_data is not None:
-                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                await SSOAuthenticationHandler.delete_pkce_verifier(cache_key)
                 verbose_proxy_logger.error(
                     "PKCE verifier for state '%s' has an unrecognized format (type=%s); "
                     "treating as a cache miss. Investigate the cached value — it may be "
@@ -3916,7 +3932,7 @@ class SSOAuthenticationHandler:
                 )
         else:
             if cached_data is not None:
-                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                await SSOAuthenticationHandler.delete_pkce_verifier(cache_key)
             verbose_proxy_logger.warning(
                 "PKCE is enabled but verifier not found in cache for state '%s' "
                 "(cache type: %s, raw data present: %s). "
@@ -3928,7 +3944,7 @@ class SSOAuthenticationHandler:
 
     @staticmethod
     @with_service_target(SSO_SESSIONS_TARGET)
-    async def _delete_pkce_verifier(cache_key: str) -> None:
+    async def delete_pkce_verifier(cache_key: str) -> None:
         """Delete a single-use PKCE verifier from cache after a successful exchange.
 
         Failure is non-fatal: a leftover verifier is a minor security concern
@@ -3947,6 +3963,8 @@ class SSOAuthenticationHandler:
                 cache_key,
                 exc,
             )
+
+    _delete_pkce_verifier = delete_pkce_verifier
 
     @staticmethod
     def generate_pkce_params() -> tuple[str, str]:
@@ -4032,7 +4050,7 @@ class SSOAuthenticationHandler:
         return token_response
 
     @staticmethod
-    async def _pkce_token_exchange(
+    async def pkce_token_exchange(
         authorization_code: str,
         code_verifier: str,
         client_id: str,
@@ -4158,6 +4176,8 @@ class SSOAuthenticationHandler:
             # Case 3: field absent from token_response — leave userinfo value as-is.
         return merged
 
+    _pkce_token_exchange = pkce_token_exchange
+
     @staticmethod
     async def _get_pkce_userinfo(
         access_token: str,
@@ -4185,7 +4205,7 @@ class SSOAuthenticationHandler:
                 )
                 if resp.status_code == 200:
                     try:
-                        userinfo_raw: Final[dict[str, object] | None] = resp.json()
+                        userinfo_raw: Final = _SSO_USERINFO_RESPONSE_ADAPTER.validate_python(resp.json())
                         if not userinfo_raw:
                             # JSON null (None) or empty dict ({}) — no identity claims.
                             # Treat as failure so id_token fallback can be attempted.

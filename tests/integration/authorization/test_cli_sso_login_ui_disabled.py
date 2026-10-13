@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import secrets
-import signal
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -23,7 +21,14 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
-from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment, string_value
+from tests.integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import OwnedProxy, group_members, owned_proxy_process
 from tests.integration._support.provider import SharedProvider
@@ -516,7 +521,6 @@ def test_login_survives_a_worker_kill(idp: Idp, tmp_path: Path) -> None:
             link: Final = browser.get(_cli_link(proxy, session.login_id))
             at_idp: Final = browser.get(_assert_idp_redirect(proxy, idp, link, session.login_id))
             assert at_idp.status_code == 302, f"{at_idp.status_code} {at_idp.text}"
-            os.kill(victim, signal.SIGKILL)
 
             def callback_attempt() -> httpx.Response | None:
                 try:
@@ -524,9 +528,11 @@ def test_login_survives_a_worker_kill(idp: Idp, tmp_path: Path) -> None:
                 except httpx.TransportError:
                     return None
 
-            callback: Final = eventually(
-                callback_attempt, lambda response: response is not None and response.status_code == 200, seconds=60
-            )
+            with owned.replacing_worker(victim) as kill:
+                kill()
+                callback: Final = eventually(
+                    callback_attempt, lambda response: response is not None and response.status_code == 200, seconds=60
+                )
             assert callback is not None
             done: Final = _complete_in_browser(browser, callback, session.user_code)
             assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"
@@ -648,3 +654,52 @@ def test_flag_values_that_do_not_disable_keep_the_gates_open(idp: Idp, tmp_path:
         for method, path in (("GET", "/sso/saml/login"), ("POST", "/sso/saml/callback")):
             saml: Final = proxy.client.request(method, path)
             assert DISABLED_PAGE_TITLE not in saml.text and saml.status_code != 200, f"{path}: {saml.status_code}"
+
+
+def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
+    one_worker: OneWorkerProxy, provider: SharedProvider
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    subject: Final = f"cli-sso-team-budget-{uuid.uuid4().hex[:12]}"
+    budget: Final = 0.0000000005
+    with proxy.scenario() as scenario:
+        team: Final = scenario.team(max_budget=budget, models=[MESSAGE_MODEL])
+        scenario.user(user_id=subject, user_email=f"{subject}@example.com", user_role="internal_user")
+        added: Final = proxy.request(
+            "POST", "/team/member_add", {"team_id": team, "member": {"user_id": subject, "role": "user"}}
+        )
+        assert added.status_code == 200, added.text
+        session: Final = _start_lite_login(proxy)
+        with _browser() as browser:
+            _sign_in(proxy, one_worker.idp, browser, session, subject=subject)
+        ready: Final = proxy.client.get(
+            f"/sso/cli/poll/{session.login_id}",
+            params={"team_id": team},
+            headers={POLL_SECRET_HEADER: session.poll_secret},
+        )
+        assert ready.status_code == 200, f"{ready.status_code} {ready.text}"
+        body: Final = JSON_OBJECT.validate_json(ready.content)
+        assert body["status"] == "ready" and body["user_id"] == subject, ready.text
+        key: Final = string_value(body["key"])
+        assert not key.startswith("sk-"), key
+        _send_message(proxy, provider, key)
+        eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)),
+            lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) > budget,
+            seconds=70,
+        )
+        refused: Final = proxy.request(
+            "POST",
+            "/v1/messages",
+            {"model": MESSAGE_MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "over team budget"}]},
+            key=key,
+        )
+        assert refused.status_code == 422, f"{refused.status_code} {refused.text}"
+        error: Final = object_value(JSON_OBJECT.validate_json(refused.content)["error"])
+        assert error["type"] == "budget_exceeded", refused.text
+        assert error["code"] == "422", refused.text
+        message: Final = string_value(error["message"])
+        assert "Budget has been exceeded!" in message, refused.text
+        assert f"Team={team}" in message, refused.text
+        assert "Current cost:" in message and f"Max budget: {budget}" in message, refused.text
+        assert provider.received() == ()

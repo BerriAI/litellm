@@ -117,7 +117,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         if "grok" in model:
             # Reuse Xai method for Grok model
             xai_config: Final = XAIChatConfig()
-            return xai_config._supports_stop_reason(model)
+            return xai_config.supports_stop_reason(model)
         return True
 
     def validate_environment(
@@ -138,7 +138,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         else:
             # No api_key provided — fall back to Azure AD token-based auth
             litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
-            headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+            headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
 
@@ -280,6 +280,15 @@ class AzureAIStudioConfig(OpenAIConfig):
             verbose_logger.debug("Model=%s is Azure OpenAI model. Setting custom_llm_provider='azure'.", model)
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
+
+    def get_openai_compatible_provider_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+    ) -> tuple[str | None, str | None, str]:
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
 
     def transform_request(
         self,

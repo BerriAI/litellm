@@ -14,14 +14,14 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm import Router
 from litellm.constants import INITIAL_RETRY_DELAY, MAX_RETRY_DELAY
-from litellm.llms.vertex_ai.common_utils import _get_gemini_url, get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import get_gemini_url, get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 CONFIG_PATH: Final = Path(__file__).parent / "google_genai_proxy_test_config.yaml"
 GEMINI_DEPLOYMENT: Final = "gemini-3.5-flash-lite"
 VERTEX_DEPLOYMENT: Final = "vertex-gemini-3.5-flash-lite"
-GEMINI_GENERATE_CONTENT_URL: Final = _get_gemini_url(mode="chat", model=GEMINI_DEPLOYMENT, stream=False)[0]
+GEMINI_GENERATE_CONTENT_URL: Final = get_gemini_url(mode="chat", model=GEMINI_DEPLOYMENT, stream=False)[0]
 VERTEX_GLOBAL_BASE_URL: Final = "https://aiplatform.googleapis.com"
 RESOURCE_EXHAUSTED: Final = {
     "error": {"code": 429, "message": "Resource exhausted. Please try again later.", "status": "RESOURCE_EXHAUSTED"}

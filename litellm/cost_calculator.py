@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
 from pydantic import BaseModel
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 import litellm._logging
@@ -18,6 +18,8 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
 )
+from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
+from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -71,13 +73,13 @@ from litellm.llms.lemonade.cost_calculator import (
     cost_per_token as lemonade_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
-    _video_output_cost_per_second,
-)
-from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
 from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
+)
+from litellm.llms.openai.cost_calculation import (
+    video_output_cost_per_second,
 )
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
@@ -100,7 +102,7 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
-from litellm.types.decisions import DecisionsResponse, DecisionsUsage
+from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -570,7 +572,22 @@ def cost_per_token(
     ):  # Option 3. if user passed model="bedrock/anthropic.claude-3", use model="anthropic.claude-3"
         model = model_without_prefix
 
-    # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
+    if is_decisions_call_type(call_type):
+        decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        decisions_overrides: Final = decisions_pricing_fields(
+            litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
+        )
+        if decisions_overrides:
+            return generic_cost_per_token(
+                model=model,
+                usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
+                data_residency=data_residency,
+                model_info=cast(  # cast-ok: _decisions fields override same-named ModelInfo rates
+                    ModelInfo, {**decisions_model_info, **decisions_overrides}
+                ),
+            )
     if call_type == "speech" or call_type == "aspeech":
         lyria_generation_cost: Final = (
             get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
@@ -1034,6 +1051,8 @@ def get_usage_object(
         ),
     )
 
+    if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
+        return None if completion_response.usage is None else _decisions_usage(completion_response.usage)
     if usage_obj is None:
         return None
     if isinstance(usage_obj, Usage):
@@ -1064,12 +1083,37 @@ def get_usage_object(
         return None
 
 
+def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
+    match usage:
+        case DecisionsUsage():
+            return PromptTokensDetailsWrapper(
+                cached_tokens=usage.cached_tokens, cache_write_tokens=usage.cache_write_tokens
+            )
+        case OpenAIDecisionUsage():
+            return PromptTokensDetailsWrapper(
+                cached_tokens=usage.input_tokens_details.cached_tokens,
+                cache_write_tokens=usage.input_tokens_details.cache_write_tokens,
+            )
+        case _:
+            assert_never(usage)
+
+
+def _decisions_usage(usage: DecisionsUsage | OpenAIDecisionUsage) -> Usage:
+    return Usage(
+        prompt_tokens=usage.input_tokens,
+        completion_tokens=usage.output_tokens,
+        total_tokens=usage.input_tokens + usage.output_tokens,
+        prompt_tokens_details=_decisions_prompt_tokens_details(usage),
+    )
+
+
 def _is_known_usage_objects(usage_obj):
     """Returns True if the usage obj is a known Usage type"""
     return (
         isinstance(usage_obj, litellm.Usage)
         or isinstance(usage_obj, ResponseAPIUsage)
         or isinstance(usage_obj, DecisionsUsage)
+        or isinstance(usage_obj, OpenAIDecisionUsage)
         or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
     )
 
@@ -1097,6 +1141,8 @@ def infer_call_type(call_type: CallTypesLiteral | None, completion_response: obj
         return "text_completion"
     elif isinstance(completion_response, LiteLLMSendMessageResponse):
         return "send_message"
+    elif isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
+        return "adecisions"
 
     return call_type
 
@@ -1107,6 +1153,8 @@ _infer_call_type = infer_call_type
 def _apply_cost_discount(
     base_cost: float,
     custom_llm_provider: str | None,
+    model: str | None = None,
+    region_name: str | None = None,
 ) -> tuple[float, float, float]:
     """
     Apply provider-specific cost discount from module-level config.
@@ -1114,17 +1162,20 @@ def _apply_cost_discount(
     Args:
         base_cost: The base cost before discount
         custom_llm_provider: The LLM provider name
+        model: The model name, used to resolve <provider>/<model-pattern> discount keys
+        region_name: The region segment the cost key may carry, so patterns can match the region-stripped name
 
     Returns:
         Tuple of (final_cost, discount_percent, discount_amount)
     """
     original_cost: Final = base_cost
-    discount_percent = 0.0
-    discount_amount = 0.0
+    resolved_discount: Final = resolve_cost_discount(
+        litellm.cost_discount_config, custom_llm_provider, model, region_name
+    )
+    discount_percent: Final = 0.0 if resolved_discount is None else resolved_discount
+    discount_amount: Final = original_cost * discount_percent
 
-    if custom_llm_provider and custom_llm_provider in litellm.cost_discount_config:
-        discount_percent = litellm.cost_discount_config[custom_llm_provider]
-        discount_amount = original_cost * discount_percent
+    if resolved_discount is not None:
         final_cost: Final = original_cost - discount_amount
 
         if verbose_logger.isEnabledFor(logging.DEBUG):
@@ -1445,6 +1496,7 @@ def completion_cost(
             )
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
+        custom_priced_request_model: Final = model if custom_pricing is True else None
         selected_model: Final = select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -1481,11 +1533,8 @@ def completion_cost(
                             "usage",
                             litellm.Usage(**_usage_for_dump.model_dump()),
                         )
-                    if isinstance(usage_obj, DecisionsUsage):
-                        _usage = {
-                            "prompt_tokens": usage_obj.input_tokens,
-                            "completion_tokens": usage_obj.output_tokens,
-                        }
+                    if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
+                        _usage = _decisions_usage(usage_obj).model_dump()
                     elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
@@ -1702,6 +1751,8 @@ def completion_cost(
                     ) = _apply_cost_discount(
                         base_cost=_final_cost,
                         custom_llm_provider=custom_llm_provider,
+                        model=model,
+                        region_name=region_name if isinstance(region_name, str) else None,
                     )
 
                     # Apply margin from module-level config if configured
@@ -1761,6 +1812,7 @@ def completion_cost(
                     litellm_logging_obj=litellm_logging_obj,
                     total_time=total_time,
                 )
+                model_for_discount = custom_priced_request_model or model
                 # Calculate cost based on prompt_tokens, completion_tokens
                 if (
                     "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
@@ -1869,6 +1921,8 @@ def completion_cost(
                     ) = _apply_cost_discount(
                         base_cost=_final_cost,
                         custom_llm_provider=custom_llm_provider,
+                        model=model_for_discount,
+                        region_name=region_name if isinstance(region_name, str) else None,
                     )
                 else:
                     discount_percent = 0.0
@@ -1977,7 +2031,8 @@ def response_cost_calculator(
     | OpenAIModerationResponse
     | Response
     | SearchResponse
-    | DecisionsResponse,
+    | DecisionsResponse
+    | OpenAIDecisionResponse,
     model: str,
     custom_llm_provider: str | None,
     call_type: Literal[
@@ -2001,6 +2056,8 @@ def response_cost_calculator(
         "asearch",
         "decisions",
         "adecisions",
+        "systemone",
+        "asystemone",
     ],
     optional_params: dict,
     cache_hit: bool | None = None,
@@ -2035,7 +2092,7 @@ def response_cost_calculator(
                         getattr(response_object, HIDDEN_PARAMS_ATTR),
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
-                    if provider_response_cost is not None:
+                    if provider_response_cost is not None and not custom_pricing:
                         return provider_response_cost
 
             response_cost = completion_cost(
@@ -2552,7 +2609,7 @@ def default_video_cost_calculator(
     if video_cost_per_second is not None:
         return video_cost_per_second * duration_seconds
 
-    output_cost_per_second: Final = _video_output_cost_per_second(cost_info, video_resolution)
+    output_cost_per_second: Final = video_output_cost_per_second(cost_info, video_resolution)
     if output_cost_per_second is not None:
         return output_cost_per_second * duration_seconds
 

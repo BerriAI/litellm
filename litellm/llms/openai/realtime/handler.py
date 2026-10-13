@@ -108,6 +108,13 @@ class OpenAIRealtime(OpenAIChatCompletion):
             url = url.copy_with(params=upstream_params)
         return str(url)
 
+    def construct_url(
+        self,
+        api_base: str,
+        query_params: RealtimeQueryParams,
+    ) -> str:
+        return self._construct_url(api_base, query_params)
+
     def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:
         """Return a per-session GA event normalizer, or None for passthrough.
 

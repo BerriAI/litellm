@@ -531,7 +531,7 @@ class TestShortCircuitEmitsNativeBlocks:
             new=AsyncMock(return_value=("Title: x\nURL: y", _make_search_response())),
         ):
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "search query"}],
                 tools=[
                     {
@@ -569,7 +569,7 @@ class TestShortCircuitEmitsNativeBlocks:
             new=AsyncMock(return_value=("Title: x\nURL: y", _make_search_response())),
         ):
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "search query"}],
                 tools=[
                     {
@@ -601,7 +601,7 @@ class TestShortCircuitEmitsNativeBlocks:
             side_effect=RateLimitError("slow down", llm_provider="tavily", model="tavily"),
         ):
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "search query"}],
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
                 custom_llm_provider="github_copilot",
