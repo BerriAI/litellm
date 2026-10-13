@@ -2584,6 +2584,10 @@ def _renamed_tool(tools: list) -> list:
     return [{**tools[0], "function": {**tools[0]["function"], "name": "lookup_v2"}}, *tools[1:]]
 
 
+def _changed_kind(tools: list) -> list:
+    return [{**tools[0], "type": "custom"}, *tools[1:]]
+
+
 def _retyped_schema(tools: list) -> list:
     function = tools[0]["function"]
     return [
@@ -2653,8 +2657,15 @@ class TestConverseToolDefinitionRewrites:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "rewrite",
-        [_added_tool, _renamed_tool, _retyped_schema, lambda tools: tools[::-1], lambda tools: {"tools": tools}],
-        ids=["added", "renamed", "retyped", "reordered", "not-a-list"],
+        [
+            _added_tool,
+            _renamed_tool,
+            _changed_kind,
+            _retyped_schema,
+            lambda tools: tools[::-1],
+            lambda tools: {"tools": tools},
+        ],
+        ids=["added", "renamed", "kind-changed", "retyped", "reordered", "not-a-list"],
     )
     async def test_tool_change_this_route_cannot_carry_fails_closed_without_mutation(self, rewrite):
         data = _tool_config_data()
