@@ -160,4 +160,36 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.modelName).toBe(wildcardModel);
     expect(deployment.litellmParamsObj.model).toBe(wildcardModel);
   });
+
+  it("sends weight and order as numbers in litellm_params", async () => {
+    const formValues = {
+      model_mappings: [{ public_name: "Public Model", litellm_model: "litellm/public" }],
+      model_name: "custom-model-name",
+      weight: "0.7",
+      order: "1",
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.litellmParamsObj.weight).toBe(0.7);
+    expect(deployment.litellmParamsObj.order).toBe(1);
+  });
+
+  it("omits weight and order from litellm_params when left blank", async () => {
+    const formValues = {
+      model_mappings: [{ public_name: "Public Model", litellm_model: "litellm/public" }],
+      model_name: "custom-model-name",
+      weight: "",
+      order: "",
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.litellmParamsObj).not.toHaveProperty("weight");
+    expect(deployment.litellmParamsObj).not.toHaveProperty("order");
+  });
 });

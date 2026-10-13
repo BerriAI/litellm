@@ -1686,6 +1686,73 @@ describe("ModelInfoView", () => {
       });
     });
 
+    const modelWithStoredRouting = () => ({
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        weight: 0.7,
+        order: 1,
+      },
+    });
+
+    const renderStoredRoutingModel = () => {
+      const stored = modelWithStoredRouting();
+      mockUseModelsInfo.mockReturnValue({
+        data: { data: [stored] },
+        isLoading: false,
+        error: null,
+      });
+      mockModelInfoV1Call.mockResolvedValue({ data: [stored] });
+    };
+
+    it("routes edited weight and order into the payload as numbers", async () => {
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.type(screen.getByPlaceholderText("e.g. 0.7"), "0.9");
+      await user.type(screen.getByPlaceholderText("e.g. 1"), "2");
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).toMatchObject({ weight: 0.9, order: 2 });
+    });
+
+    it("excludes weight and order from the LiteLLM Params JSON so the dedicated fields own them", async () => {
+      renderStoredRoutingModel();
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      const paramsJson = (screen.getByPlaceholderText(/"rpm": 100/) as HTMLTextAreaElement).value;
+
+      expect(paramsJson).not.toContain("weight");
+      expect(paramsJson).not.toContain("order");
+      expect(screen.getByPlaceholderText("e.g. 0.7")).toHaveValue(0.7);
+    });
+
+    it("keeps a stored weight out of the payload on an untouched save", async () => {
+      renderStoredRoutingModel();
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params).not.toHaveProperty("weight");
+      expect(payload.litellm_params).not.toHaveProperty("order");
+    });
+
+    it("clears a stored weight by sending null when the field is emptied", async () => {
+      renderStoredRoutingModel();
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.clear(screen.getByPlaceholderText("e.g. 0.7"));
+
+      const payload = await save(user);
+
+      expect(payload.litellm_params.weight).toBeNull();
+      expect(payload.litellm_params).not.toHaveProperty("order");
+    });
+
     it("routes each edited pricing field into its own payload key", async () => {
       const user = userEvent.setup();
       await enterEditMode(user);
