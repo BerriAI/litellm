@@ -571,19 +571,29 @@ def _encoded_task_dump(task: _Task, custom_llm_provider: str | None) -> dict[str
     return video_obj.model_dump()
 
 
+def _video_error(status_code: int, message: str) -> VolcEngineVideoError:
+    return VolcEngineVideoError(status_code=status_code, message=message)
+
+
 def _video_url_from_task(task: _Task) -> str:
+    """
+    A task whose artifact cannot be served yet is the caller's own state to fix, not a
+    gateway fault, so every branch here answers 4xx. A 5xx would have the router retry a
+    job that is simply unfinished and count the caller's early download against the
+    model's error rate.
+    """
     content: Final = task.content
     if content is not None and content.video_url:
         return content.video_url
 
     status: Final = task.status.strip().lower()
     if status in ("queued", "running"):
-        raise ValueError(f"Video is still processing (status: {task.status}). Please wait and try again.")
+        raise _video_error(404, f"Video is still processing (status: {task.status}). Please wait and try again.")
     if task.error is not None and (task.error.message or task.error.code):
-        raise ValueError(f"Video generation failed: {task.error.message or task.error.code}")
+        raise _video_error(400, f"Video generation failed: {task.error.message or task.error.code}")
     if status == "expired":
-        raise ValueError("Task expired before it finished. Ark task records expire 7 days after creation.")
-    raise ValueError("Video URL not found in task response. The task may not have succeeded yet.")
+        raise _video_error(404, "Task expired before it finished. Ark task records expire 7 days after creation.")
+    raise _video_error(502, "Video URL not found in task response. The task may not have succeeded yet.")
 
 
 def _string_param(value: object) -> str | None:

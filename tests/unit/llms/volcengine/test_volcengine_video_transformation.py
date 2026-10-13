@@ -11,6 +11,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.volcengine.videos.transformation import (
     VolcEngineVideoConfig,
@@ -23,7 +24,7 @@ from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_video_id_with_provider,
 )
-from litellm.videos.main import avideo_generation
+from litellm.videos.main import avideo_content, avideo_generation
 
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -420,23 +421,29 @@ class TestVolcEngineVideoContent:
 
         assert _video_url_from_task(task) == "https://tos/v.mp4"
 
-    def test_pending_task_raises_a_retry_hint(self):
+    def test_pending_task_answers_not_found_so_the_router_does_not_retry(self):
         task = _parse_task(_mock_response({"id": "cgt-1", "status": "running"}))
 
-        with pytest.raises(ValueError, match="still processing"):
+        with pytest.raises(VolcEngineVideoError, match="still processing") as raised:
             _video_url_from_task(task)
+
+        assert raised.value.status_code == 404
 
     def test_failed_task_surfaces_the_upstream_message(self):
         task = _parse_task(_mock_response({"id": "cgt-1", "status": "failed", "error": {"message": "quota exceeded"}}))
 
-        with pytest.raises(ValueError, match="quota exceeded"):
+        with pytest.raises(VolcEngineVideoError, match="quota exceeded") as raised:
             _video_url_from_task(task)
+
+        assert raised.value.status_code == 400
 
     def test_expired_task_points_at_the_retention_window(self):
         task = _parse_task(_mock_response({"id": "cgt-1", "status": "expired"}))
 
-        with pytest.raises(ValueError, match="expire 7 days"):
+        with pytest.raises(VolcEngineVideoError, match="expire 7 days") as raised:
             _video_url_from_task(task)
+
+        assert raised.value.status_code == 404
 
     def test_content_request_polls_the_task(self):
         url, params = VolcEngineVideoConfig().transform_video_content_request(
@@ -445,6 +452,46 @@ class TestVolcEngineVideoContent:
 
         assert url == f"{TASKS_URL}/cgt-1"
         assert params == {}
+
+
+class TestVolcEngineVideoDownload:
+    """Downloading a task that is not finished is the caller's mistake, so it has to reach them as a
+    client error. A synthesized 500 had the proxy retry the same poll twice and then count the
+    caller's own early download as a gateway fault."""
+
+    @staticmethod
+    async def _download(task_payload: dict):
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=task_payload)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            return await avideo_content(
+                video_id="cgt-2026-abc",
+                custom_llm_provider="volcengine",
+                model=f"volcengine/{SEEDANCE_2_5}",
+                api_key="sk-test",
+                api_base=API_BASE,
+                client=handler,
+            )
+
+    @pytest.mark.asyncio
+    async def test_running_task_is_a_not_found_error(self):
+        with pytest.raises(litellm.NotFoundError) as raised:
+            await self._download({"id": "cgt-2026-abc", "status": "running"})
+
+        assert raised.value.status_code == 404
+        assert "still processing" in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_failed_task_is_a_bad_request(self):
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await self._download({"id": "cgt-2026-abc", "status": "failed", "error": {"message": "flagged"}})
+
+        assert raised.value.status_code == 400
+        assert "flagged" in str(raised.value)
 
 
 class TestVolcEngineVideoList:
