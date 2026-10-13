@@ -3,6 +3,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { $api } from "@/lib/http/api";
 import { all_admin_roles } from "@/utils/roles";
 import {
+  bulkUpdateCustomers,
   createCustomer,
   deleteCustomers,
   setCustomerBlockedState,
@@ -38,6 +39,7 @@ const useCustomerMutation = <TInput, TResult>(action: (accessToken: string, inpu
 
 export const useCreateCustomer = () => useCustomerMutation(createCustomer);
 export const useUpdateCustomer = () => useCustomerMutation(updateCustomer);
+export const useBulkUpdateCustomers = () => useCustomerMutation(bulkUpdateCustomers);
 export const useDeleteCustomers = () => useCustomerMutation(deleteCustomers);
 export const useSetCustomerBlockedState = () => useCustomerMutation(setCustomerBlockedState);
 export const useSetCustomersBlockedState = () => useCustomerMutation(setCustomersBlockedState);

@@ -140,6 +140,30 @@ describe("CustomersTable controls", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Unblock selected" })).not.toBeInTheDocument());
   });
 
+  it("prevents editing more than 500 selected customers and recovers when selection is reduced", async () => {
+    const rows = Array.from(
+      { length: 501 },
+      (_, index): EndUser => ({
+        ...customer,
+        user_id: `customer-${String(index).padStart(3, "0")}`,
+        alias: null,
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersTable {...props} data={rows} />, { searchParams: "page_size=100" });
+    for (const remainingPages of [5, 4, 3, 2, 1, 0]) {
+      await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
+      if (remainingPages > 0) await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    }
+    expect(screen.getByText("501 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit selected" })).toBeDisabled();
+    expect(screen.getByText("Select at most 500 customers to edit at once")).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Select customer customer-500" }));
+    expect(screen.getByText("500 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit selected" })).toBeEnabled();
+    expect(screen.queryByText("Select at most 500 customers to edit at once")).not.toBeInTheDocument();
+  });
+
   it.each([
     { blocked: false, action: "Block" },
     { blocked: true, action: "Unblock" },
@@ -152,6 +176,7 @@ describe("CustomersTable controls", () => {
     expect(screen.getByRole("button", { name: "Block selected" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Unblock selected" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Clear selection" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit selected" })).toBeDisabled();
     await user.click(screen.getByRole("checkbox", { name: "Select customer customer-01" }));
     expect(screen.getByRole("checkbox", { name: "Select customer customer-01" })).toBeChecked();
     await user.click(screen.getByRole("button", { name: "Actions for customer-01" }));

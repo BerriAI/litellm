@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/components/networking";
 import { $api } from "@/lib/http/api";
 import {
+  useBulkUpdateCustomers,
   useCreateCustomer,
   useCustomer,
   useDeleteCustomers,
@@ -12,6 +13,7 @@ import {
   useSetCustomersBlockedState,
   useUpdateCustomer,
 } from "./useCustomerMutations";
+import type { BulkUpdateCustomersResponse } from "./customerApi";
 
 const authorized = vi.hoisted(() => vi.fn());
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -80,6 +82,92 @@ describe("useCustomer", () => {
 });
 
 describe("customer mutations", () => {
+  it.each([false, true])(
+    "invalidates customer data after a batch response with partial failure %s",
+    async (partial) => {
+      const { queryClient, wrapper } = createWrapper();
+      const userIds = ["customer-id", "another-id"];
+      const listKey = ["get", "/customer/list", {}];
+      const detailKeys = userIds.map((id) => ["get", "/customer/info", { params: { query: { end_user_id: id } } }]);
+      const unrelatedKey = ["get", "/key/list", {}];
+      queryClient.setQueryData(listKey, []);
+      detailKeys.forEach((key) => queryClient.setQueryData(key, {}));
+      queryClient.setQueryData(unrelatedKey, []);
+      const response: BulkUpdateCustomersResponse = {
+        total_requested: 2,
+        successful_updates: partial ? 1 : 2,
+        failed_updates: partial ? 1 : 0,
+        results: [
+          {
+            user_id: userIds[0],
+            success: true,
+            updated_customer: { user_id: userIds[0], blocked: false, spend: 0 },
+            error: null,
+          },
+          {
+            user_id: userIds[1],
+            success: !partial,
+            updated_customer: partial ? null : { user_id: userIds[1], blocked: false, spend: 0 },
+            error: partial ? "Customer does not exist" : null,
+          },
+        ],
+      };
+      post.mockResolvedValue(response);
+      const { result } = renderHook(useBulkUpdateCustomers, { wrapper });
+      const body = {
+        customers: userIds.map((user_id) => ({ user_id, object_permission: { mcp_toolsets: ["toolset-1"] } })),
+      };
+
+      await act(async () => {
+        await expect(result.current.mutateAsync(body)).resolves.toBe(response);
+      });
+
+      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/bulk_update", {
+        accessToken: "access-token",
+        body,
+      });
+      expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+      detailKeys.forEach((key) => expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true));
+      expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(false);
+    },
+  );
+
+  it("retains customer cache data when the bulk update request fails", async () => {
+    const { queryClient, wrapper } = createWrapper();
+    const listKey = ["get", "/customer/list", {}];
+    const detailKey = ["get", "/customer/info", { params: { query: { end_user_id: "customer-id" } } }];
+    const customer = { user_id: "customer-id", blocked: true };
+    queryClient.setQueryData(listKey, [customer]);
+    queryClient.setQueryData(detailKey, customer);
+    const error = new Error("Bulk update unavailable");
+    post.mockRejectedValue(error);
+    const { result } = renderHook(useBulkUpdateCustomers, { wrapper });
+
+    await act(async () => {
+      await expect(result.current.mutateAsync({ customers: [{ user_id: "customer-id", models: [] }] })).rejects.toBe(
+        error,
+      );
+    });
+
+    expect(queryClient.getQueryData(listKey)).toEqual([customer]);
+    expect(queryClient.getQueryData(detailKey)).toEqual(customer);
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(false);
+  });
+
+  it("rejects bulk updates without an access token", async () => {
+    authorized.mockReturnValue({ accessToken: null, userRole: "Admin" });
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(useBulkUpdateCustomers, { wrapper });
+
+    await act(async () => {
+      await expect(result.current.mutateAsync({ customers: [{ user_id: "customer-id", models: [] }] })).rejects.toThrow(
+        "Access token is required",
+      );
+    });
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("invalidates both list and detail prefixes after a successful update", async () => {
     const { queryClient, wrapper } = createWrapper();
     const listKey = ["get", "/customer/list", {}];

@@ -9,11 +9,12 @@ import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
 import CustomersPanel from "./CustomersPanel";
 
-const { post, get, useQuery, fetchServers, listTools, refetch, authorization } = vi.hoisted(() => ({
+const { post, get, useQuery, fetchServers, fetchToolsets, listTools, refetch, authorization } = vi.hoisted(() => ({
   post: vi.fn(),
   get: vi.fn(),
   useQuery: vi.fn(),
   fetchServers: vi.fn(),
+  fetchToolsets: vi.fn(),
   listTools: vi.fn(),
   refetch: vi.fn(),
   authorization: { accessToken: "sk-test", userRole: "Admin", userId: "admin", isViewOnly: false, premiumUser: false },
@@ -28,7 +29,7 @@ vi.mock("@/components/networking", async (importOriginal) => ({
   apiClient: { post, get },
   fetchMCPServers: fetchServers,
   listMCPTools: listTools,
-  fetchMCPToolsets: vi.fn().mockResolvedValue([]),
+  fetchMCPToolsets: fetchToolsets,
   fetchMCPAccessGroups: vi.fn().mockResolvedValue([]),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
@@ -75,6 +76,7 @@ describe("Customers management", () => {
     get.mockResolvedValue([]);
     post.mockResolvedValue(activeCustomer);
     fetchServers.mockResolvedValue([]);
+    fetchToolsets.mockResolvedValue([]);
     listTools.mockResolvedValue({ tools: [], error: false });
     useQuery.mockImplementation(
       (_method: string, path: string, init: { params?: { query?: { end_user_id?: string } } }) => ({
@@ -95,6 +97,68 @@ describe("Customers management", () => {
     renderWithProviders(<CustomersPanel />);
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     expect(refetch).toHaveBeenCalledOnce();
+  });
+
+  it("edits selected customers across pages in one toolsets-only batch without Enterprise", async () => {
+    const rows = Array.from(
+      { length: 26 },
+      (_, index): EndUser => ({
+        ...activeCustomer,
+        user_id: `customer-${String(index).padStart(2, "0")}`,
+        alias: null,
+      }),
+    );
+    const queryResult = { data: rows, isLoading: false, isError: false, isFetching: false, refetch };
+    useQuery.mockReturnValue(queryResult);
+    fetchToolsets.mockResolvedValue([{ toolset_id: "toolset-new", toolset_name: "Research tools", tools: [] }]);
+    const response = {
+      results: rows.map((row) => ({ user_id: row.user_id, success: true, updated_customer: row, error: null })),
+      total_requested: 26,
+      successful_updates: 26,
+      failed_updates: 0,
+    };
+    post.mockResolvedValue(response);
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersPanel />, { searchParams: "page_size=25" });
+    expect(screen.queryByRole("button", { name: "Edit selected" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
+    expect(screen.getByText("26 selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Block selected" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Edit selected" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit selected customers" });
+    await user.click(within(dialog).getByRole("checkbox", { name: "Update MCP toolsets" }));
+    await user.click(within(dialog).getByRole("combobox", { name: "MCP toolsets" }));
+    await user.click(await screen.findByRole("option", { name: "Research tools" }));
+    await user.keyboard("{Escape}");
+    await user.click(within(dialog).getByRole("button", { name: "Apply changes" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/bulk_update", {
+        accessToken: "sk-test",
+        body: {
+          customers: rows.map((row) => ({
+            user_id: row.user_id,
+            object_permission: { mcp_toolsets: ["toolset-new"] },
+          })),
+        },
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("checkbox", { name: "Select customer customer-25" })).not.toBeChecked();
+    expect(screen.queryByRole("button", { name: "Edit selected" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { userRole: "Admin", isViewOnly: true },
+    { userRole: "Admin Viewer", isViewOnly: false },
+  ])("hides bulk editing for $userRole with view-only $isViewOnly", ({ userRole, isViewOnly }) => {
+    authorization.userRole = userRole;
+    authorization.isViewOnly = isViewOnly;
+    renderWithProviders(<CustomersPanel />);
+    expect(screen.queryByRole("checkbox", { name: "Select all rows" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit selected" })).not.toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
   });
 
   it("blocks selected customers in one batch and clears selection after success", async () => {

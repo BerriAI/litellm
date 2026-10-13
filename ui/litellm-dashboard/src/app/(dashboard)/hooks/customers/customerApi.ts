@@ -8,6 +8,10 @@ export type CreateCustomerRequest = Partial<Schemas["NewCustomerRequest"]> & {
   user_id: string;
 };
 export type UpdateCustomerRequest = Partial<Schemas["UpdateCustomerRequest"]> & { user_id: string };
+export type BulkUpdateCustomersRequest = Omit<Schemas["BulkUpdateCustomerRequest"], "customers"> & {
+  customers: UpdateCustomerRequest[];
+};
+export type BulkUpdateCustomersResponse = Schemas["BulkUpdateCustomerResponse"];
 export type CustomerBlockedStateInput = { userId: string; blocked: boolean };
 export type CustomersBlockedStateInput = {
   userIds: string[];
@@ -19,6 +23,12 @@ export const createCustomer = (accessToken: string, body: CreateCustomerRequest)
 
 export const updateCustomer = (accessToken: string, body: UpdateCustomerRequest): Promise<EndUser> =>
   apiClient.post<EndUser>("/customer/update", { accessToken, body });
+
+export const bulkUpdateCustomers = (
+  accessToken: string,
+  body: BulkUpdateCustomersRequest,
+): Promise<BulkUpdateCustomersResponse> =>
+  apiClient.post<BulkUpdateCustomersResponse>("/customer/bulk_update", { accessToken, body });
 
 export const deleteCustomers = (accessToken: string, userIds: string[]): Promise<Schemas["DeleteCustomersResponse"]> =>
   apiClient.post<Schemas["DeleteCustomersResponse"]>("/customer/delete", {

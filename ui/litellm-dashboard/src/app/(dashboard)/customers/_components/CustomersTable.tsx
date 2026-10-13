@@ -1,7 +1,7 @@
 "use client";
 
 import type { RowSelectionState } from "@tanstack/react-table";
-import { Ban, Contact, Download, Search, ShieldCheck } from "lucide-react";
+import { Ban, Contact, Download, Pencil, Search, ShieldCheck } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
@@ -19,6 +19,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/lib/toast";
 
+import { MAX_BULK_CUSTOMERS } from "./bulkCustomerPayload";
+import { BulkEditCustomersModal } from "./BulkEditCustomersModal";
 import { exportCustomersToCsv } from "./customerCsvExport";
 import {
   CUSTOMER_FILTER_FIELDS,
@@ -111,6 +113,8 @@ export default function CustomersTable({
   } = useUrlTableState(TABLE_STATE_OPTIONS);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [bulkEditCustomers, setBulkEditCustomers] = useState<EndUser[] | null>(null);
+  const isBusy = isBlocking || bulkEditCustomers !== null;
   const filterScope = JSON.stringify([search, columnFilters]);
   const [selectionScope, setSelectionScope] = useState(filterScope);
   if (selectionScope !== filterScope) {
@@ -119,7 +123,7 @@ export default function CustomersTable({
   }
   const { canModify, premiumUser, onView, onEdit, onDelete, onSetBlocked } = actions;
   const columns = useMemo(() => {
-    const columnActions = { canModify, premiumUser, isBlocking, onView, onEdit, onDelete, onSetBlocked };
+    const columnActions = { canModify, premiumUser, isBlocking: isBusy, onView, onEdit, onDelete, onSetBlocked };
     const customerColumns = getCustomerTableColumns(columnActions).map((column) =>
       CUSTOMER_FILTER_FIELDS.some((field) => field.id === column.id)
         ? { ...column, filterFn: customerFilterFn }
@@ -131,14 +135,14 @@ export default function CustomersTable({
           ...customerColumns,
         ]
       : customerColumns;
-  }, [canModify, premiumUser, isBlocking, onView, onEdit, onDelete, onSetBlocked]);
+  }, [canModify, premiumUser, isBusy, onView, onEdit, onDelete, onSetBlocked]);
   const searchedCustomers = useMemo(
     () => data.filter((customer) => customerMatchesSearch(customer, search)),
     [data, search],
   );
 
   const handleBulkSetBlocked = async (userIds: string[], blocked: boolean) => {
-    const canSetBlocked = canModify && !isBlocking && premiumUser;
+    const canSetBlocked = canModify && !isBusy && premiumUser;
     if (!userIds.length || !canSetBlocked) return;
     if (await onBulkSetBlocked(userIds, blocked)) setRowSelection({});
   };
@@ -152,13 +156,13 @@ export default function CustomersTable({
         columns={columns}
         getRowId={(customer) => customer.user_id}
         defaultColumnVisibility={DEFAULT_COLUMN_VISIBILITY}
-        enableRowSelection={canModify && !isBlocking}
+        enableRowSelection={canModify && !isBusy}
         rowSelection={rowSelection}
         onRowSelectionChange={(updater) => {
-          if (!isBlocking) setRowSelection(updater);
+          if (!isBusy) setRowSelection(updater);
         }}
         toolbar={(table) => {
-          const selectedIds = table.getFilteredSelectedRowModel().rows.map((row) => row.original.user_id);
+          const selectedCustomers = table.getFilteredSelectedRowModel().rows.map((row) => row.original);
           return (
             <>
               <div className="flex flex-wrap items-center gap-2">
@@ -204,22 +208,46 @@ export default function CustomersTable({
                   </Button>
                 </DataTableToolbar>
               </div>
-              {canModify && selectedIds.length > 0 && (
+              {canModify && selectedCustomers.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm text-muted-foreground">{selectedIds.length} selected</span>
+                  <span className="text-sm text-muted-foreground">{selectedCustomers.length} selected</span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={isBusy || selectedCustomers.length > MAX_BULK_CUSTOMERS}
+                    onClick={() => setBulkEditCustomers(selectedCustomers)}
+                  >
+                    <Pencil />
+                    Edit selected
+                  </Button>
+                  {selectedCustomers.length > MAX_BULK_CUSTOMERS && (
+                    <span className="text-sm text-muted-foreground">
+                      Select at most {MAX_BULK_CUSTOMERS} customers to edit at once
+                    </span>
+                  )}
                   <BulkBlockedStateButton
                     blocked
                     premiumUser={premiumUser}
-                    disabled={isBlocking}
-                    onClick={() => void handleBulkSetBlocked(selectedIds, true)}
+                    disabled={isBusy}
+                    onClick={() =>
+                      void handleBulkSetBlocked(
+                        selectedCustomers.map((customer) => customer.user_id),
+                        true,
+                      )
+                    }
                   />
                   <BulkBlockedStateButton
                     blocked={false}
                     premiumUser={premiumUser}
-                    disabled={isBlocking}
-                    onClick={() => void handleBulkSetBlocked(selectedIds, false)}
+                    disabled={isBusy}
+                    onClick={() =>
+                      void handleBulkSetBlocked(
+                        selectedCustomers.map((customer) => customer.user_id),
+                        false,
+                      )
+                    }
                   />
-                  <Button variant="ghost" size="sm" disabled={isBlocking} onClick={() => setRowSelection({})}>
+                  <Button variant="ghost" size="sm" disabled={isBusy} onClick={() => setRowSelection({})}>
                     Clear selection
                   </Button>
                 </div>
@@ -274,6 +302,18 @@ export default function CustomersTable({
         noDataMessage={<EmptyCustomers />}
         size="compact"
       />
+      {canModify && bulkEditCustomers && (
+        <BulkEditCustomersModal
+          open
+          selectedCustomers={bulkEditCustomers}
+          onCancel={() => setBulkEditCustomers(null)}
+          onCompleted={(successfulIds) =>
+            setRowSelection((selection) =>
+              Object.fromEntries(Object.entries(selection).filter(([id]) => !successfulIds.includes(id))),
+            )
+          }
+        />
+      )}
     </div>
   );
 }

@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/components/networking";
 import {
+  bulkUpdateCustomers,
   createCustomer,
   deleteCustomers,
   setCustomerBlockedState,
   setCustomersBlockedState,
   updateCustomer,
+  type BulkUpdateCustomersRequest,
+  type BulkUpdateCustomersResponse,
 } from "./customerApi";
 
 vi.mock("@/components/networking", () => ({ apiClient: { post: vi.fn() } }));
@@ -45,6 +48,72 @@ describe("customer API", () => {
       accessToken: "access-token",
       body: { user_ids: userIds },
     });
+  });
+
+  it("posts all customer patches in one request and returns each result", async () => {
+    const body: BulkUpdateCustomersRequest = {
+      customers: [
+        { user_id: "customer-id", object_permission: { mcp_toolsets: ["toolset-1"] } },
+        { user_id: "another-id", models: [] },
+      ],
+    };
+    const response: BulkUpdateCustomersResponse = {
+      total_requested: 2,
+      successful_updates: 2,
+      failed_updates: 0,
+      results: body.customers.map(({ user_id }) => ({
+        user_id,
+        success: true,
+        updated_customer: { user_id, blocked: false, spend: 0 },
+        error: null,
+      })),
+    };
+    post.mockResolvedValue(response);
+
+    await expect(bulkUpdateCustomers("access-token", body)).resolves.toBe(response);
+    expect(post).toHaveBeenCalledExactlyOnceWith("/customer/bulk_update", {
+      accessToken: "access-token",
+      body,
+    });
+  });
+
+  it("preserves failed customer results and counts from a successful batch response", async () => {
+    const body: BulkUpdateCustomersRequest = {
+      customers: [
+        { user_id: "customer-id", object_permission: { mcp_toolsets: ["toolset-1"] } },
+        { user_id: "missing-id", object_permission: { mcp_toolsets: ["toolset-1"] } },
+      ],
+    };
+    const response: BulkUpdateCustomersResponse = {
+      total_requested: 2,
+      successful_updates: 1,
+      failed_updates: 1,
+      results: [
+        {
+          user_id: "customer-id",
+          success: true,
+          updated_customer: { user_id: "customer-id", blocked: false, spend: 0 },
+          error: null,
+        },
+        { user_id: "missing-id", success: false, updated_customer: null, error: "Customer does not exist" },
+      ],
+    };
+    post.mockResolvedValue(response);
+
+    await expect(bulkUpdateCustomers("access-token", body)).resolves.toBe(response);
+    expect(post).toHaveBeenCalledExactlyOnceWith("/customer/bulk_update", {
+      accessToken: "access-token",
+      body,
+    });
+  });
+
+  it("propagates a bulk update request failure", async () => {
+    const error = new Error("Bulk update unavailable");
+    post.mockRejectedValue(error);
+
+    await expect(
+      bulkUpdateCustomers("access-token", { customers: [{ user_id: "customer-id", models: [] }] }),
+    ).rejects.toBe(error);
   });
 
   it.each([
