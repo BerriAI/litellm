@@ -14,8 +14,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import TypeAdapter
-
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
@@ -32,8 +30,6 @@ from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import StandardCallbackDynamicParams
 
-_REQUEST_BODY: Final = TypeAdapter(Mapping[object, object])
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as _LiteLLMLoggingObject,
@@ -44,51 +40,34 @@ else:
     LiteLLMLoggingObject = Any
 
 
-def _message_logging_disabled(custom_logger: CustomLogger) -> bool:
-    return hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True
-
-
 def redact_message_input_output_from_custom_logger(
     litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
 ):
-    if _message_logging_disabled(custom_logger):
+    if hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True:
         return perform_redaction(litellm_logging_obj.model_call_details, result, redact_streaming_responses=False)
     return result
 
 
-def redact_streaming_responses_for_custom_logger(
-    model_call_details: dict[str, object], custom_logger: CustomLogger
-) -> dict[str, object]:
+def redact_streaming_responses_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
     """
     Returns a copy of model_call_details whose streaming response entries are redacted deepcopies
-    and whose litellm_params carry the redacted proxy request body when the custom logger has opted
-    out of message logging. The shared model_call_details is left untouched so other callbacks and
-    the spend log still receive the unredacted request and response.
+    when the custom logger has opted out of message logging. The shared model_call_details is left
+    untouched so other callbacks still receive the unredacted response.
     """
-    if not _message_logging_disabled(custom_logger):
+    if not (hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True):
         return model_call_details
-    params: Final = model_call_details.get("litellm_params")
     redacted_entries: Final = {
-        **{
-            streaming_key: _redacted_streaming_response_copy(model_call_details[streaming_key])
-            for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
-            if model_call_details.get(streaming_key) is not None
-        },
-        **({"litellm_params": redacted_litellm_params(params)} if isinstance(params, Mapping) else {}),
+        streaming_key: _redacted_streaming_response_copy(model_call_details[streaming_key])
+        for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
+        if model_call_details.get(streaming_key) is not None
     }
     if not redacted_entries:
         return model_call_details
     return {**model_call_details, **redacted_entries}
 
 
-def _redacted_streaming_response_copy(streaming_response: object) -> object:
-    hidden_params: Final = getattr(streaming_response, "_hidden_params", None)
-    memo: Final = (
-        {id(hidden_params): {**_REQUEST_BODY.validate_python(hidden_params)}}
-        if isinstance(hidden_params, Mapping)
-        else {}
-    )
-    redacted_response: Final = copy.deepcopy(streaming_response, memo)
+def _redacted_streaming_response_copy(streaming_response):
+    redacted_response: Final = copy.deepcopy(streaming_response)
     _redact_streaming_response(redacted_response)
     return redacted_response
 
@@ -129,7 +108,7 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
-        choice.message.provider_specific_fields = None  # rebind-ok: scrub the caller-owned logging copy in place
+        _redact_provider_specific_fields(choice.message)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
     elif isinstance(choice, litellm.utils.StreamingChoices):
@@ -139,9 +118,37 @@ def _redact_choice_content(choice):
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
-        choice.delta.provider_specific_fields = None  # rebind-ok: scrub the caller-owned logging copy in place
+        _redact_provider_specific_fields(choice.delta)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # keys are read one by one
+
+
+def _redact_provider_specific_fields(message: object) -> None:
+    if (fields := _as_mapping(getattr(message, "provider_specific_fields", None))) is not None:
+        setattr(message, "provider_specific_fields", _redacted_provider_specific_fields(fields))  # noqa: B010  # typed as object
+
+
+def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:
+    for message in (choice.get("message"), choice.get("delta")):
+        if (
+            (readable := _as_mapping(message)) is not None
+            and (fields := _as_mapping(readable.get("provider_specific_fields"))) is not None
+            and isinstance(message, dict)
+        ):
+            message["provider_specific_fields"] = _redacted_provider_specific_fields(fields)
+
+
+def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[str, object]:
+    """Copy of provider_specific_fields with its reasoning redacted the same way as the message's own."""
+    return {
+        **fields,
+        **({"reasoning_content": REDACTED_BY_LITELLM} if fields.get("reasoning_content") is not None else {}),
+        **{key: None for key in ("thinking_blocks", "reasoningContentBlocks", "citations") if key in fields},
+    }
 
 
 def _redact_responses_api_output(output_items):
@@ -251,6 +258,7 @@ def _redact_tool_calls_dict(message: Mapping[str, object]) -> None:
 def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
         if isinstance(choice, dict):
+            _redact_provider_specific_fields_dict(choice)
             if "message" in choice and isinstance(choice["message"], dict):
                 if choice["message"].get("content") is not None:
                     choice["message"]["content"] = redacted_str
@@ -260,7 +268,6 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["message"]["thinking_blocks"] = None
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
-                choice["message"]["provider_specific_fields"] = None
                 _redact_tool_calls_dict(choice["message"])
             elif "delta" in choice and isinstance(choice["delta"], dict):
                 if choice["delta"].get("content") is not None:
@@ -271,7 +278,6 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["delta"]["thinking_blocks"] = None
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
-                choice["delta"]["provider_specific_fields"] = None
                 _redact_tool_calls_dict(choice["delta"])
             elif choice.get("text") is not None:
                 choice["text"] = redacted_str
@@ -279,102 +285,54 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
             _redact_choice_content(choice)
 
 
-def _hidden_params_without_provider_fields(hidden_params: object) -> Mapping[object, object] | None:
-    """Copy of ``hidden_params`` with ``provider_specific_fields`` cleared, or None when it carries none."""
-    if not (isinstance(hidden_params, Mapping) and "provider_specific_fields" in hidden_params):
-        return None
-    return {**_REQUEST_BODY.validate_python(hidden_params), "provider_specific_fields": None}
-
-
-def _redacted_metadata(metadata: Mapping[str, object], *, redact_content: bool) -> Mapping[str, object]:
+def _redacted_baseline_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
     route: Final = metadata.get("_autorouter_baseline_route")
-    hidden_params: Final = (
-        _hidden_params_without_provider_fields(metadata.get("hidden_params")) if redact_content else None
-    )
-    redacted_entries: Final[Mapping[str, object]] = {
-        **(
-            {"_autorouter_baseline_route": replace(route, request_parameters=None)}
-            if isinstance(route, BaselineRouteStamp)
-            else {}
-        ),
-        **({"hidden_params": hidden_params} if hidden_params is not None else {}),
-    }
-    return {**metadata, **redacted_entries} if redacted_entries else metadata
+    if not isinstance(route, BaselineRouteStamp):
+        return metadata
+    return {**metadata, "_autorouter_baseline_route": replace(route, request_parameters=None)}
 
 
-def _clear_hidden_provider_fields(params: Mapping[str, object]) -> None:
-    """
-    Clear ``provider_specific_fields`` from the shared metadata ``hidden_params`` in place, so the
-    metadata dict keeps its identity: the router writes its counted-usage marker onto it later.
-    """
-    for metadata in (params.get("metadata"), params.get("litellm_metadata")):
-        if not isinstance(metadata, dict):
-            continue
-        hidden_params = _hidden_params_without_provider_fields(
-            _REQUEST_BODY.validate_python(metadata).get("hidden_params")
-        )
-        if hidden_params is not None:
-            metadata["hidden_params"] = hidden_params
-
-
-def _without_hidden_provider_fields(metadata: Mapping[object, object]) -> Mapping[object, object]:
-    hidden_params: Final = _hidden_params_without_provider_fields(metadata.get("hidden_params"))
-    return metadata if hidden_params is None else {**metadata, "hidden_params": hidden_params}
-
-
-def _redacted_proxy_request(
-    request: Mapping[str, object], *, redact_content: bool, redact_instructions: bool
-) -> Mapping[str, object]:
-    raw_body: Final = request.get("body")
-    if not (redact_content and isinstance(raw_body, Mapping)):
+def _redacted_proxy_server_request(request: Mapping[str, object], *, redact_body: bool) -> Mapping[str, object]:
+    """Copy of proxy_server_request; redact_body redacts its body the same way as the top-level request."""
+    body: Final = _as_mapping(request.get("body"))
+    if not redact_body or body is None:
         return without_classifier_audit(request)
-    body: Final = _REQUEST_BODY.validate_python(raw_body)
-    return {
-        **without_classifier_audit(request),
-        "body": {
-            **body,
-            **{
-                key: _without_hidden_provider_fields(_REQUEST_BODY.validate_python(value))
-                for key, value in body.items()
-                if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
-            },
-            **({"messages": [{"role": "user", "content": REDACTED_BY_LITELLM}]} if "messages" in body else {}),
-            **({"prompt": ""} if "prompt" in body else {}),
-            **({"input": ""} if "input" in body else {}),
-            **{
-                key: REDACTED_BY_LITELLM
-                for key in ("system", "instructions")
-                if redact_instructions and body.get(key) is not None
-            },
-        },
-    }
+    redacted_body: Final = {**body}
+    perform_redaction(redacted_body, result=None)
+    return {**without_classifier_audit(request), "body": redacted_body}
 
 
-def redacted_litellm_params(
-    params: Mapping[str, object], *, redact_content: bool = True, shared: bool = False
-) -> dict[str, object]:
+def _redact_hidden_provider_specific_fields(params: Mapping[str, object]) -> None:
+    """Redact the provider_specific_fields copied into metadata hidden_params, keeping each metadata dict."""
+    for metadata in (params.get("metadata"), params.get("litellm_metadata")):
+        if (
+            (readable := _as_mapping(metadata)) is not None
+            and (hidden_params := _as_mapping(readable.get("hidden_params"))) is not None
+            and (fields := _as_mapping(hidden_params.get("provider_specific_fields"))) is not None
+            and isinstance(metadata, dict)
+        ):
+            metadata["hidden_params"] = {
+                **hidden_params,
+                "provider_specific_fields": _redacted_provider_specific_fields(fields),
+            }
+
+
+def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body: bool = True) -> dict[str, object]:
     """
     Copy of litellm_params without classifier audit fields or baseline route request parameters.
-    redact_content also redacts the nested proxy request body and, unless shared, the body's
-    ``system`` and ``instructions`` and the provider-specific fields copied into metadata
-    ``hidden_params``. shared is the copy every logger reads: perform_redaction clears its metadata
-    ``hidden_params`` in place.
+    redact_request_body also redacts the nested proxy_server_request body.
     """
-    request: Final = params.get("proxy_server_request")
+    request: Final = _as_mapping(params.get("proxy_server_request"))
     return {
         **params,
         **{
-            key: _redacted_metadata(value, redact_content=redact_content and not shared)
+            key: _redacted_baseline_metadata(value)
             for key, value in params.items()
             if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
         },
         **(
-            {
-                "proxy_server_request": _redacted_proxy_request(
-                    request, redact_content=redact_content, redact_instructions=not shared
-                )
-            }
-            if isinstance(request, Mapping)
+            {"proxy_server_request": _redacted_proxy_server_request(request, redact_body=redact_request_body)}
+            if request is not None
             else {}
         ),
     }
@@ -384,19 +342,18 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     """
     Performs the actual redaction on the logging object and result.
 
-    redact_streaming_responses=False is the per-callback path: it leaves the shared streaming
-    response entries, proxy request body and hidden provider fields in place, and each opted-out
-    callback gets its own redacted copy via redact_streaming_responses_for_custom_logger instead.
-    The shared request body keeps ``system`` and ``instructions``: spend logs store it and
-    ``previous_response_id`` follow-ups replay the stored instructions.
+    redact_streaming_responses=False skips the in-place redaction of the shared streaming
+    response entries; per-callback redaction hands each opted-out callback its own redacted
+    copy via redact_streaming_responses_for_custom_logger instead. It also leaves the shared
+    proxy request body and hidden provider fields as they are, since the spend log reads them.
     """
     # Redact model_call_details
-    params: Final = model_call_details.get("litellm_params")
-    if isinstance(params, Mapping):
+    params: Final = _as_mapping(model_call_details.get("litellm_params"))
+    if params is not None:
         if redact_streaming_responses:
-            _clear_hidden_provider_fields(params)
+            _redact_hidden_provider_specific_fields(params)
         model_call_details["litellm_params"] = redacted_litellm_params(
-            params, redact_content=redact_streaming_responses, shared=True
+            params, redact_request_body=redact_streaming_responses
         )
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
@@ -410,10 +367,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     # Redact streaming response
     if redact_streaming_responses and model_call_details.get("stream", False) is True:
         for _streaming_key in ("complete_streaming_response", "async_complete_streaming_response"):
-            if model_call_details.get(_streaming_key) is not None:
-                model_call_details[_streaming_key] = (  # rebind-ok: isolate the logging copy
-                    _redacted_streaming_response_copy(model_call_details[_streaming_key])
-                )
+            _redact_streaming_response(model_call_details.get(_streaming_key))
 
     # Redact result
     if result is not None:

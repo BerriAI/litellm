@@ -23,19 +23,17 @@ import pytest_asyncio
 from pydantic import JsonValue
 
 import litellm
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     perform_redaction,
     redact_streaming_responses_for_custom_logger,
-    redacted_litellm_params,
     redacted_standard_logging_payload,
     should_redact_message_logging,
 )
 from litellm.responses.main import mock_responses_api_response
-from litellm.router_utils.router_callbacks.track_deployment_metrics import get_counted_usage_tokens
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
     ModelResponse,
@@ -46,145 +44,123 @@ from litellm.types.utils import (
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
+SECRET: Final = "private-redaction-canary"
+SIGNATURE: Final = "opaque-thought-signature"
 
-@pytest.mark.parametrize("as_dict", [False, True])
-def test_redaction_removes_nested_callback_content_without_mutating_originals(as_dict: bool) -> None:
-    secret: Final = "private-callback-content"
-    part: Final = {
-        "role": "assistant",
-        "content": secret,
-        "provider_specific_fields": {
-            "reasoning_content": secret,
-            "thinking_blocks": [{"thinking": secret}],
-            "reasoningContentBlocks": [{"reasoningText": {"text": secret}}],
-            "citations": [{"cited_text": secret}],
+
+def _provider_fields() -> dict[str, object]:
+    return {
+        "reasoning_content": SECRET,
+        "thinking_blocks": [{"type": "thinking", "thinking": SECRET}],
+        "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
+        "citations": [{"cited_text": SECRET}],
+        "thought_signatures": [SIGNATURE],
+    }
+
+
+def _request_params(metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        "metadata": metadata,
+        "proxy_server_request": {
+            "url": "http://localhost/v1/chat/completions",
+            "body": {
+                "model": "redaction-model",
+                "system": "kept-system",
+                "messages": [{"role": "user", "content": SECRET}],
+                "metadata": metadata,
+            },
         },
     }
-    response: Final = ModelResponse(choices=[{"index": 0, "message": part}])
-    original: Final = response.model_dump() if as_dict else response
-    snapshot: Final = copy.deepcopy(original)
-    request: Final = {
-        "url": "http://localhost/v1/chat/completions",
-        "body": {"model": "redaction-model", "messages": [{"role": "user", "content": secret}]},
-    }
-    details: Final = {"litellm_params": {"proxy_server_request": request}}
 
-    redacted: Final = perform_redaction(details, original)
 
-    assert secret not in str(redacted)
-    assert secret not in str(details)
-    assert original == snapshot
-    assert request["body"]["messages"] == [{"role": "user", "content": secret}]
-    assert details["litellm_params"]["proxy_server_request"]["body"]["model"] == "redaction-model"
+@pytest.mark.parametrize("shape", ["object", "dict_message", "dict_delta"])
+def test_redaction_reuses_message_rules_for_request_body_and_provider_fields(shape: str) -> None:
+    response: Final = ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": SECRET, "provider_specific_fields": _provider_fields()},
+            }
+        ]
+    )
+    result: Final = (
+        response
+        if shape == "object"
+        else {"choices": [{"index": 0, "delta": {"content": SECRET, "provider_specific_fields": _provider_fields()}}]}
+        if shape == "dict_delta"
+        else response.model_dump()
+    )
+    original_result: Final = copy.deepcopy(result)
+    params: Final = _request_params({"session_id": "session"})
+    original_params: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+    assert SIGNATURE in str(redacted)
+    body: Final = details["litellm_params"]["proxy_server_request"]["body"]
+    assert body["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert body["system"] == "kept-system" and body["model"] == "redaction-model"
+    assert body["metadata"] is params["metadata"]
+    assert result == original_result and params == original_params
+
+
+def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
+    hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
+    original_hidden_params: Final = copy.deepcopy(hidden_params)
+    metadata: Final[dict[str, object]] = {"session_id": "session", "hidden_params": hidden_params}
+    params: Final = _request_params(metadata)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    perform_redaction(details, None)
+
+    assert details["litellm_params"]["metadata"] is metadata
+    assert SECRET not in str(details), details
+    assert metadata["hidden_params"]["model_id"] == "deployment"
+    assert metadata["hidden_params"]["provider_specific_fields"]["thought_signatures"] == [SIGNATURE]
+    assert hidden_params == original_hidden_params
+
+
+def test_per_callback_redaction_leaves_shared_request_body_and_hidden_params() -> None:
+    metadata: Final[dict[str, object]] = {"hidden_params": {"provider_specific_fields": _provider_fields()}}
+    params: Final = _request_params(metadata)
+    original_params: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    perform_redaction(details, None, redact_streaming_responses=False)
+
+    assert details["litellm_params"] == original_params
+
+
+def test_logger_level_redaction_redacts_its_copy_of_the_request_body() -> None:
+    params: Final = _request_params({"session_id": "session"})
+    original_params: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    redacted: Final = CustomLogger(
+        turn_off_message_logging=True
+    ).redact_standard_logging_payload_from_model_call_details(details)
+
+    assert SECRET not in str(redacted["litellm_params"]), redacted
+    assert details["litellm_params"] == original_params
 
 
 @pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
-def test_streaming_provider_reasoning_is_redacted_only_in_callback_copy(key: str) -> None:
+def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_chunk_dict(key: str) -> None:
+    fields: Final = _provider_fields()
     response: Final = ModelResponseStream(
         choices=[
-            litellm.utils.StreamingChoices(
-                delta=litellm.utils.Delta(
-                    content="private-answer",
-                    provider_specific_fields={"thinking_blocks": [{"thinking": "private-reasoning"}]},
-                )
-            )
+            litellm.utils.StreamingChoices(delta=litellm.utils.Delta(content=SECRET, provider_specific_fields=fields))
         ]
     )
-    response._hidden_params["opaque"] = MappingProxyType({"transport": "metadata"})
-    details: Final = {"stream": True, key: response}
-    perform_redaction(details, None)
-    assert details[key].choices[0].delta.provider_specific_fields is None
-    assert response.choices[0].delta.provider_specific_fields == {
-        "thinking_blocks": [{"thinking": "private-reasoning"}]
-    }
-    assert response.choices[0].delta.content == "private-answer"
-    assert details[key]._hidden_params["opaque"] is response._hidden_params["opaque"]
-
-
-def _request_with_hidden_reasoning(secret: str) -> tuple[dict, dict]:
-    hidden_params: Final = {
-        "additional_headers": {"x-ratelimit-remaining-requests": "99"},
-        "provider_specific_fields": {"thinking_blocks": [{"type": "thinking", "thinking": secret}]},
-    }
-    metadata: Final = {"session_id": "session", "hidden_params": hidden_params}
-    body: Final = {
-        "model": "redaction-model",
-        "system": "kept-instructions",
-        "instructions": "kept-instructions",
-        "messages": [{"role": "user", "content": secret}],
-        "metadata": metadata,
-        "litellm_metadata": metadata,
-    }
-    params: Final = {
-        "metadata": metadata,
-        "litellm_metadata": metadata,
-        "proxy_server_request": {"url": "http://localhost/v1/messages", "body": body},
-    }
-    return params, hidden_params
-
-
-def test_redaction_removes_reasoning_copied_into_hidden_params_and_request_body() -> None:
-    secret: Final = "private-hidden-reasoning"
-    params, hidden_params = _request_with_hidden_reasoning(secret)
-    params["litellm_metadata"] = copy.deepcopy(params["litellm_metadata"])
-    snapshot: Final = copy.deepcopy(params)
-    details: Final = {"litellm_params": params}
+    details: Final[dict[str, object]] = {"stream": True, key: response}
 
     perform_redaction(details, None)
 
-    redacted: Final = details["litellm_params"]
-    assert secret not in str(redacted)
-    body: Final = redacted["proxy_server_request"]["body"]
-    assert body["system"] == body["instructions"] == "kept-instructions"
-    assert body["model"] == "redaction-model"
-    for metadata in (redacted["metadata"], redacted["litellm_metadata"], body["metadata"], body["litellm_metadata"]):
-        assert metadata["session_id"] == "session"
-        assert metadata["hidden_params"]["provider_specific_fields"] is None
-        assert metadata["hidden_params"]["additional_headers"] == hidden_params["additional_headers"]
-    assert redacted["metadata"] is params["metadata"]
-    assert hidden_params == snapshot["metadata"]["hidden_params"]
-
-
-@pytest.mark.parametrize("channel", ["metadata", "litellm_metadata"])
-def test_router_usage_marker_written_after_redaction_stays_visible(channel: str) -> None:
-    params, hidden_params = _request_with_hidden_reasoning("private-hidden-reasoning")
-    params[channel] = copy.deepcopy(params[channel])
-    details: Final = {"litellm_params": params}
-
-    perform_redaction(details, None)
-    params[channel]["hidden_params"] = hidden_params
-    perform_redaction(details, None)
-    params[channel][ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] = 7
-
-    assert get_counted_usage_tokens(details["litellm_params"]) == 7
-
-
-def test_shared_redacted_params_keep_metadata_dicts() -> None:
-    params, _ = _request_with_hidden_reasoning("private-hidden-reasoning")
-
-    redacted: Final = redacted_litellm_params(params, shared=True)
-
-    assert redacted["metadata"] is params["metadata"]
-    assert redacted["litellm_metadata"] is params["litellm_metadata"]
-    assert redacted["proxy_server_request"]["body"]["system"] == "kept-instructions"
-
-
-def test_per_callback_redaction_keeps_shared_request_body_for_other_readers() -> None:
-    secret: Final = "private-shared-request"
-    params, _ = _request_with_hidden_reasoning(secret)
-    snapshot: Final = copy.deepcopy(params)
-    details: Final[dict[str, object]] = {"litellm_params": params, "messages": [{"role": "user", "content": secret}]}
-    opted_out_logger: Final = CustomLogger(message_logging=False)
-
-    perform_redaction(details, None, redact_streaming_responses=False)
-    callback_details: Final = redact_streaming_responses_for_custom_logger(details, opted_out_logger)
-
-    assert details["litellm_params"] == snapshot
-    assert details["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
-    assert secret not in str(callback_details["litellm_params"])
-    callback_body: Final = callback_details["litellm_params"]["proxy_server_request"]["body"]
-    assert callback_body["system"] == callback_body["instructions"] == "redacted-by-litellm"
-    assert redact_streaming_responses_for_custom_logger(details, CustomLogger()) is details
+    assert SECRET not in str(response.choices[0].delta), response
+    assert response.choices[0].delta.provider_specific_fields["thought_signatures"] == [SIGNATURE]
+    assert fields == _provider_fields()
 
 
 @pytest.fixture(autouse=True)
@@ -617,9 +593,8 @@ class TestPerformRedaction:
 
         perform_redaction(details, None)
 
-        tool_call = details["complete_streaming_response"].choices[0].delta.tool_calls[0]
+        tool_call = streaming_response.choices[0].delta.tool_calls[0]
         assert tool_call.function.arguments == "redacted-by-litellm"
-        assert streaming_response.choices[0].delta.tool_calls[0].function.arguments == '{"city": "sensitive-city"}'
 
     def test_redacts_tool_call_arguments_in_standard_logging_object(self):
         details = {
@@ -897,11 +872,9 @@ class TestPerformRedaction:
 
         perform_redaction(details, response)
 
-        redacted: Final = details["complete_streaming_response"]
-        assert redacted.choices[0].message.content == "redacted-by-litellm"
-        assert getattr(redacted, "vertex_ai_grounding_metadata") == []
-        assert "vertex_ai_grounding_metadata" not in redacted._hidden_params
-        assert response.choices[0].message.content == "sensitive answer"
+        assert response.choices[0].message.content == "redacted-by-litellm"
+        assert getattr(response, "vertex_ai_grounding_metadata") == []
+        assert "vertex_ai_grounding_metadata" not in response._hidden_params
 
     def test_redacts_vertex_provider_metadata_from_metadata_hidden_params(self):
         """Streaming success_handler copies _hidden_params into metadata before redaction."""

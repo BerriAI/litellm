@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 INPUT: Final = "private-input-redaction-canary"
 REASONING: Final = "private-reasoning-redaction-canary"
 OUTPUT: Final = "private-output-redaction-canary"
+SIGNATURE: Final = "opaque-thought-signature-canary"
 INSTRUCTIONS: Final = "Reply in French. redaction-instructions-canary"
 BRIDGED: Final = "bridged-redaction-canary"
 USAGE_DEPLOYMENT: Final = f"redaction-usage-{uuid.uuid4().hex}"
@@ -119,6 +120,8 @@ def _provider(request: Request) -> Reply:
                         "reasoning_content": REASONING,
                         "thinking_blocks": [{"thinking": REASONING}],
                         "reasoningContentBlocks": [{"reasoningText": {"text": REASONING}}],
+                        "citations": [{"cited_text": INPUT}],
+                        "thought_signatures": [SIGNATURE],
                     },
                 },
                 "finish_reason": "stop",
@@ -246,6 +249,7 @@ def test_custom_logger_redacts_nested_input_and_provider_reasoning(
     assert "proxy_server_request" not in body, body
     assert len(tuple(request for request in provider.drain() if request.method == "POST")) == 1
     logged: Final = json.dumps(callback)
+    assert SIGNATURE in logged, callback
     if redact:
         assert INPUT not in logged and REASONING not in logged and OUTPUT not in logged, callback
     else:

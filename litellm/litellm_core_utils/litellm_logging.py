@@ -3530,7 +3530,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 if isinstance(callback, CustomLogger):  # custom logger class
                     from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
-                    model_call_details: dict[str, object] = self.model_call_details
+                    model_call_details: dict = self.model_call_details
                     ##################################
                     # call redaction hook for custom logger
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
