@@ -18,6 +18,7 @@ mod native;
 mod owned;
 mod runtime;
 mod services;
+mod task;
 
 pub use argument::{effective_py_args, lookup, present};
 pub use binding::PythonBinding;
@@ -27,7 +28,7 @@ pub use error::{Error, InvokeError};
 pub use file_reader::{FileContent, PythonFileReader, py_bytes};
 pub use fork_gate::RuntimeAlreadyStarted;
 pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
-pub use handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
+pub use handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle, Suspension};
 pub use hooks::{HookChain, HookResume, HookStep, PythonCallEvent, PythonCallHooks, PythonRuntime};
 pub use marshal::{
     Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
