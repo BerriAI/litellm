@@ -130,7 +130,9 @@ def test_real_drift_and_other_spend_logs_tables_survive_the_filter():
     ]
 
 
-def test_check_prisma_schema_diff_forwards_partitioning_flag(mocker):
+def test_check_prisma_schema_diff_forwards_partitioning_flag(  # test-quality-ok: forwarding test; the helper behaviour is covered by the filtering tests above
+    mocker,
+):
     """The boot-time wrapper must forward the flag to the helper."""
     from litellm.proxy.db import check_migration
 
