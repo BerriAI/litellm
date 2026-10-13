@@ -8064,6 +8064,45 @@ async def test_websocket_turn_failure_counts_its_usage_toward_tpm_v3(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_websocket_turn_success_counts_its_usage_toward_tpm_v3(monkeypatch):
+    """
+    A successful native Responses WebSocket turn is logged with the raw event list
+    as its response, not a modeled response object. Its usage must still reach the
+    key's TPM window right away, while the socket stays open.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    _api_key = hash_token("sk-ws-successful-turn")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10_000, max_parallel_requests=2)
+    tokens_key = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    reserved = await _admit_with_tpm_reservation(
+        handler, local_cache, user_api_key_dict, CallTypes.aresponses_websocket.value
+    )
+    turn_kwargs = {
+        key: value
+        for key, value in _websocket_turn_kwargs("turn-1", _api_key, Usage()).items()
+        if key != "combined_usage_object"
+    }
+
+    await handler.async_log_success_event(
+        kwargs={**turn_kwargs, "call_type": CallTypes.aresponses_websocket.value},
+        response_obj=[
+            {"type": "response.created", "response": {"id": "resp_turn_1"}},
+            {
+                "type": "response.completed",
+                "response": {"id": "resp_turn_1", "usage": {"input_tokens": 12, "output_tokens": 5, "total_tokens": 17}},
+            },
+        ],
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == reserved + 17
+    assert get_request_stash().reservation_released is False
+
+
+@pytest.mark.asyncio
 async def test_failure_event_without_a_stash_charges_nothing_outside_a_websocket_connection_v3(monkeypatch):
     """
     A nested call made inside a plain request (an LLM-judge guardrail) logs under a

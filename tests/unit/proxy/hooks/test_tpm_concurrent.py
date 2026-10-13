@@ -3768,13 +3768,14 @@ async def test_websocket_turn_usage_counts_toward_project_itpm_and_otpm(rate_lim
     assert await counters() == (stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
 
     await handler.async_log_success_event(
-        kwargs=turn_kwargs("turn-1"),
-        response_obj=ResponsesAPIResponse(
-            id="resp_1",
-            created_at=int(datetime.now().timestamp()),
-            output=[],
-            usage=ResponseAPIUsage(input_tokens=30, output_tokens=7, total_tokens=37),
-        ),
+        kwargs={**turn_kwargs("turn-1"), "call_type": CallTypes.aresponses_websocket.value},
+        response_obj=[
+            {"type": "response.created", "response": {"id": "resp_1"}},
+            {
+                "type": "response.completed",
+                "response": {"id": "resp_1", "usage": {"input_tokens": 30, "output_tokens": 7, "total_tokens": 37}},
+            },
+        ],
         start_time=datetime.now(),
         end_time=datetime.now(),
     )

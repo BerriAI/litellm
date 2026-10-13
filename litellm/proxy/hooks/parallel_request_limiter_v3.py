@@ -42,6 +42,7 @@ from litellm.caching.redis_batch import (
 )
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -765,6 +766,20 @@ def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
         return None
     call_id: Final = kwargs.get("litellm_call_id")
     return call_id if isinstance(call_id, str) else None
+
+
+_RESPONSES_WS_TURN_EVENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _unmodeled_response_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:
+    combined_usage: Final = kwargs.get("combined_usage_object")
+    if isinstance(combined_usage, Usage):
+        return combined_usage
+    if kwargs.get("call_type") != CallTypes.aresponses_websocket.value or not isinstance(response_obj, list):
+        return None
+    return ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
+        _RESPONSES_WS_TURN_EVENTS.validate_python(response_obj)
+    )
 
 
 def _parse_output_cap_value(raw_value: object) -> int | None:
@@ -4793,7 +4808,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         response_usage: Final = self._resolve_io_token_reconcile_usage(response_obj)
         if response_usage[2]:
             return response_usage
-        return self._resolve_io_token_reconcile_usage(kwargs.get("combined_usage_object"))
+        return self._resolve_io_token_reconcile_usage(_unmodeled_response_usage(kwargs, response_obj))
 
     def _build_websocket_turn_io_ops(
         self,
@@ -5036,7 +5051,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Get total tokens from response. Responses LiteLLM does not model
         # (e.g. pass-through, whose usage is reported by the upstream rather
         # than parsed out of the body) carry their usage in
-        # ``combined_usage_object`` instead, and would otherwise never charge
+        # ``combined_usage_object`` instead, and a native Responses WebSocket
+        # turn in its raw event list; either would otherwise never charge
         # the TPM window.
         _usage: Usage | dict | None = None
         if isinstance(
@@ -5050,9 +5066,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         ):
             _usage = getattr(response_obj, "usage", None)
         else:
-            _combined_usage: Final = kwargs.get("combined_usage_object")
-            if isinstance(_combined_usage, Usage):
-                _usage = _combined_usage
+            _usage = _unmodeled_response_usage(kwargs, response_obj)
         total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
         if total_tokens == 0:
             total_tokens = self._aggregate_only_total_tokens(usage=_usage)
