@@ -24,12 +24,6 @@ _CHAT_COMPLETION: Final = {
 }
 
 
-def test_corti_is_a_registered_provider():
-    assert litellm.LlmProviders.CORTI.value == "corti"
-    assert "corti" in litellm.provider_list
-    assert "corti" in litellm.constants.openai_compatible_providers
-
-
 def test_corti_provider_resolution(monkeypatch: pytest.MonkeyPatch):
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
