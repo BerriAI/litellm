@@ -19,7 +19,6 @@ DEFAULT_WINGBACK_API_BASE: Final = "https://api.wingback.ai/connectors"
 class WingbackGuardrail(GenericGuardrailAPI):
     """Wingback runtime security via the LiteLLM Generic Guardrail API contract."""
 
-    # unified guardrail dispatch only runs classes that define apply_guardrail themselves
     apply_guardrail = GenericGuardrailAPI.apply_guardrail  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent annotates request_data as a bare dict
 
     def __init__(
