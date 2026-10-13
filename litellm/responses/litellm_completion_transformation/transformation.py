@@ -2013,7 +2013,7 @@ class LiteLLMCompletionResponsesConfig:
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
         flattened_namespace_names: Final = frozenset(
-            flatten_namespace_tool_name(str(tool.get("name") or ""), str(namespace_tool.get("name") or ""))
+            flatten_namespace_tool_name(f"{tool.get('name') or ''!s}", f"{namespace_tool.get('name') or ''!s}")
             for tool in tools or ()
             if tool.get("type") == "namespace"
             for namespace_tools in (tool.get("tools"),)
