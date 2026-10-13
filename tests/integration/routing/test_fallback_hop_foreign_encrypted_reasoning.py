@@ -42,7 +42,7 @@ from integration._support.client import (
     object_value,
     string_value,
 )
-from integration._support.database import read_rows
+from integration._support.database import read_rows, scratch_database
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, wire_server
@@ -860,34 +860,34 @@ def test_hop_inside_one_encryption_boundary_keeps_the_reasoning(gateway: Gateway
         assert [body.get("input") for body in bodies] == [history(mark), history(mark)], bodies
 
 
-def configured_fallback(scenario: Scenario, source: str, target: str) -> None:
-    gateway: Final = scenario.gateway
-    original: Final = router_setting(gateway, "fallbacks")
-    restored: Final = original if isinstance(original, list) else []
-    scenario.cleanups.callback(lambda: gateway.post("/config/update", {"router_settings": {"fallbacks": restored}}))
-    gateway.post("/config/update", {"router_settings": {"fallbacks": [*restored, {source: [target]}]}})
-
-
 def assert_cross_group_hop_stripped(gateway: Gateway, source_scenario: str, target_scenario: str, mark: str) -> None:
     records: Final = observed(gateway)
     assert [body.get("input") for body in bodies_for(records, source_scenario)] == [history(mark)], records
     assert [body.get("input") for body in bodies_for(records, target_scenario)] == [stripped_history(mark)], records
 
 
-def test_configured_fallbacks_entry_hop_strips_the_source_groups_reasoning(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
+def test_configured_fallbacks_entry_hop_strips_the_source_groups_reasoning(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        scratch_database() as database,
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": database},
+            remove_environment=("DIRECT_URL", "DATABASE_URL_READ_REPLICA"),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
         source: Final = f"src-{uuid.uuid4().hex[:12]}"
         target: Final = f"dst-{uuid.uuid4().hex[:12]}"
         source_id: Final = deployment(scenario, source, scenario_api_base(scenario, source, failing()), order=None)
         target_id: Final = deployment(scenario, target, scenario_api_base(scenario, target, healthy_json()), order=None)
-        configured_fallback(scenario, source, target)
+        owned.gateway.post("/config/update", {"router_settings": {"num_retries": 0, "fallbacks": [{source: [target]}]}})
         mark: Final = marker()
         answer: Final = responses_answer(
-            gateway, HTTPX, Target(source, frozenset({source_id, target_id})), history(mark)
+            owned.gateway, HTTPX, Target(source, frozenset({source_id, target_id})), history(mark)
         )
         assert_served_by(answer, target_id)
-        assert_cross_group_hop_stripped(gateway, source, target, mark)
-    assert source not in json.dumps(router_setting(gateway, "fallbacks")), router_setting(gateway, "fallbacks")
+        assert_cross_group_hop_stripped(owned.gateway, source, target, mark)
 
 
 def test_client_fallbacks_entry_hop_strips_the_source_groups_reasoning(gateway: Gateway) -> None:

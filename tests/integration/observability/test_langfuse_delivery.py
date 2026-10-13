@@ -720,19 +720,17 @@ def _audit_upstream(provider_secret: str, marker: str, targets: list[str]):
         assert request.headers["authorization"] == f"Bearer {provider_secret}"
         targets.append(request.target)
         body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.body)
-        index: Final = len(targets)
+        reply_id: Final = uuid.uuid4().hex
         if request.target == "/v1/responses":
             if body.get("stream"):
                 return Reply(
-                    content_type="text/event-stream", chunks=_responses_stream_frames(f"resp-{marker}-{index}")
+                    content_type="text/event-stream", chunks=_responses_stream_frames(f"resp-{marker}-{reply_id}")
                 )
-            return _responses_result(f"resp-{marker}-{index}")
+            return _responses_result(f"resp-{marker}-{reply_id}")
         assert request.target == "/v1/chat/completions", request.target
         if body.get("stream"):
-            return Reply(
-                content_type="text/event-stream", chunks=_chat_stream_frames(f"chatcmpl-{marker}-{index}")
-            )
-        return _completion(f"{marker}-{index}-answer")
+            return Reply(content_type="text/event-stream", chunks=_chat_stream_frames(f"chatcmpl-{marker}-{reply_id}"))
+        return _completion(f"{marker}-{reply_id}-answer")
 
     return upstream
 

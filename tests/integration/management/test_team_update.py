@@ -2,7 +2,7 @@ import pytest
 
 from litellm.proxy._types import LitellmUserRoles
 
-from tests.integration._support.actors import Actor
+from tests.integration._support.actors import Actor, SeededKey
 from tests.integration._support.actors import create_scratch_actor, create_scratch_team
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -38,19 +38,39 @@ _MATRIX = [
 ]
 
 
-async def _seed_target(db, actors, shape: str, team_id: str) -> str:
+_TEAM_MEMBER_ACTORS = (
+    Actor.TEAM_ADMIN,
+    Actor.INTERNAL_USER,
+    Actor.OWNER,
+    Actor.UNRELATED_SAME_ORG,
+    Actor.SERVICE_ACCOUNT,
+    Actor.CROSS_ORG_USER,
+)
+
+
+async def _callers(db, actors, prefix: str) -> dict[Actor, SeededKey]:
+    team_members = {
+        actor: await create_scratch_actor(
+            db, prefix, user_role=LitellmUserRoles.INTERNAL_USER.value, suffix=actor.value
+        )
+        for actor in _TEAM_MEMBER_ACTORS
+    }
+    return {**actors.keys, **team_members}
+
+
+async def _seed_target(db, actors, callers, shape: str, team_id: str) -> str:
     """Raw-seed the resources target team; returns its organization_id."""
     if shape == "alpha":
         await create_scratch_team(
             db,
             team_id,
             organization_id=actors.org_a_id,
-            admin_user_ids=[actors.keys[Actor.TEAM_ADMIN].user_id],
+            admin_user_ids=[callers[Actor.TEAM_ADMIN].user_id],
             member_user_ids=[
-                actors.keys[Actor.INTERNAL_USER].user_id,
-                actors.keys[Actor.OWNER].user_id,
-                actors.keys[Actor.UNRELATED_SAME_ORG].user_id,
-                actors.keys[Actor.SERVICE_ACCOUNT].user_id,
+                callers[Actor.INTERNAL_USER].user_id,
+                callers[Actor.OWNER].user_id,
+                callers[Actor.UNRELATED_SAME_ORG].user_id,
+                callers[Actor.SERVICE_ACCOUNT].user_id,
             ],
         )
         return actors.org_a_id
@@ -59,7 +79,7 @@ async def _seed_target(db, actors, shape: str, team_id: str) -> str:
             db,
             team_id,
             organization_id=actors.org_b_id,
-            member_user_ids=[actors.keys[Actor.CROSS_ORG_USER].user_id],
+            member_user_ids=[callers[Actor.CROSS_ORG_USER].user_id],
         )
         return actors.org_b_id
     pytest.fail(f"unknown shape={shape}")  # pragma: no cover
@@ -79,8 +99,9 @@ async def test_team_update_authz_matrix(
     resources,
     actors,
 ):
-    org_id = await _seed_target(db, actors, shape, resources.prefix)
-    caller = actors.keys[actor]
+    callers = await _callers(db, actors, resources.prefix)
+    org_id = await _seed_target(db, actors, callers, shape, resources.prefix)
+    caller = callers[actor]
 
     resp = await gateway_client.post(
         "/team/update",
@@ -113,7 +134,8 @@ async def test_team_update_org_admin_resolved_from_team_without_org_context(
     (200), same as PROXY_ADMIN. A team admin of that same team reaches the
     handler but is refused (403) until a proxy admin enables fields for team
     admins, and the response says so."""
-    await _seed_target(db, actors, "alpha", resources.prefix)
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "alpha", resources.prefix)
 
     allowed_org_admin = await gateway_client.post(
         "/team/update",
@@ -131,7 +153,7 @@ async def test_team_update_org_admin_resolved_from_team_without_org_context(
 
     denied_team_admin = await gateway_client.post(
         "/team/update",
-        headers={"Authorization": f"Bearer {actors.keys[Actor.TEAM_ADMIN].cleartext}"},
+        headers={"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"},
         json={"team_id": resources.prefix, "team_alias": MARKER_ALIAS},
     )
     assert denied_team_admin.status_code == 403, denied_team_admin.text
@@ -169,8 +191,9 @@ async def test_team_update_org_relocation_gate(
     resources,
     actors,
 ):
-    await _seed_target(db, actors, "alpha", resources.prefix)
-    caller = actors.keys[actor]
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "alpha", resources.prefix)
+    caller = callers[actor]
 
     resp = await gateway_client.post(
         "/team/update",
@@ -199,7 +222,7 @@ async def test_team_update_org_relocation_gate(
 async def test_team_update_org_b_admin_relocation_rejection_detail(
     gateway_client, db, resources, actors
 ):
-    await _seed_target(db, actors, "alpha", resources.prefix)
+    await _seed_target(db, actors, await _callers(db, actors, resources.prefix), "alpha", resources.prefix)
     resp = await gateway_client.post(
         "/team/update",
         headers={"Authorization": f"Bearer {actors.keys[Actor.ORG_B_ADMIN].cleartext}"},
