@@ -133,6 +133,8 @@ class CheckBatchCost:
         self.batch_processed_support_confirmed: bool = False
         self._line_item_stores: Final[set[asyncio.Task[None]]] = set()
         self._line_item_store_turn: Final = asyncio.Lock()
+        self._poll_idle: Final = asyncio.Event()
+        self._poll_idle.set()
 
     @staticmethod
     def _is_missing_batch_processed_column_error(err: Exception) -> bool:
@@ -977,9 +979,9 @@ class CheckBatchCost:
         batch_id: str,
         output_content: bytes,
     ) -> None:
-        """Store a retired batch's lines off the poll loop, one batch at a time, so a slow or hung bucket never holds up
-        billing or retiring the other batches. While a poll cycle's worth of batches is still waiting, the lines of
-        the next one are dropped with an error."""
+        """Store a retired batch's lines off the poll loop, one batch at a time and only between polls, so neither
+        pricing the lines nor a slow or hung bucket holds up billing or retiring the other batches. While a poll
+        cycle's worth of batches is still waiting, the lines of the next one are dropped with an error."""
         if not litellm.batch_line_item_callbacks:
             return
         if len(self._line_item_stores) >= MAX_OBJECTS_PER_POLL_CYCLE:
@@ -1003,6 +1005,7 @@ class CheckBatchCost:
         output_content: bytes,
     ) -> None:
         async with self._line_item_store_turn:
+            await self._poll_idle.wait()
             await self._store_batch_line_items(job, response, model_id, batch_id, output_content)
 
     async def _store_batch_line_items(
@@ -1132,7 +1135,15 @@ class CheckBatchCost:
         creator_setting: Final = str_to_bool(callback_vars.get("turn_off_message_logging"))
         return creator_setting if creator_setting is not None else litellm.turn_off_message_logging is True
 
-    async def check_batch_cost(self):
+    async def check_batch_cost(self) -> None:
+        """Run one poll cycle. Batch line items wait until it has billed and retired every batch it found."""
+        self._poll_idle.clear()
+        try:
+            await self._poll_batches()
+        finally:
+            self._poll_idle.set()
+
+    async def _poll_batches(self):
         """
         Check if the batch JOB has been tracked.
         - get all status="validating" and file_purpose="batch" jobs

@@ -3603,6 +3603,36 @@ class TestBatchLineItemsFromThePoller:
 
         assert journal == [f"start batch-{name} with 1 running" for name in "abc"]
 
+    @pytest.mark.asyncio
+    async def test_lines_are_stored_only_once_the_poll_has_billed_and_retired_every_batch_it_found(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
+
+        async def _an_earlier_batch_waits_to_store_its_lines():
+            instance._store_batch_line_items_in_background(MagicMock(), MagicMock(), "model-123", "batch-earlier", b"")
+            await asyncio.sleep(0.01)
+
+        async def _store(job, response, model_id, batch_id, output_content):
+            journal.append(f"store {batch_id}")
+
+        monkeypatch.setattr(instance, "_cleanup_stale_managed_objects", _an_earlier_batch_waits_to_store_its_lines)
+        monkeypatch.setattr(instance, "_store_batch_line_items", _store)
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == [
+            f"read {_CLAIM_OUTPUT_FILE_ID}",
+            "claim",
+            "bill",
+            "finalize",
+            "store batch-earlier",
+            "store batch-456",
+        ]
+
 
 class TestCreatorTurnedOffMessageLogging:
     """Batch line items drop the request and response when the creating key or team turned off message logging,
