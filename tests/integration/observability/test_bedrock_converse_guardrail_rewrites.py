@@ -313,6 +313,9 @@ def _vendor(request: Request) -> Reply:
         return _bedrock_guardrail_verdict(body)
     if request.target == "/singulr/api/v1/ai-gateway/litellm-v2":
         return _singulr_verdict(body)
+    if request.target == "/ovalix/tracking/custom_application/checkpoint":
+        checked: Final = object_value(body.get("data")).get("content")
+        return Reply(body=json.dumps({"action_type": "block" if checked == _INJECTION else "allow"}).encode())
     if request.target == "/qualifire/api/evaluation/invoke":
         flagged_input: Final = _INJECTION in str(body.get("input"))
         return Reply(body=json.dumps({"evaluationResults": [{"results": [{"flagged": flagged_input}]}]}).encode())
@@ -387,6 +390,16 @@ def _guardrails(vendor_url: str) -> tuple[dict[str, JsonValue], ...]:
                 "api_base": f"{vendor_url}/qualifire",
                 "api_key": "synthetic-qualifire-key",
                 "evaluation_id": "synthetic-evaluation",
+            },
+        ),
+        _guardrail(
+            "ovalix",
+            {
+                "guardrail": "ovalix",
+                "tracker_api_base": f"{vendor_url}/ovalix",
+                "tracker_api_key": "synthetic-ovalix-key",
+                "application_id": "synthetic-application",
+                "pre_checkpoint_id": "synthetic-checkpoint",
             },
         ),
         _guardrail(
@@ -939,6 +952,20 @@ def test_qualifire_evaluation_gets_the_latest_text_as_its_input_as_on_main(rig: 
     _refused(rig, _converse(rig, "qualifire", body))
 
     assert [payload.get("input") for payload in _vendor_bodies(rig)] == [_INJECTION]
+
+
+def test_ovalix_blocks_a_request_field_injection_listed_last_as_on_main(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [_user({"text": "What is 2+2?"})],
+        "additionalModelRequestFields": {
+            "metadata": {"user_id": _INJECTION},
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        },
+    }
+
+    _refused(rig, _converse(rig, "ovalix", body))
+
+    assert [object_value(payload.get("data")).get("content") for payload in _vendor_bodies(rig)] == [_INJECTION]
 
 
 def test_flat_text_guardrail_gets_request_field_strings_last_as_on_main(rig: _Rig) -> None:

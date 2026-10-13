@@ -156,8 +156,20 @@ def _text_leaf(node: tuple[JsonPath, object]) -> TextSlot | None:
     return TextSlot(path, value) if isinstance(value, str) and value else None
 
 
+def _flat_text_order(root: tuple[JsonPath, object]) -> Iterator[tuple[JsonPath, object]]:
+    """
+    The nodes under ``root`` in the order the flat texts list their strings: each container's own strings in field
+    order, then its nested containers, the last one first.
+    """
+    pending: Final = [root]
+    while pending:
+        children = _json_children(pending.pop())
+        yield from (child for child in children if isinstance(child[1], str))
+        pending.extend(child for child in children if not isinstance(child[1], str))
+
+
 def _string_leaves(path: JsonPath, value: object) -> tuple[TextSlot, ...]:
-    leaves: Final = map(_text_leaf, breadth_first((path, value), _json_children))
+    leaves: Final = map(_text_leaf, _flat_text_order((path, value)))
     return tuple(leaf for leaf in leaves if leaf is not None)
 
 

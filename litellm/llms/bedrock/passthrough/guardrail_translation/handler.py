@@ -1,5 +1,4 @@
 import copy
-from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
@@ -79,32 +78,31 @@ _Write: TypeAlias = tuple[_StringHolder, object]
 _BODY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[dict[str, object]])
 
 
-def _collect_strings(node: object, holders: list[_StringHolder], breadth_first: bool = False) -> None:
+def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
     """
     Record a (container, key) holder for every non-empty string value nested
     under an arbitrary JSON node, so prompt content a caller hides in fields
     like ``toolUse.input`` or ``toolResult.content[].json`` is still scanned
     and can be written back in place. Iterative to avoid unbounded recursion
-    on deeply nested payloads. With ``breadth_first`` the strings come level by
-    level, the order a structured row lists them.
+    on deeply nested payloads.
     """
-    pending: Final = deque((node,))
-    while pending:
-        current = pending.popleft() if breadth_first else pending.pop()
+    stack: Final[list[object]] = [node]
+    while stack:
+        current = stack.pop()
         if isinstance(current, dict):
             for key, value in current.items():
                 if isinstance(value, str):
                     if value:
                         holders.append((current, key))
                 else:
-                    pending.append(value)
+                    stack.append(value)
         elif isinstance(current, list):
             for index, value in enumerate(current):
                 if isinstance(value, str):
                     if value:
                         holders.append((current, index))
                 else:
-                    pending.append(value)
+                    stack.append(value)
 
 
 def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
@@ -113,9 +111,9 @@ def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
         holders.append((block, "text"))
 
 
-def _request_field_holders(body: Mapping[str, object], in_row_order: bool) -> tuple[_StringHolder, ...]:
+def _request_field_holders(body: Mapping[str, object]) -> tuple[_StringHolder, ...]:
     holders: Final = list[_StringHolder]()
-    _collect_strings(body.get("additionalModelRequestFields"), holders, breadth_first=in_row_order)
+    _collect_strings(body.get("additionalModelRequestFields"), holders)
     return tuple(holders)
 
 
@@ -124,7 +122,6 @@ def _extract_converse_texts(
     skip_system: bool,
     skip_tool: bool,
     scan_only_tool_results: bool = False,
-    request_fields_in_row_order: bool = False,
 ) -> tuple[list[str], list[_StringHolder]]:
     """
     Walk a Bedrock Converse request body and collect text content.
@@ -152,8 +149,7 @@ def _extract_converse_texts(
     contract, while ``additionalModelRequestFields`` is free-form and defined by
     the target model, so what it carries cannot be classified without knowing
     that model. Scanning it stays the fail-closed default. Its strings come
-    last, and with ``request_fields_in_row_order`` in the order of their row,
-    for guardrails that also get rows.
+    last, in the same order as in the row built from them.
     """
     system_holders: Final = list[_StringHolder]()
     if not skip_system and not scan_only_tool_results:
@@ -161,9 +157,7 @@ def _extract_converse_texts(
             if isinstance(block, dict):
                 _collect_block_text(block, system_holders)
 
-    request_field_holders: Final = (
-        () if scan_only_tool_results else _request_field_holders(body, request_fields_in_row_order)
-    )
+    request_field_holders: Final = () if scan_only_tool_results else _request_field_holders(body)
 
     message_holders: Final = list[_StringHolder]()
     for message in body.get("messages") or []:
@@ -197,14 +191,11 @@ class _Scope:
     skip_system: bool
     skip_tool: bool
     scan_only_tool_results: bool
-    request_fields_in_row_order: bool
 
 
 def _texts_applied_rows(body: Mapping[str, object], texts: Sequence[str], scope: _Scope) -> tuple[ConverseRow, ...]:
     rewritten: Final = copy.deepcopy(dict(body))
-    _, holders = _extract_converse_texts(
-        rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results, scope.request_fields_in_row_order
-    )
+    _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
     _write_back_texts(texts, holders)
     request: Final = parse_converse_request(rewritten)
     return converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
@@ -344,9 +335,7 @@ def _edits_drop_a_text_change(
     if len(guardrailed_texts) != len(texts):
         return True
     rewritten: Final = copy.deepcopy(dict(body))
-    _, holders = _extract_converse_texts(
-        rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results, scope.request_fields_in_row_order
-    )
+    _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
     writes: Final = _holder_edits(rewritten, edits, frozenset())
     if writes is None:
         return True
@@ -663,14 +652,12 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
             skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
             scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
-            request_fields_in_row_order=reads_rows,
         )
         texts, holders = _extract_converse_texts(
             request_body,
             scope.skip_system,
             scope.skip_tool,
             scope.scan_only_tool_results,
-            scope.request_fields_in_row_order,
         )
         request: Final = parse_converse_request(request_body) if reads_rows else None
         rows: Final = converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
