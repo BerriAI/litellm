@@ -3,7 +3,7 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -859,6 +859,12 @@ def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
             pass
 
     return default_error
+
+
+async def _close_upstream(upstream: object) -> None:
+    aclose: Final[Callable[[], Awaitable[object]] | None] = getattr(upstream, "aclose", None)
+    if aclose is not None:
+        await aclose()
 
 
 class _UpstreamClosingStreamingResponse(StreamingResponse):
@@ -2881,6 +2887,18 @@ class ProxyBaseLLMRequestProcessing:
                             self._has_post_call_guardrails_for_passthrough()
                             and self._passthrough_endpoint_has_stream_guardrail_handler()
                         ):
+                            relayed_guardrails: Final = self._passthrough_stream_guardrails(
+                                self.data  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+                            )
+                            if relayed_guardrails is not None:
+                                return await self._relay_guarded_passthrough_event_stream(
+                                    request_data=self.data,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+                                    generator=generator,  # pyright: ignore[reportUnknownArgumentType]  # raw upstream byte stream
+                                    guardrails=relayed_guardrails,
+                                    proxy_logging_obj=proxy_logging_obj,
+                                    user_api_key_dict=user_api_key_dict,
+                                    headers=streaming_headers,  # pyright: ignore[reportUnknownArgumentType]  # merged upstream headers
+                                )
                             body_bytes: Final = b"".join([chunk async for chunk in generator])
                             modified_bytes: Final = await self._handle_event_stream_allm_passthrough_route(
                                 body_bytes=body_bytes,
@@ -3400,6 +3418,127 @@ class ProxyBaseLLMRequestProcessing:
         return LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
             self.data.get("custom_llm_provider"),
             self.data.get("endpoint"),
+        )
+
+    @staticmethod
+    def _passthrough_stream_guardrails(
+        request_data: dict[str, object],  # mutable-ok: model-level guardrails merge into a copy of it
+    ) -> tuple[tuple[CustomGuardrail, bool], ...] | None:
+        """
+        The post_call guardrails to run on a passthrough event stream relayed frame by frame, each with whether it
+        holds the stream until moderated by default, or None when the stream must be buffered whole instead.
+
+        A guardrail relays when ``post_call_success_hook`` would scan it through ``apply_guardrail``. One that runs
+        its own ``async_post_call_success_hook``, masks responses with ``mask_response_content``, or is a step of a
+        post_call policy pipeline still needs the whole response, so its stream stays buffered.
+        """
+        from litellm.proxy.proxy_server import llm_router
+        from litellm.proxy.utils import pipeline_managed_guardrail_names
+
+        if pipeline_managed_guardrail_names(request_data, "post_call"):
+            return None
+        guardrail_data: Final = check_and_merge_model_level_guardrails(  # pyright: ignore[reportUnknownVariableType]  # returns the untyped request dict
+            data=request_data, llm_router=llm_router
+        )
+        relayed: Final[list[tuple[CustomGuardrail, bool]]] = []  # mutable-ok: built once per request
+        for cb in litellm.callbacks:
+            if not isinstance(cb, CustomGuardrail):
+                continue
+            if (
+                cb.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    data=guardrail_data, event_type=GuardrailEventHooks.post_call
+                )
+                is not True
+            ):
+                continue
+            leaf_attrs = type(cb).__dict__
+            if "apply_guardrail" not in leaf_attrs or cb.use_native_lifecycle_hooks or cb.mask_response_content:
+                return None
+            relayed.append((cb, "async_post_call_streaming_iterator_hook" in leaf_attrs))
+        return tuple(relayed)
+
+    async def _relay_guarded_passthrough_event_stream(
+        self,
+        request_data: dict[str, object],  # mutable-ok: the request dict the hooks mutate
+        generator: AsyncIterator[bytes],
+        guardrails: Sequence[tuple[CustomGuardrail, bool]],
+        proxy_logging_obj: ProxyLogging,
+        user_api_key_dict: UserAPIKeyAuth,
+        headers: Mapping[str, str],
+    ) -> StreamingResponse:
+        """
+        Relay a passthrough event stream as it arrives while post_call guardrails scan it, the way /v1/messages
+        streams are guarded. A failure before the first frame raises, so the caller gets an HTTP error as on the
+        buffered path; after it, the failure ends the stream with the provider's in-stream exception frame.
+        """
+        from litellm.llms.pass_through.guardrail_translation.handler import (
+            LlmPassthroughRouteHandler,
+        )
+
+        provider: Final = request_data.get("custom_llm_provider")
+        items: Final = LlmPassthroughRouteHandler.event_stream_items(provider, generator)
+        if items is None:
+            raise TypeError(f"provider {provider!r} has no event-stream framer")
+        guarded: Final = proxy_logging_obj.async_post_call_event_stream_iterator_hook(
+            response=items,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            guardrails=guardrails,
+        )
+
+        async def relay() -> AsyncGenerator[bytes, None]:
+            delivered = False  # rebind-ok: set once the first frame reached the caller
+            try:
+                async for item in guarded:
+                    yield LlmPassthroughRouteHandler.encode_event_stream_item(provider, item)
+                    delivered = True
+            except Exception as e:
+                if not delivered:
+                    raise
+                verbose_proxy_logger.exception("allm_passthrough_route: guarded event stream failed mid-stream: %s", e)
+                transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=e,
+                    request_data=request_data,
+                )
+                failure: Final = transformed if transformed is not None else e
+                message: Final = (
+                    serialize_http_exception_detail(failure.detail)[0]
+                    if isinstance(failure, HTTPException)
+                    else redact_internal_details_from_client_message(getattr(failure, "message", str(failure)))
+                )
+                error_item: Final = LlmPassthroughRouteHandler.event_stream_error_item(
+                    provider, message, error_status_code(failure, status.HTTP_500_INTERNAL_SERVER_ERROR)
+                )
+                if error_item is None:
+                    raise
+                yield error_item
+            finally:
+                await guarded.aclose()
+
+        relayed: Final = relay()
+        read_ahead: Final[list[bytes]] = []  # mutable-ok: the first frame, read before the response starts
+        try:
+            read_ahead.append(await relayed.__anext__())
+        except StopAsyncIteration:
+            pass
+        except BaseException:
+            with anyio.CancelScope(shield=True):
+                await _close_upstream(generator)
+            raise
+
+        async def body() -> AsyncGenerator[bytes, None]:
+            async with contextlib.aclosing(relayed) as rest:
+                for frame in read_ahead:
+                    yield frame
+                async for frame in rest:
+                    yield frame
+
+        return _UpstreamClosingStreamingResponse(
+            content=body(),  # pyright: ignore[reportArgumentType]  # bytes body, as on the unguarded relay
+            media_type=self._passthrough_event_stream_media_type(),
+            headers={k: v for k, v in headers.items() if k.lower() != "content-length"},
+            upstream_generator=generator,  # pyright: ignore[reportArgumentType]  # raw upstream byte stream
         )
 
     def _passthrough_event_stream_media_type(self) -> str | None:

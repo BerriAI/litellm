@@ -4129,6 +4129,46 @@ class ProxyLogging:
         await ProxyLogging._record_served_stream_output(request_data, served_chunks)
         ProxyLogging.fire_deferred_stream_logging(request_data)
 
+    async def async_post_call_event_stream_iterator_hook(
+        self,
+        response: AsyncIterable[object],
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict[str, object],  # mutable-ok: same request-payload shape the hooks mutate
+        guardrails: Sequence[tuple[CustomGuardrail, bool]],
+    ) -> AsyncGenerator[object, None]:
+        """
+        Run post_call guardrails over a provider event stream the proxy relays as it arrives, such as a Bedrock
+        Converse stream on the passthrough route. Each guardrail scans the stream through the unified guardrail, as
+        on /v1/messages; its flag says whether it holds the stream until moderated by default.
+        """
+        from litellm.proxy.proxy_server import llm_router
+
+        merged_request_data: Final[dict[str, object]] = check_and_merge_model_level_guardrails(  # pyright: ignore[reportUnknownVariableType]  # returns the untyped request dict  # mutable-ok: same request-payload shape the hooks mutate
+            data=request_data, llm_router=llm_router
+        )
+        current_response: AsyncIterable[object] = response  # rebind-ok: each guardrail wraps the previous layer
+        guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
+        for guardrail, holds_until_moderated in guardrails:
+            current_response = self._wrap_streaming_iterator_with_enrichment(
+                guardrail,
+                current_response,
+                partial(
+                    unified_guardrail.async_post_call_streaming_iterator_hook,  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=merged_request_data,
+                    guardrail_to_apply=guardrail,
+                    buffer_until_moderated_default=holds_until_moderated,
+                ),
+                request_data=merged_request_data,
+            )
+            guarded_layers.append(current_response)
+        try:
+            async for item in current_response:
+                yield item
+        except (GeneratorExit, asyncio.CancelledError):
+            await ProxyLogging._close_guarded_layers(guarded_layers)
+            raise
+
     async def _pipeline_gated_stream(
         self,
         response: "AsyncGenerator[object, None]",

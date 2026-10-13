@@ -6,17 +6,23 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+    StreamTransformSink,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import PassThroughGuardrailSettings
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from fastapi import HTTPException
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -210,6 +216,15 @@ def _get_provider_handlers() -> dict[str, type[BaseTranslation]]:
     return _PROVIDER_HANDLERS
 
 
+def _provider_handler(provider: object) -> type[BaseTranslation] | None:
+    return _get_provider_handlers().get(provider) if isinstance(provider, str) else None
+
+
+def _owns_event_stream_item(handler_cls: type[BaseTranslation], item: object) -> bool:
+    owns: Final[Callable[[object], bool] | None] = getattr(handler_cls, "owns_event_stream_item", None)
+    return owns is not None and owns(item)
+
+
 class LlmPassthroughRouteHandler(BaseTranslation):
     """
     Dispatcher for allm_passthrough_route guardrail translation.
@@ -261,6 +276,104 @@ class LlmPassthroughRouteHandler(BaseTranslation):
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
         )
+
+    @staticmethod
+    def _event_stream_translation(items: Sequence[object], provider: object = None) -> BaseTranslation | None:
+        """The provider handler for a relayed event stream: the one that owns its frames, else ``provider``'s."""
+        handlers: Final = _get_provider_handlers()
+        owner: Final = next(
+            (
+                handler_cls
+                for handler_cls in handlers.values()
+                if items and _owns_event_stream_item(handler_cls, items[0])
+            ),
+            handlers.get(provider) if isinstance(provider, str) else None,
+        )
+        return owner() if owner is not None else None
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far: Sequence[object],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: dict[str, object] | None = None,  # mutable-ok: the request dict guardrails receive
+        stream_transform_sink: StreamTransformSink | None = None,
+        deliver_ended_stream_rewrites: bool = False,
+    ) -> Sequence[object]:
+        translation: Final = self._event_stream_translation(
+            responses_so_far, (request_data or {}).get("custom_llm_provider")
+        )
+        if translation is not None:
+            await translation.process_output_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                responses_so_far=list(responses_so_far),
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                stream_transform_sink=stream_transform_sink,
+                deliver_ended_stream_rewrites=deliver_ended_stream_rewrites,
+            )
+        return responses_so_far
+
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        translation: Final = self._event_stream_translation(responses_so_far)
+        return translation.get_streaming_scan_key(responses_so_far) if translation is not None else None
+
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
+        has_ended: Final[Callable[[Sequence[object]], bool] | None] = getattr(
+            self._event_stream_translation(responses_so_far), "_check_streaming_has_ended", None
+        )
+        return has_ended is not None and has_ended(responses_so_far)
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes] | None:
+        translation: Final = self._event_stream_translation(
+            responses_so_far or (), exc.request_data.get("custom_llm_provider")
+        )
+        if translation is None:
+            return None
+        return translation.build_block_sse_chunks(exc, stream_started=stream_started, responses_so_far=responses_so_far)
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
+        translation: Final = self._event_stream_translation(responses_so_far or ())
+        if translation is None:
+            return None
+        return translation.build_stream_error_items(exc, responses_so_far=responses_so_far)
+
+    @staticmethod
+    def event_stream_items(provider: object, chunks: AsyncIterable[bytes]) -> AsyncIterator[object] | None:
+        """The upstream event stream cut into the items the provider's guardrail translation scans, or None when the
+        provider has no streaming guardrail translation."""
+        framer: Final[Callable[[AsyncIterable[bytes]], AsyncIterator[object]] | None] = getattr(
+            _provider_handler(provider), "event_stream_items", None
+        )
+        return framer(chunks) if framer is not None else None
+
+    @staticmethod
+    def encode_event_stream_item(provider: object, item: object) -> bytes:
+        encoder: Final[Callable[[object], bytes] | None] = getattr(
+            _provider_handler(provider), "encode_event_stream_item", None
+        )
+        if encoder is None:
+            raise TypeError(f"provider {provider!r} has no event-stream encoder")
+        return encoder(item)
+
+    @staticmethod
+    def event_stream_error_item(provider: object, message: str, status_code: int) -> bytes | None:
+        """An in-stream error frame in the provider's event-stream format, or None when the format has none."""
+        builder: Final[Callable[[str, int], bytes] | None] = getattr(
+            _provider_handler(provider), "event_stream_error_item", None
+        )
+        return builder(message, status_code) if builder is not None else None
 
     @staticmethod
     def is_event_stream_response(provider: str | None, content_type: str) -> bool:

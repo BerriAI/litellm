@@ -1342,3 +1342,262 @@ class TestDeAnonymizeConverseStream:
 
         hook_spy.assert_not_called()
         assert result is stream_bytes
+
+
+def _decoded_frames(raw: bytes) -> list[tuple[str, str, dict]]:
+    import json
+    from botocore.eventstream import EventStreamBuffer
+
+    buf = EventStreamBuffer()
+    buf.add_data(raw)
+    return [
+        (
+            str(msg.headers[":message-type"]),
+            str(msg.headers.get(":event-type") or msg.headers.get(":exception-type")),
+            json.loads(msg.payload),
+        )
+        for msg in buf
+    ]
+
+
+async def _chunks(*chunks: bytes):
+    for chunk in chunks:
+        yield chunk
+
+
+async def _relay_through_post_call_guardrail(
+    chunks: tuple[bytes, ...],
+    guardrail: CustomGuardrail,
+    monkeypatch: pytest.MonkeyPatch,
+    holds_until_moderated: bool = False,
+) -> bytes:
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    logging_obj = LiteLLMLoggingObj(
+        model="claude",
+        messages=[],
+        stream=True,
+        call_type="allm_passthrough_route",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+    relayed = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_event_stream_iterator_hook(
+        response=BedrockPassthroughGuardrailHandler.event_stream_items(_chunks(*chunks)),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        request_data={
+            "model": "claude",
+            "custom_llm_provider": "bedrock",
+            "endpoint": "model/claude/converse-stream",
+            "litellm_logging_obj": logging_obj,
+        },
+        guardrails=[(guardrail, holds_until_moderated)],
+    )
+    return b"".join([BedrockPassthroughGuardrailHandler.encode_event_stream_item(item) async for item in relayed])
+
+
+def _card_stream() -> tuple[bytes, ...]:
+    return (
+        _build_event_stream_frame("messageStart", {"role": "assistant"}),
+        _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "Card: 4111 1111 "}}),
+        _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "1111 1111."}}),
+        _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+        _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Thanks!"}}),
+        _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1}),
+        _build_event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+    )
+
+
+class _RaisingGuardrail(CustomGuardrail):
+    def __init__(self, raised: Exception, on_text: str) -> None:
+        super().__init__(guardrail_name="raiser", event_hook=GuardrailEventHooks.post_call, default_on=True)
+        self.raised = raised
+        self.on_text = on_text
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        if any(self.on_text in text for text in inputs.get("texts", [])):
+            raise self.raised
+        return inputs
+
+
+class TestConverseStreamFrames:
+    @pytest.mark.asyncio
+    async def test_frames_are_cut_at_their_boundaries_whatever_the_transport_chunks(self):
+        stream = b"".join(_card_stream())
+        transport = tuple(stream[i : i + 7] for i in range(0, len(stream), 7))
+
+        frames = [frame async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(_chunks(*transport))]
+
+        assert [frame.raw for frame in frames] == list(_card_stream())
+        assert [frame.event_type for frame in frames] == [
+            "messageStart",
+            "contentBlockDelta",
+            "contentBlockDelta",
+            "contentBlockStop",
+            "contentBlockDelta",
+            "contentBlockStop",
+            "messageStop",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_bytes_that_cannot_be_framed_are_relayed_as_received(self):
+        frame = _build_event_stream_frame("messageStart", {"role": "assistant"})
+        garbage = b"\x00\x00\x00\x05abcdefgh"
+
+        frames = [
+            frame
+            async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(_chunks(frame + garbage, b"tail"))
+        ]
+
+        assert [item.raw for item in frames] == [frame, garbage, b"tail"]
+        assert [item.payload for item in frames[1:]] == [None, None]
+
+    @pytest.mark.asyncio
+    async def test_a_stream_ending_inside_a_frame_relays_the_partial_frame(self):
+        complete, partial = _card_stream()[:2]
+
+        frames = [
+            frame
+            async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(_chunks(complete + partial[:-3]))
+        ]
+
+        assert [frame.raw for frame in frames] == [complete, partial[:-3]]
+
+
+class TestConverseStreamGuardrailRelay:
+    @pytest.mark.asyncio
+    async def test_sampled_stream_relays_frames_as_received_and_scans_one_text_per_block(self, monkeypatch):
+        guardrail = _CardMaskingGuardrail()
+
+        relayed = await _relay_through_post_call_guardrail(_card_stream(), guardrail, monkeypatch)
+
+        assert relayed == b"".join(_card_stream())
+        assert guardrail.received_texts == [[f"Card: {_TEST_CARD}.", "Thanks!"]]
+
+    @pytest.mark.asyncio
+    async def test_each_sampled_round_scans_the_text_the_caller_received(self, monkeypatch):
+        guardrail = _CardMaskingGuardrail()
+        stream = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"}),
+            *(
+                _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text}})
+                for text in ("Card: 4111 1111 ", "1111 1111.", " More", " text", " here")
+            ),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            _build_event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+        )
+
+        relayed = await _relay_through_post_call_guardrail(stream, guardrail, monkeypatch)
+
+        assert relayed == b"".join(stream)
+        assert guardrail.received_texts == [
+            [f"Card: {_TEST_CARD}. More text"],
+            [f"Card: {_TEST_CARD}. More text here"],
+        ]
+
+    @pytest.mark.asyncio
+    async def test_stream_held_until_moderated_applies_masks_per_block(self, monkeypatch):
+        guardrail = _CardMaskingGuardrail()
+
+        relayed = await _relay_through_post_call_guardrail(
+            _card_stream(), guardrail, monkeypatch, holds_until_moderated=True
+        )
+
+        frames = _decoded_frames(relayed)
+        assert [kind for _, kind, _ in frames] == [
+            "messageStart",
+            "contentBlockDelta",
+            "contentBlockDelta",
+            "contentBlockStop",
+            "contentBlockDelta",
+            "contentBlockStop",
+            "messageStop",
+        ]
+        assert TestDeAnonymizeConverseStream._deltas_by_block(relayed, "text") == {0: "Card: ****.", 1: "Thanks!"}
+        assert relayed.endswith(b"".join(_card_stream()[3:]))
+
+    @pytest.mark.asyncio
+    async def test_block_after_frames_were_relayed_ends_the_stream_with_an_exception_frame(self, monkeypatch):
+        from fastapi import HTTPException
+
+        guardrail = _RaisingGuardrail(HTTPException(status_code=400, detail="Violated guardrail policy"), "Thanks")
+
+        relayed = await _relay_through_post_call_guardrail(_card_stream(), guardrail, monkeypatch)
+
+        assert relayed.startswith(b"".join(_card_stream()[:4]))
+        assert _decoded_frames(relayed)[4:] == [
+            ("exception", "validationException", {"message": "Violated guardrail policy"})
+        ]
+
+    @pytest.mark.asyncio
+    async def test_guardrail_message_ends_the_message_after_closing_the_open_block(self, monkeypatch):
+        from litellm.exceptions import ModifyResponseException
+
+        guardrail = _RaisingGuardrail(
+            ModifyResponseException(message="Sorry, I can't share that.", model="claude", request_data={}),
+            "1111 1111.",
+        )
+        stream = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"}),
+            *(
+                _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text}})
+                for text in ("Card: ", "4111 1111 ", "1111 1111.", " Done")
+            ),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            _build_event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+        )
+
+        relayed = await _relay_through_post_call_guardrail(stream, guardrail, monkeypatch)
+
+        assert relayed.startswith(b"".join(stream[:4]))
+        assert _decoded_frames(relayed)[4:] == [
+            ("event", "contentBlockStop", {"contentBlockIndex": 0}),
+            ("event", "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Sorry, I can't share that."}}),
+            ("event", "contentBlockStop", {"contentBlockIndex": 1}),
+            ("event", "messageStop", {"stopReason": "guardrail_intervened"}),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_guardrail_message_on_a_held_stream_is_a_whole_message(self, monkeypatch):
+        from litellm.exceptions import ModifyResponseException
+
+        guardrail = _RaisingGuardrail(
+            ModifyResponseException(
+                message="Sorry, I can't share that.",
+                model="claude",
+                request_data={"custom_llm_provider": "bedrock"},
+            ),
+            "Card",
+        )
+
+        relayed = await _relay_through_post_call_guardrail(
+            _card_stream(), guardrail, monkeypatch, holds_until_moderated=True
+        )
+
+        assert _decoded_frames(relayed) == [
+            ("event", "messageStart", {"role": "assistant"}),
+            ("event", "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "Sorry, I can't share that."}}),
+            ("event", "contentBlockStop", {"contentBlockIndex": 0}),
+            ("event", "messageStop", {"stopReason": "guardrail_intervened"}),
+        ]
+
+    @pytest.mark.parametrize(
+        ("status_code", "exception_type"),
+        [(400, "validationException"), (503, "internalServerException")],
+    )
+    def test_stream_error_frame_type_follows_the_status(self, status_code: int, exception_type: str):
+        from fastapi import HTTPException
+
+        items = BedrockPassthroughGuardrailHandler().build_stream_error_items(
+            HTTPException(status_code=status_code, detail={"error": "scan failed"})
+        )
+
+        assert items is not None
+        assert [frame for item in items for frame in _decoded_frames(item)] == [
+            ("exception", exception_type, {"message": "scan failed"})
+        ]

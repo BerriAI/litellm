@@ -1,10 +1,20 @@
-from collections.abc import Mapping, Sequence
+import copy
+import json
+import struct
+from binascii import crc32
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+    StreamTransformSink,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -12,7 +22,9 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from fastapi import HTTPException
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.pass_through.guardrail_translation.handler import (
         PassThroughEndpointHandler,
@@ -217,8 +229,6 @@ class _StreamFrame(TypedDict):
 
 
 def _unpack_uint32(buffer: bytes) -> int:
-    import struct
-
     return struct.unpack("!I", buffer)[0]
 
 
@@ -253,6 +263,220 @@ def _collect_stream_delta_text_holders(delta: object) -> list[_DeltaHolder]:
     return holders
 
 
+def _delta_frame_texts(payload: Mapping[str, object]) -> tuple[tuple[_StreamGroupKey, str], ...]:
+    """The guardrailable texts of one ``contentBlockDelta`` payload, each keyed by its content block and kind."""
+    block_index: Final = payload.get("contentBlockIndex")
+    # Group per content block: a guardrail edit that changes length must not move text between blocks.
+    return tuple(
+        ((block_index if isinstance(block_index, int) else None, group_key), container[key])
+        for group_key, container, key in _collect_stream_delta_text_holders(payload.get("delta"))
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamTextGroups:
+    """Stream texts joined per group, keeping where each fragment came from so a rewrite can be split back."""
+
+    groups: tuple[_StreamGroupKey, ...]
+    members: Mapping[_StreamGroupKey, Sequence[tuple[int, int]]]
+    fragments: Mapping[_StreamGroupKey, Sequence[str]]
+
+    def texts(self) -> tuple[str, ...]:
+        return tuple("".join(self.fragments[group]) for group in self.groups)
+
+
+def _group_stream_texts(frame_texts: Sequence[Sequence[tuple[_StreamGroupKey, str]]]) -> _StreamTextGroups:
+    """Group the per-frame texts by key in first-seen order; ``groups`` keeps only the groups with any text."""
+    order: Final[list[_StreamGroupKey]] = []  # mutable-ok: built in one pass over the frames
+    members: Final[dict[_StreamGroupKey, list[tuple[int, int]]]] = {}  # mutable-ok: built in one pass over the frames
+    fragments: Final[dict[_StreamGroupKey, list[str]]] = {}  # mutable-ok: built in one pass over the frames
+    for frame_idx, texts in enumerate(frame_texts):
+        for local_idx, (group_key, text) in enumerate(texts):
+            if group_key not in members:
+                members[group_key] = []
+                fragments[group_key] = []
+                order.append(group_key)
+            members[group_key].append((frame_idx, local_idx))
+            fragments[group_key].append(text)
+    return _StreamTextGroups(
+        groups=tuple(group for group in order if "".join(fragments[group])),
+        members=members,
+        fragments=fragments,
+    )
+
+
+def _split_group_texts(groups: _StreamTextGroups, rewritten_texts: Sequence[str]) -> Mapping[tuple[int, int], str]:
+    """Cut each group's rewritten text back into its fragments, sized like the original fragments."""
+    split: Final[dict[tuple[int, int], str]] = {}  # mutable-ok: built in one pass over the groups
+    for group_key, rewritten in zip(groups.groups, rewritten_texts):
+        members = groups.members[group_key]
+        originals = groups.fragments[group_key]
+        total_orig = sum(len(t) for t in originals) or 1
+        pos = 0
+        for k, member in enumerate(members):
+            if k == len(members) - 1:
+                split[member] = rewritten[pos:]
+            else:
+                end = pos + round(len(rewritten) * len(originals[k]) / total_orig)
+                split[member] = rewritten[pos:end]
+                pos = end
+    return split
+
+
+def _event_stream_message(headers_bytes: bytes, payload: bytes) -> bytes:
+    """One AWS event-stream message: prelude, prelude CRC, headers, payload and message CRC."""
+    prelude: Final = struct.pack("!II", 12 + len(headers_bytes) + len(payload) + 4, len(headers_bytes))
+    prelude_crc: Final = crc32(prelude) & 0xFFFFFFFF
+    message: Final = prelude + struct.pack("!I", prelude_crc) + headers_bytes + payload
+    return message + struct.pack("!I", crc32(message) & 0xFFFFFFFF)
+
+
+def _string_header(name: str, value: str) -> bytes:
+    name_bytes: Final = name.encode()
+    value_bytes: Final = value.encode()
+    return bytes((len(name_bytes),)) + name_bytes + b"\x07" + struct.pack("!H", len(value_bytes)) + value_bytes
+
+
+def _string_headers(headers: Mapping[str, str]) -> bytes:
+    return b"".join(_string_header(name, value) for name, value in headers.items())
+
+
+def _converse_event(event_type: str, payload: Mapping[str, object]) -> bytes:
+    return _event_stream_message(
+        _string_headers({":event-type": event_type, ":content-type": "application/json", ":message-type": "event"}),
+        json.dumps(payload, separators=(",", ":")).encode(),
+    )
+
+
+def _converse_exception(message: str, status_code: int) -> bytes:
+    """An in-stream exception frame, which boto3 raises as ``EventStreamError`` carrying ``message``."""
+    return _event_stream_message(
+        _string_headers(
+            {
+                ":exception-type": "validationException" if status_code < 500 else "internalServerException",
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            }
+        ),
+        json.dumps({"message": message}, separators=(",", ":")).encode(),
+    )
+
+
+@dataclass(slots=True)
+class ConverseStreamFrame:
+    """One frame of a Converse event stream as the proxy relays it.
+
+    ``payload`` is the parsed JSON of an event frame; exception frames and bytes that do not decode keep it None and
+    are relayed as received. ``guardrailed_payload`` is set when a guardrail rewrote the frame's text."""
+
+    raw: bytes
+    event_type: str | None = None
+    payload: Mapping[str, object] | None = None
+    guardrailed_payload: Mapping[str, object] | None = None
+
+    @property
+    def block_index(self) -> int | None:
+        index: Final = self.payload.get("contentBlockIndex") if self.payload is not None else None
+        return index if isinstance(index, int) else None
+
+    def scanned_texts(self) -> tuple[tuple[_StreamGroupKey, str], ...]:
+        current: Final = self.guardrailed_payload if self.guardrailed_payload is not None else self.payload
+        return _delta_frame_texts(current) if self.event_type == "contentBlockDelta" and current is not None else ()
+
+    def received_texts(self) -> tuple[tuple[_StreamGroupKey, str], ...]:
+        return (
+            _delta_frame_texts(self.payload)
+            if self.event_type == "contentBlockDelta" and self.payload is not None
+            else ()
+        )
+
+    def encode(self) -> bytes:
+        if self.guardrailed_payload is None:
+            return self.raw
+        headers_length: Final = _unpack_uint32(self.raw[4:8])
+        return _event_stream_message(
+            self.raw[12 : 12 + headers_length], json.dumps(self.guardrailed_payload, separators=(",", ":")).encode()
+        )
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+
+def _decode_converse_frame(raw: bytes) -> ConverseStreamFrame:
+    from botocore.eventstream import EventStreamBuffer, ParserError
+
+    buffer: Final = EventStreamBuffer()
+    buffer.add_data(raw)
+    try:
+        message: Final = next(iter(buffer))
+    except (ParserError, StopIteration) as e:
+        verbose_proxy_logger.debug(
+            "BedrockPassthroughGuardrailHandler: could not decode event-stream frame, relaying it unmodified: %s", e
+        )
+        return ConverseStreamFrame(raw=raw)
+    # botocore-stubs types EventStreamMessage.headers as int; at runtime it is the decoded header dict.
+    headers: Final = _JSON_OBJECT.validate_python(message.headers)
+    event_type: Final = headers.get(":event-type")
+    if headers.get(":message-type") != "event" or not isinstance(event_type, str):
+        return ConverseStreamFrame(raw=raw)
+    try:
+        payload: Final = _JSON_OBJECT.validate_json(message.payload)
+    except ValidationError:
+        return ConverseStreamFrame(raw=raw, event_type=event_type)
+    return ConverseStreamFrame(raw=raw, event_type=event_type, payload=payload)
+
+
+async def _converse_stream_frames(chunks: AsyncIterable[bytes]) -> AsyncGenerator[ConverseStreamFrame, None]:
+    """Cut the upstream bytes into frames as soon as each frame has fully arrived.
+
+    Bytes that cannot be framed (a length below the 16-byte minimum, or a stream that ends inside a frame) are relayed
+    as received."""
+    pending = b""  # rebind-ok: bytes received but not yet framed
+    framing = True  # rebind-ok: cleared once a frame length is unusable
+    async for chunk in chunks:
+        if not framing:
+            yield ConverseStreamFrame(raw=chunk)
+            continue
+        pending += chunk
+        while len(pending) >= 4:
+            total_length = _unpack_uint32(pending[:4])
+            if total_length < 16:
+                framing = False
+                break
+            if len(pending) < total_length:
+                break
+            yield _decode_converse_frame(pending[:total_length])
+            pending = pending[total_length:]
+        if not framing and pending:
+            yield ConverseStreamFrame(raw=pending)
+            pending = b""
+    if pending:
+        yield ConverseStreamFrame(raw=pending)
+
+
+def _converse_frames(items: Sequence[object]) -> tuple[ConverseStreamFrame, ...]:
+    return tuple(item for item in items if isinstance(item, ConverseStreamFrame))
+
+
+def _write_back_stream_texts(
+    frames: Sequence[ConverseStreamFrame], groups: _StreamTextGroups, rewritten_texts: Sequence[str]
+) -> None:
+    split: Final = _split_group_texts(groups, rewritten_texts)
+    for frame_idx, frame in enumerate(frames):
+        current = frame.guardrailed_payload if frame.guardrailed_payload is not None else frame.payload
+        if frame.event_type != "contentBlockDelta" or current is None:
+            continue
+        rewritten = copy.deepcopy(current)
+        changed = False
+        for local_idx, (_, container, key) in enumerate(_collect_stream_delta_text_holders(rewritten.get("delta"))):
+            new_text = split.get((frame_idx, local_idx))
+            if new_text is not None and new_text != container[key]:
+                container[key] = new_text
+                changed = True
+        if changed:
+            frame.guardrailed_payload = rewritten
+
+
 class BedrockPassthroughGuardrailHandler(BaseTranslation):
     @staticmethod
     def is_event_stream_content_type(content_type: str) -> bool:
@@ -273,10 +497,6 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         user_api_key_dict: "UserAPIKeyAuth",
         data: dict,
     ) -> bytes:
-        import json as _json
-        import struct
-        from binascii import crc32 as esm_crc32
-
         from botocore.eventstream import EventStreamBuffer
 
         frames: Final[list[_StreamFrame]] = []
@@ -304,16 +524,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 frames.append({"raw": frame_raw, "texts": []})
                 continue
 
-            texts: list[tuple[_StreamGroupKey, str]] = []
+            texts: Sequence[tuple[_StreamGroupKey, str]] = ()
             if event_type == "contentBlockDelta":
                 try:
-                    payload_dict: dict[str, object] = _json.loads(payload_bytes)
-                    block_index = payload_dict.get("contentBlockIndex")
-                    # Group per content block: a guardrail edit that changes length must not move text between blocks.
-                    texts = [
-                        ((block_index if isinstance(block_index, int) else None, group_key), container[key])
-                        for group_key, container, key in _collect_stream_delta_text_holders(payload_dict.get("delta"))
-                    ]
+                    payload_dict: dict[str, object] = json.loads(payload_bytes)
+                    texts = _delta_frame_texts(payload_dict)
                 except Exception as e:
                     verbose_proxy_logger.debug(
                         "BedrockPassthroughGuardrailHandler: could not parse "
@@ -325,27 +540,15 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         trailing_bytes: Final = body_bytes[offset:]
 
-        group_order: Final[list[_StreamGroupKey]] = []
-        group_members: Final[dict[_StreamGroupKey, list[tuple[int, int]]]] = {}
-        group_texts: Final[dict[_StreamGroupKey, list[str]]] = {}
-        for frame_idx, frame in enumerate(frames):
-            for local_idx, (group_key, text) in enumerate(frame["texts"]):
-                if group_key not in group_members:
-                    group_members[group_key] = []
-                    group_texts[group_key] = []
-                    group_order.append(group_key)
-                group_members[group_key].append((frame_idx, local_idx))
-                group_texts[group_key].append(text)
-
-        active_groups: Final = [gk for gk in group_order if "".join(group_texts[gk])]
-        if not active_groups:
+        groups: Final = _group_stream_texts([frame["texts"] for frame in frames])
+        if not groups.groups:
             return body_bytes
 
         synthetic_response: Final[dict] = {
             "output": {
                 "message": {
                     "role": "assistant",
-                    "content": [{"text": "".join(group_texts[gk])} for gk in active_groups],
+                    "content": [{"text": text} for text in groups.texts()],
                 }
             },
             "stopReason": "end_turn",
@@ -367,24 +570,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         try:
             processed_blocks: Final = processed["output"]["message"]["content"]
-            de_anonymized_texts: Final = [processed_blocks[i]["text"] for i in range(len(active_groups))]
+            de_anonymized_texts: Final = [processed_blocks[i]["text"] for i in range(len(groups.groups))]
         except (KeyError, IndexError, TypeError):
             return body_bytes
 
-        new_text_map: Final[dict[tuple[int, int], str]] = {}
-        for group_key, de_anonymized_text in zip(active_groups, de_anonymized_texts):
-            members = group_members[group_key]
-            orig_texts = group_texts[group_key]
-            total_orig = sum(len(t) for t in orig_texts) or 1
-            de_anon_len = len(de_anonymized_text)
-            pos = 0
-            for k, member in enumerate(members):
-                if k == len(members) - 1:
-                    new_text_map[member] = de_anonymized_text[pos:]
-                else:
-                    end = pos + round(de_anon_len * len(orig_texts[k]) / total_orig)
-                    new_text_map[member] = de_anonymized_text[pos:end]
-                    pos = end
+        new_text_map: Final = _split_group_texts(groups, de_anonymized_texts)  # pyright: ignore[reportUnknownArgumentType]  # the hook returns an untyped response
 
         result_parts: Final[list[bytes]] = []
 
@@ -399,27 +589,19 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
-                payload_dict = _json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
+                payload_dict = json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
                 for local_idx, (_, container, key) in enumerate(
                     _collect_stream_delta_text_holders(payload_dict.get("delta"))
                 ):
                     new_text = new_text_map.get((frame_idx, local_idx))
                     if new_text is not None:
                         container[key] = new_text
-                new_payload = _json.dumps(payload_dict, separators=(",", ":")).encode()
+                new_payload = json.dumps(payload_dict, separators=(",", ":")).encode()
             except Exception:
                 result_parts.append(frame_raw)
                 continue
 
-            new_total = 12 + orig_hdrs_len + len(new_payload) + 4
-            prelude = struct.pack("!II", new_total, orig_hdrs_len)
-            prelude_crc_val = esm_crc32(prelude) & 0xFFFFFFFF
-            prelude_crc_b = struct.pack("!I", prelude_crc_val)
-            part_for_msg_crc = prelude_crc_b + headers_bytes + new_payload
-            msg_crc_val = esm_crc32(part_for_msg_crc, prelude_crc_val) & 0xFFFFFFFF
-            msg_crc_b = struct.pack("!I", msg_crc_val)
-
-            result_parts.append(prelude + prelude_crc_b + headers_bytes + new_payload + msg_crc_b)
+            result_parts.append(_event_stream_message(headers_bytes, new_payload))
 
         result_parts.append(trailing_bytes)
         return b"".join(result_parts)
@@ -529,3 +711,110 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             _write_back_texts(guardrailed_texts, holders)
 
         return response
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far: Sequence[object],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: dict[str, object] | None = None,  # mutable-ok: the request dict guardrails receive
+        stream_transform_sink: StreamTransformSink | None = None,
+        deliver_ended_stream_rewrites: bool = False,
+    ) -> Sequence[object]:
+        """
+        Scan the Converse frames relayed so far as the buffered path scans a whole response: one text per content
+        block and kind. Once the stream has ended, guardrail rewrites are written back into the frames, which reach
+        the caller only when the stream is held until moderated.
+        """
+        frames: Final = _converse_frames(responses_so_far)
+        groups: Final = _group_stream_texts([frame.scanned_texts() for frame in frames])
+        if not groups.groups:
+            return responses_so_far
+        content: Final = [{"text": text} for text in groups.texts()]
+        await self.process_output_response(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+            response={"output": {"message": {"role": "assistant", "content": content}}},
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        )
+        if self._check_streaming_has_ended(frames):
+            _write_back_stream_texts(frames, groups, [block["text"] for block in content])
+        return responses_so_far
+
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        frames: Final = _converse_frames(responses_so_far)
+        return StreamingScanKey(
+            texts=_group_stream_texts([frame.received_texts() for frame in frames]).texts(),
+            stream_ended=self._check_streaming_has_ended(frames),
+        )
+
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
+        return any(frame.event_type == "messageStop" for frame in _converse_frames(responses_so_far))
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes]:
+        """
+        End the message with the guardrail's message as a new text block and ``stopReason`` ``guardrail_intervened``,
+        closing any content block left open and starting the message when nothing was relayed yet.
+        """
+        frames: Final = _converse_frames(responses_so_far or ())
+        started: Final = frozenset(
+            index
+            for index in (
+                frame.block_index for frame in frames if frame.event_type in ("contentBlockStart", "contentBlockDelta")
+            )
+            if index is not None
+        )
+        stopped: Final = frozenset(
+            index
+            for index in (frame.block_index for frame in frames if frame.event_type == "contentBlockStop")
+            if index is not None
+        )
+        block_index: Final = max(started | stopped, default=-1) + 1
+        return (
+            *(
+                ()
+                if any(frame.event_type == "messageStart" for frame in frames)
+                else (_converse_event("messageStart", {"role": "assistant"}),)
+            ),
+            *(_converse_event("contentBlockStop", {"contentBlockIndex": index}) for index in sorted(started - stopped)),
+            _converse_event("contentBlockDelta", {"contentBlockIndex": block_index, "delta": {"text": exc.message}}),
+            _converse_event("contentBlockStop", {"contentBlockIndex": block_index}),
+            _converse_event("messageStop", {"stopReason": "guardrail_intervened"}),
+        )
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        status_code, error = sse_error_payload(exc)
+        return (_converse_exception(str(error.get("message")), status_code),)
+
+    @staticmethod
+    def owns_event_stream_item(item: object) -> bool:
+        return isinstance(item, ConverseStreamFrame)
+
+    @staticmethod
+    def event_stream_items(chunks: AsyncIterable[bytes]) -> AsyncGenerator[ConverseStreamFrame, None]:
+        return _converse_stream_frames(chunks)
+
+    @staticmethod
+    def encode_event_stream_item(item: object) -> bytes:
+        if isinstance(item, ConverseStreamFrame):
+            return item.encode()
+        if isinstance(item, bytes):
+            return item
+        raise TypeError(f"cannot relay {type(item).__name__} on a Converse event stream")
+
+    @staticmethod
+    def event_stream_error_item(message: str, status_code: int) -> bytes:
+        return _converse_exception(message, status_code)

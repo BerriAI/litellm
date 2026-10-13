@@ -5993,7 +5993,7 @@ class TestAllmPassthroughStreamingProviderGate:
         }
         return ProxyBaseLLMRequestProcessing(data=data)
 
-    async def _run(self, processing_obj, monkeypatch, chunks, stream=None):
+    async def _run(self, processing_obj, monkeypatch, chunks, stream=None, proxy_logging_obj=None):
         import litellm.proxy.common_request_processing as crp
         from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
 
@@ -6011,7 +6011,7 @@ class TestAllmPassthroughStreamingProviderGate:
 
         monkeypatch.setattr(crp, "route_request", fake_route_request)
 
-        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj = proxy_logging_obj if proxy_logging_obj is not None else MagicMock(spec=ProxyLogging)
         proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
         proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
         proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
@@ -6084,15 +6084,77 @@ class TestAllmPassthroughStreamingProviderGate:
         streamed = [chunk async for chunk in result.body_iterator]
         assert streamed == chunks
 
-    @pytest.mark.asyncio
-    async def test_bedrock_converse_stream_is_buffered_through_handler(
-        self, monkeypatch
-    ):
-        processing_obj = self._build_processing_obj(
-            "bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream"
-        )
-        chunks = [b"raw-1", b"raw-2"]
+    @staticmethod
+    def _converse_frame(event_type: str, payload: dict) -> bytes:
+        import struct
+        from binascii import crc32
 
+        headers = b"".join(
+            bytes((len(name),)) + name + b"\x07" + struct.pack("!H", len(value)) + value
+            for name, value in (
+                (b":event-type", event_type.encode()),
+                (b":content-type", b"application/json"),
+                (b":message-type", b"event"),
+            )
+        )
+        body = json.dumps(payload).encode()
+        prelude = struct.pack("!II", 16 + len(headers) + len(body), len(headers))
+        message = prelude + struct.pack("!I", crc32(prelude)) + headers + body
+        return message + struct.pack("!I", crc32(message))
+
+    def _converse_stream(self) -> list[bytes]:
+        return [
+            self._converse_frame("messageStart", {"role": "assistant"}),
+            self._converse_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "Hello"}}),
+            self._converse_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            self._converse_frame("messageStop", {"stopReason": "end_turn"}),
+        ]
+
+    @staticmethod
+    def _apply_guardrail(**kwargs):
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _ApplyGuardrail(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return inputs
+
+        return _ApplyGuardrail(guardrail_name="scan", event_hook="post_call", default_on=True, **kwargs)
+
+    @staticmethod
+    def _success_hook_guardrail():
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _SuccessHookGuardrail(CustomGuardrail):
+            async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+                return response
+
+        return _SuccessHookGuardrail(guardrail_name="whole", event_hook="post_call", default_on=True)
+
+    @staticmethod
+    def _native_hooks_guardrail():
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _NativeHooksGuardrail(CustomGuardrail):
+            use_native_lifecycle_hooks = True
+
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return inputs
+
+        return _NativeHooksGuardrail(guardrail_name="native", event_hook="post_call", default_on=True)
+
+    async def _run_converse_stream(self, monkeypatch, guardrail, chunks, event_stream_hook=None):
+        processing_obj = self._build_processing_obj("bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream")
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        recorded: dict = {}
+
+        async def relay_frames(response, user_api_key_dict, request_data, guardrails):
+            recorded["guardrails"] = list(guardrails)
+            async for item in response:
+                yield item
+
+        self._proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        self._proxy_logging_obj.async_post_call_event_stream_iterator_hook = event_stream_hook or relay_frames
+        self._proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
         with patch.object(
             ProxyBaseLLMRequestProcessing,
             "_has_post_call_guardrails",
@@ -6106,13 +6168,98 @@ class TestAllmPassthroughStreamingProviderGate:
             "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
             new=AsyncMock(return_value=b"modified-body"),
         ) as mock_handler:
-            result = await self._run(processing_obj, monkeypatch, chunks)
+            result = await self._run(processing_obj, monkeypatch, chunks, proxy_logging_obj=self._proxy_logging_obj)
+            body = (
+                b"".join([chunk async for chunk in result.body_iterator])
+                if isinstance(result, StreamingResponse)
+                else result.body
+            )
+        return result, body, mock_handler, recorded
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "guardrail_factory",
+        ["_success_hook_guardrail", "_native_hooks_guardrail", "_mask_response_guardrail"],
+    )
+    async def test_bedrock_converse_stream_is_buffered_for_a_guardrail_that_needs_the_whole_response(
+        self, monkeypatch, guardrail_factory
+    ):
+        guardrail = (
+            self._apply_guardrail(mask_response_content=True)
+            if guardrail_factory == "_mask_response_guardrail"
+            else getattr(self, guardrail_factory)()
+        )
+
+        result, body, mock_handler, recorded = await self._run_converse_stream(
+            monkeypatch, guardrail, [b"raw-1", b"raw-2"]
+        )
 
         assert isinstance(result, Response)
         assert not isinstance(result, StreamingResponse)
-        assert result.body == b"modified-body"
+        assert body == b"modified-body"
         assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
         mock_handler.assert_awaited_once()
+        assert recorded == {}
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_relays_frames_for_an_apply_guardrail_guardrail(self, monkeypatch):
+        guardrail = self._apply_guardrail()
+        stream = b"".join(self._converse_stream())
+
+        result, body, mock_handler, recorded = await self._run_converse_stream(
+            monkeypatch, guardrail, [stream[:20], stream[20:]]
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
+        assert body == stream
+        assert recorded == {"guardrails": [(guardrail, False)]}
+        mock_handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_failure_after_the_first_frame_ends_with_an_exception_frame(
+        self, monkeypatch
+    ):
+        from botocore.eventstream import EventStreamBuffer
+
+        from litellm.exceptions import GuardrailRaisedException
+
+        async def block_after_first_frame(response, user_api_key_dict, request_data, guardrails):
+            async for item in response:
+                yield item
+                raise GuardrailRaisedException(
+                    guardrail_name="scan", message="Violated guardrail policy", should_wrap_with_default_message=False
+                )
+
+        frames = self._converse_stream()
+        result, body, _, _ = await self._run_converse_stream(
+            monkeypatch, self._apply_guardrail(), frames, event_stream_hook=block_after_first_frame
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert body.startswith(frames[0])
+        buffer = EventStreamBuffer()
+        buffer.add_data(body[len(frames[0]) :])
+        messages = list(buffer)
+        assert [(m.headers[":message-type"], m.headers[":exception-type"]) for m in messages] == [
+            ("exception", "validationException")
+        ]
+        assert json.loads(messages[0].payload) == {"message": "Violated guardrail policy"}
+        self._proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_failure_before_the_first_frame_raises(self, monkeypatch):
+        async def block_before_any_frame(response, user_api_key_dict, request_data, guardrails):
+            async for _ in response:
+                raise HTTPException(status_code=400, detail="Violated guardrail policy")
+            yield b""
+
+        with pytest.raises(HTTPException) as raised:
+            await self._run_converse_stream(
+                monkeypatch, self._apply_guardrail(), self._converse_stream(), event_stream_hook=block_before_any_frame
+            )
+
+        assert raised.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_bedrock_invoke_stream_is_not_buffered(self, monkeypatch):
