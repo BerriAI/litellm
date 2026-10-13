@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_DECISION_CATALOG, buildDecisionCatalog, isDecisionMode, isDecisionSelection } from "./decisionModels";
+import {
+  EMPTY_DECISION_CATALOG,
+  buildDecisionCatalog,
+  displayMode,
+  isDecisionMode,
+  isDecisionSelection,
+} from "./decisionModels";
 
 const COST_MAP = {
   "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
@@ -23,6 +29,16 @@ describe("isDecisionMode", () => {
     expect(isDecisionMode("chat")).toBe(false);
     expect(isDecisionMode(null)).toBe(false);
     expect(isDecisionMode(undefined)).toBe(false);
+  });
+});
+
+describe("displayMode", () => {
+  it("shows the legacy evaluation mode as decisions and leaves other modes alone", () => {
+    expect(displayMode("evaluation")).toBe("decisions");
+    expect(displayMode("decisions")).toBe("decisions");
+    expect(displayMode("chat")).toBe("chat");
+    expect(displayMode(null)).toBeUndefined();
+    expect(displayMode(undefined)).toBeUndefined();
   });
 });
 

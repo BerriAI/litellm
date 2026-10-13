@@ -10,6 +10,7 @@ from integration.cost_calculation.cases import (
     azure,
     batch_realtime,
     bedrock_converse,
+    decisions,
     fireworks_ai,
     gemini,
     misc,
@@ -29,6 +30,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     SseResponse,
 )
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 
 _PROVIDER_MODULES: Final = (
@@ -36,6 +38,7 @@ _PROVIDER_MODULES: Final = (
     anthropic,
     gemini,
     bedrock_converse,
+    decisions,
     vertex_ai,
     azure,
     fireworks_ai,
@@ -48,7 +51,10 @@ PARITY_CASES: Final[tuple[StreamParityTestCase, ...]] = tuple(
 )
 BATCH_CASES: Final[tuple[BatchCostCase, ...]] = batch_realtime.BATCH_CASES
 REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = batch_realtime.REALTIME_CASES
-_PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed))
+BRIDGE_COST_PARITY_CASES: Final[tuple[BridgeCostParityTestCase, ...]] = openai.BRIDGE_COST_PARITY
+_PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed)) | frozenset(
+    leg.name for pair in BRIDGE_COST_PARITY_CASES for leg in (pair.native, pair.bridged)
+)
 STANDALONE_CASES: Final[tuple[CostTrackingTestCase, ...]] = tuple(
     case for case in CASES if case.name not in _PARITY_LEGS
 )
