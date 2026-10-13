@@ -80,35 +80,29 @@ _FIRST_NAME_VALUE: Final = re.compile(r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATT
 _NAME_VALUE_PREFIX: Final = re.compile(
     r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATTERN + r')"\s*:\s*(?:"(?:[^"\\]|\\.)*\\?)?$'
 )
-_NEXT_OBJECT_KEY: Final = re.compile(r'^\s*,\s*"((?:[^"\\]|\\.)*)"\s*:')
-_NEXT_KEY_PREFIX: Final = re.compile(r'^\s*(?:,\s*(?:"(?:[^"\\]|\\.)*\\?(?:"\s*)?)?)?$')
-_OBJECT_END: Final = re.compile(r"^\s*\}")
 _UNDECIDED_PREFIX_LIMIT: Final = 4096
 
 
-def _second_key_verdict(after_first_value: str, schema: ResponseFormatSchema) -> _EnvelopeVerdict:
-    second_key: Final = _NEXT_OBJECT_KEY.match(after_first_value)
-    if second_key is not None:
-        return "pass_through" if second_key.group(1) in schema.property_names else "hold"
-    if _OBJECT_END.match(after_first_value):
-        return "pass_through"
-    return "undecided" if _NEXT_KEY_PREFIX.match(after_first_value) else "pass_through"
+def _first_value_verdict(after_first_key: str) -> _EnvelopeVerdict:
+    value_start: Final = after_first_key.lstrip()
+    if not value_start:
+        return "undecided"
+    return "hold" if value_start.startswith("{") else "pass_through"
 
 
 def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
     first_key: Final = _FIRST_OBJECT_KEY.match(buffered_json)
     if first_key is None:
         return "undecided" if _OBJECT_KEY_PREFIX.match(buffered_json) else "pass_through"
-    if first_key.group(1) not in schema.property_names:
-        return "hold"
-    if first_key.group(1) not in RESPONSE_FORMAT_ENVELOPE_NAME_KEYS:
+    if first_key.group(1) in RESPONSE_FORMAT_ENVELOPE_NAME_KEYS:
+        first_value: Final = _FIRST_NAME_VALUE.match(buffered_json)
+        if first_value is not None and first_value.group(1) == tool_name:
+            return "hold"
+        if first_value is None and _NAME_VALUE_PREFIX.match(buffered_json):
+            return "undecided"
+    if first_key.group(1) in schema.property_names or not schema.property_names:
         return "pass_through"
-    first_value: Final = _FIRST_NAME_VALUE.match(buffered_json)
-    if first_value is None:
-        return "undecided" if _NAME_VALUE_PREFIX.match(buffered_json) else "pass_through"
-    if first_value.group(1) == tool_name:
-        return "hold"
-    return _second_key_verdict(buffered_json[first_value.end() :], schema)
+    return _first_value_verdict(buffered_json[first_key.end() :])
 
 
 def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:

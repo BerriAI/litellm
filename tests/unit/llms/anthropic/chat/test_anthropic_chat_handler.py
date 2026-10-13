@@ -316,9 +316,7 @@ def test_streaming_thinking_blocks_are_replayable_after_signature_delta():
     assert reasoning_content == "Step 1. Step 2."
     assert thinking_blocks == (*expected_delta_blocks, expected_signature_block)
     assert "".join(block.get("thinking") or "" for block in thinking_blocks) == reasoning_content
-    assert parsed_chunks[1].choices[0].delta.provider_specific_fields == {
-        "thinking_blocks": [expected_delta_blocks[0]]
-    }
+    assert parsed_chunks[1].choices[0].delta.provider_specific_fields == {"thinking_blocks": [expected_delta_blocks[0]]}
     assert parsed_chunks[-1].choices[0].delta.provider_specific_fields == {
         "thinking_blocks": [expected_signature_block]
     }
@@ -357,7 +355,11 @@ def test_streamed_signed_thinking_round_trips_to_the_next_turn_once():
             "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
         },
         {"type": "content_block_stop", "index": 1},
-        {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 30}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 30},
+        },
         {"type": "message_stop"},
     )
     user_message: Final = {"role": "user", "content": "What's the weather in Paris?"}
@@ -844,13 +846,9 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
         },
         {"type": "message_stop"},
     )
-    body: Final = "".join(
-        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events
-    )
+    body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
     route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
-            200, text=body, headers={"content-type": "text/event-stream"}
-        )
+        return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
     )
     chunks: Final = await _collect_anthropic_stream(
         sync_mode,
@@ -861,9 +859,7 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
         stream_options={"include_usage": True},
     )
     finish_indices: Final = tuple(
-        index
-        for index, chunk in enumerate(chunks)
-        if chunk.choices and chunk.choices[0].finish_reason is not None
+        index for index, chunk in enumerate(chunks) if chunk.choices and chunk.choices[0].finish_reason is not None
     )
     finish_reasons: Final = tuple(
         chunk.choices[0].finish_reason
@@ -871,15 +867,11 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
         if chunk.choices and chunk.choices[0].finish_reason is not None
     )
     usage_indices: Final = tuple(
-        index
-        for index, chunk in enumerate(chunks)
-        if getattr(chunk, "usage", None) is not None
+        index for index, chunk in enumerate(chunks) if getattr(chunk, "usage", None) is not None
     )
     usage_chunk: Final = chunks[usage_indices[0]]
 
-    assert "".join(
-        chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices
-    ) == "Blue sky."
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "Blue sky."
     assert finish_reasons == ("stop",)
     assert finish_indices == (len(chunks) - 2,)
     assert usage_indices == (len(chunks) - 1,)
@@ -1461,17 +1453,11 @@ def test_accumulated_json_partial_fragment_returns_none_without_parsing():
     unlike Vertex which already deferred parsing until the buffer could close.
     A fragment that can't close a JSON value must not trigger a decode attempt.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
 
-    with patch.object(
-        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
-    ) as spy:
-        result = iterator._handle_accumulated_json_chunk(
-            '{"type":"content_block_delta","index":0,"delta":'
-        )
+    with patch.object(json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode) as spy:
+        result = iterator._handle_accumulated_json_chunk('{"type":"content_block_delta","index":0,"delta":')
         assert result is None
         assert spy.call_count == 0, "incomplete buffer should not be parsed"
 
@@ -1483,21 +1469,15 @@ def test_accumulated_json_does_not_reparse_every_fragment():
     fragment.
     """
     text = "x" * 200_000
-    blob = json.dumps(
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
-    )
+    blob = json.dumps({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
     fragments = [blob[i : i + 4096] for i in range(0, len(blob), 4096)]
     assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
 
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
 
     parsed = None
-    with patch.object(
-        json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode
-    ) as spy:
+    with patch.object(json.JSONDecoder, "raw_decode", autospec=True, side_effect=json.JSONDecoder.raw_decode) as spy:
         for fragment in fragments:
             out = iterator._handle_accumulated_json_chunk(fragment)
             if out is not None:
@@ -1521,9 +1501,7 @@ def test_accumulated_json_concatenated_envelopes_do_not_wedge():
     and keeps the remainder, so both values surface across two calls.
     """
     obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
 
     first = iterator._handle_accumulated_json_chunk(obj + obj)
@@ -1544,9 +1522,7 @@ def test_accumulated_json_heuristic_passes_but_value_still_incomplete():
     heuristic must let the parse attempt through, and pop_next_value
     finding nothing must propagate as None rather than raising.
     """
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
 
     result = iterator._handle_accumulated_json_chunk('{"type": {"nested": 1}')
@@ -1560,9 +1536,7 @@ def test_accumulated_json_setter_and_sync_end_of_stream_drain():
     underlying stream ends, instead of being silently dropped.
     """
     obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
-    iterator = ModelResponseIterator(
-        streaming_response=iter([]), sync_stream=True, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
     iterator.chunk_type = "accumulated_json"
     iterator.accumulated_json = obj  # exercises the setter
 
@@ -1577,9 +1551,7 @@ def test_accumulated_json_async_end_of_stream_drain():
     import asyncio
 
     obj = '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}'
-    iterator = ModelResponseIterator(
-        streaming_response=MagicMock(), sync_stream=False, json_mode=False
-    )
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=False, json_mode=False)
     iterator.chunk_type = "accumulated_json"
     iterator.accumulated_json = obj
     mock_async_iterator = MagicMock()
@@ -1773,7 +1745,9 @@ def test_web_search_calls_are_cumulative_through_incomplete_search():
     )
 
     assert list(first_start.choices[0].delta.provider_specific_fields["web_search_calls"]) == ["srvtoolu_A"]
-    assert first_result.choices[0].delta.provider_specific_fields["web_search_calls"]["srvtoolu_A"].status == "completed"
+    assert (
+        first_result.choices[0].delta.provider_specific_fields["web_search_calls"]["srvtoolu_A"].status == "completed"
+    )
     calls = second_start.choices[0].delta.provider_specific_fields["web_search_calls"]
     assert list(calls) == ["srvtoolu_A", "srvtoolu_B"]
     assert calls["srvtoolu_A"].status == "completed"
@@ -2652,9 +2626,7 @@ class TestAnthropicChatCompletionPreCallLogging:
         calls = {"pre_call": []}
         logging_obj = MagicMock()
         logging_obj.pre_call.side_effect = lambda **kwargs: calls["pre_call"].append(kwargs)
-        with patch.object(
-            AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}
-        ):
+        with patch.object(AnthropicConfig, "transform_request", return_value={"model": "m", "messages": []}):
             try:
                 AnthropicChatCompletion().completion(**self._completion_kwargs(logging_obj=logging_obj))
             except Exception:
@@ -2858,7 +2830,7 @@ def test_streamed_json_mode_tool_name_envelope_is_unwrapped_when_name_is_a_schem
     assert contents[:-2] == ("",) * (len(contents) - 2)
 
 
-def test_streamed_json_mode_name_property_answer_streams_once_its_second_key_is_known():
+def test_streamed_json_mode_name_property_answer_streams_once_its_name_value_is_known():
     answer = json.dumps(_STREAMED_CONTACT)
 
     contents = _streamed_json_mode_contents((answer[:6], answer[6:24], answer[24:]), _STREAMED_CONTACT_SCHEMA)
@@ -2869,14 +2841,49 @@ def test_streamed_json_mode_name_property_answer_streams_once_its_second_key_is_
     assert contents[4] == answer[24:]
 
 
-def test_streamed_json_mode_single_name_property_answer_streams_when_the_object_closes():
+def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
     answer = json.dumps({"name": "Ada"})
 
-    contents = _streamed_json_mode_contents((answer[:-1], answer[-1:]), _STREAMED_CONTACT_SCHEMA)
+    contents = _streamed_json_mode_contents((answer[:11], answer[11:]), _STREAMED_CONTACT_SCHEMA)
 
     assert "".join(contents) == answer
     assert contents[2] == ""
     assert contents[3] == answer
+
+
+@pytest.mark.parametrize(
+    "schema, answer",
+    [
+        pytest.param(
+            {"type": "object", "additionalProperties": {"type": "integer"}},
+            {"alpha": 1, "beta": 2, "gamma": 3},
+            id="schema_without_properties",
+        ),
+        pytest.param(
+            _STREAMED_RISK_SCHEMA,
+            {"note": "read-only window", **_STREAMED_RISK_OBJECT},
+            id="undeclared_first_key_holding_a_scalar",
+        ),
+    ],
+)
+def test_streamed_json_mode_answer_that_cannot_be_an_envelope_streams_as_it_arrives(
+    schema: dict[str, object], answer: dict[str, object]
+):
+    encoded = json.dumps(answer)
+
+    contents = _streamed_json_mode_contents((encoded[:12], encoded[12:24], encoded[24:]), schema)
+
+    assert "".join(contents) == encoded
+    assert contents[2:5] == (encoded[:12], encoded[12:24], encoded[24:])
+
+
+def test_streamed_json_mode_two_level_envelope_is_unwrapped_when_the_block_ends():
+    envelope = json.dumps({"parameter": {"value": _STREAMED_RISK_OBJECT}})
+
+    contents = _streamed_json_mode_contents((envelope[:9], envelope[9:30], envelope[30:]))
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+    assert contents[:-2] == ("",) * (len(contents) - 2)
 
 
 def test_streamed_json_mode_accepted_answer_naming_the_tool_is_kept_whole():
@@ -2897,16 +2904,16 @@ def test_envelope_verdict_holds_a_prefix_that_stays_undecided_past_the_limit():
     assert _envelope_verdict(never_closing_key, schema, RESPONSE_FORMAT_TOOL_NAME) == "hold"
 
 
-def test_streamed_json_mode_foreign_name_envelope_is_unwrapped_like_the_non_streamed_answer():
-    envelope = json.dumps({"name": "Person", "parameters": _STREAMED_PERSON})
+def test_streamed_json_mode_answer_with_a_foreign_name_matches_the_non_streamed_answer():
+    answer = {"name": "Person", "parameters": _STREAMED_PERSON}
+    encoded = json.dumps(answer)
     schema = response_format_schema(_STREAMED_PERSON_SCHEMA)
     assert schema is not None
 
-    contents = _streamed_json_mode_contents((envelope[:16], envelope[16:34], envelope[34:]), _STREAMED_PERSON_SCHEMA)
+    contents = _streamed_json_mode_contents((encoded[:16], encoded[16:34], encoded[34:]), _STREAMED_PERSON_SCHEMA)
 
-    assert json.loads("".join(contents)) == _STREAMED_PERSON
-    assert contents[:-2] == ("",) * (len(contents) - 2)
-    assert unwrap_response_format_envelope(json.loads(envelope), schema, RESPONSE_FORMAT_TOOL_NAME) == _STREAMED_PERSON
+    assert "".join(contents) == encoded
+    assert unwrap_response_format_envelope(answer, schema, RESPONSE_FORMAT_TOOL_NAME) == answer
 
 
 @respx.mock
@@ -2954,9 +2961,7 @@ def test_anthropic_streaming_function_call_arguments_are_assembled(
         },
         {"type": "message_stop"},
     )
-    body: Final = "".join(
-        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events
-    )
+    body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
     respx.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(
             200,
@@ -2990,18 +2995,12 @@ def test_anthropic_streaming_function_call_arguments_are_assembled(
     )
     chunks: Final = tuple(stream)
     tool_call_deltas: Final = tuple(
-        chain.from_iterable(
-            chunk.choices[0].delta.tool_calls or () for chunk in chunks if chunk.choices
-        )
+        chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks if chunk.choices)
     )
-    assert tuple(
-        tool_call.function.name
-        for tool_call in tool_call_deltas
-        if tool_call.function.name is not None
-    ) == ("get_current_weather",)
-    arguments: Final = "".join(
-        tool_call.function.arguments or "" for tool_call in tool_call_deltas
+    assert tuple(tool_call.function.name for tool_call in tool_call_deltas if tool_call.function.name is not None) == (
+        "get_current_weather",
     )
+    arguments: Final = "".join(tool_call.function.arguments or "" for tool_call in tool_call_deltas)
     assert json.loads(arguments) == {"location": "Boston", "unit": "fahrenheit"}
     assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=messages)
     assert assembled.choices[0].message.tool_calls[0].function.name == "get_current_weather"

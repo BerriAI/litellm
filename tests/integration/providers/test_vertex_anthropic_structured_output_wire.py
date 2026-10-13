@@ -108,7 +108,7 @@ _STREAM_SHAPES: Final = (
     "named_partial",
 )
 _HELD_STREAM_SHAPES: Final = frozenset(
-    {"wrapped", "named", "values", "large", "two_candidates", "inner_incomplete", "deep", "other_tool", "named_partial"}
+    {"wrapped", "named", "values", "large", "two_candidates", "inner_incomplete", "deep", "named_partial"}
 )
 _FAMILY: Final = (
     "anthropic_unmapped",
@@ -226,11 +226,11 @@ def _timing_text(shape: str) -> str | None:
 
 def _expected(shape: str, marker_hex: str) -> JsonValue:
     match shape:
-        case "plain" | "wrapped" | "named" | "values" | "other_tool" | "named_input" | "named_two_objects":
+        case "plain" | "wrapped" | "named" | "values" | "named_input" | "deep":
             return _payload(marker_hex)
         case "large":
             return {**_payload(marker_hex), "summary": marker_hex + "x" * 5000}
-        case "named_partial":
+        case "named_partial" | "inner_incomplete":
             return {"tier": 2}
         case "name_property":
             return {"name": marker_hex, "tier": 1}
@@ -979,7 +979,9 @@ def test_vertex_responses_stream_json_schema_output_text_is_the_schema_object(ga
 
 
 @pytest.mark.parametrize("shape", ["other_tool", "named_input", "named_two_objects", "named_string", "named_partial"])
-def test_vertex_chat_json_schema_tool_name_wrapper_unwraps_to_the_inner_object(gateway: Gateway, shape: str) -> None:
+def test_vertex_chat_json_schema_unwraps_a_tool_named_envelope_only_around_one_object(
+    gateway: Gateway, shape: str
+) -> None:
     marker, marker_hex = _marker(shape)
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
@@ -1345,11 +1347,10 @@ def test_vertex_messages_duplicate_output_format_keys_fold_the_last_value(gatewa
 @pytest.mark.parametrize(
     "schema",
     [
-        {"type": "object", "properties": _SCHEMA["properties"], "required": "tier"},
         {"type": "object", "properties": ["tier", "summary"]},
-        {},
+        {"type": "object", "properties": "tier"},
     ],
-    ids=["required_string", "properties_list", "empty_schema"],
+    ids=["properties_list", "properties_string"],
 )
 @pytest.mark.parametrize("shape", ["wrapped", "other_tool"])
 def test_vertex_chat_malformed_response_format_schema_keeps_the_tool_input(

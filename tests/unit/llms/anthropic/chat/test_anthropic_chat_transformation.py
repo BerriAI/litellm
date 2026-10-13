@@ -7347,6 +7347,17 @@ _NAMED_BOOK_SCHEMA: Final = {
     "additionalProperties": False,
 }
 _NAMED_BOOK: Final = {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"title": "Dune", "author": "Frank Herbert"}}
+_RECURSIVE_NODE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "parent": {"anyOf": [{"$ref": "#"}, {"type": "null"}]},
+    },
+    "required": ["id", "title"],
+}
+_CHILD_WITHOUT_TITLE: Final = {"id": "child-7", "parent": {"id": "root-1", "title": "Root", "parent": None}}
+_JSON_OBJECT_MODE_SCHEMA: Final = {"type": "object", "properties": {}, "additionalProperties": True}
 
 
 def _schema(document: dict[str, object]) -> ResponseFormatSchema:
@@ -7388,8 +7399,38 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
         pytest.param(
             _OPTIONAL_FIELDS_SCHEMA,
             {"input": {"score": 7}},
-            {"input": {"score": 7}},
-            id="wrapper_the_schema_itself_accepts",
+            {"score": 7},
+            id="wrapper_around_an_all_optional_schema",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter": {"value": _RISK_OBJECT}},
+            _RISK_OBJECT,
+            id="two_level_envelope",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": json.dumps(_RISK_OBJECT)},
+            _RISK_OBJECT,
+            id="tool_name_envelope_holding_encoded_json",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"tier": 1, "parameters": _RISK_OBJECT},
+            {"tier": 1, "parameters": _RISK_OBJECT},
+            id="schema_key_beside_a_wrapper_key",
+        ),
+        pytest.param(
+            _RECURSIVE_NODE_SCHEMA,
+            _CHILD_WITHOUT_TITLE,
+            _CHILD_WITHOUT_TITLE,
+            id="recursive_schema_keeps_the_answer_over_its_complete_parent",
+        ),
+        pytest.param(
+            {**_RISK_SCHEMA, "$schema": 5},
+            {"input": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="non_string_dollar_schema",
         ),
         pytest.param(
             _OPEN_SCORE_SCHEMA,
@@ -7413,8 +7454,8 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
         pytest.param(
             _LOOSE_SCHEMA,
             {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
-            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
-            id="open_schema_accepts_the_tool_name_envelope_itself",
+            _CONTACT,
+            id="tool_name_envelope_on_an_open_schema",
         ),
         pytest.param(_NAMED_BOOK_SCHEMA, _NAMED_BOOK, _NAMED_BOOK, id="accepted_answer_whose_name_is_the_tool_name"),
         pytest.param(
@@ -7430,9 +7471,8 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             {"value": 1, "child": {"value": 2}},
             id="schema_object_whose_property_holds_a_schema_shaped_object",
         ),
-        pytest.param(
-            _RISK_SCHEMA, {"input": {"tier": 3}}, {"input": {"tier": 3}}, id="inner_object_missing_required_key"
-        ),
+        pytest.param(_RISK_SCHEMA, {"input": {"tier": 3}}, {"tier": 3}, id="inner_object_missing_required_key"),
+        pytest.param(_RISK_SCHEMA, {"values": {"tier": 2}}, {"tier": 2}, id="values_wrapper_missing_required_key"),
         pytest.param(
             _RISK_SCHEMA,
             {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
@@ -7446,10 +7486,22 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             id="inner_object_without_schema_keys",
         ),
         pytest.param(
-            {"type": "object", "properties": {}, "additionalProperties": True},
+            _JSON_OBJECT_MODE_SCHEMA,
             {"input": _RISK_OBJECT},
             {"input": _RISK_OBJECT},
             id="json_object_mode_without_schema_properties",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"values": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="json_object_mode_values_wrapper",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="json_object_mode_tool_name_envelope",
         ),
     ],
 )
@@ -7469,16 +7521,13 @@ def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_env
     "document",
     [
         {"type": "object", "properties": ["tier", "summary"]},
-        {"type": "object", "properties": {"tier": {"type": "integer"}}, "required": "tier"},
+        {"type": "object", "properties": "tier"},
+        ["tier", "summary"],
     ],
-    ids=["properties_list", "required_string"],
+    ids=["properties_list", "properties_string", "schema_list"],
 )
-def test_response_format_schema_rejects_a_malformed_schema(document: dict[str, object]):
+def test_response_format_schema_rejects_a_malformed_schema(document: object):
     assert response_format_schema(document) is None
-
-
-def test_response_format_schema_without_constraints_accepts_any_object():
-    assert _schema({}).accepts({"tool_name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT})
 
 
 def test_json_mode_with_user_tool_call_unwraps_the_envelope_into_content():
