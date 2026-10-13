@@ -1095,8 +1095,6 @@ BEDROCK_CONVERSE_APAC_BARE_FALLBACK: Final = CostTrackingTestCase(
 )
 
 
-# eu.anthropic.claude-sonnet-5-v1:0 behind an inference-profile ARN, no base_model: the profile id embedded in
-# the ARN carries the eu. prefix, so the eu. row bills, not the bare anthropic.claude-sonnet-5-v1:0 row
 BEDROCK_CONVERSE_PROFILE_ARN_REGIONAL_KEY: Final = CostTrackingTestCase(
     name="bedrock-converse-profile-arn-regional-key",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
