@@ -131,3 +131,25 @@ MAX_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
 
                     {email_footer}
 """
+
+TEAM_MEMBER_MAX_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
+                    <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
+
+                    <p> Hi, <br/>
+
+                    Team member <b>{member}</b> has reached <b>{percentage}% of their team member budget</b> in team <b>{team_alias}</b>. <br /> <br />
+
+                    <b>Current Spend:</b> {spend} <br />
+                    <b>Team Member Budget:</b> {max_budget} <br />
+                    <b>Alert Threshold:</b> {alert_threshold} ({percentage}%) <br />
+
+                    <p style="color: #dc2626; font-weight: 500;">
+                    Warning: Once this member reaches their team member budget of {max_budget}, their requests in this team will be rejected.
+                    </p>
+
+                    You can view usage and manage team member budgets in the <a href="{base_url}">LiteLLM Dashboard</a>. <br /> <br />
+
+                    If you have any questions, please send an email to {email_support_contact} <br /> <br />
+
+                    {email_footer}
+"""

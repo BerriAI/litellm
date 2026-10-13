@@ -14,20 +14,21 @@ from math import isclose, isfinite
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _get_cost_per_unit,
     calculate_prompt_caching_savings,
     generic_cost_per_token,
+    get_cost_per_unit,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -122,7 +123,7 @@ class PricingBasis(NamedTuple):
 _STANDARD_RATES: Final = PricingBasis()
 
 
-class BaselineCostSnapshot(BaseModel):
+class BaselineCostSnapshot(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     model: str
@@ -414,51 +415,12 @@ def marks_gateway_injection(metadata: Mapping[str, object] | None, model_id: str
     return injected_deployment in (GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT, model_id)
 
 
-def extract_cache_read_tokens(usage_object: Mapping[str, object] | None) -> int:
-    """Cache-read tokens from a logged usage object, whatever shape recorded them.
-
-    Anthropic writes a top-level ``cache_read_input_tokens``; OpenAI-compatible
-    providers (moonshotai, openai, deepseek, etc.) write
-    ``prompt_tokens_details.cached_tokens``. This is the one owner of that
-    normalization: callers hand over the usage object rather than threading a
-    count that could disagree with it.
-    """
-    if not usage_object:
-        return 0
-    explicit: Final = usage_object.get("cache_read_input_tokens")
-    if isinstance(explicit, (int, float)) and explicit:
-        return int(explicit)
-    details: Final = usage_object.get("prompt_tokens_details")
-    if not isinstance(details, Mapping):
-        return 0
-    cached: Final = details.get("cached_tokens")
-    return int(cached) if isinstance(cached, (int, float)) else 0
-
-
-def extract_cache_creation_tokens(usage_object: Mapping[str, object] | None) -> int:
-    """Cache-write tokens from a logged usage object, whatever shape recorded them.
-
-    Anthropic writes a top-level ``cache_creation_input_tokens``; OpenAI-compatible
-    providers (kimi-k2 etc.) write ``prompt_tokens_details.cache_write_tokens`` or
-    ``prompt_tokens_details.cache_creation_tokens``.
-    """
-    if not usage_object:
-        return 0
-    explicit: Final = usage_object.get("cache_creation_input_tokens")
-    if isinstance(explicit, (int, float)) and explicit:
-        return int(explicit)
-    details: Final = usage_object.get("prompt_tokens_details")
-    if not isinstance(details, Mapping):
-        return 0
-    written: Final = next(
-        (
-            value
-            for value in (details.get("cache_write_tokens"), details.get("cache_creation_tokens"))
-            if isinstance(value, (int, float)) and value
-        ),
-        0,
-    )
-    return int(written)
+from litellm.litellm_core_utils.llm_cost_calc.cache_tokens import (  # noqa: E402  # re-export at the old path for existing importers
+    extract_cache_creation_tokens as extract_cache_creation_tokens,  # noqa: PLC0414  # explicit re-export marker
+)
+from litellm.litellm_core_utils.llm_cost_calc.cache_tokens import (  # noqa: E402  # re-export at the old path for existing importers
+    extract_cache_read_tokens as extract_cache_read_tokens,  # noqa: PLC0414  # explicit re-export marker
+)
 
 
 def _proxy_llm_router() -> "Router | None":
@@ -578,6 +540,56 @@ def autorouter_savings_for_logging_payload(
     )
 
 
+def _request_savings_pricing(
+    model: str | None,
+    custom_llm_provider: str | None,
+    model_id: str | None,
+    llm_router: "Callable[[], Router | None] | None",
+) -> tuple[str | None, ModelInfo | None]:
+    router_instance: Final = llm_router() if llm_router else None
+    identity: Final = _resolve_model(model, custom_llm_provider)
+    pricing: Final = _effective_model_info(router_instance, model_id, model or "") or (
+        _model_info(identity) if identity else None
+    )
+    return identity.provider if identity else custom_llm_provider, pricing
+
+
+def _prompt_caching_savings(
+    pricing: ModelInfo | None,
+    provider: str | None,
+    usage_object: Mapping[str, object] | None,
+    cost_breakdown: Mapping[str, object] | None,
+    billed_at: datetime | str | None,
+) -> float | None:
+    usage: Final = _usage_from_spend_log(usage_object)
+    if pricing is None or usage is None:
+        return None
+    basis: Final = _pricing_basis(cost_breakdown)
+    result: Final = calculate_prompt_caching_savings(
+        model_info=pricing,
+        usage=usage,
+        custom_llm_provider=provider,
+        service_tier=basis.service_tier,
+        data_residency=basis.data_residency,
+        vertex_location=basis.vertex_location,
+        billed_at=_coerce_billed_at(billed_at),
+    )
+    return result if isfinite(result) else None
+
+
+def prompt_caching_savings_for_request(
+    model: str | None,
+    custom_llm_provider: str | None,
+    usage_object: Mapping[str, object] | None,
+    model_id: str | None = None,
+    llm_router: "Callable[[], Router | None] | None" = None,
+    cost_breakdown: Mapping[str, object] | None = None,
+    billed_at: datetime | str | None = None,
+) -> float | None:
+    request_pricing: Final = _request_savings_pricing(model, custom_llm_provider, model_id, llm_router)
+    return _prompt_caching_savings(request_pricing[1], request_pricing[0], usage_object, cost_breakdown, billed_at)
+
+
 def compute_savings_spend(
     model: str | None,
     custom_llm_provider: str | None,
@@ -639,29 +651,12 @@ def compute_savings_spend(
     # Deployment rates when the request came through one, public rates otherwise --
     # `_effective_model_info` merges a deployment's configured prices over the built-in
     # map, so a negotiated price is not silently replaced by the list rate.
-    router_instance: Router | None = llm_router() if llm_router else None
-    identity: Final = _resolve_model(model, custom_llm_provider)
-    pricing: Final = _effective_model_info(router_instance, model_id, model or "") or (
-        _model_info(identity) if identity else None
-    )
-    input_cost: Final = (_get_cost_per_unit(pricing, "input_cost_per_token") or 0.0) if pricing else 0.0
+    request_pricing: Final = _request_savings_pricing(model, custom_llm_provider, model_id, llm_router)
+    provider: Final = request_pricing[0]
+    pricing: Final = request_pricing[1]
+    input_cost: Final = (get_cost_per_unit(pricing, "input_cost_per_token") or 0.0) if pricing else 0.0
     compression: Final = max(compression_saved_tokens, 0) * input_cost
-    usage: Final = _usage_from_spend_log(usage_object)
-    basis: Final = _pricing_basis(cost_breakdown)
-    billed_at_datetime: Final = _coerce_billed_at(billed_at)
-    prompt_caching: Final = (
-        calculate_prompt_caching_savings(
-            model_info=pricing,
-            usage=usage,
-            custom_llm_provider=identity.provider if identity else custom_llm_provider,
-            service_tier=basis.service_tier,
-            data_residency=basis.data_residency,
-            vertex_location=basis.vertex_location,
-            billed_at=billed_at_datetime,
-        )
-        if pricing is not None and usage is not None
-        else 0.0
-    )
+    prompt_caching: Final = _prompt_caching_savings(pricing, provider, usage_object, cost_breakdown, billed_at) or 0.0
     gateway_injected_caching: Final = prompt_caching if gateway_injected_cache else 0.0
 
     # The figure the logging path recorded wins, before the usage gate on purpose: a row

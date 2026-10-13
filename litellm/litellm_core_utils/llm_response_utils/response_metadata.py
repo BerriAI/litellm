@@ -1,7 +1,7 @@
 import datetime
 from collections.abc import Mapping
 from functools import reduce
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -71,7 +71,7 @@ def response_timing_metrics(
     receive_anchored: Final = timing_window[1]
     total_response_time_ms: Final = (end_time.timestamp() - window_start.timestamp()) * 1000
     if not include_overhead:
-        return {"_response_ms": total_response_time_ms}  # mutable-ok: read-only timing result
+        return {"_response_ms": total_response_time_ms}
     caching_details: Final = logging_obj.caching_details
     cache_duration_ms: Final = (
         caching_details.get("cache_duration_ms")
@@ -106,7 +106,7 @@ class ResponseMetadata:
     Handles setting and managing `_hidden_params`, `response_time_ms`, and `litellm_overhead_time_ms` for LiteLLM responses
     """
 
-    def __init__(self, result: Any):
+    def __init__(self, result: object):
         self.result = result
         self._hidden_params: HiddenParams | dict = getattr(result, "_hidden_params", {}) or {}
 
@@ -125,7 +125,7 @@ class ResponseMetadata:
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
-            "response_cost": logging_obj._response_cost_calculator(
+            "response_cost": logging_obj.response_cost_calculator(
                 result=self.result, litellm_model_name=model, router_model_id=model_id
             ),
             "additional_headers": process_response_headers(
@@ -251,6 +251,6 @@ def update_response_metadata(
         return
 
     metadata: Final = ResponseMetadata(result)
-    metadata.set_hidden_params(logging_obj, model, kwargs)
     metadata.set_timing_metrics(start_time, end_time, logging_obj, include_overhead)
+    metadata.set_hidden_params(logging_obj, model, kwargs)
     metadata.apply()

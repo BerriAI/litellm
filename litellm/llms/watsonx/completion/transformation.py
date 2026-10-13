@@ -15,15 +15,14 @@ from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import (
     IBMWatsonXMixin,
     WatsonXAIError,
-    _get_api_params,
     aconvert_watsonx_messages_to_prompt,
     convert_watsonx_messages_to_prompt,
+    get_api_params,
 )
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -227,7 +226,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         """Shared logic to build request payload"""
         extra_body_params: Final = optional_params.pop("extra_body", {})
         optional_params.update(extra_body_params)
-        watsonx_api_params: Final = _get_api_params(params=optional_params, model=model)
+        watsonx_api_params: Final = get_api_params(params=optional_params, model=model)
         watsonx_auth_payload: Final = self._prepare_payload(model=model, api_params=watsonx_api_params)
 
         return {
@@ -280,7 +279,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

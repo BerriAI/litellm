@@ -2,7 +2,7 @@
  * Helper utilities for Claude Code Marketplace
  */
 
-import { PluginSource } from "./types";
+import type { Plugin, PluginSource } from "./types";
 
 export interface SkillSourcePreview {
   parsed: PluginSource;
@@ -277,7 +277,7 @@ export const validatePluginName = (name: string): boolean => {
 /**
  * Get human-readable source display text
  */
-export const getSourceDisplayText = (source: PluginSource): string => {
+export const getSourceDisplayText = (source: Plugin["source"]): string => {
   if (source.source === "github" && source.repo) {
     return `GitHub: ${source.repo}`;
   }
@@ -293,7 +293,7 @@ export const getSourceDisplayText = (source: PluginSource): string => {
 /**
  * Get clickable link for plugin source. Ssh clone urls are not browsable, so they yield null.
  */
-export const getSourceLink = (source: PluginSource): string | null => {
+export const getSourceLink = (source: Plugin["source"]): string | null => {
   if (source.source === "github" && source.repo) {
     return `https://github.com/${source.repo}`;
   }
@@ -305,7 +305,7 @@ export const getSourceLink = (source: PluginSource): string | null => {
  * Get badge color based on category
  */
 export const getCategoryBadgeColor = (
-  category?: string,
+  category?: string | null,
 ): "blue" | "green" | "purple" | "red" | "orange" | "yellow" | "gray" => {
   if (!category) {
     return "gray";

@@ -2,33 +2,23 @@
 Types for auto-router management endpoints
 """
 
-from collections.abc import Mapping, Sequence
+import importlib
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from pydantic import Field, computed_field, field_validator, model_validator
 
-from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import StandardLoggingRoutingDecision
 
 DEFAULT_ROUTING_TEST_ROUTER_NAME: Final[str] = "auto_router_routing_test"
 
-
-class RequestComplexityRouterConfig(ComplexityRouterConfig):
-    """The part of a complexity-router config a request can carry.
-
-    `plugins` holds live RoutingPlugin objects, which no JSON body can express and which have no
-    OpenAPI schema, so it is closed off here rather than left as an arbitrary-type field.
-    """
-
-    plugins: None = Field(default=None, description="Not settable over HTTP; routing plugins are runtime objects")
-    classifier_plugin: None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # narrowing to None is the point: runtime objects are not settable over HTTP
-        default=None, description="Not settable over HTTP; the classifier plugin is a runtime object"
-    )
+_REQUEST_MODELS_MODULE: Final = "litellm.router_strategy.complexity_router.request_models"
+_REQUEST_MODELS_EXPORTS: Final = frozenset({"RequestComplexityRouterConfig", "AutoRouterRoutingTestRequest"})
 
 
-class ComplexityRouterConfigValidationRequest(BaseModel):
+class ComplexityRouterConfigValidationRequest(LiteLLMBaseModel):
     """A complexity-router config to validate without saving, so a form can surface the
     backend's own verdict inline instead of a raw 400 at write time."""
 
@@ -39,108 +29,31 @@ class ComplexityRouterConfigValidationRequest(BaseModel):
     )
 
 
-class ComplexityRouterConfigValidationResponse(BaseModel):
+class ComplexityRouterConfigValidationResponse(LiteLLMBaseModel):
     valid: bool
     error: str | None = None
 
 
-class AutoRouterRoutingTestRequest(BaseModel):
-    """A single request to classify against a complexity-router config that need not be saved yet.
-
-    Carries the same fields the serving path carries, so a dry run classifies what a real turn
-    would classify. `messages`, `system` and `tools` are forwarded to the routing hook untranslated,
-    which is why they are typed loosely: the hook reads whatever dialect the surface produced, and
-    validating them against one surface's schema would reject the others.
-    """
-
-    prompt: str | None = Field(
-        default=None,
-        description="A single ask to route, as an end user would send it. Mutually exclusive with messages",
-    )
-    messages: Sequence[Mapping[str, object]] | None = Field(
-        default=None,
-        description="The full message list to route, exactly as the serving path would receive it. Mutually exclusive with prompt",
-    )
-    system: str | Sequence[Mapping[str, object]] | None = Field(
-        default=None,
-        description="The top-level system prompt an Anthropic /v1/messages body carries beside its messages",
-    )
-    tools: Sequence[Mapping[str, object]] | None = Field(
-        default=None,
-        description="The tool definitions the request advertises, which decide whether the plan-mode floor applies",
-    )
-    complexity_router_config: RequestComplexityRouterConfig = Field(
-        description="The complexity router config to route against, in the shape /model/new accepts",
-    )
-    default_model: str | None = Field(
-        default=None,
-        description="Model to route to when no tier resolves, i.e. complexity_router_default_model",
-    )
-    router_name: str = Field(
-        default=DEFAULT_ROUTING_TEST_ROUTER_NAME,
-        description="Name reported as the router in the routing decision. Display only",
-    )
-    team_id: str | None = Field(
-        default=None,
-        description="Team the router is being created for. Required for a team admin, who may only test their own team's routers",
-    )
-
-    @field_validator("messages")
-    @classmethod
-    def _reject_messages_no_surface_accepts(
-        cls, value: Sequence[Mapping[str, object]] | None
-    ) -> Sequence[Mapping[str, object]] | None:
-        """Reject what every supported surface rejects, and nothing beyond it.
-
-        A real request carrying a message with no string role, or with content that is neither text
-        nor a block list, is a 400 on the serving path, so answering it here with a routed tier
-        would promise a decision the request never gets. Only the two keys the dialects agree on
-        are constrained: anything else in a message stays untranslated and unread.
-        """
-        if value is None:
-            return value
-        for index, message in enumerate(value):
-            if not isinstance(role := message.get("role"), str) or not role.strip():
-                raise ValueError(f"messages[{index}] needs a non-empty string role")
-            if (content := message.get("content")) is not None and not isinstance(content, str | list):
-                raise ValueError(f"messages[{index}] content must be a string, a list of blocks, or null")
-        return value
-
-    @model_validator(mode="after")
-    def _resolve_request_carrier(self) -> "AutoRouterRoutingTestRequest":
-        if self.prompt is not None and not self.prompt.strip():
-            raise ValueError("prompt must not be blank")
-        if self.messages is not None and not self.messages:
-            raise ValueError("messages must not be empty")
-        if (self.prompt is None) == (self.messages is None):
-            raise ValueError("provide exactly one of prompt or messages")
-        if self.messages is not None:
-            return self
-        return self.model_copy(
-            update={  # mutable-ok: model_copy types update as a plain dict
-                "messages": [  # mutable-ok: the routing hook's signature takes a list of message dicts
-                    {"role": "user", "content": self.prompt}  # mutable-ok: a message is dict-shaped
-                ]
-            }
-        )
-
-    def wire_body(self) -> Mapping[str, object]:
-        """The request kwargs a serving-path request would carry for this body.
-
-        Every value is handed out by identity rather than copied, so the messages the routing hook
-        classifies and the messages its raw-body plan-mode scan reads are one value, as they are on
-        the serving path.
-        """
-        return MappingProxyType(
-            {  # mutable-ok: MappingProxyType needs a dict to wrap
-                key: value
-                for key, value in (("messages", self.messages), ("system", self.system), ("tools", self.tools))
-                if value is not None
-            }
-        )
+class AutoRouterAvailabilityRequest(LiteLLMBaseModel):
+    team_id: str | None = None
+    saved_model_id: str | None = None
+    complexity_router_config: Mapping[str, object] | None = None
 
 
-class AutoRouterRoutingTestResponse(BaseModel):
+class AutoRouterAllowance(LiteLLMBaseModel):
+    key: str
+    limit: int | None
+    remaining: int | None
+    used_by_this_router: bool = False
+    available: bool = True
+
+
+class AutoRouterAvailabilityResponse(LiteLLMBaseModel):
+    allowances: tuple[AutoRouterAllowance, ...]
+    error: str | None = None
+
+
+class AutoRouterRoutingTestResponse(LiteLLMBaseModel):
     """Where one prompt would have been routed, and why."""
 
     routed_model: str = Field(description="The model group the router picked")
@@ -152,7 +65,7 @@ class AutoRouterRoutingTestResponse(BaseModel):
     )
 
 
-class AutoRouterCacheBucket(BaseModel):
+class AutoRouterCacheBucket(LiteLLMBaseModel):
     """One prompt-caching bucket of turns, with how often those turns hit the cache."""
 
     turns: int = Field(description="Turns classified into this bucket")
@@ -160,7 +73,7 @@ class AutoRouterCacheBucket(BaseModel):
     hit_rate_pct: float = Field(description="hits over this bucket's turns, as a percentage")
 
 
-class AutoRouterCacheStats(BaseModel):
+class AutoRouterCacheStats(LiteLLMBaseModel):
     """Prompt-caching behaviour of auto-routed turns, bucketed by what the router did.
 
     Every in-order turn falls in exactly one bucket: the session stayed on the same model,
@@ -186,33 +99,53 @@ class AutoRouterCacheStats(BaseModel):
     ttl_1h_turns: int = Field(description="Turns whose cache write used the one-hour TTL")
 
 
-class AutoRouterBenchmarkTotals(BaseModel):
-    """Session-shape and savings aggregates over auto-routed traffic in the window."""
+class AutoRouterBenchmarkTotals(LiteLLMBaseModel):
+    """Auto-routed traffic in the window. Turns, spend and savings count requests on the selected UTC days;
+    the session averages and cache stats describe every session overlapping the window, whole."""
 
-    sessions: int
-    turns: int
-    avg_turns_per_session: float
-    avg_session_seconds: float
-    avg_tokens_per_session: float
-    spend: float = Field(description="What the routed traffic actually cost")
+    sessions: int = Field(description="Sessions overlapping the window, counted whole")
+    turns: int = Field(description="Auto-routed requests on the selected UTC days")
+    total_tokens: int | None = Field(
+        default=None,
+        description="Input and output tokens of routed generation requests on the selected UTC days, excluding "
+        "classifier tokens; null when any selected requests predate daily token recording",
+    )
+    avg_turns_per_session: float | None = Field(
+        description="Lifetime turns per overlapping session; null when the window has routed requests but no session "
+        "rows for this router type, such as an alias whose router type changed mid-session"
+    )
+    avg_session_seconds: float | None = Field(description="Lifetime seconds per overlapping session; null as above")
+    avg_tokens_per_session: float | None = Field(description="Lifetime tokens per overlapping session; null as above")
+    spend: float = Field(description="What the selected days' routed traffic actually cost")
     classifier_cost: float | None = Field(
         description="Recorded LLM classifier cost already included in spend; null when any session turns predate "
         "subtotal recording, and zero for an empty window"
     )
     savings_estimated_turns: int = Field(
-        description="Turns covered by the current savings estimator; legacy estimates are excluded"
+        description="Requests compared against the baseline: every request on complexity routers that recorded savings"
     )
     savings_estimated_actual_spend: float = Field(
-        description="Actual spend, including classifier cost, for covered turns only"
+        description="Actual spend, including classifier cost, for the compared requests"
+    )
+    savings_estimated_classifier_cost: float | None = Field(
+        default=None,
+        description="Classifier cost included in the compared actual spend; "
+        "null when classification costs for those requests are unavailable",
     )
     saved_spend: float | None = Field(
-        description="Signed savings for covered turns only; null when traffic has no current estimates"
+        description="Recorded savings on the selected UTC days; null when traffic has no recorded savings estimates. "
+        "On totals this is the same daily figure the Overall savings view reports"
     )
-    baseline_spend: float | None = Field(description="Estimated single-model cost for covered turns only")
-    saved_pct: float | None = Field(description="Covered savings over covered baseline spend, as a percentage")
-    saved_per_session: float | None = Field(
-        description="Average session savings; unavailable unless every turn is covered"
+    unattributed_saved_spend: float | None = Field(
+        default=None,
+        description="Part of saved_spend no router's daily rows account for, such as history recorded before "
+        "per-router daily tracking; when set, baseline_spend and saved_pct are null",
     )
+    baseline_spend: float | None = Field(
+        description="Estimated single-model cost: compared actual spend plus recorded savings; "
+        "null when traffic has no recorded savings"
+    )
+    saved_pct: float | None = Field(description="Recorded savings over baseline_spend, as a percentage")
     cache: AutoRouterCacheStats
 
 
@@ -233,7 +166,7 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
     )
 
 
-class AutoRouterSessionResponse(BaseModel):
+class AutoRouterSessionResponse(LiteLLMBaseModel):
     """One auto-routed session as its own key sees it: what the last turn ran on, and what the session cost
     against the router's savings baseline (the priciest model in its hardest tier)."""
 
@@ -243,33 +176,31 @@ class AutoRouterSessionResponse(BaseModel):
     turns: int = Field(description="Auto-routed turns the rollup has recorded for this session so far")
     last_model: str = Field(description="The deployment model the most recent turn was routed to")
     spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
-    savings_estimated_turns: int = Field(
-        description="Turns covered by the current savings estimator; legacy estimates are excluded"
-    )
+    savings_estimated_turns: int = Field(description="Requests whose savings estimate recorded its baseline cost")
     savings_estimated_actual_spend: float = Field(
-        description="Actual spend, including classifier cost, for covered turns only"
+        description="Actual spend, including classifier cost, for requests whose estimate recorded its baseline cost"
     )
-    saved_spend: float | None = Field(description="Estimated savings for covered turns only, net of classifier cost")
-    baseline_spend: float | None = Field(
-        description="Estimated single-model cost; unavailable unless every turn is covered"
+    saved_spend: float | None = Field(
+        description="Recorded historical savings plus newer estimates, net of classifier cost"
     )
+    baseline_spend: float | None = Field(description="Estimated single-model cost: spend plus recorded savings")
     savings_estimated_baseline_spend: float | None = Field(
-        description="Estimated single-model cost for covered turns only"
+        description="Estimated single-model cost for requests whose estimate recorded its baseline cost"
     )
     baseline_model: str | None = Field(
-        description="The savings baseline most covered turns were priced against, recorded turn by "
+        description="The savings baseline recorded by most session turns, including historical turns, recorded turn by "
         "turn, so it still names the counterfactual after the router is reconfigured or removed. None when no "
         "turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, "
         "which derive no baseline and so report no savings"
     )
     baseline_models: Mapping[str, int] = Field(
-        description="Covered turns priced against each baseline model; more than one entry means the router's "
-        "baseline changed mid-session and baseline_spend mixes both"
+        description="Session turns recording each baseline model; more than one entry means the router's "
+        "baseline changed mid-session; these counts do not imply savings coverage"
     )
 
 
-class AutoRouterBenchmarksResponse(BaseModel):
-    """Benchmarks for the auto-router dashboard, aggregated from the per-session rollup."""
+class AutoRouterBenchmarksResponse(LiteLLMBaseModel):
+    """Benchmarks for the auto-router dashboard, aggregated from the per-session and per-day rollups."""
 
     start_date: str = Field(description="Window start day, YYYY-MM-DD UTC, inclusive")
     end_date: str = Field(description="Window end day, YYYY-MM-DD UTC, inclusive")
@@ -304,7 +235,7 @@ SHADOW_EVAL_TURN_VALVE: Final[int] = 10_000
 SHADOW_EVAL_MAX_ROUTERS: Final[int] = 4
 
 
-class StartShadowEvalRequest(BaseModel):
+class StartShadowEvalRequest(LiteLLMBaseModel):
     """Start duplicating one or more targets' traffic for blind comparison against an auto-router.
 
     A target is a virtual key, a team, or a user; each becomes its own leg with its own
@@ -491,7 +422,7 @@ class StartShadowEvalRequest(BaseModel):
         return self
 
 
-class ShadowEvalSlice(BaseModel):
+class ShadowEvalSlice(LiteLLMBaseModel):
     """Judge outcomes for one slice of a job's verdicts: a router tier, one of the
     models that served the real arm, or one scoped target (embedded on that target's
     own entry, so slices never need re-joining to a target by id)."""
@@ -535,7 +466,7 @@ class ShadowEvalSlice(BaseModel):
     )
 
 
-class ShadowEvalResult(BaseModel):
+class ShadowEvalResult(LiteLLMBaseModel):
     """Stratified results of a shadow-eval job's verdicts so far."""
 
     by_tier: tuple[ShadowEvalSlice, ...]
@@ -593,7 +524,7 @@ class ShadowEvalResult(BaseModel):
     )
 
 
-class ShadowEvalJobTargetResponse(BaseModel):
+class ShadowEvalJobTargetResponse(LiteLLMBaseModel):
     """One target a job shadows (a key, team, or user), with its own budget and stop state."""
 
     target_type: ShadowEvalTargetType = Field(description="What kind of entity this entry scopes")
@@ -659,7 +590,7 @@ class ShadowEvalJobTargetResponse(BaseModel):
     )
 
 
-class ShadowEvalJobResponse(BaseModel):
+class ShadowEvalJobResponse(LiteLLMBaseModel):
     """A shadow-eval job over one or more targets, each with its own budget and stop state;
     status is derived from stopped_by, the targets' stop and budget state, and ends_at,
     never stored, so no writer anywhere can produce an inconsistent one. Aggregate
@@ -728,3 +659,9 @@ class ShadowEvalJobResponse(BaseModel):
         if all(target.stopped_at is not None for target in self.targets):
             return "stopped"
         return "running"
+
+
+def __getattr__(name: str) -> object:
+    if name in _REQUEST_MODELS_EXPORTS:
+        return getattr(importlib.import_module(_REQUEST_MODELS_MODULE), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

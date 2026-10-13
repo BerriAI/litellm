@@ -212,7 +212,6 @@ sandbox_tools:
 
 litellm_settings:
   drop_params: True
-  telemetry: False
   code_interpreter_interception_params:
     enabled: true
     sandbox_tool_name: e2b_sandbox

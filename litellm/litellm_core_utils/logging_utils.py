@@ -5,7 +5,7 @@ import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import format_base64_size, verbose_logger
 from litellm.constants import (
@@ -43,14 +43,14 @@ Helper utils used for logging callbacks
 
 # Regex matching data-URI base64 content: "data:<mime>;base64,<payload>"
 # Captures: group(1)=mime_type, group(2)=base64_payload
-_DATA_URI_RE: Final = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
+_DATA_URI_RE: Final = re.compile(r"data:([^;,\s]{1,255});base64,([A-Za-z0-9+/=]+)")
 
 # Maximum nesting depth for _truncate_base64_in_value to guard against
 # pathological payloads. OpenAI message format is typically 3-4 levels deep.
 _MAX_TRUNCATION_DEPTH: Final = 20
 
 
-def _base64_data_uri_replacer(match: re.Match) -> str:
+def _base64_data_uri_replacer(match: re.Match[str]) -> str:
     """Replace a single base64 data-URI match with a size placeholder if too long."""
     mime_type: Final = match.group(1)
     payload: Final = match.group(2)
@@ -67,7 +67,9 @@ def _truncate_base64_in_string(value: str) -> str:
     return _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
 
 
-def _truncate_base64_in_value(value: Any) -> Any:
+def _truncate_base64_in_value(
+    value: str | dict[str, object] | list[object] | None,
+) -> str | dict[str, object] | list[object] | None:
     """Iteratively truncate base64 data URIs in a JSON-like value (str/list/dict).
 
     Uses an explicit stack instead of recursion to satisfy the project's
@@ -197,10 +199,10 @@ def _get_parent_otel_span_from_logging_obj(
 
         # Reuse existing function by passing model_call_details as kwargs
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
 
-        return _get_parent_otel_span_from_kwargs(logging_obj.model_call_details)
+        return get_parent_otel_span_from_kwargs(logging_obj.model_call_details)
 
     except Exception as e:
         verbose_logger.exception("Error in _get_parent_otel_span_from_logging_obj: %s", e)
@@ -225,14 +227,14 @@ def convert_litellm_response_object_to_str(
     return None
 
 
-def _assemble_complete_response_from_streaming_chunks(
+def assemble_complete_response_from_streaming_chunks(
     result: ModelResponse | TextCompletionResponse | ModelResponseStream,
     start_time: datetime,
     end_time: datetime,
-    request_kwargs: dict,
-    streaming_chunks: list[Any],
+    request_kwargs: Mapping[str, object],
+    streaming_chunks: list[object],
     is_async: bool,
-):
+) -> ModelResponse | TextCompletionResponse | None:
     """
     Assemble a complete response from a streaming chunks
 
@@ -260,9 +262,10 @@ def _assemble_complete_response_from_streaming_chunks(
     if result.choices[0].finish_reason is not None:  # if it's the last chunk
         streaming_chunks.append(result)
         try:
+            messages: Final = cast(list[dict[str, object]] | None, request_kwargs.get("messages", None))
             complete_streaming_response = litellm.stream_chunk_builder(
                 chunks=streaming_chunks,
-                messages=request_kwargs.get("messages", None),
+                messages=messages,
                 start_time=start_time,
                 end_time=end_time,
             )
@@ -275,6 +278,9 @@ def _assemble_complete_response_from_streaming_chunks(
     else:
         streaming_chunks.append(result)
     return complete_streaming_response
+
+
+_assemble_complete_response_from_streaming_chunks = assemble_complete_response_from_streaming_chunks
 
 
 def _set_duration_in_model_call_details(
@@ -310,7 +316,7 @@ def _set_duration_in_model_call_details(
 def speech_request_body(model: str, voice: str, optional_params: Mapping[str, object]) -> Mapping[str, object]:
     """Speech request body for telemetry, without the caller headers the provider SDKs
     take as request kwargs rather than body fields."""
-    return {  # mutable-ok: loggers isinstance-check the request body as a dict
+    return {
         "model": model,
         "voice": voice,
         **{key: value for key, value in optional_params.items() if key != "extra_headers"},

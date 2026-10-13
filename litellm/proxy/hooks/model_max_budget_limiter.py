@@ -1,13 +1,15 @@
+import asyncio
 import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # untyped callback payload requires explicit narrowing
 
 from openai.types import Batch
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
@@ -23,6 +25,7 @@ VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX: Final = "end_user_model_spend"
 USER_SPEND_CACHE_KEY_PREFIX: Final = "user_model_spend"
 TEAM_SPEND_CACHE_KEY_PREFIX: Final = "team_model_spend"
+TEAM_MEMBER_SPEND_CACHE_KEY_PREFIX: Final = "team_member_model_spend"
 
 _SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
     {
@@ -30,6 +33,7 @@ _SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
         Litellm_EntityType.USER: USER_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.END_USER: END_USER_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.TEAM: TEAM_SPEND_CACHE_KEY_PREFIX,
+        Litellm_EntityType.TEAM_MEMBER: TEAM_MEMBER_SPEND_CACHE_KEY_PREFIX,
     }
 )
 
@@ -43,6 +47,7 @@ _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
         Litellm_EntityType.USER: "user_model_budget_start_time",
         Litellm_EntityType.END_USER: "end_user_budget_start_time",
         Litellm_EntityType.TEAM: "team_model_budget_start_time",
+        Litellm_EntityType.TEAM_MEMBER: "team_member_model_budget_start_time",
     }
 )
 
@@ -59,6 +64,10 @@ class ResolvedModelBudget:
 
     budget_model: str
     budget_config: BudgetConfig
+
+
+def team_member_budget_entity_id(user_id: str, team_id: str) -> str:
+    return f"{len(user_id)}:{user_id}:{team_id}"
 
 
 def model_budget_spend_cache_key(
@@ -239,9 +248,10 @@ async def build_model_max_budget_usage(
     }
 
 
+@with_service_target("model_budgets")
 async def _current_window_spends(cache: DualCache, spend_keys: Sequence[str]) -> tuple[float, ...]:
     """Redis holds the window total across replicas; the in-memory copy is one replica's share."""
-    keys: Final = list(spend_keys)  # mutable-ok: both batch readers annotate their key argument as list
+    keys: Final = list(spend_keys)
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
         shared: Final = await redis_cache.async_batch_get_cache(key_list=keys)
@@ -287,18 +297,34 @@ def _resolve_entity_model_budgets(
     )
 
 
+def _metadata_value(metadata: object, key: str) -> object | None:
+    metadata_mapping: Final[Mapping[str, object]] = cast(  # cast-ok: callback metadata has string keys
+        Mapping[str, object], metadata
+    )
+    return metadata_mapping.get(key)
+
+
+def _metadata_string_value(metadata: object, key: str) -> str | None:
+    value: Final = _metadata_value(metadata, key)
+    return value if isinstance(value, str) else None
+
+
 class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     """
     Handles budgets for model + virtual key
 
-    Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
+    Example: key=$LITELLM_API_KEY, model=gpt-4o, max_budget=100, time_period=1d
     """
 
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue = []
+        self._redis_increment_queue_lock = asyncio.Lock()
+        self._redis_increment_flush_lock = asyncio.Lock()
+        self._detached_increment_operations = None
         self.deployment_budget_config = None
 
+    @with_service_target("model_budgets")
     async def is_key_within_model_budget(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -321,6 +347,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
         )
 
+    @with_service_target("model_budgets")
     async def get_fallback_model_within_budget(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -335,6 +362,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 continue
         return None
 
+    @with_service_target("model_budgets")
     async def is_user_within_model_budget(
         self,
         user_id: str,
@@ -355,6 +383,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM User: {user_id}, exceeded budget for model={model}",
         )
 
+    @with_service_target("model_budgets")
     async def is_end_user_within_model_budget(
         self,
         end_user_id: str,
@@ -375,6 +404,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
         )
 
+    @with_service_target("model_budgets")
     async def is_team_within_model_budget(
         self,
         team_id: str,
@@ -397,6 +427,24 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             model_max_budget=team_model_max_budget,
             model=model,
             exceeded_message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
+        )
+
+    @with_service_target("model_budgets")
+    async def is_team_member_within_model_budget(
+        self,
+        user_id: str,
+        team_id: str,
+        team_member_model_max_budget: Mapping[str, object],
+        model: str,
+    ) -> bool:
+        return await self._is_entity_within_model_budget(
+            entity_type=Litellm_EntityType.TEAM_MEMBER,
+            entity_id=team_member_budget_entity_id(user_id=user_id, team_id=team_id),
+            model_max_budget=team_member_model_max_budget,
+            model=model,
+            exceeded_message=(
+                f"LiteLLM Team Member: user={user_id}, team={team_id}, exceeded budget for model={model}"
+            ),
         )
 
     async def _is_entity_within_model_budget(
@@ -470,6 +518,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return await self.dual_cache.async_get_cache(key=spend_key)
         return await redis_cache.async_get_cache(key=spend_key)
 
+    @with_service_target("model_budgets")
     async def async_filter_deployments(
         self,
         model: str,
@@ -480,11 +529,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> list[dict]:
         return healthy_deployments
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("model_budgets")
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Track spend for virtual key + model in DualCache
 
-        Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
+        Example: key=$LITELLM_API_KEY, model=gpt-4o, max_budget=100, time_period=1d
         """
         verbose_proxy_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
@@ -510,6 +560,19 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
         key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
+        team_member_user_id: Final = _metadata_string_value(
+            payload_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+            "user_api_key_user_id",
+        )
+        team_member_team_id: Final = _metadata_string_value(
+            payload_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+            "user_api_key_team_id",
+        )
+        team_member_entity_id: Final = (
+            team_member_budget_entity_id(user_id=team_member_user_id, team_id=team_member_team_id)
+            if team_member_user_id is not None and team_member_team_id is not None
+            else None
+        )
         entity_budgets: Final = (
             (
                 Litellm_EntityType.KEY,
@@ -539,6 +602,14 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 Litellm_EntityType.END_USER,
                 standard_logging_payload.get("end_user") or payload_metadata.get("user_api_key_end_user_id"),
                 _metadata.get("user_api_key_end_user_model_max_budget"),
+            ),
+            (
+                Litellm_EntityType.TEAM_MEMBER,
+                team_member_entity_id,
+                _metadata_value(
+                    _metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+                    "user_api_key_team_member_model_max_budget",
+                ),
             ),
         )
 
@@ -614,3 +685,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
         )
         return polls == 1
+
+
+PROXY_VirtualKeyModelMaxBudgetLimiter = _PROXY_VirtualKeyModelMaxBudgetLimiter

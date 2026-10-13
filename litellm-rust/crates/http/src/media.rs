@@ -12,7 +12,7 @@ use reqwest::{
     dns::{Addrs, Name, Resolve, Resolving},
 };
 
-use crate::{ClientVariant, HttpClientConfig, HttpClientPool};
+use crate::{Client, ClientVariant, HttpClientConfig, HttpClientPool};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -54,24 +54,47 @@ impl Default for UrlPolicy {
 impl UrlPolicy {
     fn allows(&self, host: &str, port: u16) -> bool {
         let host = normalize_host(host);
-        let with_port = format!("{host}:{port}");
         self.allowed_hosts
             .iter()
-            .map(|entry| normalize_host(entry))
-            .any(|entry| entry == host || entry == with_port)
+            .filter_map(|entry| parse_allowed_host(entry))
+            .any(|(entry_host, entry_port)| {
+                entry_host == host && entry_port.is_none_or(|entry_port| entry_port == port)
+            })
     }
 }
 
-fn normalize_host(host: &str) -> String {
-    host.to_ascii_lowercase().trim_end_matches('.').to_owned()
+pub fn normalize_host(host: &str) -> String {
+    let host = host.trim().trim_end_matches('.');
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    host.to_ascii_lowercase()
+}
+
+fn parse_allowed_host(entry: &str) -> Option<(String, Option<u16>)> {
+    let entry = entry.trim();
+    if let Some(entry) = entry.strip_prefix('[') {
+        let (host, suffix) = entry.split_once(']')?;
+        let port = match suffix {
+            "" => None,
+            suffix => Some(suffix.strip_prefix(':')?.parse().ok()?),
+        };
+        return Some((normalize_host(host), port));
+    }
+    let (host, port) = match entry.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => (host, Some(port.parse().ok()?)),
+        _ => (entry, None),
+    };
+    Some((normalize_host(host), port))
 }
 
 type ProxyMatch = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
 
 #[derive(Clone)]
 pub struct MediaFetcher {
-    pinned: reqwest::Client,
-    unpinned: reqwest::Client,
+    pinned: Client,
+    unpinned: Client,
     uses_proxy: ProxyMatch,
     address_resolver: Arc<dyn AddressResolver>,
     url_policy: UrlPolicy,
@@ -131,7 +154,7 @@ impl MediaFetcher {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_test(client: reqwest::Client) -> Self {
+    pub fn for_test(client: Client) -> Self {
         Self {
             pinned: client.clone(),
             unpinned: client,
@@ -207,7 +230,7 @@ impl MediaFetcher {
         }
     }
 
-    async fn client_for(&self, url: &Url) -> Result<&reqwest::Client, Error> {
+    async fn client_for(&self, url: &Url) -> Result<&Client, Error> {
         if !self.url_policy.validate {
             return Ok(&self.unpinned);
         }
@@ -464,30 +487,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn blocks_non_public_addresses() {
-        for address in [
-            "0.0.0.1",
-            "10.0.0.1",
-            "100.64.0.1",
-            "127.0.0.1",
-            "169.254.1.1",
-            "172.16.0.1",
-            "192.168.0.1",
-            "198.18.0.1",
-            "198.51.100.1",
-            "203.0.113.1",
-            "224.0.0.1",
-            "::1",
-            "fc00::1",
-            "fe80::1",
-            "2001:db8::1",
-            "::ffff:127.0.0.1",
-        ] {
-            assert!(is_blocked_ip(address.parse().expect("valid test address")));
-        }
+    #[rstest::rstest]
+    #[case::unspecified_v4("0.0.0.1")]
+    #[case::private_v4("10.0.0.1")]
+    #[case::carrier_grade_nat("100.64.0.1")]
+    #[case::loopback_v4("127.0.0.1")]
+    #[case::link_local_v4("169.254.1.1")]
+    #[case::private_v4_second_range("172.16.0.1")]
+    #[case::private_v4_third_range("192.168.0.1")]
+    #[case::benchmarking_v4("198.18.0.1")]
+    #[case::documentation_v4_first_range("198.51.100.1")]
+    #[case::documentation_v4_second_range("203.0.113.1")]
+    #[case::multicast_v4("224.0.0.1")]
+    #[case::loopback_v6("::1")]
+    #[case::unique_local_v6("fc00::1")]
+    #[case::link_local_v6("fe80::1")]
+    #[case::documentation_v6("2001:db8::1")]
+    #[case::mapped_loopback_v6("::ffff:127.0.0.1")]
+    fn blocks_non_public_addresses(#[case] address: &str) {
+        assert!(is_blocked_ip(address.parse().expect("valid test address")));
+    }
+
+    #[rstest::rstest]
+    #[case::public("8.8.8.8")]
+    fn allows_a_public_address(#[case] address: &str) {
         assert!(!is_blocked_ip(
-            "8.8.8.8".parse().expect("valid public address")
+            address.parse().expect("valid public address")
         ));
     }
 
@@ -497,10 +522,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf; charset=binary\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
         )
         .await;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client builds");
+        let client = Client::no_redirect_for_test();
         let media = MediaFetcher::for_test(client)
             .fetch(url, policy(3, 0))
             .await
@@ -516,10 +538,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
         )
         .await;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client builds");
+        let client = Client::no_redirect_for_test();
         let error = MediaFetcher::for_test(client)
             .fetch(url, policy(2, 0))
             .await
@@ -534,10 +553,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n",
         )
         .await;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client builds");
+        let client = Client::no_redirect_for_test();
         let error = MediaFetcher::for_test(client)
             .fetch(url, policy(3, 0))
             .await
@@ -668,6 +684,21 @@ mod tests {
             .fetch(url, policy(2, 0))
             .await;
         assert!(matches!(result, Err(Error::BlockedUrl)));
+    }
+
+    #[test]
+    fn allowlist_matches_bracketed_ipv6_hosts_and_ports() {
+        let policy = UrlPolicy {
+            validate: true,
+            allowed_hosts: vec!["[2001:db8::1]".into(), "[2001:db8::1]:8443".into()],
+        };
+        assert!(policy.allows("2001:db8::1", 443));
+        assert!(policy.allows("2001:db8::1", 8443));
+        let port_specific = UrlPolicy {
+            validate: true,
+            allowed_hosts: vec!["[2001:db8::1]:8443".into()],
+        };
+        assert!(!port_specific.allows("2001:db8::1", 9443));
     }
 
     #[tokio::test]

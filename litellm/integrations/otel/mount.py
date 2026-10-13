@@ -12,22 +12,13 @@ when the feature gate is off.
 """
 
 import os
-from collections.abc import Callable
-from typing import Any, Final
-
-from opentelemetry.trace import Span, get_current_span
-from starlette.applications import Starlette
-from starlette.datastructures import MutableHeaders
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.integrations.otel.model.semconv import LiteLLM
-from litellm.integrations.otel.plumbing.context import (
-    is_recordable_span,
-    request_root_span,
-    set_request_root_span,
-)
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 # Routes excluded from server-span tracing by default: high-frequency pollers and
 # static UI/docs assets, none of which are LLM traffic. Entries are substring-matched
@@ -49,49 +40,6 @@ _DEFAULT_EXCLUDED_ROUTES: Final = (
     "/.well-known",  # UI config discovery
 )
 _DEFAULT_EXCLUDED_URLS: Final = ",".join(_DEFAULT_EXCLUDED_ROUTES)
-LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
-LITELLM_TRACE_ID_HEADER: Final = "x-litellm-trace-id"
-
-
-def _recording_request_root_span() -> Span | None:
-    span: Final = request_root_span() or get_current_span()
-    if not is_recordable_span(span) or not span.is_recording():
-        return None
-    set_request_root_span(span)
-    return span
-
-
-class TraceCorrelationMiddleware:
-    def __init__(self, app: ASGIApp, state: "_TraceCorrelationState") -> None:
-        self.app = app
-        self.state = state
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not self.state.enabled:
-            await self.app(scope, receive, send)
-            return
-
-        async def send_with_trace_correlation(message: Message) -> None:
-            if message["type"] == "http.response.start":
-                span: Final = _recording_request_root_span()
-                if span is not None:
-                    headers: Final = MutableHeaders(scope=message)
-                    headers[LITELLM_TRACE_ID_HEADER] = f"{span.get_span_context().trace_id:032x}"
-                    call_id: Final = headers.get(LITELLM_CALL_ID_HEADER)
-                    if call_id:
-                        span.set_attribute(LiteLLM.CALL_ID, call_id)
-            await send(message)
-
-        await self.app(scope, receive, send_with_trace_correlation)
-
-
-class _TraceCorrelationState:
-    def __init__(self) -> None:
-        self.enabled = False
-
-    def enable(self) -> None:
-        self.enabled = True
-
 
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
 # default OTel server-span name "{method} {route}" collapses every upstream
@@ -120,7 +68,15 @@ PASSTHROUGH_PREFIXES: Final = frozenset(
 )
 
 
-def _passthrough_span_name_hook(span: Any, scope: dict) -> None:
+class _RenameableSpan(Protocol):
+    def is_recording(self) -> bool: ...
+
+    def update_name(self, name: str) -> None: ...
+
+    def set_attribute(self, key: str, value: str) -> None: ...
+
+
+def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: dict) -> None:
     """FastAPI ``server_request_hook``: give passthrough server spans a useful name.
 
     The instrumentation matches the route at span creation, so both the span name
@@ -143,14 +99,7 @@ def _passthrough_span_name_hook(span: Any, scope: dict) -> None:
         pass
 
 
-def _install_trace_correlation(app: Starlette, install_instrumentation: Callable[[], None]) -> None:
-    correlation_state: Final = _TraceCorrelationState()
-    app.add_middleware(TraceCorrelationMiddleware, state=correlation_state)
-    install_instrumentation()
-    correlation_state.enable()
-
-
-def instrument_fastapi_app(app: Starlette) -> None:
+def instrument_fastapi_app(app: "FastAPI") -> None:
     """Attach OTel server-span instrumentation to the proxy FastAPI app.
 
     Safe no-op when the V2 gate is off or ``opentelemetry-instrumentation-fastapi``
@@ -162,6 +111,10 @@ def instrument_fastapi_app(app: Starlette) -> None:
     ``ProxyTracerProvider``; the proxy publishes the real provider as the global
     after config load (see ``proxy_startup_event``), and the proxy delegates to it.
     That way server spans and gen-ai spans share one provider and the same trace.
+
+    Once instrumented, every traced response carries the W3C ``traceresponse``
+    header naming its server span, unless another response propagator is already
+    registered.
     """
     try:
         if not is_otel_v2_enabled():
@@ -173,24 +126,27 @@ def instrument_fastapi_app(app: Starlette) -> None:
         # ``proxy_server``'s unconditional ``import`` of this module crash when the
         # package is absent, even with the gate off.
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.propagators import (
+            TraceResponsePropagator,
+            get_global_response_propagator,
+            set_global_response_propagator,  # pyright: ignore[reportUnknownVariableType]  # upstream leaves its parameter unannotated
+        )
 
         excluded_urls: Final = (
             os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
             if "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS" in os.environ
             else _DEFAULT_EXCLUDED_URLS
         )
-
-        def install_instrumentation() -> None:
-            FastAPIInstrumentor.instrument_app(
-                app,
-                excluded_urls=excluded_urls,
-                server_request_hook=_passthrough_span_name_hook,
-                # Drop the ASGI "http receive"/"http send" lifecycle sub-spans: they
-                # are low-value noise and (for passthrough) carry the catch-all route
-                # template in their name, which can't be rewritten from a hook.
-                exclude_spans=["receive", "send"],
-            )
-
-        _install_trace_correlation(app, install_instrumentation)
+        FastAPIInstrumentor.instrument_app(
+            app,
+            excluded_urls=excluded_urls,
+            server_request_hook=_passthrough_span_name_hook,
+            # Drop the ASGI "http receive"/"http send" lifecycle sub-spans: they
+            # are low-value noise and (for passthrough) carry the catch-all route
+            # template in their name, which can't be rewritten from a hook.
+            exclude_spans=["receive", "send"],
+        )
+        if get_global_response_propagator() is None:
+            set_global_response_propagator(TraceResponsePropagator())
     except Exception as e:
         verbose_logger.debug("Skipping OTel V2 FastAPI instrumentation: %s", e)

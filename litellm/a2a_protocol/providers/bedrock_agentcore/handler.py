@@ -7,7 +7,7 @@ completion bridge that would otherwise strip the envelope.
 
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, Final
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -30,9 +30,9 @@ class BedrockAgentCoreA2AHandler:
     async def handle_non_streaming(
         request_id: str,
         params: Mapping[str, object],
-        litellm_params: dict[str, Any],
+        litellm_params: dict[str, object],
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle non-streaming A2A request to AgentCore.
 
@@ -77,9 +77,9 @@ class BedrockAgentCoreA2AHandler:
     async def handle_streaming(
         request_id: str,
         params: Mapping[str, object],
-        litellm_params: dict[str, Any],
+        litellm_params: dict[str, object],
         agent_extra_headers: dict[str, str] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, object]]:
         """
         Handle streaming A2A request to AgentCore.
 
@@ -98,7 +98,7 @@ class BedrockAgentCoreA2AHandler:
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
-            method="message/send",
+            method="message/stream",
             stream=True,
             agent_extra_headers=agent_extra_headers,
         )

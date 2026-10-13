@@ -9,7 +9,9 @@ from sys import float_info
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat, TypeAdapter, model_validator
+from pydantic import ConfigDict, Field, StrictFloat, TypeAdapter, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 CapabilityBoundary: TypeAlias = Literal["supported", "uncertain", "unsupported", "unmatched"]
 CapabilityRule: TypeAlias = Literal[
@@ -111,7 +113,7 @@ _RULE_BOUNDARIES: Final = MappingProxyType(
 )
 
 
-class CapabilityClassifierVerdict(BaseModel):
+class CapabilityClassifierVerdict(LiteLLMBaseModel):
     """Strict structured verdict returned by the capability forecaster."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -202,15 +204,26 @@ def capability_classifier_system_prompt(mode: Literal["json_schema", "json_objec
     )
 
 
-def unwrap_classifier_json(content: str) -> str:
-    """Remove the optional Markdown fence without repairing or weakening verdict JSON."""
-    text: Final = content.strip()
-    if not text.startswith("```"):
-        return text
-    unfenced: Final = text.removeprefix("```").removeprefix("json").lstrip("\n\r")
-    return unfenced.removesuffix("```").strip()
+_JSON_DECODER: Final = json.JSONDecoder()
+
+
+def _complete_json_object_at(content: str, start: int) -> str | None:
+    try:
+        _, end = _JSON_DECODER.raw_decode(content, start)
+    except (ValueError, RecursionError):
+        return None
+    return content[start:end]
+
+
+def extract_classifier_json(content: str) -> str:
+    """Return the first complete JSON object in the reply, whatever prose or fence surrounds it.
+
+    A reply with no complete object comes back stripped so the caller's validation names the defect."""
+    object_starts: Final = (index for index, char in enumerate(content) if char == "{")
+    candidates: Final = (_complete_json_object_at(content, start) for start in object_starts)
+    return next((candidate for candidate in candidates if candidate is not None), content.strip())
 
 
 def parse_capability_classifier_verdict(content: str) -> CapabilityClassifierVerdict:
-    """Parse raw JSON or the fenced JSON shape tolerated by Switchyard."""
-    return CapabilityClassifierVerdict.model_validate_json(unwrap_classifier_json(content))
+    """Parse the verdict object out of a bare, fenced, or prose-wrapped reply."""
+    return CapabilityClassifierVerdict.model_validate_json(extract_classifier_json(content))

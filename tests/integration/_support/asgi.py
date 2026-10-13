@@ -4,8 +4,8 @@ import queue
 import socket
 import threading
 import time
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future
-from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Final
 
@@ -14,18 +14,20 @@ from starlette.types import ASGIApp
 
 
 @contextmanager
-def asgi_server(app: ASGIApp) -> Iterator[str]:
+def asgi_server(
+    app: ASGIApp, *, before_stop: Callable[[], None] | None = None, port: int = 0, keepalive_seconds: int = 1
+) -> Iterator[str]:
     with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port: Final = listener.getsockname()[1]
+        listener.bind(("127.0.0.1", port))
+        bound_port: Final = listener.getsockname()[1]
         server: Final = uvicorn.Server(
             uvicorn.Config(
                 app,
                 host="127.0.0.1",
-                port=port,
+                port=bound_port,
                 lifespan="on",
                 log_level="warning",
-                timeout_keep_alive=1,
+                timeout_keep_alive=keepalive_seconds,
                 timeout_graceful_shutdown=5,
             )
         )
@@ -47,7 +49,7 @@ def asgi_server(app: ASGIApp) -> Iterator[str]:
         class Capture(logging.Handler):
             def emit(self, record: logging.LogRecord) -> None:
                 if record.thread == worker.ident and record.levelno >= logging.ERROR:
-                    errors.put(record.getMessage())
+                    errors.put(self.format(record))
 
         handler: Final = Capture()
         logger: Final = logging.getLogger("uvicorn.error")
@@ -58,8 +60,10 @@ def asgi_server(app: ASGIApp) -> Iterator[str]:
             while not server.started:
                 assert worker.is_alive() and time.monotonic() < deadline, "Owned ASGI peer failed readiness"
                 time.sleep(0.01)
-            yield f"http://127.0.0.1:{port}"
+            yield f"http://127.0.0.1:{bound_port}"
         finally:
+            if before_stop is not None:
+                before_stop()
             server.should_exit = True
             worker.join(timeout=8)
             forced: Final = worker.is_alive()
