@@ -18,7 +18,7 @@ from litellm.proxy.telemetry.endpoints import (
     telemetry_store,
 )
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
-from litellm.proxy.telemetry.settings import TelemetrySettings
+from litellm.proxy.telemetry.settings import TelemetryDestination, TelemetrySettings
 from litellm.proxy.telemetry.store import TelemetryStore
 from tests.unit.proxy.telemetry.fake_database import SettingsDatabase
 
@@ -125,13 +125,20 @@ async def test_an_admin_can_store_groups_and_reads_them_back_with_a_sample_repor
     db: Final = SettingsDatabase()
     client, runtime = await _settings_client(LitellmUserRoles.PROXY_ADMIN, TelemetrySettings(), db)
     async with client:
-        saved: Final = await client.put("/telemetry/settings", json={"groups": ["heartbeat", "request_success"]})
+        saved: Final = await client.put(
+            "/telemetry/settings", json={"groups": ["heartbeat", "request_success"], "destination": "local_table"}
+        )
         read: Final = await client.get("/telemetry/settings")
     await runtime.stop()
     assert saved.status_code == 200, saved.text
     assert _enabled(read) == ("heartbeat", "request_success")
     body: Final = _settings(read)
-    assert (body.editable, body.destination, body.report_is_sample) == (True, "local_table", True)
+    assert (body.editable, body.destination, body.stored_destination, body.report_is_sample) == (
+        True,
+        TelemetryDestination.LOCAL_TABLE,
+        TelemetryDestination.LOCAL_TABLE,
+        True,
+    )
     assert body.report is not None and body.report["requests"]
 
 
@@ -200,13 +207,42 @@ async def test_env_vars_lock_the_settings_and_are_listed_without_their_values(
 
 
 @pytest.mark.asyncio
-async def test_a_vetoed_proxy_with_a_database_still_reports_the_local_table_as_its_destination() -> None:
+async def test_without_a_chosen_destination_the_settings_say_none_and_offer_only_what_is_configured() -> None:
     db: Final = SettingsDatabase(stored_groups='{"groups": ["heartbeat"]}')
-    client, runtime = await _settings_client(LitellmUserRoles.PROXY_ADMIN, TelemetrySettings(disabled=True), db)
+    client, runtime = await _settings_client(LitellmUserRoles.PROXY_ADMIN, TelemetrySettings(), db)
     async with client:
         read: Final = await client.get("/telemetry/settings")
     await runtime.stop()
-    assert (_settings(read).vetoed, _settings(read).destination) == (True, "local_table")
+    body: Final = _settings(read)
+    assert (body.destination, body.available_destinations) == (None, (TelemetryDestination.LOCAL_TABLE,))
+    assert runtime.sink is None
+
+
+@pytest.mark.asyncio
+async def test_choosing_http_without_an_endpoint_is_rejected_and_nothing_is_stored() -> None:
+    db: Final = SettingsDatabase()
+    client, runtime = await _settings_client(LitellmUserRoles.PROXY_ADMIN, TelemetrySettings(), db)
+    async with client:
+        response: Final = await client.put("/telemetry/settings", json={"groups": ["heartbeat"], "destination": "http"})
+    await runtime.stop()
+    assert response.status_code == 400, response.text
+    assert db.stored_groups is None
+
+
+@pytest.mark.asyncio
+async def test_an_env_destination_cannot_be_overridden_from_the_settings_page() -> None:
+    db: Final = SettingsDatabase()
+    settings: Final = TelemetrySettings(destination=TelemetryDestination.LOCAL_TABLE)
+    client, runtime = await _settings_client(LitellmUserRoles.PROXY_ADMIN, settings, db)
+    async with client:
+        override: Final = await client.put(
+            "/telemetry/settings", json={"groups": ["heartbeat"], "destination": "local_table"}
+        )
+        groups_only: Final = await client.put("/telemetry/settings", json={"groups": ["heartbeat"]})
+    await runtime.stop()
+    assert (override.status_code, groups_only.status_code) == (409, 200)
+    assert _settings(groups_only).destination_set_by_environment is True
+    assert _settings(groups_only).destination is TelemetryDestination.LOCAL_TABLE
 
 
 @pytest.mark.asyncio

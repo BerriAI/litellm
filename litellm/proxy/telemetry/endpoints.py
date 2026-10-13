@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
@@ -7,8 +7,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.telemetry.runtime import TelemetryRuntime
-from litellm.proxy.telemetry.settings import FLUSH_INTERVAL_SECONDS
+from litellm.proxy.telemetry.runtime import StoredChoice, TelemetryRuntime
+from litellm.proxy.telemetry.settings import FLUSH_INTERVAL_SECONDS, TelemetryDestination
 from litellm.proxy.telemetry.store import StoredReport, TelemetryStore, store_read_errors
 from litellm.telemetry.consent import OFF, REQUIRES, TelemetryConsent, parse_consent
 from litellm.telemetry.records import TelemetryGroup
@@ -81,7 +81,10 @@ class TelemetrySettingsResponse(BaseModel):
     set_by_environment: bool
     environment_variables: tuple[str, ...]
     editable: bool
-    destination: Literal["https", "local_table", "none"]
+    destination: TelemetryDestination | None
+    stored_destination: TelemetryDestination | None
+    destination_set_by_environment: bool
+    available_destinations: tuple[TelemetryDestination, ...]
     flush_interval_seconds: float
     retention_days: int
     report: Mapping[str, JsonValue] | None
@@ -92,6 +95,7 @@ class TelemetrySettingsUpdate(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     groups: tuple[str, ...]
+    destination: TelemetryDestination | None = None
 
 
 def telemetry_runtime_dependency() -> TelemetryRuntime:
@@ -100,20 +104,25 @@ def telemetry_runtime_dependency() -> TelemetryRuntime:
     return telemetry_runtime
 
 
-def _destination(runtime: TelemetryRuntime, has_database: bool) -> Literal["https", "local_table", "none"]:
-    if runtime.settings.endpoint is not None:
-        return "https"
-    return "local_table" if has_database else "none"
+def _available_destinations(runtime: TelemetryRuntime, has_database: bool) -> tuple[TelemetryDestination, ...]:
+    return tuple(
+        destination
+        for destination, available in (
+            (TelemetryDestination.LOCAL_TABLE, has_database),
+            (TelemetryDestination.HTTP, runtime.settings.endpoint is not None),
+        )
+        if available
+    )
 
 
 _STORE_UNAVAILABLE: Final = "Could not reach the stored telemetry settings, try again"
 
 
 async def _settings_response(
-    runtime: TelemetryRuntime, stored: TelemetryConsent | None, has_database: bool, caller: UserAPIKeyAuth
+    runtime: TelemetryRuntime, stored: StoredChoice, has_database: bool, caller: UserAPIKeyAuth
 ) -> TelemetrySettingsResponse:
     policy: Final = runtime.policy
-    effective: Final = policy.effective(stored) if policy is not None else OFF
+    effective: Final = policy.effective(stored.consent) if policy is not None else OFF
     last: Final = runtime.last_report
     preview: Final = (
         last
@@ -127,7 +136,11 @@ async def _settings_response(
             TelemetryGroupInfo(group=group, requires=REQUIRES[group], enabled=group in effective.groups)
             for group in TelemetryGroup
         ),
-        stored_groups=tuple(sorted(stored.groups, key=tuple(TelemetryGroup).index)) if stored is not None else None,
+        stored_groups=(
+            tuple(sorted(stored.consent.groups, key=tuple(TelemetryGroup).index))
+            if stored.consent is not None
+            else None
+        ),
         vetoed=policy is None or policy.vetoed,
         set_by_environment=policy is None or policy.vetoed or policy.pinned is not None,
         environment_variables=policy.set_variables if policy is not None else (),
@@ -136,7 +149,10 @@ async def _settings_response(
         and not policy.vetoed
         and policy.pinned is None
         and runtime.store is not None,
-        destination=_destination(runtime, has_database),
+        destination=policy.effective_destination(stored.destination) if policy is not None else None,
+        stored_destination=stored.destination,
+        destination_set_by_environment=policy is not None and policy.destination is not None,
+        available_destinations=_available_destinations(runtime, has_database),
         flush_interval_seconds=FLUSH_INTERVAL_SECONDS,
         retention_days=runtime.settings.retention_days,
         report=_REPORT_JSON.validate_python(report_to_json(preview)) if preview is not None else None,
@@ -144,9 +160,9 @@ async def _settings_response(
     )
 
 
-async def _stored(runtime: TelemetryRuntime) -> TelemetryConsent | None:
+async def _stored(runtime: TelemetryRuntime) -> StoredChoice:
     try:
-        return await runtime.stored_consent()
+        return await runtime.stored_choice()
     except store_read_errors() as e:
         verbose_proxy_logger.warning("telemetry: could not read the stored settings: %s", e)
         raise HTTPException(status_code=503, detail=_STORE_UNAVAILABLE) from e
@@ -158,7 +174,8 @@ async def get_telemetry_settings(
     runtime: Annotated[TelemetryRuntime, Depends(telemetry_runtime_dependency)],
     store: Annotated[TelemetryStore | None, Depends(telemetry_store)],
 ) -> TelemetrySettingsResponse:
-    """Which telemetry groups are on, whether env vars control them, where reports go and a last or sample report"""
+    """Which telemetry groups are on, whether env vars control them, where reports go and a last or sample report.
+    Nothing is recorded until a destination is chosen by ``LITELLM_TELEMETRY_DESTINATION`` or a saved setting"""
     if user_api_key_dict.user_role not in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
         raise HTTPException(status_code=403, detail="Only proxy admin roles can view telemetry settings")
     return await _settings_response(runtime, await _stored(runtime), store is not None, user_api_key_dict)
@@ -170,7 +187,7 @@ async def update_telemetry_settings(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     runtime: Annotated[TelemetryRuntime, Depends(telemetry_runtime_dependency)],
 ) -> TelemetrySettingsResponse:
-    """Store the telemetry groups for every worker, applied from the next report window"""
+    """Store the telemetry groups and destination for every worker, applied from the next report window"""
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(status_code=403, detail="Only the proxy admin can change telemetry settings")
     policy: Final = runtime.policy
@@ -182,12 +199,19 @@ async def update_telemetry_settings(
     consent: Final = parse_consent(update.groups)
     if not isinstance(consent, TelemetryConsent):
         raise HTTPException(status_code=400, detail=consent.message())
+    if update.destination is not None and policy.destination is not None:
+        raise HTTPException(status_code=409, detail="The destination is set by LITELLM_TELEMETRY_DESTINATION")
+    if update.destination is TelemetryDestination.HTTP and runtime.settings.endpoint is None:
+        raise HTTPException(status_code=400, detail="Set LITELLM_TELEMETRY_ENDPOINT to send reports over HTTP")
     try:
-        await store.save_consent(consent)
+        await store.save_settings(consent, update.destination)
     except store_read_errors() as e:
         verbose_proxy_logger.warning("telemetry: could not save the settings: %s", e)
         raise HTTPException(status_code=503, detail=_STORE_UNAVAILABLE) from e
     verbose_proxy_logger.info(
-        "telemetry: %s set groups to %s", user_api_key_dict.user_id, sorted(g.value for g in consent.groups)
+        "telemetry: %s set groups to %s and destination to %s",
+        user_api_key_dict.user_id,
+        sorted(g.value for g in consent.groups),
+        update.destination and update.destination.value,
     )
-    return await _settings_response(runtime, consent, True, user_api_key_dict)
+    return await _settings_response(runtime, StoredChoice(consent, update.destination), True, user_api_key_dict)

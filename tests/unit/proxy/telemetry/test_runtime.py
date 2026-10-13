@@ -7,7 +7,7 @@ from pydantic import HttpUrl
 
 from litellm.proxy.telemetry.attempt_logger import TelemetryAttemptLogger
 from litellm.proxy.telemetry.runtime import TelemetryRuntime, deployment_hasher
-from litellm.proxy.telemetry.settings import TelemetrySettings
+from litellm.proxy.telemetry.settings import TelemetryDestination, TelemetrySettings
 from litellm.telemetry.consent import ConsentGatedSink, TelemetryConsent
 from litellm.telemetry.records import AttemptRecord, InstanceInfo, RequestRecord, TelemetryGroup, UIEvent
 from tests.unit.proxy.telemetry.fake_database import SettingsDatabase
@@ -74,7 +74,7 @@ async def test_pinned_groups_register_the_attempt_logger_and_stop_cleanly() -> N
     runtime: Final = TelemetryRuntime()
     await runtime.start(
         litellm_version="1.0.0",
-        settings=TelemetrySettings(groups="HEARTBEAT", endpoint=_ENDPOINT),
+        settings=TelemetrySettings(groups="HEARTBEAT", endpoint=_ENDPOINT, destination=TelemetryDestination.HTTP),
         db=lambda: None,
         register=registered.append,
         http_client=_offline,
@@ -87,7 +87,9 @@ async def test_pinned_groups_register_the_attempt_logger_and_stop_cleanly() -> N
 
 @pytest.mark.asyncio
 async def test_pinned_groups_win_over_the_stored_groups() -> None:
-    db: Final = SettingsDatabase(stored_groups='{"groups": ["heartbeat", "request_success"]}')
+    db: Final = SettingsDatabase(
+        stored_groups='{"groups": ["heartbeat", "request_success"], "destination": "local_table"}'
+    )
     runtime: Final = await _started(TelemetrySettings(groups="heartbeat"), db)
     assert runtime.sink is not None and runtime.sink.consent == _HEARTBEAT
     await runtime.stop()
@@ -98,10 +100,10 @@ async def test_stored_groups_are_picked_up_at_the_next_window_without_a_restart(
     db: Final = SettingsDatabase()
     runtime: Final = await _started(TelemetrySettings(), db)
     assert runtime.sink is None
-    db.stored_groups = '{"groups": ["heartbeat", "request_success"]}'
+    db.stored_groups = '{"groups": ["heartbeat", "request_success"], "destination": "local_table"}'
     await runtime.refresh()
     assert runtime.sink is not None and runtime.sink.consent == _SUCCESS
-    db.stored_groups = '{"groups": []}'
+    db.stored_groups = '{"groups": [], "destination": "local_table"}'
     await runtime.refresh()
     assert runtime.sink is None
     await runtime.stop()
@@ -117,11 +119,38 @@ async def test_invalid_stored_groups_are_ignored_and_telemetry_stays_off() -> No
 
 @pytest.mark.asyncio
 async def test_a_failing_settings_read_keeps_the_current_groups() -> None:
-    db: Final = SettingsDatabase(stored_groups='{"groups": ["heartbeat"]}')
+    db: Final = SettingsDatabase(stored_groups='{"groups": ["heartbeat"], "destination": "local_table"}')
     runtime: Final = await _started(TelemetrySettings(), db)
     db.fail_reads = True
     await runtime.refresh()
     assert runtime.sink is not None and runtime.sink.consent == _HEARTBEAT
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_groups_without_a_chosen_destination_record_nothing_until_one_is_saved() -> None:
+    db: Final = SettingsDatabase(stored_groups='{"groups": ["heartbeat"]}')
+    runtime: Final = await _started(TelemetrySettings(groups="heartbeat"), db)
+    assert (runtime.sink, runtime.destination) == (None, None)
+    db.stored_groups = '{"groups": [], "destination": "local_table"}'
+    await runtime.refresh()
+    assert runtime.sink is not None and runtime.destination is TelemetryDestination.LOCAL_TABLE
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_the_env_destination_wins_over_the_stored_one() -> None:
+    db: Final = SettingsDatabase(stored_groups='{"groups": ["heartbeat"], "destination": "local_table"}')
+    runtime: Final = await _started(TelemetrySettings(endpoint=_ENDPOINT, destination=TelemetryDestination.HTTP), db)
+    assert runtime.sink is not None and runtime.destination is TelemetryDestination.HTTP
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_stored_http_destination_without_an_endpoint_records_nothing() -> None:
+    db: Final = SettingsDatabase(stored_groups='{"groups": ["heartbeat"], "destination": "http"}')
+    runtime: Final = await _started(TelemetrySettings(), db)
+    assert runtime.sink is None
     await runtime.stop()
 
 
@@ -133,7 +162,9 @@ def test_deployment_hashes_are_stable_per_secret_and_differ_across_secrets() -> 
 
 @pytest.mark.asyncio
 async def test_stop_waits_for_in_flight_request_finalizers_before_the_last_flush() -> None:
-    runtime: Final = await _started(TelemetrySettings(groups="heartbeat", endpoint=_ENDPOINT), None)
+    runtime: Final = await _started(
+        TelemetrySettings(groups="heartbeat", endpoint=_ENDPOINT, destination=TelemetryDestination.HTTP), None
+    )
     finished: Final[list[bool]] = []  # mutable-ok: records that the finalizer ran to completion
 
     async def _finalizer() -> None:
@@ -177,7 +208,7 @@ async def test_stop_during_an_export_lets_that_export_finish() -> None:
     runtime: Final = TelemetryRuntime()
     await runtime.start(
         litellm_version="1.0.0",
-        settings=TelemetrySettings(groups="heartbeat", endpoint=_ENDPOINT),
+        settings=TelemetrySettings(groups="heartbeat", endpoint=_ENDPOINT, destination=TelemetryDestination.HTTP),
         flush_interval_s=0.001,
         db=lambda: None,
         register=lambda _logger: None,

@@ -4,7 +4,9 @@ import hashlib
 import hmac
 import secrets
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import httpx
@@ -15,7 +17,13 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import get_salt_key
 from litellm.proxy.telemetry.attempt_logger import TelemetryAttemptLogger
-from litellm.proxy.telemetry.settings import FLUSH_INTERVAL_SECONDS, EnvPolicy, TelemetrySettings, env_policy
+from litellm.proxy.telemetry.settings import (
+    FLUSH_INTERVAL_SECONDS,
+    EnvPolicy,
+    TelemetryDestination,
+    TelemetrySettings,
+    env_policy,
+)
 from litellm.proxy.telemetry.store import Database, LocalTableExporter, TelemetryStore, store_read_errors
 from litellm.telemetry.aggregate import AggregatingSink
 from litellm.telemetry.consent import OFF, ConsentGatedSink, TelemetryConsent
@@ -26,6 +34,12 @@ from litellm.telemetry.sink import Exporter, ExportOutcome
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 StoredConsent: TypeAlias = Callable[[], Awaitable[TelemetryConsent | None]]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredChoice:
+    consent: TelemetryConsent | None = None
+    destination: TelemetryDestination | None = None
 
 
 def proxy_hash_secret() -> bytes:
@@ -65,13 +79,27 @@ def shared_http_client() -> httpx.AsyncClient:
     return get_async_httpx_client(httpxSpecialProvider.LoggingCallback, params={"timeout": 10.0}).client
 
 
-def _exporter(
+def _available_exporters(
     endpoint: str | None, store: TelemetryStore | None, http_client: Callable[[], httpx.AsyncClient]
-) -> Exporter:
+) -> Iterator[tuple[TelemetryDestination, _RememberingExporter]]:
     if endpoint is not None:
-        return HttpExporter(http_client(), endpoint)
-    assert store is not None, "start() returns early when there is neither an endpoint nor a database"
-    return LocalTableExporter(store)
+        yield TelemetryDestination.HTTP, _RememberingExporter(HttpExporter(http_client(), endpoint))
+    if store is not None:
+        yield TelemetryDestination.LOCAL_TABLE, _RememberingExporter(LocalTableExporter(store))
+
+
+def _log_applied(consent: TelemetryConsent, destination: TelemetryDestination | None, *, recording: bool) -> None:
+    groups: Final = sorted(group.value for group in consent.groups)
+    if recording:
+        verbose_proxy_logger.info(
+            "telemetry: recording %s, reports go to %s", groups, destination and destination.value
+        )
+    elif consent != OFF:
+        verbose_proxy_logger.warning(
+            "telemetry: %s are on but no usable destination is chosen, recording nothing. Set "
+            "LITELLM_TELEMETRY_DESTINATION or pick one on the Telemetry page",
+            groups,
+        )
 
 
 class TelemetryRuntime:
@@ -83,7 +111,9 @@ class TelemetryRuntime:
         self.policy: EnvPolicy | None = None
         self.settings: TelemetrySettings = TelemetrySettings.model_construct()
         self.litellm_version: str = ""
-        self._exporter: _RememberingExporter | None = None
+        self.destination: TelemetryDestination | None = None
+        self._exporters: Mapping[TelemetryDestination, _RememberingExporter] = MappingProxyType({})
+        self._applied: tuple[TelemetryConsent, TelemetryDestination | None] | None = None
         self._instance: InstanceInfo | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._flushing: asyncio.Future[None] | None = None
@@ -91,7 +121,8 @@ class TelemetryRuntime:
 
     @property
     def last_report(self) -> Report | None:
-        return self._exporter.last_report if self._exporter is not None else None
+        exporter: Final = self._exporters.get(self.destination) if self.destination is not None else None
+        return exporter.last_report if exporter is not None else None
 
     def spawn(self, coroutine: Coroutine[None, None, None]) -> None:
         task: Final = asyncio.create_task(coroutine)
@@ -120,7 +151,7 @@ class TelemetryRuntime:
             return
         self.store = store
         endpoint: Final = str(settings.endpoint) if settings.endpoint is not None else None
-        self._exporter = _RememberingExporter(_exporter(endpoint, store, http_client))
+        self._exporters = MappingProxyType(dict(_available_exporters(endpoint, store, http_client)))
         register(
             TelemetryAttemptLogger(
                 lambda: self.sink,
@@ -135,13 +166,15 @@ class TelemetryRuntime:
         sink: Final = self.sink
         return sink is not None and sink.consent.allows(TelemetryGroup.EVENT_DETAILS)
 
-    async def stored_consent(self) -> TelemetryConsent | None:
+    async def stored_choice(self) -> StoredChoice:
         store: Final = self.store
-        stored: Final = await store.consent() if store is not None else None
-        if stored is None or isinstance(stored, TelemetryConsent):
-            return stored
-        verbose_proxy_logger.warning("telemetry: ignoring stored settings, %s", stored.message())
-        return None
+        stored: Final = await store.settings() if store is not None else None
+        if stored is None:
+            return StoredChoice()
+        if isinstance(stored.consent, TelemetryConsent):
+            return StoredChoice(stored.consent, stored.destination)
+        verbose_proxy_logger.warning("telemetry: ignoring stored groups, %s", stored.consent.message())
+        return StoredChoice(destination=stored.destination)
 
     async def _instance_info(self) -> InstanceInfo:
         known: Final = self._instance
@@ -156,22 +189,27 @@ class TelemetryRuntime:
         return instance
 
     async def refresh(self) -> None:
-        """Apply the current groups; only called between windows so every report has a single set of groups"""
+        """Apply the current groups and destination; only called between windows so every report has a single set"""
         policy: Final = self.policy
-        exporter: Final = self._exporter
-        if policy is None or exporter is None:
+        if policy is None or not self._exporters:
             return
         try:
-            consent: Final = policy.effective(await self.stored_consent() if policy.pinned is None else None)
-            current: Final = self.sink
-            if current is not None and current.consent == consent:
+            pinned: Final = policy.pinned is not None and policy.destination is not None
+            stored: Final = StoredChoice() if pinned else await self.stored_choice()
+            consent: Final = policy.effective(stored.consent)
+            destination: Final = policy.effective_destination(stored.destination)
+            if self._applied == (consent, destination):
                 return
-            if consent == OFF:
-                self.sink = None
-                return
-            gated: Final = ConsentGatedSink(AggregatingSink(exporter), consent)
-            gated.set_instance(await self._instance_info())
-            self.sink = gated
+            exporter: Final = self._exporters.get(destination) if destination is not None else None
+            sink: Final = (
+                ConsentGatedSink(AggregatingSink(exporter), consent)
+                if consent != OFF and exporter is not None
+                else None
+            )
+            if sink is not None:
+                sink.set_instance(await self._instance_info())
+            self.sink, self.destination, self._applied = sink, destination, (consent, destination)
+            _log_applied(consent, destination, recording=sink is not None)
         except store_read_errors() as e:
             verbose_proxy_logger.debug("telemetry: keeping the current groups, could not read stored settings: %s", e)
 

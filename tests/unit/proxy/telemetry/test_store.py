@@ -7,7 +7,7 @@ from typing_extensions import LiteralString
 
 from litellm.proxy.telemetry.attempt_logger import TelemetryAttemptLogger
 from litellm.proxy.telemetry.runtime import TelemetryRuntime, deployment_hash_secret
-from litellm.proxy.telemetry.settings import TelemetrySettings
+from litellm.proxy.telemetry.settings import TelemetryDestination, TelemetrySettings
 from litellm.proxy.telemetry.store import HASH_SECRET_PARAM, LocalTableExporter, TelemetryStore
 from litellm.telemetry.records import AttemptRecord, InstanceInfo, StatusClass
 from litellm.telemetry.report import Report
@@ -96,13 +96,16 @@ async def test_a_failed_prune_does_not_resend_a_window_that_was_already_stored()
 
 
 @pytest.mark.asyncio
-async def test_without_an_endpoint_the_runtime_keeps_reports_locally_under_the_persisted_instance_id() -> None:
+async def test_the_local_table_destination_keeps_reports_under_the_persisted_instance_id() -> None:
     db: Final = _FakeDatabase()
     registered: Final[list[TelemetryAttemptLogger]] = []  # mutable-ok: captures the register callback
     runtime: Final = TelemetryRuntime()
     await runtime.start(
         litellm_version="1.0.0",
-        settings=TelemetrySettings(groups="heartbeat,request_success,token_info,request_taxonomy"),
+        settings=TelemetrySettings(
+            groups="heartbeat,request_success,token_info,request_taxonomy",
+            destination=TelemetryDestination.LOCAL_TABLE,
+        ),
         db=lambda: db,
         register=registered.append,
     )

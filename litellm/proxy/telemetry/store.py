@@ -2,6 +2,7 @@ import json
 import secrets
 import uuid
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from typing import Final, Protocol
 
 import httpx
@@ -9,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from typing_extensions import LiteralString
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.telemetry.settings import TelemetryDestination
 from litellm.telemetry.consent import ConsentError, TelemetryConsent, parse_consent
 from litellm.telemetry.report import Report, report_to_json
 from litellm.telemetry.sink import ExportOutcome
@@ -42,6 +44,13 @@ class _StoredGroups(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     groups: tuple[str, ...]
+    destination: TelemetryDestination | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StoredSettings:
+    consent: TelemetryConsent | ConsentError
+    destination: TelemetryDestination | None
 
 
 class _SettingsRow(BaseModel):
@@ -83,20 +92,28 @@ class TelemetryStore:
         )
         return rows[0].value
 
-    async def consent(self) -> TelemetryConsent | ConsentError | None:
+    async def settings(self) -> StoredSettings | None:
         rows: Final = _SETTINGS_ROWS.validate_python(
             await self._db.query_raw(
                 """SELECT param_value FROM "LiteLLM_Config" WHERE param_name = $1""", SETTINGS_PARAM
             )
         )
-        return parse_consent(rows[0].param_value.groups) if rows else None
+        if not rows:
+            return None
+        stored: Final = rows[0].param_value
+        return StoredSettings(consent=parse_consent(stored.groups), destination=stored.destination)
 
-    async def save_consent(self, consent: TelemetryConsent) -> None:
+    async def save_settings(self, consent: TelemetryConsent, destination: TelemetryDestination | None) -> None:
         await self._db.execute_raw(
             """INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES ($1, $2::jsonb)
             ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value""",
             SETTINGS_PARAM,
-            json.dumps({"groups": sorted(group.value for group in consent.groups)}),
+            json.dumps(
+                {
+                    "groups": sorted(group.value for group in consent.groups),
+                    "destination": destination.value if destination is not None else None,
+                }
+            ),
         )
 
     async def save(self, report_id: str, report: Report) -> None:
