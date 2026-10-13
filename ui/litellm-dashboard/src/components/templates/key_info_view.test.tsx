@@ -239,6 +239,35 @@ describe("KeyInfoView", () => {
     expect(screen.queryByRole("tab", { name: "Auto-router usage" })).not.toBeInTheDocument();
   });
 
+  describe("key alias row", () => {
+    const renderKeyAliasRow = async (keyData: Partial<KeyResponse>) => {
+      vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+      renderWithProviders(
+        <KeyInfoView keyData={{ ...MOCK_KEY_DATA, ...keyData }} onClose={() => {}} keyId="test-key-id" teams={[]} />,
+      );
+      await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+      return screen.getByText("Key Alias").parentElement;
+    };
+
+    it("shows the key owner when the key has no alias", async () => {
+      const row = await renderKeyAliasRow({
+        key_alias: null,
+        user: { user_id: "790", user_email: "chenyan@example.com", user_alias: "陈岩" },
+      });
+
+      expect(row).toHaveTextContent("陈岩");
+    });
+
+    it("keeps a configured alias ahead of the key owner", async () => {
+      const row = await renderKeyAliasRow({
+        key_alias: "batch-worker",
+        user: { user_id: "790", user_email: "chenyan@example.com", user_alias: "陈岩" },
+      });
+
+      expect(row).toHaveTextContent("batch-worker");
+    });
+  });
+
   describe("last updated", () => {
     const renderWithTimestamps = (overrides: Partial<KeyResponse>) => {
       vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);

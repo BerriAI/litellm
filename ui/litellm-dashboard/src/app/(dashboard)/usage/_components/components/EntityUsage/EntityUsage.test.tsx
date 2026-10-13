@@ -533,6 +533,17 @@ describe("EntityUsage", () => {
       expect(getTopAPIKeys(results, 5)[0]?.user).toBe("user-123");
     });
 
+    it("labels keys with their owner when no alias or email was recorded", () => {
+      const results = [
+        createDailyData("2025-01-01", {
+          "key-123": createKeyMetrics(12.5, { key_alias: null, team_id: null, user_id: "user-123" }),
+        }),
+      ];
+
+      expect(getGlobalTopKeys(results, 5)[0]?.key_alias).toBe("user-123");
+      expect(getTopAPIKeys(results, 5)[0]?.key_alias).toBe("user-123");
+    });
+
     it("carries whether each key still exists for global and entity top keys", () => {
       const results = [
         createDailyData("2025-01-01", {

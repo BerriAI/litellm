@@ -538,6 +538,8 @@ export default function KeyInfoView({
   const budgetDisplay = hasOwnBudget ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}` : "Unlimited";
   const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
   const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser);
+  const keyOwnerLabel = currentKeyData.user?.user_alias || currentKeyData.user_email || currentKeyData.user_id;
+  const keyAliasLabel = currentKeyData.key_alias || keyOwnerLabel || "Not Set";
 
   return (
     <div className="w-full h-full overflow-y-auto p-4">
@@ -904,7 +906,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Key Alias</p>
-                    <p className="text-sm">{currentKeyData.key_alias || "Not Set"}</p>
+                    <p className="text-sm">{keyAliasLabel}</p>
                   </div>
 
                   <div>

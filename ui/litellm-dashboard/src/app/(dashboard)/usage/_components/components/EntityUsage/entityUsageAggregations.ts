@@ -128,7 +128,7 @@ export const getGlobalTopKeys = (results: DailyData[], topKeysLimit: number): To
   return Object.entries(keySpend)
     .map(([api_key, metrics]) => ({
       api_key,
-      key_alias: keyActivityLabel(metrics.metadata),
+      key_alias: keyActivityLabel(metrics.metadata, metrics.metadata.user_id ?? "-"),
       user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
       key_exists: metrics.metadata.key_exists,
       tags: metrics.metadata.tags || [],
@@ -194,7 +194,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
   return Object.entries(keySpend)
     .map(([api_key, metrics]) => ({
       api_key,
-      key_alias: keyActivityLabel(metrics.metadata),
+      key_alias: keyActivityLabel(metrics.metadata, metrics.metadata.user_id ?? "-"),
       user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
       key_exists: metrics.metadata.key_exists,
       tags: metrics.metadata.tags || [],
