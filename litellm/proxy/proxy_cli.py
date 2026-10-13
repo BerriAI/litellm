@@ -1033,7 +1033,7 @@ class ProxyInitializationHelpers:
     "--reload",
     is_flag=True,
     default=False,
-    help="Enable uvicorn hot reload (dev only), including all --num_workers workers. Also reloads when the --config YAML or .env changes. Incompatible with --run_gunicorn, --run_hypercorn, and --run_granian.",
+    help="Enable uvicorn hot reload (dev only), including every --num_workers worker on uvicorn>=0.50.0. Also reloads when the --config YAML or .env changes. Incompatible with --run_gunicorn, --run_hypercorn, and --run_granian.",
 )
 @click.option(
     "--prometheus_metrics_port",
@@ -1597,12 +1597,22 @@ def run_server(
             if num_workers > 1:
                 start_query_engine_reaper()
             if reload and num_workers > 1:
-                from litellm.proxy.dev_reload import RELOAD_OPTIONS, run_multi_worker_reload
-
-                run_multi_worker_reload(
-                    RELOAD_OPTIONS.validate_python(uvicorn_args), workers=TypeAdapter(int).validate_python(num_workers)
+                from litellm.proxy.dev_reload import (
+                    RELOAD_OPTIONS,
+                    multi_worker_reload_supported,
+                    run_multi_worker_reload,
                 )
-                return
+
+                if multi_worker_reload_supported():
+                    run_multi_worker_reload(
+                        RELOAD_OPTIONS.validate_python(uvicorn_args),
+                        workers=TypeAdapter(int).validate_python(num_workers),
+                    )
+                    return
+                print(
+                    "\033[1;33mLiteLLM Proxy: --reload with --num_workers>1 requires uvicorn>=0.50.0, "
+                    "so only a single worker reloads.\033[0m"
+                )
             uvicorn.run(
                 **uvicorn_args,
                 workers=num_workers,

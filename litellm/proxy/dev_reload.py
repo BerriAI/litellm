@@ -1,17 +1,19 @@
-from collections.abc import Sequence
+import logging
+import sys
+from collections.abc import Callable, Sequence
 from functools import partial
 from inspect import signature
 from socket import socket
 from typing import Final, Literal
 
-from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from pydantic import ConfigDict, ImportString, JsonValue, TypeAdapter, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 from uvicorn import Config, Server
+from uvicorn import config as uvicorn_config
 from uvicorn.supervisors import ChangeReload, Multiprocess
 
 
-class WorkerOptions(TypedDict, total=False):
-    app: Required[ReadOnly[str]]
+class ServerOptions(TypedDict, total=False):
     host: ReadOnly[str]
     port: ReadOnly[int]
     server_header: ReadOnly[bool]
@@ -28,14 +30,38 @@ class WorkerOptions(TypedDict, total=False):
 
 
 @with_config(ConfigDict(extra="forbid"))
-class ReloadOptions(WorkerOptions):
+class ReloadOptions(ServerOptions):
+    app: Required[ReadOnly[str]]
     reload: ReadOnly[bool]
     reload_dirs: ReadOnly[tuple[str, ...]]
     reload_includes: ReadOnly[tuple[str, ...]]
 
 
 RELOAD_OPTIONS: Final = TypeAdapter(ReloadOptions)
-WORKER_OPTIONS: Final = TypeAdapter(WorkerOptions)
+SERVER_OPTIONS: Final = TypeAdapter(ServerOptions)
+ASGI_APP: Final = TypeAdapter(ImportString[Callable[..., object]])
+LOGGER: Final = logging.getLogger("uvicorn.error")
+
+
+def multi_worker_reload_supported() -> bool:
+    return hasattr(uvicorn_config, "STARTUP_FAILURE")
+
+
+def load_app_or_exit(import_path: str) -> Callable[..., object]:
+    try:
+        return ASGI_APP.validate_python(import_path)
+    except Exception:
+        LOGGER.exception("Error loading ASGI app %s", import_path)
+        sys.exit(uvicorn_config.STARTUP_FAILURE)
+
+
+def pool_config(options: ReloadOptions, workers: int) -> Config:
+    return Config(
+        partial(load_app_or_exit, options["app"]),
+        factory=True,
+        workers=workers,
+        **SERVER_OPTIONS.validate_python(options),
+    )
 
 
 def _run_worker_pool(config: Config, sockets: Sequence[socket] | None) -> None:
@@ -53,14 +79,14 @@ def _run_worker_pool(config: Config, sockets: Sequence[socket] | None) -> None:
 
 
 def run_multi_worker_reload(options: ReloadOptions, workers: int) -> None:
-    worker_options: Final = WORKER_OPTIONS.validate_python(options)
-    worker_config: Final = Config(**worker_options, workers=workers)
+    worker_config: Final = pool_config(options, workers)
     reload_config: Final = Config(
-        **worker_options,
+        options["app"],
         workers=1,
         reload=options["reload"],
         reload_dirs=list(options["reload_dirs"]),
         reload_includes=list(options["reload_includes"]),
+        **SERVER_OPTIONS.validate_python(options),
     )
     shared_socket: Final = worker_config.bind_socket()
     try:
