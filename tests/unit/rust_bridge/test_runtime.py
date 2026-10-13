@@ -279,13 +279,10 @@ class ScriptedStreamExecution:
         self._steps: Final = iter((*(Yield(chunk) for chunk in chunks), Complete(None)))
         self.closed = False
 
-    def start(self) -> Open:
-        return Open(None)
-
-    def resume_value(self, value: object) -> Yield | Complete:
+    def send(self, value: object) -> Yield | Complete:
         return next(self._steps)
 
-    def resume_error(self, error: BaseException) -> Complete:
+    def throw(self, error: BaseException) -> Complete:
         return Complete(None)
 
     def close(self) -> None:

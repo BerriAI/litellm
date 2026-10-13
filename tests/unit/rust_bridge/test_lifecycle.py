@@ -17,14 +17,11 @@ class ScriptedExecution:
         self.resumed: list[tuple[str, object]] = []
         self.closed = False
 
-    def start(self) -> Step:
-        return self._steps.pop(0)
-
-    def resume_value(self, value: object) -> Step:
+    def send(self, value: object) -> Step:
         self.resumed.append(("value", value))
         return self._steps.pop(0)
 
-    def resume_error(self, error: BaseException) -> Step:
+    def throw(self, error: BaseException) -> Step:
         self.resumed.append(("error", type(error)))
         return self._steps.pop(0)
 
@@ -45,7 +42,7 @@ def test_drive_resumes_each_await_with_its_result_or_error_and_returns_the_compl
 
     assert asyncio.run(drive(execution)) == "done"
 
-    assert execution.resumed == [("value", 1), ("error", ValueError)]
+    assert execution.resumed == [("value", None), ("value", 1), ("error", ValueError)]
     assert execution.closed
 
 

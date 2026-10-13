@@ -30,11 +30,9 @@ Step = Await | Settled
 
 
 class Execution(Protocol):
-    def start(self) -> Step: ...
+    def send(self, value: object) -> Step: ...
 
-    def resume_value(self, value: object) -> Step: ...
-
-    def resume_error(self, error: BaseException) -> Step: ...
+    def throw(self, error: BaseException) -> Step: ...
 
     def close(self) -> None: ...
 
@@ -50,9 +48,9 @@ async def _settle(execution: Execution, step: Step) -> Settled:
         except GeneratorExit:
             raise
         except BaseException as error:
-            step = execution.resume_error(error)  # rebind-ok: advance the execution protocol
+            step = execution.throw(error)  # rebind-ok: advance the execution protocol
         else:
-            step = execution.resume_value(value)  # rebind-ok: advance the execution protocol
+            step = execution.send(value)  # rebind-ok: advance the execution protocol
     return step
 
 
@@ -65,7 +63,7 @@ def _settled(step: Step) -> Settled:
 async def drive(execution: Execution, stream_factory: Callable[[Execution, object], object] | None = None) -> object:
     handed_off = False  # rebind-ok: set once the execution belongs to the returned stream
     try:
-        step: Final = await _settle(execution, execution.start())
+        step: Final = await _settle(execution, execution.send(None))
         if isinstance(step, Open):
             factory: Final = Stream if stream_factory is None else stream_factory
             stream: Final = factory(execution, step.value)
@@ -92,7 +90,7 @@ class Stream(AsyncIterator[object]):
         if self._done:
             raise StopAsyncIteration
         try:
-            step: Final = await _settle(self._execution, self._execution.resume_value(None))
+            step: Final = await _settle(self._execution, self._execution.send(None))
         except BaseException:
             self._finish()
             raise
@@ -105,7 +103,7 @@ class Stream(AsyncIterator[object]):
         if self._done:
             return
         try:
-            await _settle(self._execution, self._execution.resume_error(StreamClosed()))
+            await _settle(self._execution, self._execution.throw(StreamClosed()))
         finally:
             self._finish()
 
@@ -129,7 +127,7 @@ class SyncStream(Iterator[object]):
         if self._done:
             raise StopIteration
         try:
-            step: Final = _settled(self._execution.resume_value(None))
+            step: Final = _settled(self._execution.send(None))
         except BaseException:
             self._finish()
             raise
@@ -142,7 +140,7 @@ class SyncStream(Iterator[object]):
         if self._done:
             return
         try:
-            _settled(self._execution.resume_error(StreamClosed()))
+            _settled(self._execution.throw(StreamClosed()))
         finally:
             self._finish()
 
