@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Iterator
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
+from litellm.rust_bridge import public_execution
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -25,13 +26,15 @@ class NativeAmessages(Protocol):
 def _messages_binding(value: object) -> NativeMessages | None:
     if not callable(value):
         return None
-    return cast("NativeMessages", value)  # cast-ok: callable validated at the native binding boundary
+    native: Final = public_execution.synchronous(value)
+    return cast("NativeMessages", native)  # cast-ok: the public execution adapter returns the route's result
 
 
 def _amessages_binding(value: object) -> NativeAmessages | None:
     if not callable(value):
         return None
-    return cast("NativeAmessages", value)  # cast-ok: callable validated at the native binding boundary
+    native: Final = public_execution.asynchronous(value)
+    return cast("NativeAmessages", native)  # cast-ok: the public execution adapter returns the route's result
 
 
 NATIVE_MESSAGES: Final = NativeBinding("messages", validate=_messages_binding)

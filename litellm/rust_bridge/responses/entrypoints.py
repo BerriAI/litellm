@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
+from litellm.rust_bridge import public_execution
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -25,13 +26,15 @@ class NativeAresponses(Protocol):
 def _responses_binding(value: object) -> NativeResponses | None:
     if not callable(value):
         return None
-    return cast("NativeResponses", value)  # cast-ok: callable validated at the native binding boundary
+    native: Final = public_execution.synchronous(value)
+    return cast("NativeResponses", native)  # cast-ok: the public execution adapter returns the route's result
 
 
 def _aresponses_binding(value: object) -> NativeAresponses | None:
     if not callable(value):
         return None
-    return cast("NativeAresponses", value)  # cast-ok: callable validated at the native binding boundary
+    native: Final = public_execution.asynchronous(value)
+    return cast("NativeAresponses", native)  # cast-ok: the public execution adapter returns the route's result
 
 
 NATIVE_RESPONSES: Final = NativeBinding("responses", validate=_responses_binding)
