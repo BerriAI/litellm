@@ -188,6 +188,45 @@ async def test_decision_call_goes_to_the_owner_team_deployment_without_charging_
     assert (called_hosts, logged.model_groups_and_teams) == ((expected_host,), [expected_logged])
 
 
+@pytest.mark.asyncio
+async def test_decision_on_a_public_name_a_team_wildcard_covers_keeps_the_proxy_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-proxy-key")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "owner-typesafe-wildcard",
+                "litellm_params": {
+                    "model": "typesafe/*",
+                    "api_base": "https://team-wildcard.example",
+                    "api_key": "synthetic-test-key",
+                },
+                "model_info": {"team_id": "owner", "team_public_model_name": "typesafe/*"},
+            }
+        ]
+    )
+    guardrail: Final = DecisionModelGuardrail(
+        guardrail_name="team-guard",
+        decision_model="typesafe/jev-latest",
+        checks=(PROMPT_INJECTION_CHECK,),
+        router_provider=lambda: router,
+    )
+    answer: Final = {"model": "jev-latest", "answers": {"prompt_injection": {"type": "noul", "noul": 0.99}}}
+    request_data: Final[dict[str, object]] = {"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}
+    with respx.mock:
+        team_wildcard: Final = respx.post("https://team-wildcard.example/v1/systemone").mock(
+            return_value=httpx.Response(200, json=answer)
+        )
+        public: Final = respx.post(url__regex=r"^https://.+/v1/systemone$").mock(
+            return_value=httpx.Response(200, json=answer)
+        )
+        with pytest.raises(HTTPException) as blocked:
+            await guardrail.apply_guardrail({"texts": ["unsafe"]}, request_data, "request")
+    assert (blocked.value.status_code, public.call_count, team_wildcard.call_count) == (400, 1, 0)
+
+
 CUSTOM_CHECK: Final = DecisionModelCheck(name="invoice_policy", instructions="Is this about invoices?")
 
 

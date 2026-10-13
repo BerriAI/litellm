@@ -146,19 +146,27 @@ def attached_auth(request_data: object) -> UserAPIKeyAuth | None:
     )
 
 
+def _callable_by_id(router: Router, deployment_id: str) -> bool:
+    deployment: Final = router.get_deployment(model_id=deployment_id)
+    return deployment is not None and "*" not in deployment.litellm_params.model
+
+
 def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | None) -> str | None:
     """The team a guardrail call for the caller behind `auth` resolves `model` under, or None.
 
     It is the caller's team only when the router's route to `model` for that team reaches a
     deployment a caller without a team cannot reach, which means the team has its own
-    deployment behind the name. Names every caller shares keep resolving exactly as they do
-    without a team.
+    deployment behind the name, and every deployment on that route is a concrete model rather
+    than a wildcard. Names every caller shares, and names only a team wildcard covers, keep
+    resolving exactly as they do without a team.
     """
     team_id: Final = auth.team_id if auth is not None else None
     if team_id is None or router is None:
         return None
     team_route: Final = router.get_candidate_model_ids_for_route(model, team_id)
-    return None if team_route <= router.get_candidate_model_ids_for_route(model) else team_id
+    if team_route <= router.get_candidate_model_ids_for_route(model):
+        return None
+    return team_id if all(_callable_by_id(router, deployment_id) for deployment_id in team_route) else None
 
 
 def _field(value: object, key: str) -> object:
@@ -181,11 +189,7 @@ async def team_routed_model(router: Router, model: str, team_id: str | None) -> 
         )
     )
     deployment_id: Final = _field(_field(picked, "model_info"), "id")
-    template: Final = router.get_deployment(model_id=deployment_id) if isinstance(deployment_id, str) else None
-    concrete: Final = template is not None and template.litellm_params.model == _field(
-        _field(picked, "litellm_params"), "model"
-    )
-    return deployment_id if isinstance(deployment_id, str) and concrete else model
+    return deployment_id if isinstance(deployment_id, str) and _callable_by_id(router, deployment_id) else model
 
 
 async def judge_acompletion(

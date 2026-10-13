@@ -695,6 +695,39 @@ async def test_team_judge_call_reaches_the_team_deployment_without_charging_the_
     assert (blocked.value.status_code, upstream.call_count, logged.teams) == (422, 1, [None])
 
 
+@pytest.mark.asyncio
+async def test_judge_on_a_public_name_a_team_wildcard_covers_keeps_the_proxy_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-proxy-key")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "owner-openai-wildcard",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_base": "https://team-wildcard.example/v1",
+                    "api_key": "synthetic-test-key",
+                },
+                "model_info": {"team_id": "owner", "team_public_model_name": "openai/*"},
+            }
+        ]
+    )
+    guardrail: Final = _make_guardrail(judge_model="openai/gpt-4o-mini", router_provider=lambda: router)
+    request_data: Final[dict[str, object]] = {"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}
+    with respx.mock:
+        team_wildcard: Final = respx.post("https://team-wildcard.example/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_FAILING_JUDGE_REPLY)
+        )
+        public: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_FAILING_JUDGE_REPLY)
+        )
+        with pytest.raises(HTTPException) as blocked:
+            await guardrail.apply_guardrail({"texts": ["unsafe"]}, request_data, "request")
+    assert (blocked.value.status_code, public.call_count, team_wildcard.call_count) == (422, 1, 0)
+
+
 def _judge_response_mock() -> MagicMock:
     return MagicMock(choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))])
 

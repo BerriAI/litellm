@@ -175,6 +175,16 @@ _PROXY_WIDE_TEAM_JUDGE: dict[str, object] = {
     "model_name": "team-judge",
     "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "fake"},
 }
+_TEAM_PUBLIC_WILDCARD: dict[str, object] = {
+    "model_name": "owner-openai-wildcard",
+    "litellm_params": {"model": "openai/*", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "openai/*"},
+}
+_TEAM_FIXED_UNDER_PUBLIC_WILDCARD: dict[str, object] = {
+    "model_name": "owner-fixed-under-wildcard",
+    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "openai/*"},
+}
 _LEGACY_OWNER_SHARED_JUDGE: dict[str, object] = {
     "model_name": "shared-judge",
     "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
@@ -232,6 +242,9 @@ def test_attached_auth_reads_only_the_instance_the_proxy_attached(
         ((_SHARED_JUDGE, _LEGACY_OWNER_SHARED_JUDGE), "shared-judge", "other", None),
         ((_SHARED_JUDGE, _LEGACY_OWNER_SHARED_JUDGE), "shared-judge", "owner", None),
         ((_LEGACY_OWNER_SHARED_JUDGE,), "shared-judge", "other", None),
+        ((_TEAM_PUBLIC_WILDCARD,), "openai/gpt-4o-mini", "owner", None),
+        ((_TEAM_PUBLIC_WILDCARD, _SHARED_JUDGE), "openai/gpt-4o", "owner", None),
+        ((_TEAM_PUBLIC_WILDCARD, _TEAM_FIXED_UNDER_PUBLIC_WILDCARD), "openai/gpt-4o-mini", "owner", None),
     ],
     ids=[
         "team-model",
@@ -245,6 +258,9 @@ def test_attached_auth_reads_only_the_instance_the_proxy_attached(
         "untagged-team-sees-fewer-shared-deployments",
         "legacy-team-tag-on-a-shared-name",
         "only-a-legacy-team-deployment",
+        "team-wildcard-over-a-public-name",
+        "team-wildcard-over-a-shared-deployments-model",
+        "team-wildcard-beside-a-fixed-team-model",
     ],
 )
 def test_caller_team_for_uses_the_team_only_where_it_has_its_own_deployment(
