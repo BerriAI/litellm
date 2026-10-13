@@ -273,6 +273,7 @@ class CostTrackingTestCase(BaseModel):
     request: dict[str, JsonValue]
     response: StoredResponse
     expected: Expected
+    known_bug: str | None = None
     fallback_from: StoredResponse | None = None
     disconnect_after_frames: int | None = Field(default=None, ge=1)
     upstream_body: dict[str, JsonValue] | None = None
