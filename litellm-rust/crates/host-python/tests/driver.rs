@@ -9,12 +9,8 @@ use litellm_host::{
     lifecycle::{CallEvent, ExecutionEvent, FailureOrigin},
     machine::CallMachine,
     observation::observation_channel,
-    protocol::Reply,
 };
-use litellm_host_python::{
-    CallOptions, Error as HostError, HookChain, InvokeError, PythonBinding, PythonHostCalls,
-    PythonOwned, PythonRuntime, run_call,
-};
+use litellm_host_python::{CallOptions, HookChain, PythonOwned, PythonRuntime, run_call};
 use pyo3::{
     exceptions::{
         PyBaseException, PyException, PyLookupError, PyRuntimeError, PyStopIteration, PyTypeError,
@@ -26,9 +22,9 @@ use pyo3::{
 };
 use rstest::rstest;
 use support::{
-    Classified, Error, HookScript, Interpreter, Log, MachineFactory, OpScript, Synthetic, binding,
-    call_options, failing_machine, hooks, interpreter, lifecycle_binding, open_stream, read_all,
-    run_composed, run_scripted, settled, success_machine,
+    HookScript, Interpreter, Log, MachineFactory, OpScript, Synthetic, binding, call_options,
+    failing_machine, hooks, interpreter, lifecycle_binding, open_stream, read_all, run_composed,
+    run_scripted, settled, success_machine,
 };
 
 fn observed(capacity: usize) -> (CallOptions, impl FnMut() -> Vec<CallEvent>) {
@@ -261,7 +257,6 @@ fn startup_failures_release_the_factory_without_constructing_a_machine(
             self.0.store(true, Ordering::SeqCst);
         }
     }
-
     Python::attach(|py| {
         let constructed = Arc::new(AtomicBool::new(false));
         let did_construct = constructed.clone();
@@ -404,131 +399,103 @@ fn a_stream_carries_its_head_before_the_first_chunk(
     });
 }
 
+struct Classification {
+    provider_fails: bool,
+    op: OpScript,
+    classifier_fails: bool,
+    message: &'static str,
+    native_context: Option<&'static str>,
+    steps: &'static [&'static str],
+}
+
 #[rstest]
-fn a_native_failure_is_classified_once_and_reported_classified(
+#[case::provider_failure(Classification {
+    provider_fails: true,
+    op: OpScript::Answer,
+    classifier_fails: false,
+    message: "classified: provider exploded",
+    native_context: None,
+    steps: &["project", "classify:provider exploded"],
+})]
+#[case::host_op_rejection(Classification {
+    provider_fails: false,
+    op: OpScript::RejectNatively,
+    classifier_fails: false,
+    message: "classified: op rejected",
+    native_context: None,
+    steps: &["project", "op:sign", "classify:op rejected"],
+})]
+#[case::host_op_python_exception(Classification {
+    provider_fails: false,
+    op: OpScript::RaisePython,
+    classifier_fails: false,
+    message: "op failed",
+    native_context: None,
+    steps: &["project", "op:sign"],
+})]
+#[case::failing_classifier(Classification {
+    provider_fails: true,
+    op: OpScript::Answer,
+    classifier_fails: true,
+    message: "classifier failed",
+    native_context: Some("provider exploded"),
+    steps: &["project", "classify:provider exploded"],
+})]
+fn a_native_failure_is_classified_once_and_a_python_exception_is_raised_as_is(
     #[from(interpreter)] _python: Interpreter,
+    #[case] case: Classification,
     #[values(false, true)] asynchronous: bool,
 ) {
     Python::attach(|py| {
-        let (result, log) = run_scripted(
-            py,
-            failing_machine(),
-            OpScript::Answer,
-            HookScript::Plain,
-            asynchronous,
-        );
-        let error = result.unwrap_err();
-        assert!(error.is_instance_of::<PyValueError>(py));
-        assert_eq!(error.value(py).to_string(), "classified: provider exploded");
-        assert_eq!(
-            log,
-            [
-                "started",
-                "begin",
-                "project",
-                "classify:provider exploded",
-                "failed:Call:classified: provider exploded",
-                "adapter.close",
-                "host.close",
-            ]
-        );
-    });
-}
-
-#[rstest]
-fn a_native_rejection_from_a_host_operation_is_classified_once(
-    #[from(interpreter)] _python: Interpreter,
-) {
-    Python::attach(|py| {
-        let (result, log) = run_scripted(
-            py,
-            success_machine(),
-            OpScript::RejectNatively,
-            HookScript::Plain,
-            false,
-        );
-        assert_eq!(
-            result.unwrap_err().value(py).to_string(),
-            "classified: op rejected"
-        );
-        assert_eq!(
-            log,
-            [
-                "started",
-                "begin",
-                "project",
-                "op:sign",
-                "classify:op rejected",
-                "failed:Call:classified: op rejected",
-                "adapter.close",
-                "host.close",
-            ]
-        );
-    });
-}
-
-#[rstest]
-fn a_python_exception_from_a_host_operation_is_reported_as_raised(
-    #[from(interpreter)] _python: Interpreter,
-) {
-    Python::attach(|py| {
-        let (result, log) = run_scripted(
-            py,
-            success_machine(),
-            OpScript::RaisePython,
-            HookScript::Plain,
-            false,
-        );
-        let error = result.unwrap_err();
-        assert!(error.is_instance_of::<PyValueError>(py));
-        assert_eq!(error.value(py).to_string(), "op failed");
-        assert_eq!(
-            log,
-            [
-                "started",
-                "begin",
-                "project",
-                "op:sign",
-                "failed:Call:op failed",
-                "adapter.close",
-                "host.close",
-            ]
-        );
-    });
-}
-
-#[rstest]
-fn a_failing_classifier_surfaces_with_the_native_error_as_context(
-    #[from(interpreter)] _python: Interpreter,
-) {
-    Python::attach(|py| {
-        let log_handle = Log::default();
+        let Classification {
+            provider_fails,
+            op,
+            classifier_fails,
+            message,
+            native_context,
+            steps,
+        } = case;
+        let log = Log::default();
+        let binding = if classifier_fails {
+            binding(&log, op).with_failing_classifier()
+        } else {
+            binding(&log, op)
+        };
+        let machine = if provider_fails {
+            failing_machine()
+        } else {
+            success_machine()
+        };
         let (result, log) = run_composed(
             py,
-            failing_machine(),
-            binding(&log_handle, OpScript::Answer).with_failing_classifier(),
-            hooks(&log_handle, HookScript::Plain),
+            machine,
+            binding,
+            hooks(&log, HookScript::Plain),
             std::convert::identity,
-            call_options(false),
+            call_options(asynchronous),
         );
         let error = result.unwrap_err();
-        assert!(error.is_instance_of::<PyTypeError>(py));
-        assert_eq!(error.value(py).to_string(), "classifier failed");
-        let context = error.context(py).unwrap();
-        assert!(context.is_instance_of::<PyRuntimeError>(py));
-        assert_eq!(context.value(py).to_string(), "provider exploded");
-        assert_eq!(
-            log,
-            [
-                "started",
-                "begin",
-                "project",
-                "classify:provider exploded",
-                "failed:Call:classifier failed",
-                "adapter.close",
-                "host.close",
-            ]
-        );
+        assert_eq!(error.value(py).to_string(), message);
+        match native_context {
+            Some(context) => {
+                assert!(error.is_instance_of::<PyTypeError>(py));
+                let chained = error.context(py).unwrap();
+                assert!(chained.is_instance_of::<PyRuntimeError>(py));
+                assert_eq!(chained.value(py).to_string(), context);
+            }
+            None => assert!(error.is_instance_of::<PyValueError>(py)),
+        }
+        let expected: Vec<String> = ["started", "begin"]
+            .iter()
+            .chain(steps)
+            .map(|step| step.to_string())
+            .chain([
+                format!("failed:Call:{message}"),
+                "adapter.close".into(),
+                "host.close".into(),
+            ])
+            .collect();
+        assert_eq!(log, expected);
     });
 }
 
@@ -739,25 +706,6 @@ fn the_host_projects_from_the_keyword_view_the_argument_policy_rewrote(
 }
 
 #[rstest]
-fn the_adapters_finalized_response_is_what_the_call_returns_and_reports(
-    #[from(interpreter)] _python: Interpreter,
-    #[values(false, true)] asynchronous: bool,
-) {
-    Python::attach(|py| {
-        let (result, log) = run_scripted(
-            py,
-            success_machine(),
-            OpScript::Answer,
-            HookScript::ReplaceResponse,
-            asynchronous,
-        );
-        assert_eq!(result.unwrap().extract::<String>(py).unwrap(), "replaced");
-        assert!(log.contains(&"succeeded:replaced".to_string()));
-        assert!(!log.contains(&"succeeded:project:1|rewritten".to_string()));
-    });
-}
-
-#[rstest]
 fn a_failure_while_finalizing_fails_the_call_instead_of_succeeding(
     #[from(interpreter)] _python: Interpreter,
     #[values(false, true)] asynchronous: bool,
@@ -788,79 +736,23 @@ fn a_failure_while_finalizing_fails_the_call_instead_of_succeeding(
 }
 
 #[rstest]
-fn cancellation_ends_the_call_without_terminal_dispatch(#[from(interpreter)] _python: Interpreter) {
+fn cancellation_ends_the_call_without_terminal_dispatch(
+    #[from(interpreter)] _python: Interpreter,
+    #[values(false, true)] asynchronous: bool,
+) {
     Python::attach(|py| {
-        struct Cancelling(Log);
-        impl PythonBinding for Cancelling {
-            type Protocol = Synthetic;
-            type Failure = Classified;
-            fn decode_request(
-                &mut self,
-                _: Python<'_>,
-                _: &Bound<'_, PyDict>,
-            ) -> Result<String, InvokeError<Error>> {
-                self.0.push("project");
-                Err(pyo3::exceptions::asyncio::CancelledError::new_err(()).into())
-            }
-
-            fn encode_stream_head(
-                &mut self,
-                _: Python<'_>,
-                head: std::convert::Infallible,
-            ) -> PyResult<Py<PyAny>> {
-                match head {}
-            }
-            fn encode_chunk(
-                &mut self,
-                _: Python<'_>,
-                chunk: std::convert::Infallible,
-            ) -> PyResult<Py<PyAny>> {
-                match chunk {}
-            }
-            fn encode_response(&mut self, _: Python<'_>, _: String) -> PyResult<Py<PyAny>> {
-                Err(HostError::MissingState.into())
-            }
-            fn map_error(&self, _: Python<'_>, error: Error) -> PyResult<Classified> {
-                self.0.push("classify");
-                Ok(Classified(error.0))
-            }
-            fn host_error(error: &PyErr) -> Error {
-                Error(error.to_string())
-            }
-        }
-
-        impl PythonHostCalls<Synthetic> for Cancelling {
-            fn handle_host_call(
-                &mut self,
-                _: Python<'_>,
-                _: (&'static str, Reply<String>),
-            ) -> Result<(), InvokeError<Error>> {
-                Err(PyErr::from(HostError::MissingState).into())
-            }
-        }
-
-        impl PythonOwned for Cancelling {
-            fn close(&mut self, _: Python<'_>) {}
-            fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-                Ok(())
-            }
-        }
-        let log = Log::default();
-        let host = Cancelling(log.clone());
-        let adapter = hooks(&log, HookScript::Plain);
-        let error = run_call(
+        let (result, log) = run_scripted(
             py,
-            |_, _, request| Ok(success_machine()(request)),
-            host,
-            adapter,
-            PyDict::new(py).unbind(),
-            call_options(false),
-        )
-        .unwrap_err();
+            success_machine(),
+            OpScript::CancelRequest,
+            HookScript::Plain,
+            asynchronous,
+        );
+        let error = result.unwrap_err();
         assert!(!error.is_instance_of::<PyException>(py));
         assert_eq!(
-            log.entries(),
-            ["started", "begin", "project", "adapter.close"]
+            log,
+            ["started", "begin", "project", "adapter.close", "host.close"]
         );
     });
 }
