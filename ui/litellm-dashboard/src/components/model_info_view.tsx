@@ -119,9 +119,8 @@ export default function ModelInfoView({
 
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
-  const { data: displayNames } = useUserDisplayNames(
-    useMemo(() => [modelData?.model_info?.created_by ?? ""], [modelData]),
-  );
+  const createdBy = modelData?.model_info?.created_by;
+  const { data: displayNames } = useUserDisplayNames(useMemo(() => [createdBy ?? ""], [createdBy]));
 
   const aliasForTeam = (teamId: string | null | undefined): string | null =>
     teams?.find((team) => team.team_id === teamId)?.team_alias || null;
@@ -708,14 +707,7 @@ export default function ModelInfoView({
                   />
                 </svg>
                 Created By{" "}
-                {modelData.model_info.created_by ? (
-                  <UserReference
-                    userId={modelData.model_info.created_by}
-                    displayName={displayNames?.[modelData.model_info.created_by]}
-                  />
-                ) : (
-                  "Not Set"
-                )}
+                {createdBy ? <UserReference userId={createdBy} displayName={displayNames?.[createdBy]} /> : "Not Set"}
               </div>
             </div>
 
