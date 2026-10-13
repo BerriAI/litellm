@@ -5,6 +5,7 @@ Virtual models provide ordered failover across deployments referenced by model_i
 This test suite validates routing, failover, retry, and timeout semantics.
 """
 
+from typing import Final
 from unittest.mock import patch
 
 import pytest

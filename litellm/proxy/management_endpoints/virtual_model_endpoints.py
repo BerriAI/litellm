@@ -534,7 +534,7 @@ async def list_virtual_models(
             param=None,
         )
 
-    where: Final[dict[str, dict[str, str]] | None] = (
+    where: Final = (
         {"virtual_model_name": {"contains": search, "mode": "insensitive"}}
         if isinstance(search, str) and search
         else None

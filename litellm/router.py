@@ -1805,7 +1805,7 @@ class Router:
             return False
         if requested_model_group not in self._virtual_model_names:
             return False
-        members = self.virtual_model_members.get(requested_model_group)
+        members: Final = self.virtual_model_members.get(requested_model_group)
         if members is None:
             return False
         return deployment_id in members and len(members) > 1
@@ -13864,12 +13864,15 @@ class Router:
             request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
         )
 
+        # Type narrow: at this point healthy_deployments is always a list
+        _healthy_list: Final = healthy_deployments if isinstance(healthy_deployments, list) else [healthy_deployments]
+        
         is_virtual: Final = model in self._virtual_model_names
         if is_virtual:
             # Virtual models apply exclusions before order filtering so a failed
             # priority-1 member cannot starve healthy lower-priority members.
             healthy_deployments = litellm.utils.get_excluded_filtered_deployments(  # rebind-ok: virtual-model exclusion-before-order filter chain
-                cast(list[dict], healthy_deployments),
+                _healthy_list,
                 excluded_deployment_ids=_excluded_deployment_ids,
             )
             if _retry_skipped_deployment_ids:
@@ -13877,18 +13880,18 @@ class Router:
                     healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
                 )
             healthy_deployments = litellm.utils.get_order_filtered_deployments(  # rebind-ok: virtual-model exclusion-before-order filter chain
-                cast(list[dict], healthy_deployments), target_order=_target_order
+                healthy_deployments, target_order=_target_order
             )
         else:
             ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
             healthy_deployments = litellm.utils.get_order_filtered_deployments(
-                cast(list[dict], healthy_deployments), target_order=_target_order
+                _healthy_list, target_order=_target_order
             )
             ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
             ## this request via weighted-failover. Always honored, regardless of the
             ## router-level flag, so a stale exclusion key on kwargs cannot escape.
             healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
-                cast(list[dict], healthy_deployments),
+                healthy_deployments,
                 excluded_deployment_ids=_excluded_deployment_ids,
             )
             ## RETRY SKIP ## -> drop deployments that already refused this request with a
@@ -15073,9 +15076,13 @@ class Router:
                 healthy_deployments = litellm.utils.get_excluded_filtered_deployments(  # rebind-ok: virtual-model exclusion-before-order filter chain  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # get_excluded_filtered_deployments is untyped legacy
                     healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
                 )
-            healthy_deployments = litellm.utils.get_order_filtered_deployments(  # rebind-ok: virtual-model exclusion-before-order filter chain
+            # Pin to the legacy chain's bare-element contract: an annotated
+            # list[dict[str, object]] here would leak `object` into the inferred
+            # return of this unannotated function and break legacy consumers.
+            _virtual_ordered: Final[list[dict]] = litellm.utils.get_order_filtered_deployments(  # mutable-ok: get_order_filtered_deployments declares list[dict[str, object]]; the bare-dict view preserves the legacy inferred contract of this unannotated selection function
                 healthy_deployments, target_order=_target_order
             )
+            healthy_deployments = _virtual_ordered  # rebind-ok: virtual-model exclusion-before-order filter chain
         else:
             ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
             healthy_deployments = litellm.utils.get_order_filtered_deployments(

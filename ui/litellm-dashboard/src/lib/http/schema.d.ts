@@ -49229,6 +49229,8 @@ export interface components {
             description?: string | null;
             /** Num Retries */
             num_retries?: number | null;
+            /** Remove Members */
+            remove_members?: string[] | null;
             /** Routing Strategy */
             routing_strategy?: ("ordered" | "simple-shuffle" | "least-busy" | "usage-based-routing" | "usage-based-routing-v2" | "latency-based-routing" | "cost-based-routing") | null;
             /** Stream Timeout */
@@ -83769,7 +83771,10 @@ export interface operations {
     };
     list_virtual_models_virtual_model_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Filter virtual models by name substring (case-insensitive) */
+                search?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -83783,6 +83788,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VirtualModelResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
