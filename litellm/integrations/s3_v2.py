@@ -517,16 +517,17 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         object_name: Final = batch_line_items_object_name(payload)
         s3_path: Final = cast(str | None, self.s3_path)  # cast-ok: s3_path is set from untyped callback params
         s3_object_key: Final = (f"{s3_path.rstrip('/')}/" if s3_path else "") + object_name
-        delivered: Final = await self.async_upload_data_to_s3(
-            s3BatchLoggingElement(
-                payload={},
-                body=batch_line_items_ndjson(payload),
-                content_type="application/x-ndjson",
-                s3_object_key=s3_object_key,
-                s3_object_download_filename=object_name.rsplit("/", 1)[-1],
-            )
+        element: Final = s3BatchLoggingElement(
+            payload={},
+            body=await asyncio.to_thread(batch_line_items_ndjson, payload),
+            content_type="application/x-ndjson",
+            s3_object_key=s3_object_key,
+            s3_object_download_filename=object_name.rsplit("/", 1)[-1],
         )
+        delivered: Final = await self.async_upload_data_to_s3(element)
         if not delivered:
+            # only a log-queue flush reads and clears the drop marks, and this upload is not part of one
+            self._flush_dropped.pop(id(element), None)
             verbose_logger.error(
                 "s3 logging: the %d line items of batch %s were not stored at %s",
                 len(payload["lines"]),

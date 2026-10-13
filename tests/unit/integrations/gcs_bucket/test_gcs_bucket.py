@@ -368,3 +368,29 @@ async def test_a_rejected_batch_line_items_write_raises_for_the_dispatcher(monke
         )
 
     assert uploads.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_are_serialized_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    import litellm.integrations.gcs_bucket.gcs_bucket as gcs_bucket_module
+    from litellm.types.utils import StandardBatchLineItemsPayload
+
+    logger, _ = _gcs_logger_with_upload_status(monkeypatch, 200)
+    logger.async_httpx_client = AsyncHTTPHandler(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"name": request.url.params["name"]}))
+    )
+    serialize: Final = gcs_bucket_module.batch_line_items_ndjson
+    threads: Final[list[threading.Thread]] = []
+
+    def _serialize(payload: StandardBatchLineItemsPayload) -> str:
+        threads.append(threading.current_thread())
+        return serialize(payload)
+
+    monkeypatch.setattr(gcs_bucket_module, "batch_line_items_ndjson", _serialize)
+
+    await logger.async_log_batch_line_items({"batch_id": "b", "finished_at": 1791494130, "lines": ()})
+
+    (thread,) = threads
+    assert thread is not threading.main_thread()

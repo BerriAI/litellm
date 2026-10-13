@@ -107,7 +107,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             headers=headers,
             bucket_name=gcs_logging_config["bucket_name"],
             object_name=batch_line_items_object_name(payload),
-            logging_payload=batch_line_items_ndjson(payload),
+            logging_payload=await asyncio.to_thread(batch_line_items_ndjson, payload),
         )
 
     def _drain_queue_batch(self) -> list[GCSLogQueueItem]:

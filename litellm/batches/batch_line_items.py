@@ -8,9 +8,10 @@ from typing import Final, Literal, TypeAlias
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.batches.batch_utils import calculate_batch_cost_and_usage, get_file_content_as_dictionary
+from litellm.batches.batch_utils import batch_cost_and_usage, get_file_content_as_dictionary
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import init_custom_logger_compatible_class
+from litellm.llms.vertex_ai.files.transformation import vertex_batch_row_custom_id
 from litellm.types.utils import (
     ModelInfo,
     StandardBatchLineItem,
@@ -50,11 +51,12 @@ def _text(attribution: Mapping[str, object], name: str) -> str | None:
 
 
 def _line_key(entry: Mapping[str, object]) -> str | None:
+    """A line's custom_id. Bedrock calls it recordId, and native Vertex rows carry it in the row key or request labels."""
     key: Final = entry.get("custom_id", entry.get("recordId"))
-    return key if isinstance(key, str) else None
+    return key if isinstance(key, str) else vertex_batch_row_custom_id(entry)
 
 
-async def build_batch_line_items(
+def build_batch_line_items(
     source: BatchLineItemSource, input_content: bytes, result_contents: Iterable[bytes]
 ) -> StandardBatchLineItemsPayload:
     """Pair every output and error line with the input line that shares its custom_id, priced one line at a time."""
@@ -63,16 +65,16 @@ async def build_batch_line_items(
     return StandardBatchLineItemsPayload(
         batch_id=source.batch_id,
         finished_at=source.finished_at,
-        lines=tuple([await _line_item(source, requests, entry) for entry in results]),
+        lines=tuple([_line_item(source, requests, entry) for entry in results]),
     )
 
 
-async def _line_item(
+def _line_item(
     source: BatchLineItemSource,
     requests: Mapping[str | None, Mapping[str, object]],
     entry: dict[str, object],
 ) -> StandardBatchLineItem:
-    priced: Final = await calculate_batch_cost_and_usage(
+    priced: Final = batch_cost_and_usage(
         (entry,), source.cost_provider, model_name=source.model, model_info=source.model_info
     )
     succeeded: Final = priced.successful_requests > 0

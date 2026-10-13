@@ -14,6 +14,7 @@ from litellm.batches.batch_line_items import (
 from litellm.batches.batch_utils import calculate_batch_cost_and_usage, get_file_content_as_dictionary
 from litellm.integrations.batch_line_item_objects import batch_line_items_ndjson, batch_line_items_object_name
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig, _OpenAIToVertexBatchUploadStream
 from litellm.types.utils import ModelInfo, StandardBatchLineItemsPayload
 
 INPUT_RATE = 0.001
@@ -78,8 +79,8 @@ def _source(**overrides) -> BatchLineItemSource:
     return BatchLineItemSource(**{**fields, **overrides})
 
 
-async def _payload() -> StandardBatchLineItemsPayload:
-    return await build_batch_line_items(
+def _payload() -> StandardBatchLineItemsPayload:
+    return build_batch_line_items(
         _source(),
         _jsonl(_request("ok-1", "first question"), _request("bad-1", "second question")),
         (_jsonl(_success("ok-1", 100, 50)), _jsonl(_error("bad-1"))),
@@ -102,7 +103,7 @@ class _FailingLogger(CustomLogger):
 
 @pytest.mark.asyncio
 async def test_each_result_line_is_paired_with_the_request_that_shares_its_custom_id():
-    payload = await build_batch_line_items(
+    payload = build_batch_line_items(
         _source(),
         _jsonl(_request("ok-1", "first"), _request("bad-1", "second"), _request("never-ran", "third")),
         (_jsonl(_success("ok-1", 100, 50)), _jsonl(_error("bad-1"))),
@@ -142,7 +143,7 @@ async def test_each_result_line_is_paired_with_the_request_that_shares_its_custo
 async def test_line_costs_add_up_to_the_batch_cost_the_spend_row_records():
     outputs = _jsonl(_success("a", 100, 50), _success("b", 7, 3), _error("c"))
 
-    payload = await build_batch_line_items(_source(), b"", (outputs,))
+    payload = build_batch_line_items(_source(), b"", (outputs,))
     aggregate = await calculate_batch_cost_and_usage(
         get_file_content_as_dictionary(outputs), "openai", model_name="gpt-4o-mini", model_info=_source().model_info
     )
@@ -164,7 +165,7 @@ async def test_anthropic_results_without_an_input_file_keep_their_status_and_usa
     }
     errored = {"custom_id": "a-2", "result": {"type": "errored", "error": {"type": "invalid_request_error"}}}
 
-    payload = await build_batch_line_items(
+    payload = build_batch_line_items(
         _source(model="claude-sonnet-5-5", custom_llm_provider="anthropic", cost_provider="anthropic"),
         b"",
         (_jsonl(succeeded, errored),),
@@ -181,7 +182,7 @@ async def test_bedrock_lines_pair_by_record_id():
     request = {"recordId": "r-1", "modelInput": {"messages": [{"role": "user", "content": "hi"}]}}
     result = {**request, "modelOutput": {"usage": {"input_tokens": 3, "output_tokens": 2}}}
 
-    payload = await build_batch_line_items(
+    payload = build_batch_line_items(
         _source(custom_llm_provider="bedrock", cost_provider="bedrock"), _jsonl(request), (_jsonl(result),)
     )
 
@@ -189,9 +190,44 @@ async def test_bedrock_lines_pair_by_record_id():
     assert (line["custom_id"], line["status"], line["request"]) == ("r-1", "success", request)
 
 
+def test_vertex_lines_pair_with_the_input_row_that_carries_their_custom_id():
+    vertex_input = b"\n".join(
+        _OpenAIToVertexBatchUploadStream(
+            _jsonl(_request("vx-0", "first"), _request("vx-1", "second")),
+            VertexAIFilesConfig()._map_openai_to_vertex_params,
+        ).iter_bytes()
+    )
+    vertex_rows = get_file_content_as_dictionary(vertex_input)
+    assert all("custom_id" not in row for row in vertex_rows)
+
+    payload = build_batch_line_items(
+        _source(model="gemini-2.5-flash", custom_llm_provider="vertex_ai", cost_provider="vertex_ai"),
+        vertex_input,
+        (_jsonl(_success("vx-1", 4, 2), _success("vx-0", 3, 1)),),
+    )
+
+    assert [(line["custom_id"], line["request"]) for line in payload["lines"]] == [
+        ("vx-1", vertex_rows[1]),
+        ("vx-0", vertex_rows[0]),
+    ]
+
+
+def test_a_vertex_input_row_without_a_custom_id_pairs_with_nothing():
+    unlabeled = {"request": {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}}
+
+    payload = build_batch_line_items(
+        _source(model="gemini-2.5-flash", custom_llm_provider="vertex_ai", cost_provider="vertex_ai"),
+        _jsonl(unlabeled),
+        (_jsonl({**_success("x", 3, 1), "custom_id": None}),),
+    )
+
+    (line,) = payload["lines"]
+    assert (line["custom_id"], line["request"]) == (None, None)
+
+
 @pytest.mark.asyncio
 async def test_redaction_drops_only_the_request_and_response():
-    payload = await _payload()
+    payload = _payload()
 
     redacted = without_request_and_response(payload)
 
@@ -203,7 +239,7 @@ async def test_redaction_drops_only_the_request_and_response():
 
 @pytest.mark.asyncio
 async def test_the_object_holds_one_json_line_per_batch_line_under_its_finished_day():
-    payload = await _payload()
+    payload = _payload()
 
     ndjson = batch_line_items_ndjson(payload)
 
@@ -218,7 +254,7 @@ async def test_the_object_holds_one_json_line_per_batch_line_under_its_finished_
 
 @pytest.mark.asyncio
 async def test_a_logger_gets_the_request_and_response_unless_message_logging_is_off(monkeypatch):
-    payload = await _payload()
+    payload = _payload()
     open_logger, quiet_logger, legacy_logger = (
         _RecordingLogger(),
         _RecordingLogger(turn_off_message_logging=True),
@@ -235,7 +271,7 @@ async def test_a_logger_gets_the_request_and_response_unless_message_logging_is_
 
 @pytest.mark.asyncio
 async def test_redacted_dispatch_never_hands_a_logger_the_bodies(monkeypatch):
-    payload = await _payload()
+    payload = _payload()
     logger = _RecordingLogger()
     monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
 
@@ -246,7 +282,7 @@ async def test_redacted_dispatch_never_hands_a_logger_the_bodies(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_failing_or_unknown_sink_is_logged_and_the_other_sinks_still_get_the_lines(monkeypatch, caplog):
-    payload = await _payload()
+    payload = _payload()
     logger = _RecordingLogger()
     monkeypatch.setattr(litellm, "batch_line_item_callbacks", (_FailingLogger(), "langfuse", logger))
 

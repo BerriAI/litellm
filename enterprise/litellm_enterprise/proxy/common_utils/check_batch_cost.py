@@ -1064,7 +1064,10 @@ class CheckBatchCost:
                 if redact_bodies
                 else await self._batch_file_content(response.input_file_id, cost_provider, file_access)
             )
-            payload: Final = await build_batch_line_items(source, input_content, (output_content, error_content))
+            # pricing every line of a large batch is CPU-bound, so it runs off the event loop
+            payload: Final = await asyncio.to_thread(
+                build_batch_line_items, source, input_content, (output_content, error_content)
+            )
             await dispatch_batch_line_items(payload, redact_bodies=redact_bodies)
             verbose_proxy_logger.info(
                 f"CheckBatchCost: handed the {len(payload['lines'])} line items of batch {batch_id} "

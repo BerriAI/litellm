@@ -75,6 +75,16 @@ async def calculate_batch_cost_and_usage(
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
 ) -> BatchCostUsageResult:
+    """Calculate the cost and usage of a batch, see batch_cost_and_usage."""
+    return batch_cost_and_usage(file_content_dictionary, custom_llm_provider, model_name, model_info)
+
+
+def batch_cost_and_usage(
+    file_content_dictionary: Sequence[dict[str, object]],  # mutable-ok: the rows calculate_batch_cost_and_usage takes
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
+    model_name: str | None = None,
+    model_info: ModelInfo | None = None,
+) -> BatchCostUsageResult:
     """
     Calculate the cost and usage of a batch.
 

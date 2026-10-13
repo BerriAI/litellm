@@ -5562,12 +5562,14 @@ def _batch_line_items_payload() -> dict:
     }
 
 
-def _s3_logger_answering(status: int, s3_path: str | None) -> tuple[S3Logger, list[httpx.Request]]:
+def _s3_logger_answering(
+    status: int, s3_path: str | None, content: bytes = b""
+) -> tuple[S3Logger, list[httpx.Request]]:
     requests: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(status, request=request)
+        return httpx.Response(status, content=content, request=request)
 
     logger = S3Logger(
         s3_bucket_name="test-bucket",
@@ -5619,3 +5621,37 @@ async def test_a_rejected_batch_line_items_upload_is_logged_with_the_batch_id(ca
         "bGl0ZWxsbV9wcm94eTtiYXRjaA" in record.getMessage() and "were not stored" in record.getMessage()
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_a_batch_line_items_object_the_bucket_refuses_for_good_is_not_kept_in_memory():
+    logger, requests = _s3_logger_answering(400, "cold", b"<Error><Code>InvalidArgument</Code></Error>")
+
+    await logger.async_log_batch_line_items(_batch_line_items_payload())
+    await logger.flush_queue()
+
+    assert len(requests) == 1
+    assert logger._flush_dropped == {}
+
+
+@pytest.mark.asyncio
+async def test_batch_line_items_are_serialized_off_the_event_loop(monkeypatch):
+    import threading
+
+    import litellm.integrations.s3_v2 as s3_v2_module
+
+    logger, requests = _s3_logger_answering(200, "cold/")
+    serialize = s3_v2_module.batch_line_items_ndjson
+    threads = []
+
+    def _serialize(payload):
+        threads.append(threading.current_thread())
+        return serialize(payload)
+
+    monkeypatch.setattr(s3_v2_module, "batch_line_items_ndjson", _serialize)
+
+    await logger.async_log_batch_line_items(_batch_line_items_payload())
+
+    assert len(requests) == 1
+    (thread,) = threads
+    assert thread is not threading.main_thread()

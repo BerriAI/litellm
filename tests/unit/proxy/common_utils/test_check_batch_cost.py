@@ -3334,6 +3334,32 @@ class TestBatchLineItemsFromThePoller:
         assert row.batch_processed is True
 
     @pytest.mark.asyncio
+    async def test_the_lines_are_priced_off_the_event_loop(self, monkeypatch):
+        import threading
+
+        import litellm
+        from litellm.batches import batch_line_items
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
+        build = batch_line_items.build_batch_line_items
+        threads = []
+
+        def _build(*args):
+            threads.append(threading.current_thread())
+            return build(*args)
+
+        monkeypatch.setattr(batch_line_items, "build_batch_line_items", _build)
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal[-1] == "lines"
+        (thread,) = threads
+        assert thread is not threading.main_thread()
+
+    @pytest.mark.asyncio
     async def test_a_creator_that_cannot_be_looked_up_gets_lines_without_bodies(self, monkeypatch):
         import litellm
 
