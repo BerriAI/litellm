@@ -14,7 +14,9 @@ import os
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -38,6 +40,11 @@ EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 SAMPLED: Final = "relay-sampled"
 BUFFERED: Final = "relay-buffered"
 CODE: Final = "relay-code"
+FAILING: Final = "relay-failing"
+FAILING_HELD: Final = "relay-failing-held"
+END_ONLY: Final = "relay-end-only"
+OUTAGE: Final = "relay-outage"
+STACKED: Final = "relay-stacked"
 CODE_BLOCK_REASON: Final = "code says no"
 BLOCK_REASON: Final = "Violated guardrail policy"
 MASKED_WORD: Final = "Paris"
@@ -119,6 +126,7 @@ class Rig:
     sink: Wire
     scripts: dict[str, Reply]
     keys: Mapping[str, str]
+    outage: threading.Event
 
     def scans(self, guardrail: str, marker: str) -> tuple[tuple[str, ...], ...]:
         return tuple(
@@ -184,11 +192,18 @@ def _guardrail(name: str, sink: Wire, **settings: JsonValue) -> dict[str, JsonVa
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     scripts: Final[dict[str, Reply]] = {}
+    outage: Final = threading.Event()
 
     def provider(request: Request) -> Reply:
-        assert request.target == f"/model/{MODEL_ID}/converse-stream", request.target
+        assert request.target in (f"/model/{MODEL_ID}/converse-stream", f"/model/{MODEL_ID}/converse"), request.target
         marker: Final = json.loads(request.body)["messages"][0]["content"][0]["text"]
         return scripts[marker]
+
+    def vendor(request: Request) -> Reply:
+        failing: Final = request.target.startswith((f"/{FAILING}/", f"/{FAILING_HELD}/"))
+        if failing or (outage.is_set() and request.target.startswith(f"/{OUTAGE}/")):
+            return Reply(status=503, body=b'{"error":"guardrail vendor unavailable"}')
+        return verdict(request)
 
     with httpx.Client(base_url=os.environ["INTEGRATION_PROXY_URL"], timeout=30, trust_env=False) as root_client:
         root: Final = Gateway(
@@ -197,11 +212,15 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             os.environ["INTEGRATION_UPSTREAM_URL"],
         )
         directory: Final = tmp_path_factory.mktemp("converse-stream-relay")
-        with wire_server(provider) as upstream, wire_server(verdict) as sink:
+        with wire_server(provider) as upstream, wire_server(vendor) as sink:
             config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
             config["guardrails"] = [
                 _guardrail(SAMPLED, sink),
                 _guardrail(BUFFERED, sink, streaming_buffer_until_moderated=True),
+                _guardrail(FAILING, sink),
+                _guardrail(FAILING_HELD, sink, streaming_buffer_until_moderated=True),
+                _guardrail(END_ONLY, sink, streaming_end_of_stream_only=True),
+                _guardrail(OUTAGE, sink),
                 {
                     "guardrail_name": CODE,
                     "litellm_params": {
@@ -234,13 +253,18 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             config_path.write_text(yaml.safe_dump(config))
             with owned_proxy_process(root, directory, {}, config=config_path, workers=2) as owned:
                 with owned.gateway.scenario() as scenario:
+                    single: Final = (SAMPLED, BUFFERED, CODE, FAILING, FAILING_HELD, END_ONLY, OUTAGE)
                     yield Rig(
                         owned.gateway,
                         scenario,
                         upstream,
                         sink,
                         scripts,
-                        {name: scenario.key(guardrails=[name]) for name in (SAMPLED, BUFFERED, CODE)},
+                        {
+                            **{name: scenario.key(guardrails=[name]) for name in single},
+                            STACKED: scenario.key(guardrails=[SAMPLED, BUFFERED]),
+                        },
+                        outage,
                     )
 
 
@@ -281,14 +305,11 @@ def _spend_rows(call_id: str) -> list[dict[str, JsonValue]]:
     )
 
 
-def test_first_frames_reach_the_caller_while_the_upstream_is_still_streaming(rig: Rig) -> None:
-    gate: Final = threading.Event()
-    marker: Final = f"relay-{uuid.uuid4().hex}"
-    frames: Final = converse_frames((f"Hello {marker} ", "world"))
-    first_transport_chunk: Final = frames[0] + frames[1]
-    rig.scripts[marker] = Reply(
-        content_type=EVENT_STREAM, chunks=(first_transport_chunk, *frames[2:]), gate_after_first=gate
-    )
+def _stream_releasing_upstream(
+    rig: Rig, marker: str, first_chunk_length: int, gate: threading.Event
+) -> tuple[int, bool, bytes]:
+    """Stream ``marker`` through the sampled guardrail and release the upstream held after its first transport chunk
+    once that chunk has reached the caller; report whether the upstream was still held at that point."""
     release_held_upstream: Final = threading.Timer(import_seconds(), gate.set)
     release_held_upstream.start()
     try:
@@ -299,22 +320,33 @@ def test_first_frames_reach_the_caller_while_the_upstream_is_still_streaming(rig
             headers={"Authorization": f"Bearer {rig.keys[SAMPLED]}"},
             timeout=case_timeout_seconds(),
         ) as response:
-            status: Final = response.status_code
             chunks: Final = response.iter_raw()
             received: Final = bytearray()
             for chunk in chunks:
                 received.extend(chunk)
-                if len(received) >= len(first_transport_chunk):
+                if len(received) >= first_chunk_length:
                     break
             upstream_still_held: Final = not gate.is_set()
             gate.set()
             received.extend(b"".join(chunks))
+            return response.status_code, upstream_still_held, bytes(received)
     finally:
         release_held_upstream.cancel()
         gate.set()
-    assert status == 200, bytes(received)
+
+
+def test_first_frames_reach_the_caller_while_the_upstream_is_still_streaming(rig: Rig) -> None:
+    gate: Final = threading.Event()
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    frames: Final = converse_frames((f"Hello {marker} ", "world"))
+    first_transport_chunk: Final = frames[0] + frames[1]
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=(first_transport_chunk, *frames[2:]), gate_after_first=gate
+    )
+    status, upstream_still_held, received = _stream_releasing_upstream(rig, marker, len(first_transport_chunk), gate)
+    assert status == 200, received
     assert upstream_still_held, "the first frames reached the caller only after the upstream finished its stream"
-    assert bytes(received) == b"".join(frames), decode(bytes(received))
+    assert received == b"".join(frames), decode(received)
     assert rig.scans(SAMPLED, marker) == ((f"Hello {marker} world",),)
 
 
@@ -377,6 +409,21 @@ def test_sampled_stream_forwards_frames_as_sent_without_applying_masks_like_chat
     assert rig.scans(SAMPLED, marker) == ((f"{MASKED_WORD} {marker} is the capital",),)
 
 
+def test_a_frame_whose_payload_is_not_utf8_is_relayed_as_sent_and_the_rest_still_scanned(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    clean: Final = converse_frames((f"Before {marker} ", "after"))
+    garbled: Final = aws_event_stream_frame(
+        {":event-type": "contentBlockDelta", ":content-type": "application/json", ":message-type": "event"},
+        b'{"contentBlockIndex":0,"delta":{"text":"\xff"}}',
+    )
+    frames: Final = (*clean[:2], garbled, *clean[2:])
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames)
+    status, content_type, body = _stream(rig, SAMPLED, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    assert body == b"".join(frames), body[-300:]
+    assert set(rig.scans(SAMPLED, marker)) == {(f"Before {marker} after",)}
+
+
 def test_buffered_stream_applies_masks_per_content_block(rig: Rig) -> None:
     marker: Final = f"relay-{uuid.uuid4().hex}"
     rig.scripts[marker] = Reply(
@@ -429,3 +476,182 @@ def test_buffered_stream_block_returns_an_error_before_any_frame(rig: Rig) -> No
     outcome: Final = rig.converse_stream(BUFFERED, marker)
     assert outcome.events == () and outcome.rejected_before_stream is not None, outcome
     assert "(400)" in outcome.rejected_before_stream, outcome
+
+
+def _spend_statuses(call_id: str, at_least: int) -> list[JsonValue]:
+    rows: Final = eventually(lambda: _spend_rows(call_id), lambda rows: len(rows) >= at_least, seconds=70)
+    return [row["status"] for row in rows]
+
+
+def _exception(frames: Sequence[Frame]) -> tuple[str, str] | None:
+    last: Final = frames[-1] if frames else None
+    if last is None or last.message_type != "exception":
+        return None
+    return last.kind, str(last.payload.get("message"))
+
+
+def test_upstream_closing_mid_stream_ends_the_relayed_stream_with_an_exception_frame(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    gate: Final = threading.Event()
+    frames: Final = converse_frames((f"Cut {marker} ", "short", " here"))
+    first_transport_chunk: Final = frames[0] + frames[1]
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=(first_transport_chunk, *frames[2:]), gate_after_first=gate, abort_after=1
+    )
+    status, upstream_still_held, body = _stream_releasing_upstream(rig, marker, len(first_transport_chunk), gate)
+    assert status == 200, body
+    assert upstream_still_held, "the first frames reached the caller only after the upstream closed"
+    assert body.startswith(first_transport_chunk), decode(body)
+    relayed: Final = decode(body)
+    exception: Final = _exception(relayed)
+    assert exception is not None and exception[0] == "internalServerException", relayed
+
+
+def test_guardrail_vendor_failing_mid_stream_fails_closed_with_an_exception_frame(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    frames: Final = converse_frames((f"Scan {marker} ", "one", " two", " three", " four", " five"))
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames)
+    status, content_type, body = _stream(rig, FAILING, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    assert body.startswith(b"".join(frames[:4])), decode(body)
+    relayed: Final = decode(body)
+    assert "messageStop" not in [frame.kind for frame in relayed], relayed
+    exception: Final = _exception(relayed)
+    assert exception is not None and exception[0] == "internalServerException", relayed
+
+
+def test_held_stream_with_the_guardrail_vendor_failing_returns_an_error_before_any_frame(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=converse_frames((f"Held {marker} ", "text")))
+    status, content_type, body = _stream(rig, FAILING_HELD, marker)
+    assert status == 500 and content_type.startswith("application/json"), (status, content_type, body)
+
+
+def test_end_of_stream_only_relays_every_content_frame_then_blocks(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    frames: Final = converse_frames((f"Late {marker} ", "one", " two", " three", " four", f" {BLOCKED_WORD}"))
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames)
+    status, content_type, body = _stream(rig, END_ONLY, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    content_frames: Final = b"".join(frames[:-2])
+    assert body.startswith(content_frames), decode(body)
+    assert decode(body[len(content_frames) :]) == (
+        Frame("exception", "validationException", {"message": BLOCK_REASON}),
+    ), decode(body)
+    assert rig.scans(END_ONLY, marker) == ((f"Late {marker} one two three four {BLOCKED_WORD}",),)
+
+
+def test_end_of_stream_only_scans_a_clean_stream_once_and_relays_it_unchanged(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    frames: Final = converse_frames((f"Fine {marker} ", "one", " two", " three", " four", " five"))
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames)
+    status, _, body = _stream(rig, END_ONLY, marker)
+    assert status == 200 and body == b"".join(frames), decode(body)
+    assert rig.scans(END_ONLY, marker) == ((f"Fine {marker} one two three four five",),)
+
+
+def test_sampled_and_held_guardrails_on_one_key_hold_the_stream_and_mask_it(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=converse_frames((f"{MASKED_WORD} {marker} ", "is", " the", " capital"))
+    )
+    status, content_type, body = _stream(rig, STACKED, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    assert block_texts(decode(body)) == {0: f"{MASK} {marker} is the capital"}, decode(body)
+    scanned_by: Final = {
+        request.target.split("/")[1] for request in rig.sink.drain() if marker.encode() in request.body
+    }
+    assert scanned_by == {SAMPLED, BUFFERED}, scanned_by
+
+
+def test_client_disconnect_stops_the_proxy_reading_the_upstream(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    frames: Final = converse_frames((f"Long {marker} ", *(f" word{index}" for index in range(60))))
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames, pause_between_chunks=0.1)
+    while not rig.provider.disconnected.empty():
+        rig.provider.disconnected.get_nowait()
+    with rig.gateway.client.stream(
+        "POST",
+        _stream_path(),
+        json=_stream_body(marker),
+        headers={"Authorization": f"Bearer {rig.keys[SAMPLED]}"},
+        timeout=case_timeout_seconds(),
+    ) as response:
+        assert response.status_code == 200
+        received: Final = bytearray()
+        for chunk in response.iter_raw():
+            received.extend(chunk)
+            if len(received) >= len(b"".join(frames[:3])):
+                break
+    target: Final = f"/model/{MODEL_ID}/converse-stream"
+    closed: Final = eventually(
+        lambda: rig.provider.disconnected.qsize(), lambda count: count > 0, seconds=4, return_last_on_timeout=True
+    )
+    assert closed, "the proxy kept reading the upstream after the caller went away"
+    assert rig.provider.disconnected.get_nowait() == target
+
+
+def test_non_streaming_converse_block_is_unchanged(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    reply: Final = {
+        "output": {"message": {"role": "assistant", "content": [{"text": f"The secret {marker} is {BLOCKED_WORD}"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 9, "outputTokens": 4, "totalTokens": 13},
+        "metrics": {"latencyMs": 10},
+    }
+    rig.scripts[marker] = Reply(body=json.dumps(reply).encode())
+    response: Final = rig.gateway.client.post(
+        f"/bedrock/model/{ROUTER_MODEL}/converse",
+        json=_stream_body(marker),
+        headers={"Authorization": f"Bearer {rig.keys[SAMPLED]}"},
+        timeout=case_timeout_seconds(),
+    )
+    assert response.status_code == 400, response.text
+    assert BLOCK_REASON in response.text, response.text
+
+
+def test_concurrent_streams_each_get_their_own_verdict_and_spend_rows(rig: Rig) -> None:
+    markers: Final = [f"relay-{uuid.uuid4().hex}" for _ in range(16)]
+    blocked: Final = frozenset(markers[::2])
+    for marker in markers:
+        words = (f"Burst {marker} ", "one", " two", BLOCKED_WORD if marker in blocked else " three", " four", " five")
+        rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=converse_frames(words), pause_between_chunks=0.02)
+    with ThreadPoolExecutor(max_workers=len(markers)) as pool:
+        outcomes: Final = dict(zip(markers, pool.map(partial(_stream_with_call_id, rig, SAMPLED), markers)))
+    for marker, (status, _, body, call_id) in outcomes.items():
+        assert status == 200 and call_id, (marker, status, body)
+        frames = decode(body)
+        if marker in blocked:
+            assert _exception(frames) == ("validationException", BLOCK_REASON), (marker, frames)
+        else:
+            assert _exception(frames) is None and frames[-1].kind == "metadata", (marker, frames)
+    for marker, (_, _, _, call_id) in outcomes.items():
+        expected = ["failure", "success"] if marker in blocked else ["success"]
+        assert _spend_statuses(call_id, len(expected)) == expected, marker
+
+
+def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: Rig) -> None:
+    def burst(count: int) -> list[tuple[str, tuple[int, str, bytes, str]]]:
+        markers = [f"relay-{uuid.uuid4().hex}" for _ in range(count)]
+        for marker in markers:
+            rig.scripts[marker] = Reply(
+                content_type=EVENT_STREAM,
+                chunks=converse_frames((f"Outage {marker} ", "one", " two", " three", " four")),
+            )
+        with ThreadPoolExecutor(max_workers=count) as pool:
+            return list(zip(markers, pool.map(partial(_stream_with_call_id, rig, OUTAGE), markers)))
+
+    rig.outage.set()
+    try:
+        during: Final = burst(8)
+    finally:
+        rig.outage.clear()
+    after: Final = burst(8)
+    for marker, (status, _, body, _) in during:
+        exception = _exception(decode(body))
+        assert status == 200 and exception is not None and exception[0] == "internalServerException", (marker, body)
+    for marker, (status, _, body, _) in after:
+        assert status == 200 and _exception(decode(body)) is None, (marker, body)
+        assert body == b"".join(rig.scripts[marker].chunks or ()), (marker, decode(body))
+    for marker, (_, _, _, call_id) in (*during, *after):
+        assert _spend_statuses(call_id, 1).count("success") == 1, marker
