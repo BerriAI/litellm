@@ -7,6 +7,8 @@ from typing import Final
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
     ExactExpected,
+    FailureDetails,
+    FailureExpected,
     JsonResponse,
     RecountExpected,
     RecountRates,
@@ -5823,6 +5825,837 @@ CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT: Final = CostTrackingTestCase(
     ),
 )
 
+CLAUDE_SONNET_5_5_TOOL_CALL: Final = CostTrackingTestCase(
+    name="claude-sonnet-5-5-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-sonnet-5-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "545ca20285d9 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "allowed_openai_params": ["tool_choice"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-sonnet-5-5",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_$REQUEST_ID",
+                    "name": "get_weather",
+                    "input": {"city": "Berlin", "days": 7, "units": "metric"},
+                    "caller": {"type": "direct"},
+                }
+            ],
+            "container": None,
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.01287, input_cost=0.006072, output_cost=0.006798, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+CLAUDE_SONNET_5_5_THINKING: Final = CostTrackingTestCase(
+    name="claude-sonnet-5-5-thinking",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-sonnet-5-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "87d4acad824b summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-sonnet-5-5",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "scripted answer 87d4acad824b"}],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1240,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.01089, input_cost=0.004092, output_cost=0.006798, prompt_tokens=1240, completion_tokens=412
+    ),
+)
+
+CLAUDE_HAIKU_5_5_TOOL_CALL: Final = CostTrackingTestCase(
+    name="claude-haiku-5-5-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-haiku-5-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "69e58cd95315 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "allowed_openai_params": ["tool_choice"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-haiku-5-5",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_$REQUEST_ID",
+                    "name": "get_weather",
+                    "input": {"city": "Berlin", "days": 7, "units": "metric"},
+                    "caller": {"type": "direct"},
+                }
+            ],
+            "container": None,
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.00429, input_cost=0.002024, output_cost=0.002266, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+CLAUDE_HAIKU_5_5_THINKING: Final = CostTrackingTestCase(
+    name="claude-haiku-5-5-thinking",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-haiku-5-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "eadef5247ccc summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-haiku-5-5",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "",
+                    "signature": "CAQS1gQKEAgSGAI4AUIIdGhpbmtpbmcSDOsCmv80YWY0IrUDvBoMog2",
+                },
+                {"type": "text", "text": "scripted answer eadef5247ccc"},
+            ],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1240,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 4040,
+                "output_tokens_details": {"thinking_tokens": 3480},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.023584, input_cost=0.001364, output_cost=0.02222, prompt_tokens=1240, completion_tokens=4040
+    ),
+)
+
+CLAUDE_FABLE_5_TOOL_CALL: Final = CostTrackingTestCase(
+    name="claude-fable-5-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "80901cc6dd89 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "allowed_openai_params": ["tool_choice"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_$REQUEST_ID",
+                    "name": "get_weather",
+                    "input": {"city": "Berlin", "days": 7, "units": "metric"},
+                    "caller": {"type": "direct"},
+                }
+            ],
+            "container": None,
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0585, input_cost=0.0276, output_cost=0.0309, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+CLAUDE_FABLE_5_THINKING: Final = CostTrackingTestCase(
+    name="claude-fable-5-thinking",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "d4bb9ddb7e64 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "",
+                    "signature": "CAQS1gQKEAgSGAI4AUIIdGhpbmtpbmcSDOsCmv80YWY0IrUDvBoMog2",
+                },
+                {"type": "text", "text": "scripted answer d4bb9ddb7e64"},
+            ],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1240,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 4040,
+                "output_tokens_details": {"thinking_tokens": 3480},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.3216, input_cost=0.0186, output_cost=0.303, prompt_tokens=1240, completion_tokens=4040
+    ),
+)
+
+CLAUDE_FABLE_5_1_TOOL_CALL: Final = CostTrackingTestCase(
+    name="claude-fable-5-1-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-1",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "e0fdc87d1c48 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "allowed_openai_params": ["tool_choice"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5-1",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_$REQUEST_ID",
+                    "name": "get_weather",
+                    "input": {"city": "Berlin", "days": 7, "units": "metric"},
+                    "caller": {"type": "direct"},
+                }
+            ],
+            "container": None,
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0624, input_cost=0.02944, output_cost=0.03296, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+CLAUDE_FABLE_5_1_THINKING: Final = CostTrackingTestCase(
+    name="claude-fable-5-1-thinking",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-fable-5-1",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "bf3807156155 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-fable-5-1",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "scripted answer bf3807156155"}],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1240,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0528, input_cost=0.01984, output_cost=0.03296, prompt_tokens=1240, completion_tokens=412
+    ),
+)
+
+CLAUDE_OPUS_5_5_TOOL_CALL: Final = CostTrackingTestCase(
+    name="claude-opus-5-5-tool_call",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-opus-5-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "31f57d0ee701 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather and a short forecast for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {"type": "string", "description": "City name"},
+                            "days": {"type": "integer", "description": "Forecast horizon in days"},
+                            "units": {"type": "string", "enum": ["metric", "imperial"]},
+                        },
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "allowed_openai_params": ["tool_choice"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-opus-5-5",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_$REQUEST_ID",
+                    "name": "get_weather",
+                    "input": {"city": "Berlin", "days": 7, "units": "metric"},
+                    "caller": {"type": "direct"},
+                }
+            ],
+            "container": None,
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0156, input_cost=0.00736, output_cost=0.00824, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+CLAUDE_OPUS_5_5_THINKING: Final = CostTrackingTestCase(
+    name="claude-opus-5-5-thinking",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-opus-5-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "d4af5bf007f7 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "reasoning_effort": "medium",
+        "allowed_openai_params": ["reasoning_effort"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-opus-5-5",
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "",
+                    "signature": "CAQS1gQKEAgSGAI4AUIIdGhpbmtpbmcSDOsCmv80YWY0IrUDvBoMog2",
+                },
+                {"type": "text", "text": "scripted answer d4af5bf007f7"},
+            ],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1240,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 4040,
+                "output_tokens_details": {"thinking_tokens": 3480},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.08576, input_cost=0.00496, output_cost=0.0808, prompt_tokens=1240, completion_tokens=4040
+    ),
+)
+
+CLAUDE_OPUS_5_5_UPSTREAM_404_ZERO_SPEND: Final = CostTrackingTestCase(
+    name="claude-opus-5-5-upstream_404_zero_spend",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-opus-5-5",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "scripted upstream failure 404"}],
+        "stream": False,
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "type": "error",
+            "error": {"type": "not_found_error", "message": "model: scripted-missing-model"},
+            "request_id": "req_$REQUEST_ID",
+        },
+        status=404,
+    ),
+    expected=FailureExpected(failure=FailureDetails(status=404)),
+)
+
+CLAUDE_OPUS_5_5_INPUT_TEXT_ROLLUPS: Final = CostTrackingTestCase(
+    name="claude-opus-5-5-input_text_rollups",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="claude-opus-5-5",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "fed41894bd20 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "model": "claude-opus-5-5",
+            "id": "msg_$UNIQUE_ID",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "scripted answer fed41894bd20"}],
+            "container": None,
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "stop_details": None,
+            "usage": {
+                "input_tokens": 1840,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                "output_tokens": 412,
+                "output_tokens_details": {"thinking_tokens": 0},
+                "service_tier": "standard",
+                "inference_geo": "global",
+            },
+            "diagnostics": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0156, input_cost=0.00736, output_cost=0.00824, prompt_tokens=1840, completion_tokens=412, rollups=True
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_HAIKU_4_5_INPUT_TEXT,
     CLAUDE_HAIKU_4_5_CACHE_READ,
@@ -5926,6 +6759,18 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
     CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
     CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_TOOL_CALL,
+    CLAUDE_SONNET_5_5_THINKING,
+    CLAUDE_HAIKU_5_5_TOOL_CALL,
+    CLAUDE_HAIKU_5_5_THINKING,
+    CLAUDE_FABLE_5_TOOL_CALL,
+    CLAUDE_FABLE_5_THINKING,
+    CLAUDE_FABLE_5_1_TOOL_CALL,
+    CLAUDE_FABLE_5_1_THINKING,
+    CLAUDE_OPUS_5_5_TOOL_CALL,
+    CLAUDE_OPUS_5_5_THINKING,
+    CLAUDE_OPUS_5_5_UPSTREAM_404_ZERO_SPEND,
+    CLAUDE_OPUS_5_5_INPUT_TEXT_ROLLUPS,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (

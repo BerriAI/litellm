@@ -43,6 +43,7 @@ class CostMapEntry(BaseModel):
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     supports_function_calling: bool | None = None
+    supports_none_reasoning_effort: bool | None = None
     input_cost_per_token: float | None = None
     input_cost_per_token_decisions: float | None = None
     input_cost_per_query: float | None = None
