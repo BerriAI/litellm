@@ -117,7 +117,6 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "response_format",
             "response_mime_type",
             "previous_interaction_id",
-            "continuation_token",
         ]
 
     def validate_environment(
@@ -199,7 +198,6 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "environment",
             "response_modalities",
             "previous_interaction_id",
-            "continuation_token",
         ]
         for key in optional_keys:
             if optional_params.get(key) is not None:

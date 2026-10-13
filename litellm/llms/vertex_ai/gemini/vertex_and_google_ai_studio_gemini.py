@@ -115,6 +115,7 @@ from .long_decode import (
     output_tokens_of,
     parse_body,
     sum_usage_metadata,
+    url_for,
     with_initial_prompt_tokens,
 )
 from .transformation import (
@@ -2769,7 +2770,9 @@ async def make_call(
         )
 
     try:
-        response: Final = await client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+        response: Final = await client.post(
+            url_for(api_base, request_body), headers=headers, data=data, stream=True, logging_obj=logging_obj
+        )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string: Final = str(await e.response.aread())
@@ -2786,7 +2789,9 @@ async def make_call(
         )
 
     async def open_hop(body: RequestBody) -> httpx.Response:
-        return await client.post(api_base, headers=headers, data=json.dumps(body), stream=True, logging_obj=logging_obj)
+        return await client.post(
+            url_for(api_base, body), headers=headers, data=json.dumps(body), stream=True, logging_obj=logging_obj
+        )
 
     completion_stream: Final = ModelResponseIterator(
         streaming_response=response.aiter_lines(),
@@ -2823,7 +2828,9 @@ def make_sync_call(
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response: Final = client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+    response: Final = client.post(
+        url_for(api_base, request_body), headers=headers, data=data, stream=True, logging_obj=logging_obj
+    )
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -2833,7 +2840,9 @@ def make_sync_call(
         )
 
     def open_hop(body: RequestBody) -> httpx.Response:
-        return client.post(api_base, headers=headers, data=json.dumps(body), stream=True, logging_obj=logging_obj)
+        return client.post(
+            url_for(api_base, body), headers=headers, data=json.dumps(body), stream=True, logging_obj=logging_obj
+        )
 
     completion_stream: Final = ModelResponseIterator(
         streaming_response=response.iter_lines(),
@@ -3037,7 +3046,7 @@ class VertexLLM(VertexBase):
         async def post(body: RequestBody) -> httpx.Response:
             try:
                 response: Final = await client.post(
-                    api_base,
+                    url_for(api_base, body),
                     headers=headers,
                     json=dict(body),
                     logging_obj=logging_obj,
@@ -3243,7 +3252,9 @@ class VertexLLM(VertexBase):
 
         def post(body: RequestBody) -> httpx.Response:
             try:
-                response: Final = client.post(url=url, headers=headers, json=dict(body), logging_obj=logging_obj)
+                response: Final = client.post(
+                    url=url_for(url, body), headers=headers, json=dict(body), logging_obj=logging_obj
+                )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:
                 raise VertexAIError(
@@ -3545,8 +3556,6 @@ class ModelResponseIterator:
         if "usageMetadata" not in chunk:
             return chunk
         self._hop_usage = chunk["usageMetadata"]
-        if self._initial_prompt_tokens is None:
-            self._initial_prompt_tokens = self._hop_usage.get("promptTokenCount")
         if not self._usage_offset:
             return chunk
         return {**chunk, "usageMetadata": sum_usage_metadata(self._usage_offset, self._hop_usage)}
@@ -3571,6 +3580,8 @@ class ModelResponseIterator:
             } or None
 
     def _start_hop(self, response: httpx.Response) -> None:
+        if self._initial_prompt_tokens is None:
+            self._initial_prompt_tokens = self._hop_usage.get("promptTokenCount")
         self._usage_offset = sum_usage_metadata(self._usage_offset, self._hop_usage)
         self._hop_usage = UsageMetadata()
         self._grounding_offset = (*self._grounding_offset, *self._hop_grounding)
@@ -3601,7 +3612,8 @@ class ModelResponseIterator:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
         self._start_hop(hop_response)
-        self.async_response_iterator = hop_response.aiter_lines()
+        self.streaming_response = hop_response.aiter_lines()
+        self.async_response_iterator = self.streaming_response
         return None
 
     def _open_next_hop_sync(self, token: str) -> Optional["ModelResponseStream"]:
@@ -3614,7 +3626,8 @@ class ModelResponseIterator:
             log_failed_hop(e)
             return self._truncated_stream_end(token)
         self._start_hop(hop_response)
-        self.response_iterator = hop_response.iter_lines()
+        self.streaming_response = hop_response.iter_lines()
+        self.response_iterator = self.streaming_response
         return None
 
     # Sync iterator

@@ -20,7 +20,6 @@ INTERACTIONS_API_OPTIONAL_PARAMS: Final = {
     "response_format",
     "response_mime_type",
     "previous_interaction_id",
-    "continuation_token",
     "agent_config",
 }
 

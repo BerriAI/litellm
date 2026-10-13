@@ -53,6 +53,7 @@ HOP_2_TRUNCATED: Final = {
 
 
 HOP_END_FINISH_REASONS: Final = ("MAX_TOKENS", "CONTINUATION")
+VERTEX_PUBLISHER_BASE: Final = "https://aiplatform.googleapis.com/v1/projects/p/locations/global/publishers/google"
 
 HOP_1_SEARCHES: Final = ("argon launch date", "argon output limit", "argon pricing")
 HOP_2_SEARCHES: Final = ("argon pricing", "argon context window")
@@ -81,6 +82,14 @@ def _replay(hops: Sequence[httpx.Response], sent: list[dict[str, object]]) -> Ca
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
         return hops[len(sent) - 1]
+
+    return handler
+
+
+def _recording_paths(hops: Sequence[httpx.Response], paths: list[str]) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return hops[len(paths) - 1]
 
     return handler
 
@@ -246,7 +255,12 @@ def _stream_hops(hop_end: str = "MAX_TOKENS") -> tuple[httpx.Response, httpx.Res
     )
 
 
-async def _collect_stream(is_async: bool, hops: Sequence[httpx.Response], sent: list[dict[str, object]]) -> list:
+async def _stream_chunks(
+    is_async: bool,
+    handler: Callable[[httpx.Request], httpx.Response],
+    api_base: str | None = None,
+    continuation_token: str | None = None,
+) -> list:
     kwargs: Final = {
         "model": MODEL,
         "messages": list(MESSAGES),
@@ -254,17 +268,29 @@ async def _collect_stream(is_async: bool, hops: Sequence[httpx.Response], sent: 
         "stream": True,
         "stream_options": {"include_usage": True},
         "api_key": "fake-gemini-key",
+        "api_base": api_base,
+        "continuation_token": continuation_token,
     }
     if is_async:
         stream: Final = await litellm.acompletion(
-            **kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent)))
+            **kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(handler))
         )
         return [chunk async for chunk in stream]
     return list(
-        litellm.completion(
-            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(hops, sent))))
-        )
+        litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))))
     )
+
+
+async def _collect_stream(is_async: bool, hops: Sequence[httpx.Response], sent: list[dict[str, object]]) -> list:
+    return await _stream_chunks(is_async, _replay(hops, sent))
+
+
+def _stream_text(chunks: list) -> str:
+    return "".join(c.choices[0].delta.content or "" for c in chunks if c.choices)
+
+
+def _stream_finish_reasons(chunks: list) -> list[str]:
+    return [c.choices[0].finish_reason for c in chunks if c.choices and c.choices[0].finish_reason]
 
 
 def _delta_fields(chunks: list) -> list[Mapping[str, object]]:
@@ -293,6 +319,119 @@ async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish
     assert chunks[-1].usage.prompt_tokens == 20
     assert chunks[-1].usage.completion_tokens == 50
     assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_long_decode_reads_every_chunk_of_each_continuation_stream(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        _stream_hops()[0],
+        _sse(
+            {
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": " wor"}]}, "continuationToken": "Y2twdC0x"}
+                ],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+            },
+            {
+                **HOP_2_TRUNCATED,
+                "candidates": [{**HOP_2_TRUNCATED["candidates"][0], "content": {"parts": [{"text": "ld"}]}}],
+            },
+        ),
+        _sse(
+            {"candidates": [{"content": {"role": "model", "parts": [{"text": " ag"}]}}]},
+            {
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "ain"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 7, "totalTokenCount": 17},
+            },
+        ),
+    )
+
+    chunks: Final = await _collect_stream(is_async, hops, sent)
+
+    assert [body.get("continuationToken") for body in sent] == [None, "dG9rLTE=", "dG9rLTI="]
+    assert _stream_text(chunks) == "hello world again"
+    assert _stream_finish_reasons(chunks) == ["stop"]
+    assert chunks[-1].usage.prompt_tokens == 30
+    assert chunks[-1].usage.completion_tokens == 57
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_initial_prompt_tokens_is_the_prompt_count_the_first_stream_ends_with(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+    first_stream: Final = _sse(
+        {
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "hel"}]}}],
+            "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 3, "totalTokenCount": 10},
+        },
+        STREAM_HOP_1_END,
+    )
+
+    chunks: Final = await _collect_stream(is_async, (first_stream, _sse(HOP_2)), sent)
+
+    assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
+    assert chunks[-1].usage.prompt_tokens == 20
+
+
+def _api_versions(paths: Sequence[str]) -> list[str]:
+    return [path.split("/projects/")[0] for path in paths]
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_continuation_request_to_a_vertex_url_goes_to_the_api_version_that_accepts_the_token(
+    is_async: bool,
+):
+    paths: Final[list[str]] = []
+    hops: Final = (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2))
+    transport: Final = httpx.MockTransport(_recording_paths(hops, paths))
+    kwargs: Final = {
+        "model": MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 100_000,
+        "api_key": "fake-gemini-key",
+        "api_base": VERTEX_PUBLISHER_BASE,
+    }
+
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=transport))
+        if is_async
+        else litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=transport)))
+    )
+
+    assert response.choices[0].message.content == "hello world"
+    # Vertex AI answered 400 for continuationToken on v1 and 200 on v1beta1, probed at location global on 2026-10-13
+    assert _api_versions(paths) == ["/v1", "/v1beta1"]
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_continuation_request_to_a_vertex_url_goes_to_the_api_version_that_accepts_the_token(
+    is_async: bool,
+):
+    paths: Final[list[str]] = []
+
+    chunks: Final = await _stream_chunks(is_async, _recording_paths(_stream_hops(), paths), VERTEX_PUBLISHER_BASE)
+
+    assert _stream_text(chunks) == "hello world"
+    assert _api_versions(paths) == ["/v1", "/v1beta1"]
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_request_the_client_continues_on_a_vertex_url_goes_to_the_api_version_that_accepts_the_token(
+    is_async: bool,
+):
+    paths: Final[list[str]] = []
+
+    chunks: Final = await _stream_chunks(
+        is_async, _recording_paths((_sse(HOP_2),), paths), VERTEX_PUBLISHER_BASE, continuation_token="dG9rLTE="
+    )
+
+    assert _stream_text(chunks) == " world"
+    assert _api_versions(paths) == ["/v1beta1"]
 
 
 @pytest.mark.parametrize("hop_2_searches", [(), HOP_2_SEARCHES])

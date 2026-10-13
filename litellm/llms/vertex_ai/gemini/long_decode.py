@@ -42,6 +42,9 @@ HOP_FAILURES: Final = (VertexAIError, httpx.HTTPError, Timeout)
 
 CONTINUABLE_FINISH_REASONS: Final = frozenset({"MAX_TOKENS", "CONTINUATION"})
 
+_VERTEX_V1_PATH: Final = "/v1/projects/"
+_VERTEX_PATH_ACCEPTING_CONTINUATION_TOKEN: Final = "/v1beta1/projects/"
+
 LongDecodeHops: TypeAlias = tuple[GenerateContentResponseBody, ...]
 AsyncHopPost: TypeAlias = Callable[[RequestBody], Awaitable[httpx.Response]]
 SyncHopPost: TypeAlias = Callable[[RequestBody], httpx.Response]
@@ -98,6 +101,12 @@ def next_hop_token(
 
 def hop_request(request_body: RequestBody, token: str) -> RequestBody:
     return {**request_body, "continuationToken": token}
+
+
+def url_for(url: str, request_body: RequestBody) -> str:
+    if "continuationToken" not in request_body:
+        return url
+    return url.replace(_VERTEX_V1_PATH, _VERTEX_PATH_ACCEPTING_CONTINUATION_TOKEN, 1)
 
 
 def sum_usage_metadata(first: UsageMetadata, *rest: UsageMetadata) -> UsageMetadata:
