@@ -2254,4 +2254,4 @@ def test_transform_response_carries_served_service_tier(served_tier: str | None)
         encoding=None,
     )
 
-    assert result.service_tier == served_tier
+    assert result.to_dict().get("service_tier") == served_tier
