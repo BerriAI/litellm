@@ -5,7 +5,7 @@ from pydantic import Field
 from .base import GuardrailConfigModel
 
 
-class WingbackGuardrailConfigModel(GuardrailConfigModel):
+class WingbackGuardrailConfigModel(GuardrailConfigModel):  # pyright: ignore[reportMissingTypeArgument]  # parameterizing adds an optional_params field to the UI form
     """Configuration parameters for the Wingback guardrail."""
 
     api_key: str | None = Field(

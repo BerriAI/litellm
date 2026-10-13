@@ -24,7 +24,7 @@ def initialize_guardrail(
         unreachable_fallback=litellm_params.unreachable_fallback or "fail_closed",
         fail_on_error=litellm_params.fail_on_error,
         extra_headers=litellm_params.extra_headers,
-        guardrail_name=guardrail.get("guardrail_name", ""),
+        guardrail_name=guardrail["guardrail_name"],
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
         timeout=litellm_params.timeout,
