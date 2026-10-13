@@ -232,35 +232,71 @@ def _failure_kwargs(deployment_id: str, exception: Exception) -> Mapping[str, ob
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
 @pytest.mark.parametrize("failure_kind", ["500", "429", "timeout"])
-async def test_retryable_failure_demotes_cheapest_until_health_window_expires(
+async def test_qualifying_failures_demote_after_minimum_failure_count(
     sync_mode: bool,
     failure_kind: Literal["500", "429", "timeout"],
 ) -> None:
     deployments: Final = (_deployment("cheapest"), _deployment("expensive"))
     handler: Final = _handler(
         {"cheapest": (1.0, 1.0), "expensive": (10.0, 10.0)},
-        routing_args={"health_window_seconds": 0.2, "top_n": 1},
+        routing_args={"top_n": 1},
     )
     failure: Final = _failure(failure_kind)
     kwargs: Final = _failure_kwargs("cheapest", failure)
 
     if sync_mode:
-        handler.log_failure_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+        for _ in range(3):
+            handler.log_failure_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
     else:
-        await handler.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
-    demoted_picks: Final = (
-        _picks(handler, deployments, 200) if sync_mode else await _async_picks(handler, deployments, 200)
-    )
+        for _ in range(3):
+            await handler.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+    demoted_picks: Final = _picks(handler, deployments, 200) if sync_mode else await _async_picks(handler, deployments, 200)
     assert frozenset(demoted_picks) == frozenset({"expensive"})
 
-    time.sleep(0.3)
 
-    recovered: Final = (
-        _selected_id(handler.get_available_deployments(MODEL_GROUP, deployments))
-        if sync_mode
-        else _selected_id(await handler.async_get_available_deployments(MODEL_GROUP, deployments))
+def test_single_failure_and_successes_preserve_inverse_square_share() -> None:
+    deployment_ids: Final = ("cost-1", "cost-2", "cost-3")
+    deployments: Final = tuple(_deployment(deployment_id) for deployment_id in deployment_ids)
+    handler: Final = _handler(
+        {
+            "cost-1": (1.0, 1.0),
+            "cost-2": (2.0, 2.0),
+            "cost-3": (3.0, 3.0),
+        }
     )
-    assert recovered == "cheapest"
+    handler.log_failure_event(
+        kwargs=_failure_kwargs("cost-1", _failure("500")),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    for _ in range(50):
+        handler.log_success_event(
+            kwargs={"litellm_params": {"model_info": {"id": "cost-1"}}},
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    assert _chi_square(_picks(handler, deployments, 10_000), deployment_ids, (36, 9, 4)) < 13.82
+
+
+@pytest.mark.asyncio
+async def test_demoted_deployment_recovers_after_two_health_windows() -> None:
+    deployments: Final = (_deployment("cheapest"), _deployment("expensive"))
+    handler: Final = _handler(
+        {"cheapest": (1.0, 1.0), "expensive": (10.0, 10.0)},
+        routing_args={"health_window_seconds": 0.2, "top_n": 1},
+    )
+    kwargs: Final = _failure_kwargs("cheapest", _failure("500"))
+    for _ in range(3):
+        handler.log_failure_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+
+    assert _selected_id(handler.get_available_deployments(MODEL_GROUP, deployments)) == "expensive"
+    time.sleep(0.45)
+
+    assert _selected_id(handler.get_available_deployments(MODEL_GROUP, deployments)) == "cheapest"
 
 
 def test_bad_request_does_not_demote_a_deployment() -> None:
@@ -281,7 +317,10 @@ def test_bad_request_does_not_demote_a_deployment() -> None:
 
 def test_all_demoted_deployments_fall_back_to_the_healthy_candidates() -> None:
     deployments: Final = (_deployment("first"), _deployment("second"))
-    handler: Final = _handler({"first": (1.0, 1.0), "second": (2.0, 2.0)})
+    handler: Final = _handler(
+        {"first": (1.0, 1.0), "second": (2.0, 2.0)},
+        routing_args={"demotion_min_failures": 1},
+    )
     for deployment_id in ("first", "second"):
         handler.log_failure_event(
             kwargs=_failure_kwargs(deployment_id, _failure("500")),
@@ -323,7 +362,7 @@ async def test_success_updates_per_group_output_token_ema(async_mode: bool) -> N
 
 
 @pytest.mark.asyncio
-async def test_router_weighted_failover_demotes_a_failing_cheap_deployment() -> None:
+async def test_router_weighted_failover_demotes_after_repeated_cheap_failures() -> None:
     router: Final = Router(
         model_list=[
             {
@@ -348,9 +387,12 @@ async def test_router_weighted_failover_demotes_a_failing_cheap_deployment() -> 
         routing_strategy_args={"top_n": 1},
         num_retries=0,
     )
-    first_response: Final = await _router_response(router)
-
-    assert get_hidden_params_dict(first_response)["model_id"] == "expensive"
+    responses: Final = (
+        await _router_response(router),
+        await _router_response(router),
+        await _router_response(router),
+    )
+    assert all(get_hidden_params_dict(response)["model_id"] == "expensive" for response in responses)
     assert _selected_id(_router_deployment(router)) == "expensive"
 
     next_response: Final = await _router_response(router)

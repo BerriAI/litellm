@@ -3,6 +3,8 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
+from math import ceil
 from types import MappingProxyType
 from typing import Final
 
@@ -29,7 +31,9 @@ class _FrozenPayload(LiteLLMPydanticObjectBase):
 class RoutingArgs(_FrozenPayload):
     price_exponent: float = 2.0
     top_n: int | None = Field(default=None, gt=0)
-    health_window_seconds: float = 30.0
+    health_window_seconds: float = Field(default=30.0, gt=0)
+    demotion_failure_ratio: float = Field(default=0.1, ge=0.0, le=1.0)
+    demotion_min_failures: int = Field(default=3, gt=0)
     default_output_tokens: int = 256
 
 
@@ -75,6 +79,16 @@ class _CacheAccess:
     def __init__(self, cache: DualCache) -> None:
         self._cache: Final = cache
 
+    def increment_cache(self, key: str, *, ttl: int) -> None:
+        self._cache.increment_cache(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped DualCache API
+            key=key, value=1, ttl=ttl
+        )
+
+    async def async_increment_cache(self, key: str, *, ttl: int) -> None:
+        await self._cache.async_increment_cache(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped DualCache API
+            key=key, value=1, ttl=ttl
+        )
+
     def set_cache(self, key: str, value: object, *, ttl: float) -> None:
         self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # untyped DualCache API
             key=key, value=value, ttl=ttl
@@ -108,8 +122,33 @@ _CACHE_VALUES_ADAPTER: Final[TypeAdapter[tuple[object | None, ...] | None]] = Ty
 @dataclass(frozen=True, slots=True)
 class _Candidate:
     deployment: DeploymentTypedDict
-    demotion_key: str | None
+    deployment_id: str | None
     cost: float | None
+
+
+def _callback_deployment_id(payload: _CallbackPayload) -> str | None:
+    litellm_params: Final = payload.litellm_params
+    model_info: Final = None if litellm_params is None else litellm_params.model_info
+    deployment_id: Final = None if model_info is None else model_info.id
+    return None if deployment_id is None else str(deployment_id)
+
+
+def _candidate_counter_keys(candidate: _Candidate, buckets: tuple[int, int]) -> tuple[str, ...]:
+    if candidate.deployment_id is None:
+        return ()
+    attempts_keys: Final = tuple(f"price_weighted:{candidate.deployment_id}:{bucket}:attempts" for bucket in buckets)
+    failures_keys: Final = tuple(f"price_weighted:{candidate.deployment_id}:{bucket}:failures" for bucket in buckets)
+    return attempts_keys + failures_keys
+
+
+def _counter_keys(candidates: tuple[_Candidate, ...], buckets: tuple[int, int]) -> tuple[str, ...]:
+    return tuple(chain.from_iterable(_candidate_counter_keys(candidate, buckets) for candidate in candidates))
+
+
+def _counter_value(value: object | None) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
 
 
 def _deployment(value: object) -> _Deployment | None:
@@ -157,7 +196,7 @@ class PriceWeightedLoggingHandler(CustomLogger):
         self._output_tokens_ema: Mapping[str, float] = MappingProxyType({})
         self._output_tokens_ema_lock = threading.Lock()
 
-    def _deployment_demote_key(self, kwargs: Mapping[str, object]) -> str | None:
+    def _retryable_failure_deployment_id(self, kwargs: Mapping[str, object]) -> str | None:
         payload: Final = _CallbackPayload.model_validate(kwargs)
         exception: Final = payload.exception
         if not isinstance(exception, Exception):
@@ -169,10 +208,47 @@ class PriceWeightedLoggingHandler(CustomLogger):
                 return None
             if status_code is None or (status_code != 429 and status_code < 500):
                 return None
-        litellm_params: Final = payload.litellm_params
-        model_info: Final = None if litellm_params is None else litellm_params.model_info
-        deployment_id: Final = None if model_info is None else model_info.id
-        return None if deployment_id is None else f"price_weighted:demoted:{deployment_id}"
+        return _callback_deployment_id(payload)
+
+    def _counter_bucket(self) -> int:
+        return int(time.time() // self.routing_args.health_window_seconds)
+
+    def _counter_buckets(self) -> tuple[int, int]:
+        current_bucket: Final = self._counter_bucket()
+        return current_bucket, current_bucket - 1
+
+    def _counter_ttl(self) -> int:
+        return max(1, ceil(2 * self.routing_args.health_window_seconds))
+
+    @staticmethod
+    def _counter_key(deployment_id: str, bucket: int, counter: str) -> str:
+        return f"price_weighted:{deployment_id}:{bucket}:{counter}"
+
+    def _increment_counters(self, deployment_id: str, *, failure: bool) -> None:
+        bucket: Final = self._counter_bucket()
+        ttl: Final = self._counter_ttl()
+        self.router_cache.increment_cache(
+            key=self._counter_key(deployment_id, bucket, "attempts"),
+            ttl=ttl,
+        )
+        if failure:
+            self.router_cache.increment_cache(
+                key=self._counter_key(deployment_id, bucket, "failures"),
+                ttl=ttl,
+            )
+
+    async def _async_increment_counters(self, deployment_id: str, *, failure: bool) -> None:
+        bucket: Final = self._counter_bucket()
+        ttl: Final = self._counter_ttl()
+        await self.router_cache.async_increment_cache(
+            key=self._counter_key(deployment_id, bucket, "attempts"),
+            ttl=ttl,
+        )
+        if failure:
+            await self.router_cache.async_increment_cache(
+                key=self._counter_key(deployment_id, bucket, "failures"),
+                ttl=ttl,
+            )
 
     @with_service_target("router_usage")
     def log_failure_event(
@@ -182,14 +258,10 @@ class PriceWeightedLoggingHandler(CustomLogger):
         start_time: object,
         end_time: object,
     ) -> None:
-        key: Final = self._deployment_demote_key(kwargs)
-        if key is None:
+        deployment_id: Final = self._retryable_failure_deployment_id(kwargs)
+        if deployment_id is None:
             return
-        self.router_cache.set_cache(
-            key=key,
-            value=time.time(),
-            ttl=self.routing_args.health_window_seconds,
-        )
+        self._increment_counters(deployment_id, failure=True)
 
     @with_service_target("router_usage")
     async def async_log_failure_event(
@@ -199,25 +271,24 @@ class PriceWeightedLoggingHandler(CustomLogger):
         start_time: object,
         end_time: object,
     ) -> None:
-        key: Final = self._deployment_demote_key(kwargs)
-        if key is None:
+        deployment_id: Final = self._retryable_failure_deployment_id(kwargs)
+        if deployment_id is None:
             return
-        await self.router_cache.async_set_cache(
-            key=key,
-            value=time.time(),
-            ttl=self.routing_args.health_window_seconds,
-        )
+        await self._async_increment_counters(deployment_id, failure=True)
 
-    def _record_success_event(self, kwargs: Mapping[str, object], response_obj: object) -> None:
-        payload: Final = _CallbackPayload.model_validate(kwargs)
+    def _record_success_event(
+        self,
+        payload: _CallbackPayload,
+        response_obj: object,
+        *,
+        has_litellm_metadata: bool,
+    ) -> None:
         if payload.call_type is not None and is_batch_retrieve_call_type(payload.call_type):
             return
         litellm_params: Final = payload.litellm_params
         if litellm_params is None:
             return
-        metadata: Final = (
-            litellm_params.litellm_metadata if LITELLM_METADATA_FIELD in kwargs else litellm_params.metadata
-        )
+        metadata: Final = litellm_params.litellm_metadata if has_litellm_metadata else litellm_params.metadata
         model_group: Final = None if metadata is None else metadata.model_group
         completion_tokens: Final = _completion_tokens(response_obj)
         if not isinstance(model_group, str) or completion_tokens is None:
@@ -235,7 +306,15 @@ class PriceWeightedLoggingHandler(CustomLogger):
         start_time: object,
         end_time: object,
     ) -> None:
-        self._record_success_event(kwargs, response_obj)
+        payload: Final = _CallbackPayload.model_validate(kwargs)
+        deployment_id: Final = _callback_deployment_id(payload)
+        if deployment_id is not None:
+            self._increment_counters(deployment_id, failure=False)
+        self._record_success_event(
+            payload,
+            response_obj,
+            has_litellm_metadata=LITELLM_METADATA_FIELD in kwargs,
+        )
 
     @with_service_target("router_usage")
     async def async_log_success_event(
@@ -245,7 +324,15 @@ class PriceWeightedLoggingHandler(CustomLogger):
         start_time: object,
         end_time: object,
     ) -> None:
-        self._record_success_event(kwargs, response_obj)
+        payload: Final = _CallbackPayload.model_validate(kwargs)
+        deployment_id: Final = _callback_deployment_id(payload)
+        if deployment_id is not None:
+            await self._async_increment_counters(deployment_id, failure=False)
+        self._record_success_event(
+            payload,
+            response_obj,
+            has_litellm_metadata=LITELLM_METADATA_FIELD in kwargs,
+        )
 
     def _candidates(
         self,
@@ -267,14 +354,13 @@ class PriceWeightedLoggingHandler(CustomLogger):
         raw_deployment_id: Final = None if model_info is None else model_info.id
         deployment_id: Final = None if raw_deployment_id is None else str(raw_deployment_id)
         model_name: Final = None if litellm_params is None else litellm_params.model
-        demotion_key: Final = None if deployment_id is None else f"price_weighted:demoted:{deployment_id}"
         if deployment_id is None or model_name is None:
-            return _Candidate(deployment=deployment, demotion_key=demotion_key, cost=None)
+            return _Candidate(deployment=deployment, deployment_id=deployment_id, cost=None)
         input_price, output_price = self.price_lookup(deployment_id, model_name)
         if input_price is None or output_price is None:
-            return _Candidate(deployment=deployment, demotion_key=demotion_key, cost=None)
+            return _Candidate(deployment=deployment, deployment_id=deployment_id, cost=None)
         cost: Final = input_tokens * input_price + output_tokens * output_price
-        return _Candidate(deployment=deployment, demotion_key=demotion_key, cost=cost)
+        return _Candidate(deployment=deployment, deployment_id=deployment_id, cost=cost)
 
     def _request_candidates(
         self,
@@ -296,18 +382,39 @@ class PriceWeightedLoggingHandler(CustomLogger):
     def _stable_candidates(
         self,
         candidates: tuple[_Candidate, ...],
+        counter_keys: tuple[str, ...],
         cache_values: Sequence[object | None] | None,
+        buckets: tuple[int, int],
     ) -> tuple[_Candidate, ...]:
-        keys: Final = tuple(candidate.demotion_key for candidate in candidates if candidate.demotion_key is not None)
         if cache_values is None:
             return candidates
-        demoted_keys: Final = frozenset(key for key, value in zip(keys, cache_values) if value is not None)
+        values_by_key: Final = MappingProxyType(dict(zip(counter_keys, cache_values)))
         stable: Final = tuple(
-            candidate
-            for candidate in candidates
-            if candidate.demotion_key is None or candidate.demotion_key not in demoted_keys
+            candidate for candidate in candidates if not self._is_candidate_demoted(candidate, values_by_key, buckets)
         )
         return stable if stable else candidates
+
+    def _is_candidate_demoted(
+        self,
+        candidate: _Candidate,
+        values_by_key: Mapping[str, object | None],
+        buckets: tuple[int, int],
+    ) -> bool:
+        if candidate.deployment_id is None:
+            return False
+        attempts: Final = sum(
+            _counter_value(values_by_key.get(self._counter_key(candidate.deployment_id, bucket, "attempts")))
+            for bucket in buckets
+        )
+        failures: Final = sum(
+            _counter_value(values_by_key.get(self._counter_key(candidate.deployment_id, bucket, "failures")))
+            for bucket in buckets
+        )
+        return (
+            failures >= self.routing_args.demotion_min_failures
+            and attempts > 0
+            and failures / attempts >= self.routing_args.demotion_failure_ratio
+        )
 
     def _pick_candidate(self, candidates: tuple[_Candidate, ...]) -> DeploymentTypedDict:
         known_costs: Final = tuple(candidate.cost for candidate in candidates if candidate.cost is not None)
@@ -330,11 +437,18 @@ class PriceWeightedLoggingHandler(CustomLogger):
     def _select_deployment(
         self,
         candidates: tuple[_Candidate, ...],
+        counter_keys: tuple[str, ...],
         cache_values: Sequence[object | None] | None,
+        buckets: tuple[int, int],
     ) -> DeploymentTypedDict | None:
         if not candidates:
             return None
-        stable_candidates: Final = self._stable_candidates(candidates=candidates, cache_values=cache_values)
+        stable_candidates: Final = self._stable_candidates(
+            candidates=candidates,
+            counter_keys=counter_keys,
+            cache_values=cache_values,
+            buckets=buckets,
+        )
         return self._pick_candidate(candidates=stable_candidates)
 
     @with_service_target("router_usage")
@@ -354,9 +468,15 @@ class PriceWeightedLoggingHandler(CustomLogger):
             messages=messages,
             input=input,
         )
-        keys: Final = tuple(candidate.demotion_key for candidate in candidates if candidate.demotion_key is not None)
-        cache_values: Final = self.router_cache.batch_get_cache(list(keys)) if keys else ()
-        return self._select_deployment(candidates=candidates, cache_values=cache_values)
+        buckets: Final = self._counter_buckets()
+        counter_keys: Final = _counter_keys(candidates, buckets)
+        cache_values: Final = self.router_cache.batch_get_cache(counter_keys) if counter_keys else ()
+        return self._select_deployment(
+            candidates=candidates,
+            counter_keys=counter_keys,
+            cache_values=cache_values,
+            buckets=buckets,
+        )
 
     @with_service_target("router_usage")
     async def async_get_available_deployments(
@@ -375,6 +495,12 @@ class PriceWeightedLoggingHandler(CustomLogger):
             messages=messages,
             input=input,
         )
-        keys: Final = tuple(candidate.demotion_key for candidate in candidates if candidate.demotion_key is not None)
-        cache_values: Final = await self.router_cache.async_batch_get_cache(list(keys)) if keys else ()
-        return self._select_deployment(candidates=candidates, cache_values=cache_values)
+        buckets: Final = self._counter_buckets()
+        counter_keys: Final = _counter_keys(candidates, buckets)
+        cache_values: Final = await self.router_cache.async_batch_get_cache(counter_keys) if counter_keys else ()
+        return self._select_deployment(
+            candidates=candidates,
+            counter_keys=counter_keys,
+            cache_values=cache_values,
+            buckets=buckets,
+        )
