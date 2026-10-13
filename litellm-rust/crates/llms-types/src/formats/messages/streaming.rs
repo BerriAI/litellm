@@ -1,3 +1,4 @@
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::{Map, Value};
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -108,9 +109,11 @@ pub struct MessagesStreamError {
     pub extra: Map<String, Value>,
 }
 
+/// An Anthropic stream event. Event types Anthropic adds later decode into `Other` and
+/// re-encode unchanged, while a malformed event of a known type is still an error.
 #[macro_rules_attribute::apply(crate::wire_type)]
-#[derive(strum::AsRefStr)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(strum::AsRefStr, strum::VariantNames)]
+#[serde(remote = "Self", tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum MessagesStreamEvent {
     MessageStart {
@@ -142,6 +145,53 @@ pub enum MessagesStreamEvent {
     Error {
         error: MessagesStreamError,
     },
+    #[serde(skip)]
+    #[strum(transparent)]
+    Other(UnknownMessagesStreamEvent),
+}
+
+/// A stream event whose `type` this version does not name, kept whole.
+#[macro_rules_attribute::apply(crate::wire_type)]
+pub struct UnknownMessagesStreamEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(flatten)]
+    pub data: Map<String, Value>,
+}
+
+impl AsRef<str> for UnknownMessagesStreamEvent {
+    fn as_ref(&self) -> &str {
+        &self.event_type
+    }
+}
+
+impl MessagesStreamEvent {
+    /// Whether `event_type` names one of the typed variants. `other` is the fallback
+    /// variant's own name, not an Anthropic event type.
+    fn is_known(event_type: &str) -> bool {
+        event_type != "other" && <Self as strum::VariantNames>::VARIANTS.contains(&event_type)
+    }
+}
+
+impl<'de> Deserialize<'de> for MessagesStreamEvent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let event = UnknownMessagesStreamEvent::deserialize(deserializer)?;
+        if !Self::is_known(&event.event_type) {
+            return Ok(Self::Other(event));
+        }
+        let mut data = event.data;
+        data.insert("type".into(), Value::String(event.event_type));
+        Self::deserialize(Value::Object(data)).map_err(de::Error::custom)
+    }
+}
+
+impl Serialize for MessagesStreamEvent {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Other(event) => event.serialize(serializer),
+            known => Self::serialize(known, serializer),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -195,10 +245,28 @@ mod tests {
     }
 
     #[rstest]
+    #[case::bare(json!({"type": "future_event"}))]
+    #[case::payload(json!({"type": "future_event", "index": 2, "payload": {"items": [1, null]}}))]
+    #[case::fallback_name(json!({"type": "other", "x": 1}))]
+    #[case::empty_name(json!({"type": ""}))]
+    fn unknown_events_pass_through_whole(#[case] wire: Value) {
+        let event: MessagesStreamEvent = serde_json::from_value(wire.clone()).unwrap();
+        assert!(matches!(event, MessagesStreamEvent::Other(_)));
+        assert_eq!(
+            Some(event.as_ref()),
+            wire.get("type").and_then(Value::as_str)
+        );
+        assert_eq!(serde_json::to_value(event).unwrap(), wire);
+    }
+
+    #[rstest]
     #[case::invalid_index(json!({"type": "content_block_stop", "index": "zero"}))]
     #[case::missing_delta(json!({"type": "content_block_delta", "index": 0}))]
-    #[case::unknown_event(json!({"type": "future_event"}))]
-    fn malformed_or_unrecognized_events_remain_rejected(#[case] wire: Value) {
+    #[case::unknown_delta(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "future_delta"}}))]
+    #[case::missing_type(json!({"index": 0}))]
+    #[case::numeric_type(json!({"type": 7}))]
+    #[case::non_object(json!([]))]
+    fn malformed_events_remain_rejected(#[case] wire: Value) {
         assert!(serde_json::from_value::<MessagesStreamEvent>(wire).is_err());
     }
 }
