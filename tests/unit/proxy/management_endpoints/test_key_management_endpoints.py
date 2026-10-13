@@ -4483,9 +4483,9 @@ async def test_generate_key_team_member_inherits_org_skips_membership_check():
 
     # Team belongs to an org; caller is a team member but NOT an explicit member
     # of that organization (the regression scenario).
-    mock_team_table = MagicMock()
-    mock_team_table.organization_id = org_id
-    mock_team_table.metadata = None
+    team_table: Final = LiteLLM_TeamTableCachedObj(
+        team_id="team-1", organization_id=org_id
+    )
 
     mock_validate_org = AsyncMock()
     mock_generate_key = AsyncMock(
@@ -4539,7 +4539,7 @@ async def test_generate_key_team_member_inherits_org_skips_membership_check():
                 user_role=LitellmUserRoles.INTERNAL_USER.value,
             ),
             litellm_changed_by=None,
-            team_table=mock_team_table,
+            team_table=team_table,
         )
 
     # Key creation proceeded for the team member ...
@@ -4635,9 +4635,9 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
     team_org_id = "other-org"
     foreign_org_id = "someone-elses-org"
 
-    mock_team_table = MagicMock()
-    mock_team_table.organization_id = team_org_id
-    mock_team_table.metadata = None
+    team_table: Final = LiteLLM_TeamTableCachedObj(
+        team_id="team-1", organization_id=team_org_id
+    )
 
     mock_validate_org = AsyncMock()
     mock_generate_key = AsyncMock(
@@ -4695,7 +4695,7 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
                 user_role=LitellmUserRoles.INTERNAL_USER.value,
             ),
             litellm_changed_by=None,
-            team_table=mock_team_table,
+            team_table=team_table,
         )
 
     mock_validate_org.assert_awaited_once()
@@ -16127,25 +16127,28 @@ async def test_ghsa_q775_ui_session_token_team_key_exempt_from_budget_ceiling():
         max_budget=0.25,
     )
 
+    prisma: Final = MagicMock()
+    prisma.insert_data = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token="hashed-token")
+    )
+
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
     ):
-        try:
-            await _common_key_generation_helper(
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=None,
-                team_table=MagicMock(),
-            )
-        except (HTTPException, ProxyException) as err:
-            msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
-            assert (
-                "cannot exceed" not in msg.lower()
-            ), "UI/CLI session token creating a team key must be exempt from the ceiling"
+        result: Final = await _common_key_generation_helper(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+            team_table=LiteLLM_TeamTableCachedObj(team_id="team-abc"),
+        )
+
+    assert result.team_id == data.team_id
+    assert result.max_budget == data.max_budget
+    assert prisma.insert_data.await_args.kwargs["data"]["max_budget"] == data.max_budget
 
 
 @pytest.mark.asyncio
