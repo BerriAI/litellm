@@ -2,33 +2,37 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class PluginAuthor(BaseModel):
+class PluginAuthor(LiteLLMBaseModel):
     """Plugin author information."""
 
     name: str = Field(..., description="Author name")
     email: str | None = Field(None, description="Author email")
 
 
-class PluginOwner(BaseModel):
+class PluginOwner(LiteLLMBaseModel):
     """Marketplace owner information."""
 
     name: str = Field(..., description="Owner name")
     email: str | None = Field(None, description="Owner email")
 
 
-class PluginSpec(BaseModel):
+class PluginSpec(LiteLLMBaseModel):
     """Mutable fields shared by plugin create and update requests."""
 
     source: dict[str, str] = Field(
         ...,
         description=(
-            "Git source reference. Supported formats:\n"
+            "Plugin source reference. Supported formats:\n"
             "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
             "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
-            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}"
+            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n"
+            "- Zip archive on any https host (e.g. S3): "
+            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}"
         ),
     )
     version: str | None = Field("1.0.0", description="Semantic version")
@@ -46,7 +50,7 @@ class RegisterPluginRequest(PluginSpec):
     Request body for registering a plugin in the marketplace.
 
     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-    GitHub/GitLab/Bitbucket and referenced by their git source.
+    GitHub/GitLab/Bitbucket or as a zip archive on any https host and referenced by their source.
     """
 
     name: str = Field(
@@ -69,18 +73,18 @@ class UpdatePluginRequest(PluginSpec):
     version: str | None = Field(None, description="Semantic version; cleared if omitted")
 
 
-class PluginResponse(BaseModel):
+class PluginResponse(LiteLLMBaseModel):
     """Plugin information in API responses."""
 
     id: str = Field(..., description="Plugin unique ID")
     name: str = Field(..., description="Plugin name")
     version: str | None = Field(None, description="Plugin version")
     description: str | None = Field(None, description="Plugin description")
-    source: dict[str, str] = Field(..., description="Git source reference")
+    source: dict[str, str] = Field(..., description="Plugin source reference")
     enabled: bool = Field(..., description="Whether plugin is enabled")
 
 
-class RegisterPluginResponse(BaseModel):
+class RegisterPluginResponse(LiteLLMBaseModel):
     """Response from plugin registration."""
 
     status: str = Field(..., description="Operation status")
@@ -88,7 +92,7 @@ class RegisterPluginResponse(BaseModel):
     plugin: PluginResponse = Field(..., description="Plugin information")
 
 
-class PluginListItem(BaseModel):
+class PluginListItem(LiteLLMBaseModel):
     """Plugin item in list responses."""
 
     id: str
@@ -107,14 +111,14 @@ class PluginListItem(BaseModel):
     updated_at: str | None
 
 
-class ListPluginsResponse(BaseModel):
+class ListPluginsResponse(LiteLLMBaseModel):
     """Response from listing plugins."""
 
     plugins: list[PluginListItem]
     count: int
 
 
-class MarketplacePluginEntry(BaseModel):
+class MarketplacePluginEntry(LiteLLMBaseModel):
     """Plugin entry in marketplace.json."""
 
     name: str
@@ -127,7 +131,7 @@ class MarketplacePluginEntry(BaseModel):
     category: str | None = None
 
 
-class MarketplaceResponse(BaseModel):
+class MarketplaceResponse(LiteLLMBaseModel):
     """
     Marketplace catalog response.
 

@@ -4,8 +4,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
@@ -44,6 +45,8 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     team_id: str | None
     user_id: str | None
 
+    is_config: ReadOnly[bool]
+
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
     """Response format for listing vector stores"""
@@ -55,7 +58,7 @@ class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
     total_pages: int | None
 
 
-class VectorStoreUpdateRequest(BaseModel):
+class VectorStoreUpdateRequest(LiteLLMBaseModel):
     vector_store_id: str
     custom_llm_provider: str | None = None
     vector_store_name: str | None = None
@@ -63,11 +66,11 @@ class VectorStoreUpdateRequest(BaseModel):
     vector_store_metadata: dict | None = None
 
 
-class VectorStoreDeleteRequest(BaseModel):
+class VectorStoreDeleteRequest(LiteLLMBaseModel):
     vector_store_id: str
 
 
-class VectorStoreInfoRequest(BaseModel):
+class VectorStoreInfoRequest(LiteLLMBaseModel):
     vector_store_id: str
 
 
@@ -94,6 +97,17 @@ class VectorStoreSearchResponse(TypedDict, total=False):
     object: Literal["vector_store.search_results.page"]  # Always "vector_store.search_results.page"
     search_query: str | None
     data: list[VectorStoreSearchResult] | None
+
+
+VectorStoreSearchFailureMode = Literal["annotate", "error"]
+
+
+class VectorStoreSearchFailure(TypedDict):
+    """A configured vector store whose search failed, as reported back to the API caller"""
+
+    vector_store_id: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str | None]
+    error: ReadOnly[str]
 
 
 class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
@@ -249,12 +263,12 @@ class VectorStoreCreateResponse(TypedDict, total=False):
     metadata: dict[str, str] | None  # Metadata associated with the vector store
 
 
-class IndexCreateLiteLLMParams(BaseModel):
+class IndexCreateLiteLLMParams(LiteLLMBaseModel):
     vector_store_index: str
     vector_store_name: str
 
 
-class IndexCreateRequest(BaseModel):
+class IndexCreateRequest(LiteLLMBaseModel):
     index_name: str
     litellm_params: IndexCreateLiteLLMParams
     index_info: dict[str, object] | None = None
@@ -265,7 +279,7 @@ class BaseVectorStoreAuthCredentials(TypedDict, total=False):
     query_params: dict
 
 
-class LiteLLM_ManagedVectorStoreIndex(BaseModel):
+class LiteLLM_ManagedVectorStoreIndex(LiteLLMBaseModel):
     """LiteLLM managed vector store index object - this is is the object stored in the database"""
 
     id: str
@@ -278,7 +292,7 @@ class LiteLLM_ManagedVectorStoreIndex(BaseModel):
     updated_by: str | None = None
 
 
-class IndexListResponse(BaseModel):
+class IndexListResponse(LiteLLMBaseModel):
     object: Literal["list"] = "list"
     data: tuple[LiteLLM_ManagedVectorStoreIndex, ...]
 

@@ -182,10 +182,14 @@ def create_skill(
         if extra_body:
             create_request.update(extra_body)
 
-        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy"
+        # Route to LiteLLM DB if custom_llm_provider="litellm_proxy". description/instructions
+        # arrive as top-level kwargs from the REST form endpoint, or nested in extra_body from
+        # the SDK convention used by other providers' create_request above.
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
             return _get_litellm_skills_handler().create_skill_handler(
                 display_title=display_title,
+                description=kwargs.get("description") or (extra_body.get("description") if extra_body else None),
+                instructions=kwargs.get("instructions") or (extra_body.get("instructions") if extra_body else None),
                 files=files,
                 metadata=_get_skill_request_metadata(kwargs, extra_body),
                 user_id=kwargs.get("user_id"),

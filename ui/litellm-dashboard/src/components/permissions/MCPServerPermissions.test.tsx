@@ -106,8 +106,7 @@ describe("MCPServerPermissions", () => {
     expect(screen.queryByText("ask_question")).not.toBeInTheDocument();
 
     // Click the server row to expand
-    const serverRow = screen.getByText(/DW_MCP/).closest("div");
-    await userEvent.click(serverRow!);
+    await userEvent.click(screen.getByText(/DW_MCP/));
 
     // Now tools should be visible
     await waitFor(() => {
@@ -117,7 +116,7 @@ describe("MCPServerPermissions", () => {
     });
 
     // Click the server row again to collapse
-    await userEvent.click(serverRow!);
+    await userEvent.click(screen.getByText(/DW_MCP/));
 
     // Tools should be hidden again
     await waitFor(() => {
@@ -297,11 +296,8 @@ describe("MCPServerPermissions", () => {
     expect(toolLabels.length).toBeGreaterThan(0);
 
     // Expand both servers by clicking their rows
-    const server1Row = screen.getByText(/DW_MCP/).closest("div");
-    const server2Row = screen.getByText(/Test Server/).closest("div");
-
-    await userEvent.click(server1Row!); // Expand server 1
-    await userEvent.click(server2Row!); // Expand server 2
+    await userEvent.click(screen.getByText(/DW_MCP/)); // Expand server 1
+    await userEvent.click(screen.getByText(/Test Server/)); // Expand server 2
 
     // Verify server 1 tools are now visible
     await waitFor(() => {
@@ -354,6 +350,69 @@ describe("MCPServerPermissions", () => {
 
     // API should not be called without token
     expect(networking.fetchMCPServers).not.toHaveBeenCalled();
+  });
+
+  it("should name a server a grant references by server name rather than by id", async () => {
+    /**
+     * The backend accepts a server id, name or alias interchangeably, so a grant written by API
+     * or config can name the server. Falling through to the raw string hides which server it is.
+     */
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: mockServerId1,
+        server_name: "github_mcp",
+        alias: "GitHub",
+      },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={["github_mcp"]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText(/GitHub/)).toBeInTheDocument();
+    expect(screen.queryByText("github_mcp")).not.toBeInTheDocument();
+  });
+
+  it("should display tools for a name-keyed allowlist on an id-referenced server", async () => {
+    /**
+     * The allowlist key and the grant entry can name the same server differently; matching only on
+     * server_id renders the server as if it had no tool restrictions at all.
+     */
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: mockServerId1,
+        server_name: "github_mcp",
+        alias: "GitHub",
+      },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId1]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{ github_mcp: ["list_issues", "list_prs"] }}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/GitHub/)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("tools")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText(/GitHub/));
+
+    await waitFor(() => {
+      expect(screen.getByText("list_issues")).toBeInTheDocument();
+      expect(screen.getByText("list_prs")).toBeInTheDocument();
+    });
   });
 
   it("should display the All Proxy MCP Servers state instead of the raw sentinel string", async () => {

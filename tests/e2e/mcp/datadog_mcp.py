@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
+from typing import Protocol
 
 from e2e_config import datadog_mcp_url, unique_marker
+from e2e_metadata import step
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 
 SEARCH_LOGS_TOOL = "search_datadog_logs"
+
+
+class DdLogsReader(Protocol):
+    def poll_events_for_marker(self, marker: str) -> list[object]: ...
 
 
 def _dd_api_key() -> str:
@@ -30,12 +37,17 @@ def assert_dd_mcp_creds() -> None:
         )
 
 
+@step("Register the Datadog remote MCP server with its credentials from the environment")
 def register_datadog_mcp(
     client: McpClient,
     resources: ResourceManager,
     *,
     mcp_access_groups: list[str] | None = None,
+    allowed_tools: Sequence[str] | None = (SEARCH_LOGS_TOOL,),
 ) -> str:
+    """Register the core Datadog toolset with its credentials from the env. By default
+    the server exposes only `search_datadog_logs`; pass `allowed_tools=None` to expose
+    every tool the core toolset serves."""
     assert_dd_mcp_creds()
     name = f"e2e_dd_mcp_{unique_marker()}"
     server_id = client.register_server(
@@ -47,7 +59,7 @@ def register_datadog_mcp(
             "DD-API-KEY": _dd_api_key(),
             "DD-APPLICATION-KEY": _dd_app_key(),
         },
-        allowed_tools=[SEARCH_LOGS_TOOL],
+        allowed_tools=None if allowed_tools is None else list(allowed_tools),
         mcp_access_groups=mcp_access_groups,
     )
     resources.defer(lambda: client.delete_server(server_id))

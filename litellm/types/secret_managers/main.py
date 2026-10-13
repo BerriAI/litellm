@@ -45,6 +45,9 @@ class KeyManagementSettings(LiteLLMPydanticObjectBase):
     tags: dict[str, str] | None = None
     """Optional tags to attach when creating secrets (e.g. {"Environment": "Prod", "Owner": "AI-Platform"})."""
 
+    kms_key_id: str | None = None
+    """Optional customer-managed KMS key (ID, alias or ARN) used to encrypt secrets created in AWS Secrets Manager."""
+
     custom_secret_manager: str | None = None
     """
     Path to custom secret manager class (e.g. "my_secret_manager.InMemorySecretManager")

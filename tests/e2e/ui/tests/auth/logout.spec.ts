@@ -1,10 +1,14 @@
 import { test, expect } from "@playwright/test";
-import { ADMIN_STORAGE_PATH } from "../../constants";
+import { Role, users } from "../../fixtures/users";
+import { logInThroughLoginPage } from "../../helpers/userOnboarding";
 
 test.describe("Logout", () => {
-  test.use({ storageState: ADMIN_STORAGE_PATH });
+  test.use({ storageState: { cookies: [], origins: [] } });
 
   test("Clicking Logout clears the session and forces re-login on a protected page", async ({ page }) => {
+    const admin = users[Role.ProxyAdmin];
+    await logInThroughLoginPage(page, admin.email, admin.password);
+
     await page.goto("/ui");
     // Scope to the sidebar; the top-bar breadcrumb also shows "Virtual Keys".
     await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 10_000 });
@@ -20,6 +24,11 @@ test.describe("Logout", () => {
     // Click Logout — the handler clears the auth cookie and navigates via
     // window.location.href = PROXY_LOGOUT_URL (empty string in the e2e env).
     await popup.getByRole("button", { name: "Logout" }).click();
+    await expect
+      .poll(async () => (await page.context().cookies()).filter((c) => c.name === "token").length, {
+        timeout: 15_000,
+      })
+      .toBe(0);
 
     // The cookie is now gone — visiting a protected page must redirect to /ui/login.
     await page.goto("/ui?page=llm-playground", { waitUntil: "domcontentloaded" });

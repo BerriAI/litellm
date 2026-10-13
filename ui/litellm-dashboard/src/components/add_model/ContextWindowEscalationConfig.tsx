@@ -7,7 +7,7 @@ const ContextWindowEscalationConfig: React.FC<{
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
 }> = ({ value, onChange }) => {
-  const enabled = value.enable_context_window_escalation ?? true;
+  const enabled = value.enable_context_window_escalation ?? false;
   // A number input renders Number("0.") as "0", so a decimal cannot be typed without a local draft.
   const [bufferDraft, setBufferDraft] = React.useState<string | null>(null);
   const commitBuffer = (raw: string) => {
@@ -32,7 +32,8 @@ const ContextWindowEscalationConfig: React.FC<{
       </div>
       <span className="block text-xs mb-3 text-muted-foreground">
         When a prompt provably cannot fit the decided tier&apos;s context windows, route it to the lowest tier whose
-        window holds it instead of letting the provider reject it. Off means requests dispatch on complexity alone.
+        window holds it instead of letting the provider reject it. Disabled by default. Off means requests dispatch on
+        complexity alone.
       </span>
       {enabled && (
         <div style={{ maxWidth: 320 }}>
