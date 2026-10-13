@@ -242,6 +242,8 @@ async def subscription_capabilities(context: OperationContext) -> tuple[frozense
             return session.server_capabilities or ServerCapabilities()
 
         try:
+            if await operations._mcp_server_rate_limit_rejection(target.server, context.user_api_key_auth) is not None:  # pyright: ignore[reportPrivateUsage]  # reuse request-scoped catalog admission
+                return ServerCapabilities()
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
                 return await target.client.run_with_session(read, quiet_on_error=True)
         except Exception:  # noqa: BLE001  # an optional notification probe must not disable an otherwise usable catalog

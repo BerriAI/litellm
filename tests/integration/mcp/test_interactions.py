@@ -564,6 +564,7 @@ def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_pat
         ("tools", "missing-credentials"),
         ("tools", "concurrent-probes"),
         ("tools", "probe-timeout"),
+        ("tools", "rate-limited"),
     ],
 )
 def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
@@ -630,6 +631,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
     setup_changed = Event()
     probe_arrivals = []
     catalog_reads = []
+    limited_requests = []
     probe_catalog_goal = []
     probe_barrier = asyncio.Event()
 
@@ -675,7 +677,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         "user_role": "internal_user",
         "object_permission": {
             "object_permission_id": "subscription-permission",
-            "mcp_servers": ["subscription-server", "second-server"] if access in ("fanout", "mixed-capabilities", "missing-credentials", "concurrent-probes") else ["subscription-server"],
+            "mcp_servers": ["subscription-server", "second-server"] if access in ("fanout", "mixed-capabilities", "missing-credentials", "concurrent-probes", "rate-limited") else ["subscription-server"],
         },
     }
     auth_state: Final = auth_module.with_suffix(".json")
@@ -700,6 +702,8 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
 
             return EmptyResult()
 
+        if ctx.request.headers.get("x-probe-target") == "limited":
+            limited_requests.append(ctx.method)
         if ctx.method == "tools/list":
             catalog_credentials.append(ctx.request.headers.get("authorization"))
             if access == "setup-race" and connected.is_set() and not setup_changed.is_set():
@@ -927,7 +931,16 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                     else:
                         assert discovery.capabilities.tools.list_changed
                         assert discovery.capabilities.resources.list_changed
-                        assert bool(discovery.capabilities.resources.subscribe) is (access not in ("fanout", "concurrent-probes"))
+                        assert bool(discovery.capabilities.resources.subscribe) is (access not in ("fanout", "concurrent-probes", "rate-limited"))
+                    if access == "rate-limited":
+                        assert limited_requests, "Admitted discovery never reached the limited upstream"
+                        limited_requests.clear()
+                        limited = DiscoverResult.model_validate(await session.send_discover("2026-07-28"))
+                        assert limited_requests == [], "Rejected discovery reached the rate-limited upstream"
+                        assert limited.capabilities.tools is not None
+                        assert not limited.capabilities.tools.list_changed
+                        assert not (limited.capabilities.resources and limited.capabilities.resources.subscribe)
+                        return
                     if access in ("probe-failure", "concurrent-probes", "probe-timeout"):
                         probe_catalog_goal.append(len(catalog_reads) + 4 * len(identity["object_permission"]["mcp_servers"]))
                         probe_fails.set()
@@ -1153,6 +1166,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                             "transport": "http",
                             "protocol_version": "2025-11-25" if access in ("legacy", "legacy-both") else "2026-07-28",
                             **({"allowed_tools": ["change_tools"]} if access == "hidden" else {}),
+                            **({"rpm": 1, "static_headers": {"X-Probe-Target": "limited"}} if access == "rate-limited" else {}),
                             **({"timeout": 2} if access == "concurrent-probes" else {}),
                             **(
                                 {"auth_type": "oauth_delegate", "extra_headers": ["Authorization"]}
@@ -1179,7 +1193,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                                     } if access == "missing-credentials" else {}),
                                 }
                             }
-                            if access in ("fanout", "mixed-capabilities", "missing-credentials", "concurrent-probes")
+                            if access in ("fanout", "mixed-capabilities", "missing-credentials", "concurrent-probes", "rate-limited")
                             else {}
                         ),
                     },

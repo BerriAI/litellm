@@ -3394,6 +3394,13 @@ class GatewayOperations:
                 )
                 try:
                     results: Final = await asyncio.gather(*tasks)
+                    from litellm.proxy._experimental.mcp_server.subscriptions import subscription_capabilities
+
+                    upstream_versions, notifications = (
+                        await subscription_capabilities(context)
+                        if context.protocol_version == "2026-07-28" and not context.mcp_proxy_mode
+                        else (frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities())
+                    )
                 finally:
                     try:
                         for task in tasks:
@@ -3401,13 +3408,6 @@ class GatewayOperations:
                         await asyncio.gather(*tasks, return_exceptions=True)
                     finally:
                         _mcp_server_admission_memo.reset(memo_token)
-                from litellm.proxy._experimental.mcp_server.subscriptions import subscription_capabilities
-
-                upstream_versions, notifications = (
-                    await subscription_capabilities(context)
-                    if context.protocol_version == "2026-07-28" and not context.mcp_proxy_mode
-                    else (frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities())
-                )
                 return build_discovery(
                     configured=configured_versions(),
                     revision=context.protocol_version or "2025-11-25",
