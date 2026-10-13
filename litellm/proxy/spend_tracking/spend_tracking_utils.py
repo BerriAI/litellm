@@ -43,6 +43,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -1124,33 +1125,32 @@ _OMITTED_BLOCK_PLACEHOLDERS: Final = MappingProxyType(
 
 
 def stores_latest_user_message_only() -> bool:
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.proxy_server import general_settings_view
 
-    return general_settings.get("spend_logs_prompt_storage") == _LATEST_USER_MESSAGE_STORAGE
+    return general_settings_view().get("spend_logs_prompt_storage") == _LATEST_USER_MESSAGE_STORAGE
 
 
 def _content_block_text(block: object) -> str | None:
     if isinstance(block, str):
         return block
-    if not isinstance(block, Mapping):
-        return None
-    block_type: Final = block.get("type")
+    block_type: Final = message_field(block, "type")
     if block_type in _TEXT_BLOCK_TYPES:
-        text: Final = block.get("text")
+        text: Final = message_field(block, "text")
         return text if isinstance(text, str) else None
     return _OMITTED_BLOCK_PLACEHOLDERS.get(block_type) if isinstance(block_type, str) else None
 
 
 def _is_tool_output_block(block: object) -> bool:
-    return isinstance(block, Mapping) and block.get("type") in _TOOL_OUTPUT_BLOCK_TYPES
+    return message_field(block, "type") in _TOOL_OUTPUT_BLOCK_TYPES
 
 
 def _user_content_text(content: object) -> str | None:
     if isinstance(content, str):
         return content or None
-    if not isinstance(content, list) or any(_is_tool_output_block(block) for block in content):
+    blocks: Final = parts_of(content)
+    if any(_is_tool_output_block(block) for block in blocks):
         return None
-    texts: Final = tuple(text for text in map(_content_block_text, content) if text)
+    texts: Final = tuple(text for text in map(_content_block_text, blocks) if text)
     return "\n".join(texts) or None
 
 
@@ -1158,17 +1158,19 @@ def _latest_user_message_text(request_body: Mapping[str, object]) -> str | None:
     turns: Final = request_body.get("messages", request_body.get("input"))
     if isinstance(turns, str):
         return turns or None
-    if not isinstance(turns, list) or not turns:
+    latest: Final = next(reversed(parts_of(turns)), None)
+    if message_field(latest, "role") != "user":
         return None
-    latest: Final = turns[-1]
-    if not isinstance(latest, Mapping) or latest.get("role") != "user":
-        return None
-    return _user_content_text(latest.get("content"))
+    return _user_content_text(message_field(latest, "content"))
 
 
 def _latest_user_message_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
     text: Final = _latest_user_message_text(request_body)
-    return EMPTY_MAPPING if text is None else MappingProxyType({_LATEST_USER_MESSAGE_STORAGE: text})
+    return MappingProxyType({}) if text is None else MappingProxyType({_LATEST_USER_MESSAGE_STORAGE: text})
+
+
+def _stored_request_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    return _latest_user_message_body(request_body) if stores_latest_user_message_only() else request_body
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
@@ -1684,10 +1686,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            if stores_latest_user_message_only():
-                _request_body = _latest_user_message_body(_request_body)
-
-            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
+            _request_body = _sanitize_request_body_for_spend_logs_payload(_stored_request_body(_request_body))
             _request_body_json_str: Final = safe_dumps(_request_body)
             if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
                 verbose_proxy_logger.info(
