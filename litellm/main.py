@@ -5710,6 +5710,7 @@ def completion(
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
+                    "merge_system_message",
                 )
                 if key in kwargs
             },

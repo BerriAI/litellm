@@ -2404,6 +2404,10 @@ def _is_instruction_message(message: AllMessageValues) -> bool:
     return message.get("role") in INSTRUCTION_MESSAGE_ROLES
 
 
+def _is_system_message(message: AllMessageValues) -> bool:
+    return message.get("role") == "system"
+
+
 def system_messages_first(
     messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
 ) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
@@ -2437,9 +2441,30 @@ def merge_consecutive_system_messages(
 ) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
     return [
         merged
-        for is_system_run, run in groupby(messages, key=lambda message: message.get("role") == "system")
+        for is_system_run, run in groupby(messages, key=_is_system_message)
         for merged in ((_merge_system_message_run(tuple(run)),) if is_system_run else run)
     ]
+
+
+def hoist_system_messages(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    """
+    Move every system message to the front and merge them into one leading system message.
+
+    vLLM and other strict OpenAI-compatible servers reject a request whose system message is
+    not the first message, so callers that opt in normalize the list before the provider call.
+    The list is returned unchanged when it already has exactly one system message up front.
+    """
+    system_messages: Final = [message for message in messages if _is_system_message(message)]
+    if not system_messages or (len(system_messages) == 1 and messages[0] is system_messages[0]):
+        return messages
+    return merge_consecutive_system_messages(
+        [
+            *system_messages,
+            *(message for message in messages if not _is_system_message(message)),
+        ]
+    )
 
 
 def _attempt_json_repair(s: str) -> object | None:

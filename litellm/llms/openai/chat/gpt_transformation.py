@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     flatten_combinators_and_drop_non_python_regex_patterns,
     get_tool_call_names,
     hoist_images_from_tool_messages,
+    hoist_system_messages,
     system_messages_first,
     tool_with_sanitized_parameters,
 )
@@ -490,6 +491,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             return messages
         return system_messages_first(messages)
 
+    def _normalized_messages(
+        self, messages: list[AllMessageValues], litellm_params: Mapping[str, object]
+    ) -> list[AllMessageValues]:
+        ordered: Final = self._prompt_cache_ordered_messages(messages, litellm_params)
+        if not litellm_params.get("merge_system_message"):
+            return ordered
+        return hoist_system_messages(ordered)
+
     def transform_request(
         self,
         model: str,
@@ -504,9 +513,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        messages = self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
-        )
+        messages = self._transform_messages(messages=self._normalized_messages(messages, litellm_params), model=model)
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
         ):
@@ -536,7 +543,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         headers: dict,
     ) -> dict:
         transformed_messages = await self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+            messages=self._normalized_messages(messages, litellm_params), model=model, is_async=True
         )
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
