@@ -7711,7 +7711,10 @@ async def test_passthrough_success_reconciles_budget_reservation():
 
     increment_spend_counters.assert_awaited_once()
     assert increment_spend_counters.await_args.kwargs["budget_reservation"] is reservation
-    assert increment_spend_counters.await_args.kwargs["budget_reservation"] == budget_reservation
+    assert increment_spend_counters.await_args.kwargs["budget_reservation"] == {
+        **budget_reservation,
+        "settling_call_id": "lit-5425-call-id",
+    }
 
 
 @pytest.mark.asyncio
