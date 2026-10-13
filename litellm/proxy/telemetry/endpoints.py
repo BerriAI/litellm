@@ -47,7 +47,9 @@ async def export_telemetry_reports(
     limit: Annotated[int, Query(ge=1, le=5000)] = 500,
 ) -> TelemetryReportsResponse:
     """Stored telemetry reports, oldest first, for installs that keep telemetry local instead of sending it.
-    Page with ``after=next_after&after_id=next_after_id`` until ``next_after`` is null"""
+    Page with ``after=next_after&after_id=next_after_id`` until ``next_after`` is null. Another worker can commit a
+    report just after a newer one is exported, so resume a later export a few windows before the last cursor and skip
+    ids already seen"""
     if user_api_key_dict.user_role not in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
         raise HTTPException(status_code=403, detail="Only proxy admin roles can export telemetry reports")
     if store is None:
