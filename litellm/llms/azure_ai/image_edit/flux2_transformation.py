@@ -98,11 +98,19 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
             raise ValueError("FLUX 2 image edit requires a prompt.")
 
         if image is None:
-            raise ValueError("FLUX 2 image edit requires an image.")
+            raise litellm.BadRequestError(
+                message="FLUX 2 image edit requires an image.",
+                model=model,
+                llm_provider="azure_ai",
+            )
 
         images: Final = tuple(image) if isinstance(image, list) else (image,)
         if not images:
-            raise ValueError("FLUX 2 image edit requires at least one image.")
+            raise litellm.BadRequestError(
+                message="FLUX 2 image edit requires at least one image.",
+                model=model,
+                llm_provider="azure_ai",
+            )
         max_reference_images: Final = 10 if "flex" in model.lower() else 8
         if len(images) > max_reference_images:
             raise ValueError(f"{model} supports at most {max_reference_images} reference images.")
