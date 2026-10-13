@@ -2092,7 +2092,7 @@ def response_cost_calculator(
                         getattr(response_object, HIDDEN_PARAMS_ATTR),
                     )
                     provider_response_cost: Final = get_response_cost_from_hidden_params(hidden_params)
-                    if provider_response_cost is not None:
+                    if provider_response_cost is not None and not custom_pricing:
                         return provider_response_cost
 
             response_cost = completion_cost(
