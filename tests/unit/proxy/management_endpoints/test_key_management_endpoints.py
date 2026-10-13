@@ -22543,3 +22543,130 @@ async def test_key_generate_reads_the_team_from_the_writer_database_not_the_cach
         )
 
     assert raised.value.message == "Team not found for team_id=1234. Non-admin users cannot create keys for non-existent teams."
+
+
+def test_key_info_unexpected_database_exception_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_prisma: Final = MagicMock()
+    secret_marker: Final = "SECRET_DB_DETAIL: invalid database statement"
+    mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(
+        side_effect=RuntimeError(secret_marker)
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+
+    admin_auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-master",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    proxy_server.app.dependency_overrides[user_api_key_auth] = lambda: admin_auth
+
+    try:
+        client: Final = TestClient(proxy_server.app)
+        with caplog.at_level("ERROR"):
+            response: Final = client.get("/key/info?key=sk-target")
+        assert response.status_code == 500
+        assert secret_marker not in response.text
+        assert response.json()["error"]["message"] == "Internal server error from /key/info. Details are in the proxy server logs."
+        assert secret_marker in caplog.text
+    finally:
+        proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_key_info_missing_key_preserves_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+
+    admin_auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-master",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    proxy_server.app.dependency_overrides[user_api_key_auth] = lambda: admin_auth
+
+    try:
+        client: Final = TestClient(proxy_server.app)
+        response: Final = client.get("/key/info?key=sk-nonexistent")
+        assert response.status_code == 404
+        assert response.json()["error"]["message"] == "Key not found in database"
+    finally:
+        proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_key_info_permission_denied_preserves_403(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_key: Final = MagicMock()
+    mock_key.token = "hashed-other-token"
+    mock_key.user_id = "other-user"
+    mock_key.model_dump.return_value = {
+        "token": "hashed-other-token",
+        "user_id": "other-user",
+        "team_id": None,
+        "blocked": False,
+        "expires": None,
+    }
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=mock_key)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._can_user_query_key_info",
+        AsyncMock(return_value=False),
+    )
+
+    user_auth: Final = UserAPIKeyAuth(
+        api_key="sk-regular-user",
+        user_id="user1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    proxy_server.app.dependency_overrides[user_api_key_auth] = lambda: user_auth
+
+    try:
+        client: Final = TestClient(proxy_server.app)
+        response: Final = client.get("/key/info?key=sk-other-key")
+        assert response.status_code == 403
+        assert "not allowed to access this key's info" in response.text
+    finally:
+        proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_key_info_database_not_connected_sanitized_500(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    admin_auth: Final = UserAPIKeyAuth(
+        api_key="sk-test-master",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    proxy_server.app.dependency_overrides[user_api_key_auth] = lambda: admin_auth
+
+    try:
+        client: Final = TestClient(proxy_server.app)
+        with caplog.at_level("ERROR"):
+            response: Final = client.get("/key/info?key=sk-target")
+        assert response.status_code == 500
+        assert response.json()["error"]["message"] == "Internal server error from /key/info. Details are in the proxy server logs."
+        assert "Database not connected" in caplog.text
+    finally:
+        proxy_server.app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+

@@ -4708,8 +4708,16 @@ async def info_key_fn(
             key_info_dict["budget_limits_usage"] = budget_limits_usage
 
         return {"key": key, "info": await attach_object_permission_to_dict(key_info_dict, prisma_client)}
-    except Exception as e:
+    except (ProxyException, HTTPException) as e:
         raise handle_exception_on_proxy(e)
+    except Exception as e:
+        verbose_proxy_logger.exception("Unhandled error in /key/info")
+        raise ProxyException(
+            message="Internal server error from /key/info. Details are in the proxy server logs.",
+            type="internal_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 async def _find_deleted_key_info(
