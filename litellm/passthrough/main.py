@@ -81,7 +81,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
         self._litellm_logging_obj = litellm_logging_obj
         self._spend = _SpendCollection(provider_config, litellm_logging_obj)
         self._flush_scheduled = False
-        self._background_tasks: set[asyncio.Task] = set()  # mutable-ok: instance set for background task tracking
+        self._background_tasks: set[asyncio.Task[None]] = set()  # mutable-ok: instance set for background task tracking
         self._hidden_params: dict[str, object] = {}  # mutable-ok: router attaches response headers here in place
 
     @property
@@ -147,6 +147,11 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
                 self._spend.chunk_count,
                 e,
             )
+
+    async def wait_for_spend_flush(self) -> None:
+        """Wait until the spend-tracking flush scheduled when the stream ended or was closed has finished."""
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
     def __aiter__(self) -> AsyncPassthroughStreamingResponse:
         return self

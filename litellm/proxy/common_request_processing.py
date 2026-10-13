@@ -867,6 +867,16 @@ async def _close_upstream(upstream: object) -> None:
         await aclose()
 
 
+async def _close_upstream_and_log_its_spend(upstream: object) -> None:
+    """Close the upstream and wait until the spend it collected has been logged."""
+    await _close_upstream(upstream)
+    wait_for_spend_flush: Final[Callable[[], Awaitable[object]] | None] = getattr(
+        upstream, "wait_for_spend_flush", None
+    )
+    if wait_for_spend_flush is not None:
+        await wait_for_spend_flush()
+
+
 class _UpstreamClosingStreamingResponse(StreamingResponse):
     """StreamingResponse that always closes its body iterator and the wrapped
     upstream generator.
@@ -3496,6 +3506,8 @@ class ProxyBaseLLMRequestProcessing:
                 if not delivered:
                     raise
                 verbose_proxy_logger.exception("allm_passthrough_route: guarded event stream failed mid-stream: %s", e)
+                # The failure hook rewrites the request's logging object, so the stream's spend is logged first.
+                await _close_upstream_and_log_its_spend(generator)
                 transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
                     user_api_key_dict=user_api_key_dict,
                     original_exception=e,
