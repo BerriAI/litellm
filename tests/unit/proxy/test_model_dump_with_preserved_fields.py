@@ -126,8 +126,23 @@ def test_none_fields_stripped_from_message():
     assert "audio" not in msg
 
 
-def test_none_fields_stripped_from_top_level():
-    """system_fingerprint=None should be omitted from top-level."""
+def test_unset_system_fingerprint_stripped_from_top_level():
+    """A system_fingerprint the provider never sent should be omitted from top-level."""
+    response = ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="Hello", role="assistant"),
+            )
+        ],
+    )
+    result = model_dump_with_preserved_fields(response, exclude_unset=True)
+    assert "system_fingerprint" not in result
+
+
+def test_explicit_none_system_fingerprint_kept_at_top_level():
+    """A provider that sent system_fingerprint: null keeps it through ModelResponse(**payload)."""
     response = ModelResponse(
         choices=[
             Choices(
@@ -139,7 +154,7 @@ def test_none_fields_stripped_from_top_level():
         system_fingerprint=None,
     )
     result = model_dump_with_preserved_fields(response, exclude_unset=True)
-    assert "system_fingerprint" not in result
+    assert result["system_fingerprint"] is None
 
 
 def test_multiple_choices_independent():

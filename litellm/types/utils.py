@@ -2223,6 +2223,13 @@ def _normalize_model_response_usage(usage: Mapping[str, object] | BaseModel) -> 
     return Usage(**dump)
 
 
+class _UnsetSystemFingerprint:
+    __slots__ = ()
+
+
+_UNSET_SYSTEM_FINGERPRINT: Final = _UnsetSystemFingerprint()
+
+
 class ModelResponse(ModelResponseBase):
     choices: list[Choices]
     """The list of completion choices the model generated for the input prompt."""
@@ -2234,7 +2241,7 @@ class ModelResponse(ModelResponseBase):
         created=None,
         model=None,
         object=None,
-        system_fingerprint=None,
+        system_fingerprint=_UNSET_SYSTEM_FINGERPRINT,
         usage=None,
         stream=None,
         stream_options=None,
@@ -2290,7 +2297,7 @@ class ModelResponse(ModelResponseBase):
 
         if usage is not None:
             init_values["usage"] = usage
-        if system_fingerprint is not None:
+        if system_fingerprint is not _UNSET_SYSTEM_FINGERPRINT:
             init_values["system_fingerprint"] = system_fingerprint
 
         super().__init__(
