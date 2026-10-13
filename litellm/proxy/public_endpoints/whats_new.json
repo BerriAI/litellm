@@ -2,6 +2,13 @@
   "launches": [
     {
       "icon": "box",
+      "title": "Gemini 4 Argon",
+      "description": "Google's newest model, with day 0 pricing on Google AI Studio and Vertex AI.",
+      "href": "https://docs.litellm.ai/blog/gemini-4-argon",
+      "published_on": "2026-10-13"
+    },
+    {
+      "icon": "box",
       "title": "Claude Haiku 5.5",
       "description": "Anthropic's newest small model, with day 0 pricing on Anthropic, Bedrock and Vertex AI.",
       "href": "https://docs.litellm.ai/blog/claude-haiku-5-5",
