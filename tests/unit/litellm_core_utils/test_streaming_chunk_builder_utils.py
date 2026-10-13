@@ -2138,3 +2138,34 @@ def test_stream_chunk_builder_joins_openai_audio_output_pieces() -> None:
         "expires_at": 1767225600,
         "transcript": "Yes.",
     }
+
+
+def test_stream_chunk_builder_takes_upstream_provider_from_any_chunk():
+    """The serving provider may arrive on any chunk; the assembled response carries it either way."""
+    import litellm
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    first = ModelResponseStream(
+        id="chunk-1",
+        created=1742056047,
+        model="openrouter/some-org/some-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content="hi", role="assistant"), finish_reason=None)],
+    )
+    last = ModelResponseStream(
+        id="chunk-1",
+        created=1742056048,
+        model="openrouter/some-org/some-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+    last._hidden_params["upstream_provider"] = "SomeProvider"
+
+    assembled = litellm.stream_chunk_builder(chunks=[first, last], messages=[{"role": "user", "content": "hi"}])
+
+    assert assembled is not None
+    assert assembled._hidden_params["upstream_provider"] == "SomeProvider"
+
+    none_assembled = litellm.stream_chunk_builder(
+        chunks=[first.model_copy(deep=True)], messages=[{"role": "user", "content": "hi"}]
+    )
+    assert none_assembled is not None
+    assert "upstream_provider" not in none_assembled._hidden_params

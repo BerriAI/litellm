@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_param, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -180,7 +180,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
         """
         Transform the response from OpenRouter API.
 
-        Extracts cost information from response headers if available.
+        Extracts cost information from response headers if available, and records the
+        upstream provider that served the request (OpenRouter's top-level ``provider``).
 
         Returns:
             ModelResponse: The transformed response with cost information.
@@ -219,8 +220,17 @@ class OpenrouterConfig(OpenAIGPTConfig):
                         dict[str, object], hidden_params["additional_headers"]
                     )
                     additional_headers["llm_provider-x-litellm-response-cost"] = float(response_cost)
+            # OpenRouter names the provider that actually served the request. Since cost is
+            # provider-reported per call, this is the field that explains per-call cost
+            # variation on one model.
+            response_body: Final = cast(  # cast-ok: raw JSON body; only a string-valued top-level key is read
+                dict[str, object], response_json
+            )
+            upstream_provider: Final = response_body.get("provider")
+            if isinstance(upstream_provider, str) and upstream_provider:
+                set_hidden_param(model_response, "upstream_provider", upstream_provider)
         except Exception:
-            # If we can't extract cost, continue without it - don't fail the response
+            # If we can't extract cost or provider, continue without them - don't fail the response
             pass
 
         return model_response
@@ -270,7 +280,7 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
                 new_choices.append(choice)
-            return ModelResponseStream(
+            stream_chunk: Final = ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
                 created=chunk["created"],
@@ -278,6 +288,15 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 model=chunk["model"],
                 choices=new_choices,
             )
+            # Each OpenRouter chunk carries the serving provider at the top level; keep it as a
+            # hidden param so the stream wrapper and the chunk builder can surface it.
+            chunk_body: Final = cast(  # cast-ok: parsed SSE chunk; only a string-valued top-level key is read
+                dict[str, object], chunk
+            )
+            upstream_provider: Final = chunk_body.get("provider")
+            if isinstance(upstream_provider, str) and upstream_provider:
+                set_hidden_param(stream_chunk, "upstream_provider", upstream_provider)
+            return stream_chunk
         except KeyError as e:
             raise OpenRouterException(
                 message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
