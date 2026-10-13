@@ -35,9 +35,10 @@ func isNotFound(err error) bool {
 }
 
 func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipVerify},
-	}
+	// Clone the default transport so the client keeps its proxy (HTTP_PROXY, HTTPS_PROXY, NO_PROXY),
+	// dial and idle-connection settings; a bare http.Transport has no Proxy func and ignores them.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: insecureSkipVerify}
 
 	return &Client{
 		APIBase:            apiBase,
