@@ -442,7 +442,7 @@ impl LegacyLogging {
         py: Python<'_>,
         facts: &litellm_host::interceptors::ExecutionFacts,
     ) -> PyResult<HookStep<Self, ()>> {
-        use litellm_host::interceptors::ResultSource;
+        use litellm_host::interceptors::{Cost, ResultSource};
 
         let logger = self.logger()?.object(py);
         let params = logger
@@ -462,6 +462,12 @@ impl LegacyLogging {
             ),
         )?;
         let details = logger.getattr("model_call_details")?;
+        let reported_cost = match &facts.cost {
+            Cost::Reported { amount } => amount.as_f64(),
+            Cost::CacheHit | Cost::Deferred => None,
+        };
+        logger.setattr("_provider_reported_cost", reported_cost)?;
+        details.call_method1("pop", ("response_cost", py.None()))?;
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
@@ -957,6 +963,81 @@ logger = PayloadLogger()
 on_pre_call = lambda additional_args: None
 check = lambda: None
 ";
+
+    #[rstest]
+    #[case::reported(Some(0.37), false)]
+    #[case::free(Some(0.0), false)]
+    #[case::deferred(None, false)]
+    #[case::cached(None, true)]
+    fn result_ready_hands_only_a_reported_cost_to_the_spend_logging_record(
+        #[case] reported: Option<f64>,
+        #[case] cache_hit: bool,
+        #[values(0.001, 7.0)] existing_cost: f64,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(
+                py,
+                &locals,
+                c"
+logger.litellm_params = {}
+logger.optional_params = {}
+logger.model_call_details = {'response_cost': 7.0}
+logger._provider_reported_cost = None
+",
+            );
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            let source = if cache_hit {
+                litellm_host::interceptors::ResultSource::Cache {
+                    key: "cached-test".into(),
+                }
+            } else {
+                litellm_host::interceptors::ResultSource::Provider
+            };
+            let facts = litellm_host::interceptors::ExecutionFacts {
+                provider: litellm_host::interceptors::ProviderIdentity {
+                    model: "native-test".into(),
+                    provider: "edenai".into(),
+                },
+                cost: litellm_host::interceptors::Cost::settle(
+                    &source,
+                    reported.and_then(serde_json::Number::from_f64),
+                ),
+                source,
+            };
+            let previous = litellm_host::interceptors::ExecutionFacts {
+                provider: facts.provider.clone(),
+                cost: litellm_host::interceptors::Cost::Reported {
+                    amount: serde_json::Number::from_f64(9.0).unwrap(),
+                },
+                source: litellm_host::interceptors::ResultSource::Provider,
+            };
+            logging.result_ready(py, &previous).unwrap();
+            local(&locals, "logger")
+                .getattr("model_call_details")
+                .unwrap()
+                .set_item("response_cost", existing_cost)
+                .unwrap();
+            let step = logging.result_ready(py, &facts).unwrap();
+            assert!(matches!(step, HookStep::Ready(())));
+            locals.set_item("reported", reported).unwrap();
+            locals.set_item("cache_hit", cache_hit).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+assert logger.model_call_details.get('response_cost') is None, logger.model_call_details
+assert logger._provider_reported_cost == reported, logger._provider_reported_cost
+assert logger.model_call_details['cache_hit'] is cache_hit, logger.model_call_details
+assert logger.update['custom_llm_provider'] == 'edenai', logger.update
+",
+            );
+        });
+    }
 
     const DOCUMENT: &str = "data:application/pdf;base64,YWJj";
     const EDITED: &str = "data:application/pdf;base64,ZWRpdGVk";
