@@ -30614,76 +30614,6 @@
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014
     },
-    "gemini/gemini-4-argon": {
-        "litellm_provider": "gemini",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 1048576,
-        "max_tokens": 1048576,
-        "mode": "chat",
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions"
-        ],
-        "supported_modalities": [
-            "text",
-            "image",
-            "audio",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_audio_input": true,
-        "supports_function_calling": true,
-        "supports_native_streaming": true,
-        "supports_parallel_function_calling": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_url_context": true,
-        "supports_video_input": true,
-        "supports_vision": true,
-        "supports_web_search": true
-    },
-    "vertex_ai/gemini-4-argon": {
-        "litellm_provider": "vertex_ai",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 1048576,
-        "max_tokens": 1048576,
-        "mode": "chat",
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/completions"
-        ],
-        "supported_modalities": [
-            "text",
-            "image",
-            "audio",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_audio_input": true,
-        "supports_function_calling": true,
-        "supports_native_streaming": true,
-        "supports_parallel_function_calling": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_url_context": true,
-        "supports_video_input": true,
-        "supports_vision": true,
-        "supports_web_search": true
-    },
     "gemini/gemini-3.8-flash": {
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
@@ -72658,8 +72588,8 @@
         "input_cost_per_token_priority": 3.6e-06,
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_reasoning_token": 1e-05,
         "output_cost_per_token": 1e-05,
