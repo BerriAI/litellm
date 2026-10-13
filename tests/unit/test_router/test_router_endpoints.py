@@ -501,38 +501,91 @@ async def test_init_responses_api_endpoints():
     # Just mock the _ageneric_api_call_with_fallbacks method
     router._ageneric_api_call_with_fallbacks = AsyncMock()
 
-    # Add a mock implementation of _get_model_id_from_response_id to the Router instance
-    ResponsesAPIRequestUtils.get_model_id_from_response_id = MagicMock(
-        return_value=None
-    )
+    with patch.object(
+        ResponsesAPIRequestUtils, "get_model_id_from_response_id"
+    ) as mock_get_model_id:
+        # Call without a response_id (no model extraction should happen)
+        mock_get_model_id.return_value = None
+        await router._init_responses_api_endpoints(
+            original_function=AsyncMock(), thread_id="thread_xyz"
+        )
 
-    # Call without a response_id (no model extraction should happen)
+        # Verify _ageneric_api_call_with_fallbacks was called but model wasn't changed
+        first_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
+        assert "model" not in first_call_kwargs
+        assert first_call_kwargs["thread_id"] == "thread_xyz"
+
+        # Reset the mock
+        router._ageneric_api_call_with_fallbacks.reset_mock()
+
+        # Change the return value for the second call
+        mock_get_model_id.return_value = "claude-3-sonnet"
+
+        # Call with a response_id
+        await router._init_responses_api_endpoints(
+            original_function=AsyncMock(), response_id="resp_claude_123"
+        )
+
+        # Verify model was updated in the kwargs
+        second_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
+        assert second_call_kwargs["model"] == "claude-3-sonnet"
+        assert second_call_kwargs["response_id"] == "resp_claude_123"
+
+
+@pytest.mark.asyncio
+async def test_init_responses_api_endpoints_unknown_response_id_raises_not_found():
+    """
+    An id that decodes to no model_id, with no model kwarg and no default
+    deployment, is not a response this proxy issued; raise NotFoundError
+    (status 404) instead of the generic model=None deployment error.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ]
+    )
+    router._ageneric_api_call_with_fallbacks = AsyncMock()
+
+    with pytest.raises(litellm.NotFoundError) as exc_info:
+        await router._init_responses_api_endpoints(
+            original_function=AsyncMock(), response_id="invalid-response-id-xyz"
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "invalid-response-id-xyz" in str(exc_info.value)
+    router._ageneric_api_call_with_fallbacks.assert_not_called()
+
+    await router._init_responses_api_endpoints(original_function=AsyncMock())
+    assert "model" not in router._ageneric_api_call_with_fallbacks.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_init_responses_api_endpoints_default_fallback_still_routes():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ],
+        fallbacks=[{"*": ["test-model"]}],
+    )
+    router._ageneric_api_call_with_fallbacks = AsyncMock()
+
     await router._init_responses_api_endpoints(
-        original_function=AsyncMock(), thread_id="thread_xyz"
+        original_function=AsyncMock(), response_id="invalid-response-id-xyz"
     )
 
-    # Verify _ageneric_api_call_with_fallbacks was called but model wasn't changed
-    first_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
-    assert "model" not in first_call_kwargs
-    assert first_call_kwargs["thread_id"] == "thread_xyz"
-
-    # Reset the mock
-    router._ageneric_api_call_with_fallbacks.reset_mock()
-
-    # Change the return value for the second call
-    ResponsesAPIRequestUtils.get_model_id_from_response_id.return_value = (
-        "claude-3-sonnet"
-    )
-
-    # Call with a response_id
-    await router._init_responses_api_endpoints(
-        original_function=AsyncMock(), response_id="resp_claude_123"
-    )
-
-    # Verify model was updated in the kwargs
-    second_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
-    assert second_call_kwargs["model"] == "claude-3-sonnet"
-    assert second_call_kwargs["response_id"] == "resp_claude_123"
+    router._ageneric_api_call_with_fallbacks.assert_called_once()
 
 
 @pytest.mark.asyncio
