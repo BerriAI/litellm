@@ -127,10 +127,7 @@ describe("ProjectKeysTable", () => {
 
   it("falls back to the token when the alias and key name are empty", () => {
     renderWithProviders(
-      <ProjectKeysTable
-        {...defaultProps}
-        keys={[makeKey({ token: "tok-empty-name", key_name: "", key_alias: "" })]}
-      />,
+      <ProjectKeysTable {...defaultProps} keys={[makeKey({ token: "tok-empty-name", key_name: "", key_alias: "" })]} />,
     );
 
     expect(screen.getByRole("row", { name: "Open key tok-empty-name" })).toBeInTheDocument();

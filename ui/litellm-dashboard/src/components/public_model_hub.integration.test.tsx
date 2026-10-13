@@ -534,9 +534,7 @@ describe("public hub MCP details modal", () => {
     renderHub();
 
     await userEvent.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
-    expect(
-      await screen.findByRole("row", { name: "Open MCP server server-fallback-alias" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("row", { name: "Open MCP server server-fallback-alias" })).toBeInTheDocument();
   });
 
   it("does not show the upstream url when a server is opened", async () => {
