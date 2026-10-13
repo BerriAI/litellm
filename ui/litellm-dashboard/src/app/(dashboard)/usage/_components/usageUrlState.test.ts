@@ -25,6 +25,20 @@ const serialize = createSerializer(usageUrlParsers);
 
 const applyPatch = (query: string, patch: UsageUrlPatch): string => serialize(query, patch);
 
+const withTimezone = <T>(timezone: string, callback: () => T): T => {
+  const originalTimezone = process.env.TZ;
+  process.env.TZ = timezone;
+  try {
+    return callback();
+  } finally {
+    if (originalTimezone === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = originalTimezone;
+    }
+  }
+};
+
 const adminAccess = { allowedViews: USAGE_OPTIONS, isAdmin: true };
 const internalUserAccess = {
   allowedViews: ["global", "tag"] as readonly UsageOption[],
@@ -125,22 +139,51 @@ describe("date range", () => {
   });
 
   it("stores a custom range matching today as explicit dates", () => {
-    const today = { from: moment().startOf("day").toDate(), to: moment().endOf("day").toDate() };
+    const today = moment();
+    const value = { from: today.clone().startOf("day").toDate(), to: today.clone().endOf("day").toDate() };
 
-    expect(dateRangePatch(today, null)).toEqual({
+    expect(dateRangePatch(value, null)).toEqual({
       range: null,
-      from: today.from.toISOString(),
-      to: today.to.toISOString(),
+      from: today.format("YYYY-MM-DD"),
+      to: today.format("YYYY-MM-DD"),
     });
   });
 
   it("stores an unknown preset label as explicit dates", () => {
-    const today = { from: moment().startOf("day").toDate(), to: moment().endOf("day").toDate() };
+    const today = moment();
+    const value = { from: today.clone().startOf("day").toDate(), to: today.clone().endOf("day").toDate() };
 
-    expect(dateRangePatch(today, "not-a-preset")).toEqual({
+    expect(dateRangePatch(value, "not-a-preset")).toEqual({
       range: null,
-      from: today.from.toISOString(),
-      to: today.to.toISOString(),
+      from: today.format("YYYY-MM-DD"),
+      to: today.format("YYYY-MM-DD"),
+    });
+  });
+
+  it("keeps the custom calendar day when opened in a different timezone", () => {
+    const query = withTimezone("Australia/Sydney", () => {
+      const value = {
+        from: new Date(2026, 0, 5, 0, 0, 0, 0),
+        to: new Date(2026, 0, 5, 23, 59, 59, 999),
+      };
+
+      expect(value.from.getTimezoneOffset()).toBe(-660);
+      expect(moment(value.from).format("YYYY-MM-DD")).toBe("2026-01-05");
+      expect(moment(value.to).format("YYYY-MM-DD")).toBe("2026-01-05");
+
+      const serialized = applyPatch("", dateRangePatch(value, null));
+      expect(serialized).toBe("?from=2026-01-05&to=2026-01-05");
+      return serialized;
+    });
+
+    withTimezone("America/New_York", () => {
+      expect(new Date(2026, 0, 5).getTimezoneOffset()).toBe(300);
+      const range = dateRangeFromParams(load(query));
+      expect(range).toBeDefined();
+      if (!range) return;
+
+      expect(moment(range.from).format("YYYY-MM-DD")).toBe("2026-01-05");
+      expect(moment(range.to).format("YYYY-MM-DD")).toBe("2026-01-05");
     });
   });
 
@@ -151,19 +194,24 @@ describe("date range", () => {
     expect(moment(range?.to).isSame(moment(), "day")).toBe(true);
   });
 
-  it("round-trips a custom range as the same UTC instants", () => {
-    const custom = { from: new Date("2026-01-05T08:00:00.000Z"), to: new Date("2026-01-09T20:30:00.000Z") };
+  it("round-trips a custom range as whole local calendar days", () => {
+    const custom = { from: new Date(2026, 0, 5, 8, 0, 0, 0), to: new Date(2026, 0, 9, 20, 30, 0, 0) };
     const query = applyPatch("?range=7d", dateRangePatch(custom, null));
 
-    expect(query).toBe("?from=2026-01-05T08:00:00.000Z&to=2026-01-09T20:30:00.000Z");
-    expect(dateRangeFromParams(load(query))).toEqual(custom);
+    expect(query).toBe("?from=2026-01-05&to=2026-01-09");
+    expect(dateRangeFromParams(load(query))).toEqual({
+      from: new Date(2026, 0, 5, 0, 0, 0, 0),
+      to: new Date(2026, 0, 9, 23, 59, 59, 999),
+    });
   });
 
   it.each([
     ["an unknown preset", "?range=90d"],
-    ["a malformed date", "?from=yesterday&to=2026-01-09T00:00:00.000Z"],
-    ["a range that ends before it starts", "?from=2026-01-09T00:00:00.000Z&to=2026-01-05T00:00:00.000Z"],
-    ["only one end of a custom range", "?from=2026-01-05T00:00:00.000Z"],
+    ["an ISO timestamp", "?from=2026-01-04T13:00:00.000Z&to=2026-01-05"],
+    ["an impossible date", "?from=2026-02-30&to=2026-03-01"],
+    ["a malformed date", "?from=yesterday&to=2026-01-09"],
+    ["a range that ends before it starts", "?from=2026-01-09&to=2026-01-05"],
+    ["only one end of a custom range", "?from=2026-01-05"],
   ])("ignores %s", (_label, query) => {
     expect(dateRangeFromParams(load(query))).toBeUndefined();
   });
@@ -172,7 +220,7 @@ describe("date range", () => {
 describe("cleanUsageUrl", () => {
   it("leaves a valid URL alone", () => {
     expect(clean("?view=team&team=t1&team=t2&range=30d")).toBeNull();
-    expect(clean("?user=u1&tab=keys&from=2026-01-05T00:00:00.000Z&to=2026-01-09T00:00:00.000Z")).toBeNull();
+    expect(clean("?user=u1&tab=keys&from=2026-01-05&to=2026-01-09")).toBeNull();
     expect(clean("?view=tag&tag=prod", internalUserAccess)).toBeNull();
   });
 
@@ -191,7 +239,7 @@ describe("cleanUsageUrl", () => {
   });
 
   it("prefers the preset when a URL carries both a preset and a custom range", () => {
-    expect(clean("?range=7d&from=2026-01-05T00:00:00.000Z&to=2026-01-09T00:00:00.000Z")).toEqual({
+    expect(clean("?range=7d&from=2026-01-05&to=2026-01-09")).toEqual({
       query: "?range=7d",
       deniedAccess: false,
     });

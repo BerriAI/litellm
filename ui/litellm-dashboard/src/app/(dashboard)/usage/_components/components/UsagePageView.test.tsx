@@ -186,7 +186,10 @@ vi.mock("@/components/shared/advanced_date_picker", async (importOriginal) => {
         {
           "data-testid": "pick-a-different-range",
           onClick: () =>
-            onValueChange?.({ from: new Date("2024-01-01T00:00:00Z"), to: new Date("2024-01-08T00:00:00Z") }, null),
+            onValueChange?.(
+              { from: new Date(2024, 0, 1, 0, 0, 0, 0), to: new Date(2024, 0, 8, 23, 59, 59, 999) },
+              null,
+            ),
         },
         "pick",
       ),
@@ -1677,13 +1680,13 @@ describe("UsagePage", () => {
     });
 
     it("fetches the custom range in the URL and writes a newly picked one", async () => {
-      const { lastQuery } = renderAt("?from=2025-03-01T00:00:00.000Z&to=2025-03-05T00:00:00.000Z");
+      const { lastQuery } = renderAt("?from=2025-03-01&to=2025-03-05");
 
       const expectedRequest = {
         accessToken: "test-token",
-        endTime: new Date("2025-03-05T00:00:00.000Z"),
+        endTime: new Date(2025, 2, 5, 23, 59, 59, 999),
         entityIds: null,
-        startTime: new Date("2025-03-01T00:00:00.000Z"),
+        startTime: new Date(2025, 2, 1, 0, 0, 0, 0),
       };
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(expect.objectContaining(expectedRequest));
@@ -1692,7 +1695,7 @@ describe("UsagePage", () => {
       fireEvent.click(screen.getByTestId("pick-a-different-range"));
 
       await waitFor(() => {
-        expect(lastQuery()).toBe("?from=2024-01-01T00:00:00.000Z&to=2024-01-08T00:00:00.000Z");
+        expect(lastQuery()).toBe("?from=2024-01-01&to=2024-01-08");
       });
     });
 

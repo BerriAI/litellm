@@ -1,3 +1,4 @@
+import moment from "moment";
 import { parseAsNativeArrayOf, parseAsString, type inferParserType } from "nuqs";
 
 import type { EntityType } from "@/components/EntityUsageExport/types";
@@ -98,16 +99,11 @@ export const entitySelectionPatch = (entityType: EntityType, ids: readonly strin
   return { [MULTI_ENTITY_KEYS[entityType]]: ids.length > 0 ? [...ids] : null };
 };
 
-const parseIsoDate = (value: string): Date | undefined => {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-};
-
 const customRangeFromParams = (from: string, to: string): DateRangePickerValue | undefined => {
-  const fromDate = parseIsoDate(from);
-  const toDate = parseIsoDate(to);
-  if (!fromDate || !toDate || fromDate > toDate) return undefined;
-  return { from: fromDate, to: toDate };
+  const fromDate = moment(from, "YYYY-MM-DD", true);
+  const toDate = moment(to, "YYYY-MM-DD", true);
+  if (!fromDate.isValid() || !toDate.isValid() || fromDate.isAfter(toDate, "day")) return undefined;
+  return { from: fromDate.startOf("day").toDate(), to: toDate.endOf("day").toDate() };
 };
 
 type DateParams = Pick<UsageUrlParams, "range" | "from" | "to">;
@@ -125,7 +121,11 @@ export const dateRangePatch = (value: DateRangePickerValue, presetShortLabel: st
     return { range: presetShortLabel, from: null, to: null };
   }
   if (!value.from || !value.to) return { range: null, from: null, to: null };
-  return { range: null, from: value.from.toISOString(), to: value.to.toISOString() };
+  return {
+    range: null,
+    from: moment(value.from).format("YYYY-MM-DD"),
+    to: moment(value.to).format("YYYY-MM-DD"),
+  };
 };
 
 const invalidDatePatch = (params: DateParams): UsageUrlPatch => {
