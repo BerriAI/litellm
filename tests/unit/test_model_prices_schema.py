@@ -659,7 +659,7 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
     """Tencent TokenHub applies the DeepSeek weekday peak windows and half-rate off-peak prices
-    to these models (tencentcloud.com/zh/document/product/1300/78937, read 2026-10-13)."""
+    to these models (tencentcloud.com/document/product/1300/78937, read 2026-10-13)."""
     rows: Mapping[str, object] = json.loads(path.read_text())
     drifted: Final = {
         name: deepseek_off_peak_drift(entry)
@@ -681,7 +681,7 @@ def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hour
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
     """TokenHub publishes these prices and capabilities in its official model catalog and rate card
-    (tencentcloud.com/zh/document/product/1300/78934 and /78937, read 2026-10-13)."""
+    (tencentcloud.com/document/product/1300/78934 and /78937, read 2026-10-13)."""
     rows: Mapping[str, object] = json.loads(path.read_text())
     actual: Final = MappingProxyType(
         {
@@ -713,7 +713,7 @@ def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
     """TokenHub publishes these Kimi prices and capabilities in its official model catalog and rate card
-    (tencentcloud.com/zh/document/product/1300/78934 and /78937, read 2026-10-13)."""
+    (tencentcloud.com/document/product/1300/78934 and /78937, read 2026-10-13)."""
     rows: Mapping[str, object] = json.loads(path.read_text())
     actual: Final = MappingProxyType(
         {

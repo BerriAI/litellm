@@ -59482,7 +59482,7 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 8.7e-07,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59508,7 +59508,7 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59563,7 +59563,7 @@
             ]
         },
         "output_cost_per_token": 3.96e-06,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59618,7 +59618,7 @@
             ]
         },
         "output_cost_per_token": 1.2e-06,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59644,7 +59644,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1.25e-06,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59669,7 +59669,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59694,7 +59694,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59718,7 +59718,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59742,7 +59742,7 @@
         "max_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59766,7 +59766,7 @@
         "max_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59790,7 +59790,7 @@
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 8e-06,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59814,7 +59814,7 @@
         "max_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
@@ -59836,7 +59836,7 @@
         "max_input_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://www.tencentcloud.com/zh/document/product/1300/78937",
+        "source": "https://www.tencentcloud.com/document/product/1300/78937",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
