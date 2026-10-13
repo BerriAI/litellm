@@ -194,7 +194,7 @@ def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] 
         return as_json_object(value)
     try:
         return as_json_object(json.loads(value))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         return None
 
 
