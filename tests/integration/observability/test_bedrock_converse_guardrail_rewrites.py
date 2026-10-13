@@ -313,6 +313,9 @@ def _vendor(request: Request) -> Reply:
         return _bedrock_guardrail_verdict(body)
     if request.target == "/singulr/api/v1/ai-gateway/litellm-v2":
         return _singulr_verdict(body)
+    if request.target == "/qualifire/api/evaluation/invoke":
+        flagged_input: Final = _INJECTION in str(body.get("input"))
+        return Reply(body=json.dumps({"evaluationResults": [{"results": [{"flagged": flagged_input}]}]}).encode())
     if request.target == "/promptguard/api/v1/guard":
         messages: Final = body.get("messages")
         if _CARD_PATTERN.search(json.dumps(messages)) is None:
@@ -375,6 +378,15 @@ def _guardrails(vendor_url: str) -> tuple[dict[str, JsonValue], ...]:
                 "singulr_api_key": "synthetic-singulr-key",
                 "singulr_application_id": "synthetic-application",
                 "singulr_guardrail_id": "synthetic-guardrail",
+            },
+        ),
+        _guardrail(
+            "qualifire",
+            {
+                "guardrail": "qualifire",
+                "api_base": f"{vendor_url}/qualifire",
+                "api_key": "synthetic-qualifire-key",
+                "evaluation_id": "synthetic-evaluation",
             },
         ),
         _guardrail(
@@ -913,6 +925,20 @@ def test_singulr_scans_a_tool_result_injection_as_the_latest_user_turn_as_on_mai
     _refused(rig, _converse(rig, "singulr", body))
 
     assert [_latest_user_text(payload) for payload in _vendor_bodies(rig)] == [_INJECTION]
+
+
+def test_qualifire_evaluation_gets_the_latest_text_as_its_input_as_on_main(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": "Summarise my account."}),
+            _assistant({"text": "Sure."}),
+            _user({"text": _INJECTION}),
+        ]
+    }
+
+    _refused(rig, _converse(rig, "qualifire", body))
+
+    assert [payload.get("input") for payload in _vendor_bodies(rig)] == [_INJECTION]
 
 
 def test_flat_text_guardrail_gets_request_field_strings_last_as_on_main(rig: _Rig) -> None:

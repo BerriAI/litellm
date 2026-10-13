@@ -37,6 +37,7 @@ from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import OpenAIMo
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs import PanwPrismaAirsHandler
 from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security import PromptSecurityGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.promptguard.promptguard import PromptGuardGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import QualifireGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.singulr.singulr import SingulrGuardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
@@ -2806,6 +2807,9 @@ _FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
         singulr_application_id="app-test",
         singulr_guardrail_id="gr-test",
     ),
+    lambda: QualifireGuardrail(
+        guardrail_name="qualifire", api_key="qf-test", api_base="http://127.0.0.1:9", evaluation_id="eval-test"
+    ),
 )
 
 
@@ -2858,6 +2862,7 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
             "akto",
             "promptguard",
             "singulr",
+            "qualifire",
         ],
     )
     async def test_guardrail_gets_every_flat_text_and_its_mask_reaches_every_turn(self, make_guardrail, monkeypatch):
