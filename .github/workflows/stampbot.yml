@@ -1,0 +1,79 @@
+name: litellm-stampbot
+
+on: # zizmor: ignore[dangerous-triggers] runs the default branch's code only; the pull request is read through the API as data and never checked out
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  stamp:
+    name: litellm-stampbot
+    if: >-
+      vars.STAMPBOT_ENABLED != 'false' && (
+        (github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && contains(github.event.comment.body, '@litellm-stampbot'))
+        || (github.event_name == 'pull_request_target'
+          && github.event.pull_request.head.repo.full_name == github.repository)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Check for GitHub App credentials
+        id: app
+        env:
+          APP_ID: ${{ secrets.STAMPBOT_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.STAMPBOT_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "${APP_ID}" ] && [ -n "${APP_PRIVATE_KEY}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No STAMPBOT_APP_ID / STAMPBOT_APP_PRIVATE_KEY secrets, running in shadow mode (comment and label only)."
+          fi
+
+      - name: Mint the App token
+        id: app-token
+        if: steps.app.outputs.present == 'true'
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.STAMPBOT_APP_ID }}
+          private-key: ${{ secrets.STAMPBOT_APP_PRIVATE_KEY }}
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Evaluate the pull request
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          STAMPBOT_EVENT: ${{ github.event_name == 'issue_comment' && 'comment' || 'synchronize' }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          COMMENTER_ASSOCIATION: ${{ github.event.comment.author_association }}
+          STAMPBOT_APP_TOKEN_PRESENT: ${{ steps.app.outputs.present }}
+          STAMPBOT_APPROVALS_ENABLED: ${{ vars.STAMPBOT_APPROVALS_ENABLED }}
+          STAMPBOT_TEAM_SLUG: ${{ vars.STAMPBOT_TEAM_SLUG || 'litellm-engineering' }}
+          LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          STAMPBOT_JUDGE_MODEL: ${{ vars.STAMPBOT_JUDGE_MODEL }}
+        run: |
+          uv run --frozen python ci_cd/stampbot.py

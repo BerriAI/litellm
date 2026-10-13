@@ -1,0 +1,88 @@
+# The deterministic half of litellm-stampbot. ci_cd/stampbot.py reads this file and
+# computes a floor tier (low, medium, high) from the files a pull request touches,
+# its size, its test delta, and the state of its checks and reviews. The judge model
+# can raise that tier and never lower it. Only a final tier of low gets an approval.
+
+# Paths a human always reviews. Any match puts the whole pull request at high.
+always_human:
+  - litellm/proxy/auth/**
+  - litellm/proxy/management_endpoints/**
+  - litellm/proxy/spend_tracking/**
+  - litellm/proxy/db/**
+  - litellm/proxy/hooks/**
+  - litellm/proxy/guardrails/**
+  - litellm/proxy/pass_through_endpoints/**
+  - litellm/proxy/proxy_server.py
+  - litellm/proxy/utils.py
+  - litellm/proxy/litellm_pre_call_utils.py
+  - litellm/__init__.py
+  - litellm/main.py
+  - litellm/utils.py
+  - litellm/router.py
+  - litellm/router_utils/**
+  - litellm/router_strategy/**
+  - litellm/caching/**
+  - litellm/secret_managers/**
+  - enterprise/**
+  - "**/migrations/**"
+  - schema.prisma
+  - "**/*.prisma"
+  - .github/**
+  - .circleci/**
+  - ci_cd/**
+  - scripts/**
+  - pyproject.toml
+  - uv.lock
+  - "**/package.json"
+  - "**/package-lock.json"
+  - "**/Dockerfile*"
+  - docker/**
+  - deploy/**
+  - cosign.pub
+  - .claude/**
+  - .cursor/**
+  - .vscode/**
+
+# A pull request whose every file matches one of these is low by rule and skips the judge.
+low_by_rule:
+  - docs/**
+  - cookbook/**
+  - "**/*.md"
+  - tests/**
+
+# A test file is one of these. Code changes outside them need one in the same pull request.
+test_paths:
+  - tests/**
+  - ui/litellm-dashboard/**/*.test.ts
+  - ui/litellm-dashboard/**/*.test.tsx
+  - ui/litellm-dashboard/**/*.spec.ts
+  - ui/litellm-dashboard/**/*.spec.tsx
+
+# Code the test requirement applies to.
+code_paths:
+  - litellm/**
+  - ui/litellm-dashboard/src/**
+
+# Lines in a test file whose addition or removal makes the pull request high.
+test_weakening:
+  added:
+    - pytest.mark.skip
+    - pytest.mark.skipif
+    - pytest.mark.xfail
+    - pytest.skip(
+    - "@unittest.skip"
+    - "test.skip("
+    - "it.skip("
+    - "describe.skip("
+  removed:
+    - "assert "
+    - expect(
+
+# Diff size caps. Over judge_max is high by rule. Under low the judge is told the change is small.
+size:
+  low:
+    lines: 100
+    files: 3
+  judge_max:
+    lines: 400
+    files: 10

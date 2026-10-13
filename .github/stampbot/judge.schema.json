@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tier", "change_kind", "blast_radius", "reasons", "look_at"],
+  "properties": {
+    "tier": { "type": "string", "enum": ["low", "medium", "high"] },
+    "change_kind": {
+      "type": "string",
+      "enum": ["additive", "scoped_behavior_change", "default_behavior_change", "public_api_change", "price_change"]
+    },
+    "blast_radius": {
+      "type": "string",
+      "enum": ["one_provider_or_page", "shared_helper", "request_hot_path", "boot_path"]
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "maxItems": 5
+    },
+    "look_at": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 5
+    }
+  }
+}
