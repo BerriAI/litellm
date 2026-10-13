@@ -2729,6 +2729,36 @@ class TestConverseToolDefinitionRewrites:
         }
 
     @pytest.mark.asyncio
+    async def test_tool_choice_naming_a_kept_tool_survives_the_removal(self):
+        data = _tool_config_data()
+        data["data"]["toolConfig"]["toolChoice"] = {"tool": {"name": "refund"}}
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": inputs["tools"][1:]})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"]["toolConfig"] == {
+            "tools": [{"toolSpec": {"name": "refund", "inputSchema": {"json": {"type": "object"}}}}],
+            "toolChoice": {"tool": {"name": "refund"}},
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_choice", "kept"),
+        [({"auto": {}}, slice(0, 0)), ({"tool": {"name": "lookup"}}, slice(1, None))],
+        ids=["every-tool-removed", "chosen-tool-removed"],
+    )
+    async def test_removal_leaving_a_tool_config_bedrock_rejects_fails_closed_without_mutation(self, tool_choice, kept):
+        data = _tool_config_data()
+        data["data"]["toolConfig"]["toolChoice"] = tool_choice
+        original = copy.deepcopy(data["data"])
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": inputs["tools"][kept]})
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert data["data"] == original
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "rewrite",
         [

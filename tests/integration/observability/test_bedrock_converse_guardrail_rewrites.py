@@ -1059,6 +1059,14 @@ def test_tool_the_guardrail_removed_never_reaches_bedrock_nor_does_its_cache_poi
     assert sent["toolConfig"] == {"tools": _TOOL_CONFIG["tools"][2:]}
 
 
+def test_tool_choice_the_guardrail_removed_is_refused_before_bedrock(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [_user({"text": "Which cards are on file?"})],
+        "toolConfig": {**_TOOL_CONFIG, "toolChoice": {"tool": {"name": "lookup_card"}}},
+    }
+    assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.DROPS_A_TOOL), body))
+
+
 def test_tool_the_guardrail_added_is_refused_before_bedrock(rig: _Rig) -> None:
     body: Final = {"messages": [_user({"text": "Which cards are on file?"})], "toolConfig": _TOOL_CONFIG}
     assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.ADDS_A_TOOL), body))

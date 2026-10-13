@@ -276,13 +276,29 @@ def _is_cache_point(entry: object) -> bool:
     return fields is not None and "cachePoint" in fields
 
 
+def _tool_name(entry: object) -> object:
+    return _child(_child(entry, "toolSpec"), "name")
+
+
 def _tools_write(body: Mapping[str, object], edit: RemovedTools) -> _Write | None:
+    """
+    Drop the tools the guardrail removed, or refuse when what is left is a ``toolConfig`` Bedrock rejects: no tool at
+    all, or a ``toolChoice`` naming a removed tool.
+    """
     tool_config: Final = _child(body, "toolConfig")
     tools: Final = as_json_array(_child(tool_config, "tools"))
     if tools is None:
         return None
-    kept: Final = (tool for index, tool in enumerate(tools) if index not in edit.indices)
-    return (tool_config, "tools"), list(dropwhile(_is_cache_point, kept))
+    kept: Final = list(
+        dropwhile(_is_cache_point, (tool for index, tool in enumerate(tools) if index not in edit.indices))
+    )
+    removed: Final = frozenset(
+        name for index, tool in enumerate(tools) if index in edit.indices and isinstance(name := _tool_name(tool), str)
+    )
+    chosen: Final = _child(_child(_child(tool_config, "toolChoice"), "tool"), "name")
+    if all(_tool_name(tool) is None for tool in kept) or (isinstance(chosen, str) and chosen in removed):
+        return None
+    return (tool_config, "tools"), kept
 
 
 def _resolved(body: Mapping[str, object], edit: Edit) -> _Write | None:
