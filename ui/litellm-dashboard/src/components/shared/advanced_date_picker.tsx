@@ -33,7 +33,7 @@ const relativeTimeOptions: RelativeTimeOption[] = [
     label: "Last 7 days",
     shortLabel: "7d",
     getValue: () => ({
-      from: moment().subtract(7, "days").startOf("day").toDate(),
+      from: moment().subtract(6, "days").startOf("day").toDate(),
       to: moment().endOf("day").toDate(),
     }),
   },
@@ -41,7 +41,7 @@ const relativeTimeOptions: RelativeTimeOption[] = [
     label: "Last 30 days",
     shortLabel: "30d",
     getValue: () => ({
-      from: moment().subtract(30, "days").startOf("day").toDate(),
+      from: moment().subtract(29, "days").startOf("day").toDate(),
       to: moment().endOf("day").toDate(),
     }),
   },

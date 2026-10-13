@@ -178,6 +178,36 @@ describe("AdvancedDatePicker", () => {
     expect(todayOption.closest("button")).toHaveClass("bg-info/10");
   });
 
+  it.each([
+    ["Last 7 days", "2026-10-13", "2026-10-07"],
+    ["Last 30 days", "2026-10-13", "2026-09-14"],
+    ["Last 7 days", "2026-01-03", "2025-12-28"],
+    ["Last 30 days", "2026-03-10", "2026-02-09"],
+    ["Last 7 days", "2026-11-03", "2026-10-28"],
+  ])("applies %s ending on %s with an inclusive start of %s", (label, today, expectedStart) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(`${today}T12:00:00`));
+
+    try {
+      render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(label) }));
+
+      expect(screen.getByDisplayValue(expectedStart)).toBeInTheDocument();
+      expect(screen.getByDisplayValue(today)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+      expect(mockOnValueChange).toHaveBeenLastCalledWith({
+        from: new Date(`${expectedStart}T00:00:00.000`),
+        to: new Date(`${today}T23:59:59.999`),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("selects a relative range from the keyboard alone", async () => {
     const user = userEvent.setup();
     const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
