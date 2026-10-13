@@ -1,7 +1,6 @@
 from collections.abc import Mapping
 from typing import Final
 
-from httpx._models import Headers
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -11,16 +10,13 @@ class V1MError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Mapping[str, str] | Headers | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
 class V1MConfig(OpenAIGPTConfig):
-    """Configuration for v1m (System One) calibrated decision engine.
-
-    Website: https://v1m.ir
-    """
+    """Configuration for v1m (System One) calibrated decision engine."""
 
     def __init__(
         self,
@@ -50,7 +46,7 @@ class V1MConfig(OpenAIGPTConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Mapping[str, str] | Headers,
+        headers: Mapping[str, str] | None,
     ) -> BaseLLMException:
         return V1MError(
             status_code=status_code,
