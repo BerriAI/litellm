@@ -13,7 +13,7 @@ import copy
 import os
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
 from pydantic import TypeAdapter, ValidationError
@@ -73,6 +73,7 @@ OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_CONTENT_PART_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 AllToolParamValues = ChatCompletionToolParam | AllAnthropicToolsValues
 
@@ -89,6 +90,12 @@ def _validated_object_list(value: object) -> list[object] | None:
         return _OBJECT_LIST_ADAPTER.validate_python(value)
     except ValidationError:
         return None
+
+
+def _part_with_cache_control_renamed(part: object) -> object:
+    if not _accepts_prompt_cache_breakpoint(part):
+        return part
+    return cache_control_as_prompt_cache_breakpoint(_CONTENT_PART_ADAPTER.validate_python(part))
 
 
 def configured_injection_points(value: object) -> Sequence[CacheControlInjectionPoint]:
@@ -239,7 +246,7 @@ def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
     return isinstance(tool, dict) and tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
-def _accepts_prompt_cache_breakpoint(block: object) -> TypeGuard[Mapping[str, object]]:
+def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
 
 
@@ -640,12 +647,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 AllMessageValues,
                 {
                     **fields,
-                    "content": [
-                        cache_control_as_prompt_cache_breakpoint(part)
-                        if _accepts_prompt_cache_breakpoint(part)
-                        else part
-                        for part in parts
-                    ],
+                    "content": [_part_with_cache_control_renamed(part) for part in parts],
                 },
             )
         )
