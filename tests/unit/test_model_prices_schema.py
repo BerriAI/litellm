@@ -609,6 +609,14 @@ TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS: Final = (
     "tencent/deepseek-v4-pro-0813",
     "tencent/deepseek-v4.1-flash",
 )
+TENCENT_TOKENHUB_GLM_ROWS: Final = MappingProxyType(
+    {
+        "tencent/glm-5.3-flashx": (3.7e-07, 1.25e-06, 7.5e-08, True, True),
+        "tencent/glm-5.3-flash": (1.5e-07, 5e-07, 3e-08, True, True),
+        "tencent/glm-5.3": (1.4e-06, 4.4e-06, 2.6e-07, False, False),
+        "tencent/glm-5.2": (1.4e-06, 4.4e-06, 2.6e-07, False, False),
+    }
+)
 
 
 def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
@@ -652,6 +660,38 @@ def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hour
     }
     assert drifted == {}
     assert all(name in rows for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS)
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
+    """TokenHub publishes these prices, limits, and multimodal capabilities
+    (tencentcloud.com/products/tokenhub, read 2026-10-13)."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    actual: Final = MappingProxyType(
+        {
+            name: (
+                entry.get("input_cost_per_token"),
+                entry.get("output_cost_per_token"),
+                entry.get("cache_read_input_token_cost"),
+                entry.get("supports_vision", False),
+                entry.get("supports_video_input", False),
+            )
+            for name in TENCENT_TOKENHUB_GLM_ROWS
+            if isinstance(entry := rows.get(name), dict)
+        }
+    )
+    invalid_metadata: Final = tuple(
+        name
+        for name in TENCENT_TOKENHUB_GLM_ROWS
+        if not isinstance(entry := rows.get(name), dict)
+        or entry.get("litellm_provider") != "tencent"
+        or entry.get("max_input_tokens") != 1000000
+        or entry.get("max_output_tokens") != 128000
+        or entry.get("max_tokens") != 128000
+        or entry.get("input_cost_per_token_cache_hit") != entry.get("cache_read_input_token_cost")
+    )
+    assert actual == TENCENT_TOKENHUB_GLM_ROWS
+    assert invalid_metadata == ()
 
 
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
