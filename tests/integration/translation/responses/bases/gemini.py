@@ -19,7 +19,7 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
     expected_provider_headers={"content-type": "application/json", "x-goog-api-key": "synthetic-gemini-key"},
     expected_provider_request={
         "contents": [{"parts": [{"text": "Say hello."}], "role": "user"}],
-        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024},
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
     },
     mock_provider_response={
@@ -110,7 +110,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
     expected_provider_headers={"content-type": "application/json", "x-goog-api-key": "synthetic-gemini-key"},
     expected_provider_request={
         "contents": [{"parts": [{"text": "Say hello."}], "role": "user"}],
-        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024},
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
     },
     mock_provider_response={
@@ -201,7 +201,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
     expected_provider_headers={"content-type": "application/json", "x-goog-api-key": "synthetic-gemini-key"},
     expected_provider_request={
         "contents": [{"parts": [{"text": "Say hello."}], "role": "user"}],
-        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024},
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
     },
     mock_provider_response={

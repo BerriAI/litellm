@@ -304,10 +304,11 @@ async def test_a_rejection_burst_survives_a_killed_worker_without_an_asgi_crash(
     before: Final = await _burst(owned, shapes, "burst")
     assert _crash_lines(before) == (), before
     victim: Final = eventually(lambda: _workers(owned), lambda workers: len(workers) == 2)[0]
-    victim.kill()
-    during: Final = await _refused(owned, "/v1/responses", shapes["unknown_key"], f"model={_tag('during')}")
-    assert during.status == 403, during.window
-    assert _crash_lines(during.window) == (), during.window
+    with owned.replacing_worker(victim.pid) as kill:
+        kill()
+        during: Final = await _refused(owned, "/v1/responses", shapes["unknown_key"], f"model={_tag('during')}")
+        assert during.status == 403, during.window
+        assert _crash_lines(during.window) == (), during.window
     eventually(
         lambda: frozenset(worker.pid for worker in _workers(owned)),
         lambda pids: len(pids) == 2 and victim.pid not in pids,
