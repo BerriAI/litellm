@@ -1228,11 +1228,13 @@ class ModelResponseIterator:
             Tuple of (finish_reason, usage, container)
         """
         message_delta: Final = MessageBlockDelta(**chunk)
-        finish_reason = map_finish_reason(finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop")
         # Override finish_reason to "stop" if we converted response_format tools
         # (matches OpenAI behavior and non-streaming Anthropic implementation)
-        if self.converted_response_format_tool:
-            finish_reason = "stop"
+        finish_reason: Final = (
+            "stop"
+            if self.converted_response_format_tool
+            else map_finish_reason(finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop")
+        )
         usage: Final = (
             self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
         )
