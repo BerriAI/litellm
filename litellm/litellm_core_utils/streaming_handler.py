@@ -1394,11 +1394,7 @@ class CustomStreamWrapper:
                     setattr(
                         model_response,
                         "usage",
-                        litellm.Usage(
-                            prompt_tokens=response_obj["usage"].get("prompt_tokens", None) or None,
-                            completion_tokens=response_obj["usage"].get("completion_tokens", None) or None,
-                            total_tokens=response_obj["usage"].get("total_tokens", None) or None,
-                        ),
+                        _usage_from_payload(response_obj["usage"]),
                     )
                 elif isinstance(response_obj["usage"], Usage):
                     setattr(
@@ -2423,6 +2419,11 @@ class CustomStreamWrapper:
         return chunk
 
     _strip_sse_data_from_chunk = strip_sse_data_from_chunk
+
+
+def _usage_from_payload(payload: Mapping[str, Any]) -> Usage:
+    """Build ``Usage`` from a wire-shaped usage dict, forwarding every key."""
+    return litellm.Usage(**payload)
 
 
 def _cache_token_count(details: PromptTokensDetailsWrapper | None, keys: tuple[str, ...]) -> int:
