@@ -2138,3 +2138,162 @@ def test_stream_chunk_builder_joins_openai_audio_output_pieces() -> None:
         "expires_at": 1767225600,
         "transcript": "Yes.",
     }
+
+
+def _fragmenting_tool_call_chunk(tool_call: dict[str, object], finish_reason: str | None = None) -> dict[str, object]:
+    return {
+        "id": "chatcmpl-fragment-test",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "fragmenting-server",
+        "choices": [{"index": 0, "delta": {"tool_calls": [tool_call]}, "finish_reason": finish_reason}],
+    }
+
+
+def test_split_tool_call_fragments_are_joined() -> None:
+    chunks = [
+        _fragmenting_tool_call_chunk(
+            {"index": 0, "id": "call_", "type": "function", "function": {"name": "get_", "arguments": ""}}
+        ),
+        _fragmenting_tool_call_chunk(
+            {
+                "index": 0,
+                "id": "9f2c",
+                "type": "function",
+                "function": {"name": "weather", "arguments": '{"city": "Paris"}'},
+            },
+            finish_reason="tool_calls",
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks)
+
+    tool_call = response.choices[0].message.tool_calls[0]
+    assert tool_call.id == "call_9f2c"
+    assert tool_call.function.name == "get_weather"
+    assert tool_call.function.arguments == '{"city": "Paris"}'
+
+
+def test_whole_value_repeated_on_every_chunk_is_not_duplicated() -> None:
+    chunks = [
+        _fragmenting_tool_call_chunk(
+            {
+                "index": 0,
+                "id": "call_9f2c",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": ""},
+            }
+        ),
+        _fragmenting_tool_call_chunk(
+            {
+                "index": 0,
+                "id": "call_9f2c",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+            },
+            finish_reason="tool_calls",
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks)
+
+    tool_call = response.choices[0].message.tool_calls[0]
+    assert tool_call.id == "call_9f2c"
+    assert tool_call.function.name == "get_weather"
+
+
+def test_parallel_tool_calls_keep_separate_ids_and_names() -> None:
+    chunks = [
+        _fragmenting_tool_call_chunk(
+            {
+                "index": 0,
+                "id": "call_a",
+                "type": "function",
+                "function": {"name": "get_", "arguments": ""},
+            }
+        ),
+        _fragmenting_tool_call_chunk(
+            {
+                "index": 1,
+                "id": "call_",
+                "type": "function",
+                "function": {"name": "put_", "arguments": ""},
+            }
+        ),
+        _fragmenting_tool_call_chunk(
+            {
+                "index": 0,
+                "id": "1",
+                "type": "function",
+                "function": {"name": "weather", "arguments": '{"city": "Paris"}'},
+            }
+        ),
+        _fragmenting_tool_call_chunk(
+            {
+                "index": 1,
+                "id": "b2",
+                "type": "function",
+                "function": {"name": "weather", "arguments": '{"city": "Berlin"}'},
+            },
+            finish_reason="tool_calls",
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks)
+
+    first, second = response.choices[0].message.tool_calls
+    assert (first.id, first.function.name) == ("call_a1", "get_weather")
+    assert (second.id, second.function.name) == ("call_b2", "put_weather")
+
+
+def test_append_fragment_guard_branches() -> None:
+    """Falsy fragments keep the accumulated value, a first fragment seeds it, an
+    equal fragment is a whole-value repeat (#44392), and anything else extends."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import _append_fragment
+
+    assert _append_fragment("call_9f2c", None) == "call_9f2c"
+    assert _append_fragment("call_9f2c", "") == "call_9f2c"
+    assert _append_fragment(None, "call_9f2c") == "call_9f2c"
+    assert _append_fragment("call_9f2c", "call_9f2c") == "call_9f2c"
+    assert _append_fragment("call_", "9f2c") == "call_9f2c"
+
+
+def test_custom_tool_call_name_split_fragments() -> None:
+    chunks = [
+        _fragmenting_tool_call_chunk(
+            {"index": 0, "id": "call_TBs", "type": "custom", "custom": {"name": "Apply", "input": ""}}
+        ),
+        _fragmenting_tool_call_chunk(
+            {"index": 0, "custom": {"name": "Patch", "input": "*** End Patch\n"}},
+            finish_reason="tool_calls",
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks)
+
+    tool_call = response.choices[0].message.tool_calls[0]
+    assert tool_call.custom.name == "ApplyPatch"
+    assert tool_call.custom.input == "*** End Patch\n"
+
+
+def test_dict_tool_call_with_object_function_fragments_are_joined() -> None:
+    chunks = [
+        _fragmenting_tool_call_chunk(
+            {"index": 0, "id": "call_", "type": "function", "function": Function(name="get_", arguments="")}
+        ),
+        _fragmenting_tool_call_chunk(
+            {
+                "index": 0,
+                "id": "9f2c",
+                "type": "function",
+                "function": Function(name="weather", arguments='{"city": "Paris"}'),
+            },
+            finish_reason="tool_calls",
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks)
+
+    tool_call = response.choices[0].message.tool_calls[0]
+    assert tool_call.id == "call_9f2c"
+    assert tool_call.function.name == "get_weather"
