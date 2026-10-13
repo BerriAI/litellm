@@ -2234,7 +2234,7 @@ class ModelResponse(ModelResponseBase):
         created=None,
         model=None,
         object=None,
-        system_fingerprint: str | None = None,
+        system_fingerprint=None,
         usage=None,
         stream=None,
         stream_options=None,
