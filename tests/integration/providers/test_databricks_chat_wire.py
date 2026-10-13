@@ -864,7 +864,8 @@ def test_databricks_json_schema_burst_through_an_upstream_outage_keeps_every_ref
     for request in received:
         _assert_burst_outbound(request)
     expected: Final = tuple(
-        (503, _OUTAGE_MESSAGE) if down else (200, _EXPECTED_JSON) for _endpoint, _stream, down in plan
+        (529 if endpoint == "messages" else 503, _OUTAGE_MESSAGE) if down else (200, _EXPECTED_JSON)
+        for endpoint, _stream, down in plan
     )
     assert tuple(_outcome(*result) for result in results) == expected
     assert tuple(_outcome(*result) for result in recovered) == ((200, _EXPECTED_JSON),) * len(recovery)

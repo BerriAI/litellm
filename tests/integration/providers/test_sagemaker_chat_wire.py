@@ -438,7 +438,7 @@ async def _burst(gateway: Gateway, model: str, calls: tuple[_Call, ...]) -> tupl
 
 def _assert_answered(served: _Served, down: frozenset[str]) -> None:
     if served.call.marker in down:
-        assert served.status == 503, (served.call, served.text)
+        assert served.status == (529 if served.call.endpoint == "messages" else 503), (served.call, served.text)
         assert "synthetic container outage" in served.text, (served.call, served.text)
         return
     assert served.status == 200, (served.call, served.text)

@@ -221,9 +221,62 @@ class TestProxyExceptionAnthropicEnvelope:
         assert json.loads(response.body)["error"]["type"] == "overloaded_error"
 
     @pytest.mark.asyncio
-    async def test_count_tokens_answers_a_503_as_529_overloaded_error(self):
-        from fastapi import HTTPException
+    async def test_anthropic_response_hands_the_failure_hook_the_529_it_answers(self):
+        """The failure hook ends the OTel server span and counts the failed request from the exception's status
+        before the route answers, so the route hands it the 529 the client gets, not the deployment's 503."""
+        import litellm
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
 
+        unavailable = litellm.ServiceUnavailableError(
+            message='BedrockException - {"message": "Bedrock is unable to process your request."}',
+            llm_provider="bedrock",
+            model="global.anthropic.claude-opus-5-5",
+        )
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(
+                ep, "read_request_body", new=AsyncMock(return_value={})
+            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(  # test-quality-ok: the deployment's 503 surfaces deep inside this call; the test targets the endpoint's except block
+                ep.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=AsyncMock(side_effect=unavailable),
+            ),
+            patch.object(
+                proxy_server, "proxy_logging_obj"
+            ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        recorded = mock_logging.post_call_failure_hook.await_args.kwargs["original_exception"]
+        assert recorded is unavailable
+        assert recorded.status_code == 529
+        assert response.status_code == 529
+        assert json.loads(response.body)["error"]["type"] == "overloaded_error"
+
+    def test_with_answered_status_moves_a_proxy_exception_503_to_529_and_nothing_else(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy._types import ProxyException
+
+        closed = ProxyException(
+            message="budget service unavailable", type="service_unavailable_error", param=None, code=503
+        )
+        assert ep.with_answered_status(closed).code == "529"
+        rejected = ProxyException(message="bad request", type="invalid_request_error", param=None, code=400)
+        assert ep.with_answered_status(rejected).code == "400"
+        assert ep.with_answered_status(ValueError("no status")).args == ("no status",)
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_answers_a_503_as_529_overloaded_error(self):
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -240,13 +293,17 @@ class TestProxyExceptionAnthropicEnvelope:
                 "read_request_body",
                 new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
             ),
-            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=unavailable)),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
-            pytest.raises(HTTPException) as raised,
+            patch.object(
+                proxy_server, "token_counter", new=AsyncMock(side_effect=unavailable)
+            ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
         ):
-            await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
-        assert raised.value.status_code == 529
-        assert raised.value.detail["error"]["type"] == "overloaded_error"
+        assert response.status_code == 529
+        body = json.loads(response.body)
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "overloaded_error"
+        assert "detail" not in body
 
     @staticmethod
     def _call_id_error_response(general_settings, provider_specific_fields=None):
@@ -328,13 +385,17 @@ class TestHttpExceptionDictDetail:
         request.headers = {}
 
         with (
-            patch.object(ep, "read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(
+                ep, "read_request_body", new=AsyncMock(return_value={})
+            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
             patch.object(  # test-quality-ok: the guardrail raise happens deep inside this call; the test targets the endpoint's except block
                 ep.ProxyBaseLLMRequestProcessing,
                 "base_process_llm_request",
                 new=AsyncMock(side_effect=exc),
             ),
-            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+            patch.object(
+                proxy_server, "proxy_logging_obj"
+            ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
             response = await ep.anthropic_response(
@@ -425,9 +486,15 @@ class TestErrorLogCarriesCallId:
         request.headers = {}
 
         with (
-            patch.object(ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the provider failure happens inside this call; the test targets the endpoint's except block
-            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+            patch.object(
+                ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})
+            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process
+            ),  # test-quality-ok: the provider failure happens inside this call; the test targets the endpoint's except block
+            patch.object(
+                proxy_server, "proxy_logging_obj"
+            ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
@@ -458,9 +525,15 @@ class TestErrorLogCarriesCallId:
         request.headers = {}
 
         with (
-            patch.object(ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the proxy shaped failure happens inside this call; the test targets the endpoint's except block
-            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+            patch.object(
+                ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})
+            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process
+            ),  # test-quality-ok: the proxy shaped failure happens inside this call; the test targets the endpoint's except block
+            patch.object(
+                proxy_server, "proxy_logging_obj"
+            ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
             response = await ep.anthropic_response(
@@ -490,7 +563,9 @@ class TestErrorLogCarriesCallId:
                 "read_request_body",
                 new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
             ),
-            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+            patch.object(
+                proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))
+            ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
             pytest.raises(HTTPException) as raised,
         ):

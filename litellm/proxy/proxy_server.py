@@ -132,6 +132,7 @@ from litellm.proxy.common_utils.callback_utils import (
     process_callback,
     strip_callback_config,
 )
+from litellm.proxy.common_utils.openai_error_payload import error_status_code, openai_error_param, openai_error_type
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  # legacy module exports
     _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
@@ -10302,11 +10303,12 @@ async def async_data_generator(
             # Including it in the SSE response leaks internal details to clients.
             error_msg = str(e)
 
+        error_code: Final = error_status_code(e, 500)
         proxy_exception: Final = ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_code),
+            param=openai_error_param(e),
+            code=error_code,
         )
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True

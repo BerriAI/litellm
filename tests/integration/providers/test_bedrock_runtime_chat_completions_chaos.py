@@ -332,10 +332,8 @@ async def test_peer_killed_mid_burst_fails_only_the_held_calls_and_a_restarted_p
     assert (len(succeeded), len(failed)) == (6, 6), [(item.call.marker, item.status) for item in served]
     for item in succeeded:
         _assert_answered_with_its_own_marker(item)
-    assert {item.status for item in failed} == {503}, [
-        (item.call.endpoint, item.call.stream, item.status, item.text) for item in failed
-    ]
     for item in failed:
+        assert item.status == (529 if item.call.endpoint == "messages" else 503), (item.call, item.status, item.text)
         assert "ServiceUnavailableError: BedrockException - Server disconnected" in item.text, item.text
         assert "marker-" not in item.text and item.call_id is not None, item.text
     with _child_peer(deployment.peer_port, answer_first=10**6) as revived:

@@ -2,7 +2,7 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
-from typing import Final
+from typing import Final, Protocol, runtime_checkable
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -63,6 +63,27 @@ def _anthropic_error_detail(
         "litellm_call_id": call_id,
     }
     return with_call_id
+
+
+@runtime_checkable
+class _CarriesStatusCode(Protocol):
+    status_code: int
+
+
+def with_answered_status(exc: Exception) -> Exception:
+    """The same exception carrying the status the Anthropic routes answer with (a 503 answers as 529), so the
+    proxy-level recorders the failure hook runs (the spend log row, the OTel server span, the failed-request metric,
+    alerting) agree with the client. The deployment-level recorders (the deployment failure metric, cooldown) ran in
+    the litellm layer with the deployment's own status before the exception gets here."""
+    if isinstance(exc, ProxyException):
+        if exc.code.isdecimal():
+            answered_code: Final = str(AnthropicExceptionMapping.get_status_code(int(exc.code)))
+            exc.code = answered_code  # rebind-ok: the recorders key on this object's class and attributes, so the status moves on it, not on a copy
+        return exc
+    if isinstance(exc, _CarriesStatusCode):
+        answered_status: Final = AnthropicExceptionMapping.get_status_code(exc.status_code)
+        exc.status_code = answered_status  # rebind-ok: litellm exception classes bind their status in __init__, so no new instance can carry 529 under the same class
+    return exc
 
 
 def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
@@ -246,15 +267,18 @@ async def anthropic_response(
             request_id=request.headers.get("x-request-id"),
         )
         return JSONResponse(status_code=e.status_code, content=body)
-    except Exception as e:
+    except Exception as raised:
+        answered: Final = with_answered_status(raised)
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=base_llm_response_processor.data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=answered,
+            request_data=base_llm_response_processor.data,
         )
-        log_llm_api_exception(e, base_llm_response_processor.litellm_call_id)
+        log_llm_api_exception(answered, base_llm_response_processor.litellm_call_id)
 
-        if isinstance(e, ProxyException):
+        if isinstance(answered, ProxyException):
             return _anthropic_error_json_response(
-                with_litellm_call_id(e, base_llm_response_processor.litellm_call_id), request
+                with_litellm_call_id(answered, base_llm_response_processor.litellm_call_id), request
             )
 
         # Extract model_id from request metadata (same as success path)
@@ -271,20 +295,20 @@ async def anthropic_response(
             response_cost=0,
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=data,
-            timeout=getattr(e, "timeout", None),
+            timeout=getattr(answered, "timeout", None),
             litellm_logging_obj=None,
         )
 
-        if isinstance(e, HTTPException):
-            return _anthropic_error_json_response(proxy_exception_from_http_exception(e, headers), request)
+        if isinstance(answered, HTTPException):
+            return _anthropic_error_json_response(proxy_exception_from_http_exception(answered, headers), request)
 
-        error_msg: Final = f"{e}"
+        error_msg: Final = f"{answered}"
         return _anthropic_error_json_response(
             ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=openai_error_type(e, error_status_code(e, 500)),
-                param=openai_error_param(e),
-                code=error_status_code(e, 500),
+                message=getattr(answered, "message", error_msg),
+                type=openai_error_type(answered, error_status_code(answered, 500)),
+                param=openai_error_param(answered),
+                code=error_status_code(answered, 500),
                 headers=headers,
             ),
             request,
@@ -364,17 +388,7 @@ async def count_tokens(
     except HTTPException:
         raise
     except ProxyException as e:
-        status_code: Final = AnthropicExceptionMapping.get_status_code(
-            int(e.code) if e.code and e.code.isdigit() else 500
-        )
-        detail: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
-            status_code=status_code,
-            raw_message=e.message,
-        )
-        raise HTTPException(
-            status_code=status_code,
-            detail=detail,
-        )
+        return _anthropic_error_json_response(e, request)
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)
         raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})

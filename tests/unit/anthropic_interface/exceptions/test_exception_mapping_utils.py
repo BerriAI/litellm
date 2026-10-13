@@ -173,6 +173,21 @@ class TestTransformToAnthropicError:
         )
         assert result["request_id"] == "req_123"
 
+    def test_an_anthropic_shaped_503_body_answers_529_with_the_overloaded_type(self):
+        """A 503 whose message is already an Anthropic envelope keeps its message but takes the error type the
+        529 it answers as names, so the status and the body agree."""
+        raw = json.dumps({"type": "error", "error": {"type": "api_error", "message": "Service unavailable"}})
+        result = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=AnthropicExceptionMapping.get_status_code(503),
+            raw_message=raw,
+            request_id="req_529",
+        )
+        assert result == {
+            "type": "error",
+            "error": {"type": "overloaded_error", "message": "Service unavailable"},
+            "request_id": "req_529",
+        }
+
     def test_translates_bedrock_error(self):
         """Test that Bedrock errors are translated to Anthropic format."""
         bedrock_error = json.dumps({"detail": {"message": "Access denied"}})

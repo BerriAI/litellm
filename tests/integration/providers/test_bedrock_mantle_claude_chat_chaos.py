@@ -233,7 +233,7 @@ async def test_upstream_aborts_then_an_outage_fail_each_call_once_and_the_native
         refused: Final = await _burst(proxy, gateway.key, model, during_outage)
         assert len(refused) == 4
         for item in refused:
-            assert item.status == 503, item.text
+            assert item.status == (529 if item.call.endpoint == "messages" else 503), item.text
             assert "Cannot connect to host" in item.text, item.text
         assert await asyncio.to_thread(
             eventually, lambda: _unhealthy_count(gateway, model), lambda count: count == 1, 30

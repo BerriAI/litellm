@@ -370,7 +370,7 @@ def test_retry_rejected_before_it_opens_counts_against_the_same_budget(gateway: 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         response: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "deployment"))
-        _assert_rejected_before_content(response, wire, status=500, attempts=2, error="error")
+        _assert_rejected_before_content(response, wire, status=529, attempts=2, error="overloaded_error")
 
 
 def test_non_stream_messages_rejected_with_500_is_retried_per_the_deployment_budget(gateway: Gateway) -> None:
