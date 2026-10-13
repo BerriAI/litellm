@@ -28,8 +28,8 @@ from litellm.llms.custom_httpx.http_handler import (
     version,
 )
 from litellm.llms.oci.chat.cohere import (
-    adapt_messages_to_cohere_standard,
     adapt_tool_definitions_to_cohere_standard,
+    build_cohere_request_messages,
     extract_text_content,
     handle_cohere_response,
     handle_cohere_stream_chunk,
@@ -567,11 +567,13 @@ class OCIChatConfig(BaseConfig):
                 if preamble:
                     preamble_override = preamble
 
+            message, chat_history, tool_results = build_cohere_request_messages(messages)
             chat_request: Final = CohereChatRequest(
                 apiFormat="COHERE",
-                message=extract_text_content(user_messages[-1]["content"]),
-                chatHistory=adapt_messages_to_cohere_standard([m for m in messages if m.get("role") != "system"]),
+                message=message,
+                chatHistory=list(chat_history),
                 preambleOverride=preamble_override,
+                toolResults=list(tool_results) or None,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
             )
             data = OCICompletionPayload(
