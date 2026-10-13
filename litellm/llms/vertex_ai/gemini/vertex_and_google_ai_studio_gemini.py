@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 import httpx
@@ -53,6 +54,7 @@ from litellm.types.llms.openai import (
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_CACHE_CREATION_TOKENS_KEY,
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
     VERTEX_CREDENTIALS_TYPES,
     Candidates,
@@ -115,6 +117,25 @@ else:
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
 
+# Gemini prebuilt voices per https://ai.google.dev/gemini-api/docs/speech-generation (2026-10-01), by nearest character;
+# nova is left out since Gemini 3.x TTS models accept it as given (live check 2026-10-08)
+OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "alloy": "Kore",
+        "ash": "Iapetus",
+        "ballad": "Algieba",
+        "cedar": "Achird",
+        "coral": "Sulafat",
+        "echo": "Charon",
+        "fable": "Umbriel",
+        "marin": "Despina",
+        "onyx": "Orus",
+        "sage": "Vindemiatrix",
+        "shimmer": "Achernar",
+        "verse": "Puck",
+    }
+)
+
 
 def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
     return UnsupportedParamsError(
@@ -126,6 +147,11 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
         ),
         status_code=400,
     )
+
+
+def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
+    recorded: Final = logging_obj.model_call_details.get(VERTEX_AI_CACHE_CREATION_TOKENS_KEY)
+    return recorded if isinstance(recorded, int) else 0
 
 
 def _served_model_name(model_version: object) -> str | None:
@@ -1071,7 +1097,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         speechConfig = {
             voiceConfig: {
                 prebuiltVoiceConfig: {
-                    voiceName: "alloy",
+                    voiceName: "Kore",
                 }
             },
             languageCode: "en-US",
@@ -1096,7 +1122,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         speech_config: Final[SpeechConfig] = {}
 
         if "voice" in value:
-            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": value["voice"]}
+            voice: Final = value["voice"]
+            voice_name: Final = (
+                OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice) if isinstance(voice, str) else voice
+            )
+            prebuilt_voice_config: Final[PrebuiltVoiceConfig] = {"voiceName": voice_name}
             voice_config: Final[VoiceConfig] = {"prebuiltVoiceConfig": prebuilt_voice_config}
             speech_config["voiceConfig"] = voice_config
 
@@ -1274,11 +1304,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["responseModalities"] = ["AUDIO"]
             elif "AUDIO" not in optional_params["responseModalities"]:
                 optional_params["responseModalities"].append("AUDIO")
-
-        # Set default temperature to 1.0 for Gemini 3 models if not specified
-        if VertexGeminiConfig._is_gemini_3_or_newer(model):
-            if "temperature" not in optional_params:
-                optional_params["temperature"] = 1.0
 
         self._drop_search_tools_mixed_with_functions(optional_params)
 
@@ -1796,6 +1821,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _calculate_usage(
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
+        cache_creation_tokens: int = 0,
     ) -> Usage:
         if completion_response is not None and "usageMetadata" not in completion_response:
             raise ValueError(f"usageMetadata not found in completion_response. Got={completion_response}")
@@ -1939,19 +1965,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         tool_use_prompt_tokens: Final = usage_metadata.get("toolUsePromptTokenCount") or None
 
-        prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=cached_tokens,
-            audio_tokens=prompt_audio_tokens,
-            text_tokens=prompt_text_tokens,
-            image_tokens=prompt_image_tokens,
-            video_tokens=prompt_video_tokens,
-            tool_use_tokens=tool_use_prompt_tokens,
-        )
-
         billable_tool_use_prompt_tokens: Final = (
             0
             if VertexGeminiConfig._response_has_search_grounding(completion_response)
             else (tool_use_prompt_tokens or 0)
+        )
+        billable_text_tokens: Final = (
+            prompt_text_tokens if prompt_text_tokens is None else prompt_text_tokens + billable_tool_use_prompt_tokens
+        )
+
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens,
+            audio_tokens=prompt_audio_tokens,
+            text_tokens=billable_text_tokens,
+            image_tokens=prompt_image_tokens,
+            video_tokens=prompt_video_tokens,
+            tool_use_tokens=tool_use_prompt_tokens,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
@@ -1959,11 +1988,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
         usage: Final = Usage(
-            prompt_tokens=usage_metadata.get("promptTokenCount", 0) + billable_tool_use_prompt_tokens,
+            prompt_tokens=usage_metadata.get("promptTokenCount", 0)
+            + billable_tool_use_prompt_tokens
+            + cache_creation_tokens,
             completion_tokens=completion_tokens,
-            total_tokens=usage_metadata.get("totalTokenCount", 0),
+            total_tokens=usage_metadata.get("totalTokenCount", 0) + cache_creation_tokens,
             prompt_tokens_details=prompt_tokens_details,
             cache_read_input_tokens=cached_tokens,
+            cache_creation_input_tokens=cache_creation_tokens or None,
             reasoning_tokens=reasoning_tokens,
             completion_tokens_details=response_tokens_details,
         )
@@ -1974,8 +2006,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def calculate_usage(
         cls,
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
+        cache_creation_tokens: int = 0,
     ) -> Usage:
-        return cls._calculate_usage(completion_response)
+        return cls._calculate_usage(completion_response, cache_creation_tokens)
 
     @staticmethod
     def _check_finish_reason(
@@ -2185,10 +2218,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _set_stream_metadata_on_response(
         model_response: Any,
-        grounding_metadata: list[dict],
-        url_context_metadata: list[dict],
-        safety_ratings: list[dict],
-        citation_metadata: list[dict],
+        grounding_metadata: Sequence[Mapping[str, object]],
+        url_context_metadata: Sequence[Mapping[str, object]],
+        safety_ratings: Sequence[Mapping[str, object]],
+        citation_metadata: Sequence[Mapping[str, object]],
     ) -> None:
         setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
         if grounding_metadata:
@@ -2586,7 +2619,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     _,  # cumulative_tool_call_index not needed in non-streaming
                 ) = VertexGeminiConfig._process_candidates(_candidates, model_response, logging_obj.optional_params)
 
-            usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
+            usage: Final = VertexGeminiConfig._calculate_usage(
+                completion_response=completion_response,
+                cache_creation_tokens=_cache_creation_tokens(logging_obj),
+            )
 
             VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
@@ -3360,6 +3396,7 @@ class ModelResponseIterator:
 
         usage: Final = VertexGeminiConfig.calculate_usage(
             completion_response=processed_chunk,
+            cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
         )
 
         VertexGeminiConfig.set_grounding_usage_counters(usage, grounding_metadata)
