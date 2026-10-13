@@ -3299,7 +3299,6 @@ def test_get_litellm_model_info(data):
         get_info_mock.assert_called_once_with(data["expected"])
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("cache_params", "expected_type", "expected_host", "expected_port"),
