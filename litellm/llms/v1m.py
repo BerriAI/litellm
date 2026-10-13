@@ -1,13 +1,12 @@
 import json
 import time
-from typing import Any
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class V1MError(BaseLLMException):
-    def __init__(self, status_code: int, message: str, headers: Any = None):
+    def __init__(self, status_code: int, message: str, headers: object = None) -> None:
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
@@ -29,11 +28,11 @@ class V1MConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[dict[str, Any]] | None = None,
-        state: str | dict[str, Any] | None = None,
-        questions: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+        messages: list[dict] | None = None,
+        state: str | dict | None = None,
+        questions: dict | None = None,
+        **kwargs,
+    ) -> dict:
         clean_model = model.replace("v1m/", "") if model.startswith("v1m/") else model
 
         if state is not None and questions is not None:
@@ -70,7 +69,7 @@ class V1MConfig(OpenAIGPTConfig):
             },
         }
 
-    def transform_response(self, raw_resp: dict[str, Any], model: str) -> dict[str, Any]:
+    def transform_response(self, raw_resp: dict, model: str) -> dict:
         evals = raw_resp.get("evaluations", raw_resp)
         return {
             "id": f"v1m-{int(time.time())}",
