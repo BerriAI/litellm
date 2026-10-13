@@ -11339,6 +11339,14 @@ class ProxyStartupEvent:
 
         await MavvrikFocusLogger.init_mavvrik_focus_background_job(scheduler=scheduler)
 
+        from litellm.integrations.ternary.ternary_logger import (  # noqa: PLC0415  # lazy import avoids a circular import at module load
+            TernaryLogger,
+        )
+
+        await TernaryLogger.init_ternary_background_job(
+            scheduler=scheduler,  # pyright: ignore[reportUnknownArgumentType]  # APScheduler ships no type information
+        )
+
         ########################################################
         # Prometheus Background Job
         ########################################################
@@ -18843,6 +18851,14 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "description": (
             "Carry spend beyond max_budget into the next window when budgets reset, instead of "
             "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
+        ),
+    },
+    "personal_key_model_access_from_teams": {
+        "type": "Boolean",
+        "description": (
+            "Caps each personal key (a key with no team) to the models its owner's current teams can call, "
+            "re-evaluated on every request. A user in no team gets no model access. A user in several teams "
+            "can call any model one of those teams can call. Team keys are unaffected."
         ),
     },
     "max_ui_session_budget": {
