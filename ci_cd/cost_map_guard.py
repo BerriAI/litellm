@@ -56,7 +56,7 @@ def _rendered_schema(cost_map: CostMap) -> str:
 def _evaluation_output_price_failure(
     key: str, entry: object, evaluation_output_price_sources: Mapping[str, str]
 ) -> str | None:
-    if not isinstance(entry, dict) or entry.get("mode") != "evaluation":
+    if not isinstance(entry, dict) or entry.get("mode") not in ("evaluation", "decisions"):
         return None
     output_cost: Final = entry.get("output_cost_per_token")
     if (
@@ -67,7 +67,7 @@ def _evaluation_output_price_failure(
     ):
         return None
     return (
-        f"{key}: mode evaluation rows bill input only; output_cost_per_token must be 0 unless the vendor "
+        f"{key}: mode evaluation and decisions rows bill input only; output_cost_per_token must be 0 unless the vendor "
         "prices output tokens for this model (add the source to EVALUATION_OUTPUT_PRICE_SOURCES)"
     )
 

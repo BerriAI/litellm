@@ -359,7 +359,7 @@ from litellm.proxy.auth.auth_utils import (
     log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
 )
-from litellm.proxy.auth.fallback_budget import router_fallback_budget_check
+from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
@@ -7196,7 +7196,10 @@ class ProxyConfig:
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
             fallback_access_check=router_fallback_access_check,
-            fallback_budget_check=router_fallback_budget_check,
+            fallback_budget_check=RouterFallbackBudgetCheck(
+                is_enforced=router_fallback_budget_check.is_enforced,
+                team_member_model_budget_limiter=model_max_budget_limiter,
+            ),
             auto_router_capability_limit=_license_check.auto_router_capability_limit,
         )
 
@@ -7431,7 +7434,7 @@ class ProxyConfig:
             else:
                 raise ValueError("Invalid Key Management System selected")
 
-            from litellm.rust_bridge.secret_manager import capture_secret_manager
+            from litellm.rust_bridge.host.secret_manager import capture_secret_manager
 
             if litellm.secret_manager_client is not previous_client:
                 capture_secret_manager(litellm.secret_manager_client, key_management_system)
@@ -7691,7 +7694,10 @@ class ProxyConfig:
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
                         fallback_access_check=router_fallback_access_check,
-                        fallback_budget_check=router_fallback_budget_check,
+                        fallback_budget_check=RouterFallbackBudgetCheck(
+                            is_enforced=router_fallback_budget_check.is_enforced,
+                            team_member_model_budget_limiter=model_max_budget_limiter,
+                        ),
                         auto_router_capability_limit=_license_check.auto_router_capability_limit,
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
@@ -11332,6 +11338,14 @@ class ProxyStartupEvent:
         )
 
         await MavvrikFocusLogger.init_mavvrik_focus_background_job(scheduler=scheduler)
+
+        from litellm.integrations.ternary.ternary_logger import (  # noqa: PLC0415  # lazy import avoids a circular import at module load
+            TernaryLogger,
+        )
+
+        await TernaryLogger.init_ternary_background_job(
+            scheduler=scheduler,  # pyright: ignore[reportUnknownArgumentType]  # APScheduler ships no type information
+        )
 
         ########################################################
         # Prometheus Background Job
@@ -18399,6 +18413,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
+        "disable_fallbacks_on_per_model_rate_limits": "Boolean",
         "maximum_spend_logs_retention_period": "String",
         "maximum_health_check_retention_period": "String",
         "maximum_daily_tag_spend_retention_period": "String",
@@ -18836,6 +18851,14 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "description": (
             "Carry spend beyond max_budget into the next window when budgets reset, instead of "
             "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
+        ),
+    },
+    "personal_key_model_access_from_teams": {
+        "type": "Boolean",
+        "description": (
+            "Caps each personal key (a key with no team) to the models its owner's current teams can call, "
+            "re-evaluated on every request. A user in no team gets no model access. A user in several teams "
+            "can call any model one of those teams can call. Team keys are unaffected."
         ),
     },
     "max_ui_session_budget": {
