@@ -40,6 +40,37 @@ def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
     return None, model
 
 
+# Cross-Region / geo inference-profile prefixes on Bedrock model IDs
+# (us.openai.gpt-6.1-sol, eu.anthropic..., global....). Distinct from the
+# AWS-region path prefix handled by split_mantle_region_prefix (us-east-1/...).
+# Keep aligned with litellm.utils._BEDROCK_REGION_PREFIXES; cannot import that
+# here without a circular import through utils -> this module.
+_MANTLE_GEO_PROFILE_PREFIXES: Final = (
+    "us.",
+    "eu.",
+    "apac.",
+    "jp.",
+    "au.",
+    "us-gov.",
+    "global.",
+    "ap-northeast-1.",
+)
+
+
+def mantle_cost_map_model_id(model: str) -> str:
+    """Bare model id for ``bedrock_mantle/<id>`` cost-map lookups.
+
+    Strips an optional AWS-region path prefix and a geo inference-profile
+    prefix so ``us.openai.gpt-6.1-sol`` resolves to the
+    ``openai.gpt-6.1-sol`` row. The model id sent to AWS is unchanged.
+    """
+    bare = split_mantle_region_prefix(model)[1]
+    for prefix in _MANTLE_GEO_PROFILE_PREFIXES:
+        if bare.startswith(prefix):
+            return bare[len(prefix) :]
+    return bare
+
+
 def resolve_mantle_region(params: Mapping[str, object]) -> str:
     region: Final = params.get("aws_region_name")
     if isinstance(region, str) and region:
@@ -149,7 +180,7 @@ def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     gpt-oss substring), so a substring gate would be wrong. A model absent from
     model_cost simply has no signal and returns False (chat-completions emulation).
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
+    entry: Final = model_cost.get(f"bedrock_mantle/{mantle_cost_map_model_id(model)}", {}) if model else {}
     if "/v1/responses" in (entry.get("supported_endpoints") or []):
         return True
     return entry.get("mode") == "responses"
@@ -166,5 +197,5 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     the base for the model's whole OpenAI-compatible surface, so both the chat and
     responses configs derive from it -- there is no separate model-name rule.
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
+    entry: Final = model_cost.get(f"bedrock_mantle/{mantle_cost_map_model_id(model)}", {}) if model else {}
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"

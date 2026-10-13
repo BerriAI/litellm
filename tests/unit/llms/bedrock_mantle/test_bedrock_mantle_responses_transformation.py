@@ -1320,6 +1320,22 @@ class TestMantleBaseSegment:
             ),
             ("openai.gpt-oss-120b", {}, "v1"),
             (None, {}, "v1"),
+            # Geo inference-profile prefixes must resolve to the bare cost-map row
+            (
+                "us.openai.gpt-5.5",
+                {"bedrock_mantle/openai.gpt-5.5": {"use_openai_responses_path": True}},
+                "openai/v1",
+            ),
+            (
+                "eu.openai.gpt-oss-120b",
+                {"bedrock_mantle/openai.gpt-oss-120b": {}},
+                "v1",
+            ),
+            (
+                "us-east-1/us.openai.gpt-5.5",
+                {"bedrock_mantle/openai.gpt-5.5": {"use_openai_responses_path": True}},
+                "openai/v1",
+            ),
         ],
     )
     def test_base_segment(self, model, model_cost, expected):
@@ -1332,6 +1348,43 @@ class TestMantleSupportsResponses:
     """The capability helper is data-driven (supported_endpoints / mode), with no
     model-name match: per-model, so gpt-oss-120b is supported but the safeguard
     variant is not despite the shared substring."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "openai.gpt-6.1-sol",
+            "us.openai.gpt-6.1-sol",
+            "eu.openai.gpt-6.1-sol",
+            "global.openai.gpt-6.1-sol",
+            "us-east-1/us.openai.gpt-6.1-sol",
+        ],
+    )
+    def test_geo_inference_profile_resolves_cost_map_row(self, model):
+        from litellm.llms.bedrock_mantle.common_utils import (
+            mantle_base_segment,
+            mantle_cost_map_model_id,
+            mantle_supports_responses,
+        )
+
+        model_cost = {
+            "bedrock_mantle/openai.gpt-6.1-sol": {
+                "mode": "responses",
+                "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+                "use_openai_responses_path": True,
+            }
+        }
+        assert mantle_cost_map_model_id(model) == "openai.gpt-6.1-sol"
+        assert mantle_supports_responses(model, model_cost) is True
+        assert mantle_base_segment(model, model_cost) == "openai/v1"
+
+    def test_unknown_geo_prefixed_model_stays_unsupported(self):
+        from litellm.llms.bedrock_mantle.common_utils import (
+            mantle_base_segment,
+            mantle_supports_responses,
+        )
+
+        assert mantle_supports_responses("us.openai.unknown-model", {}) is False
+        assert mantle_base_segment("us.openai.unknown-model", {}) == "v1"
 
 
 class TestBedrockMantlePerModelResponsesURL:
