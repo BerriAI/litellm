@@ -23,7 +23,7 @@ def test_mcp_gateway_importable_true_when_chain_works():
     assert mcp_gateway_importable() is True
 
 
-def test_completion_skips_mcp_gateway_when_import_chain_dies():
+def test_completion_skips_mcp_gateway_when_import_chain_dies():  # test-quality-ok: routing test; the client mock is the observable that the gateway was skipped
     client = OpenAI(api_key="fake-api-key")
 
     with (
