@@ -149,3 +149,36 @@ def test_v2_user_info_route_access():
         valid_token=valid_token,
         request_data={},
     )
+
+
+def test_health_license_route_in_info_routes():
+    """Non-admins hit /health/license from the dashboard sidebar; it must be an info route.
+
+    Regression for https://github.com/BerriAI/litellm/issues/46198 — without this,
+    internal_user_viewer page loads raise admin-only denials that flood ERROR logs.
+    """
+    assert "/health/license" in LiteLLMRoutes.info_routes.value
+    assert RouteChecks.is_info_route("/health/license") is True
+
+
+def test_internal_user_viewer_allowed_health_license():
+    """internal_user_viewer must be able to call GET /health/license without admin denial."""
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(user_id="viewer_user")
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    # Must not raise — license metadata is non-sensitive and the dashboard polls it.
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        route="/health/license",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
