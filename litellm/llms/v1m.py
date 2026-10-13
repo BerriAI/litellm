@@ -1,6 +1,6 @@
-from typing import Any, Dict, List, Optional, Union
 import json
 import time
+from typing import Any
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -16,8 +16,8 @@ class V1MConfig(OpenAIGPTConfig):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
         timeout: float = 15.0,
     ) -> None:
         self.api_key = api_key
@@ -29,11 +29,11 @@ class V1MConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        state: Optional[Union[str, Dict[str, Any]]] = None,
-        questions: Optional[Dict[str, Any]] = None,
+        messages: list[dict[str, Any]] | None = None,
+        state: str | dict[str, Any] | None = None,
+        questions: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         clean_model = model.replace("v1m/", "") if model.startswith("v1m/") else model
 
         if state is not None and questions is not None:
@@ -70,7 +70,7 @@ class V1MConfig(OpenAIGPTConfig):
             },
         }
 
-    def transform_response(self, raw_resp: Dict[str, Any], model: str) -> Dict[str, Any]:
+    def transform_response(self, raw_resp: dict[str, Any], model: str) -> dict[str, Any]:
         evals = raw_resp.get("evaluations", raw_resp)
         return {
             "id": f"v1m-{int(time.time())}",
