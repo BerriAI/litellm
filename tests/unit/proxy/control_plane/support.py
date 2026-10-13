@@ -1,7 +1,8 @@
 """Shared rig for control plane route tests: a routed fake transport and a licensed app over two dataplanes."""
 
 from collections import defaultdict
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Final
@@ -34,8 +35,10 @@ class RoutedTransport:  # mutable-ok: records calls for assertions
 
     routes: Mapping[str, Iterator[httpx.Response | Exception]]
     calls: list[tuple[str, tuple[tuple[str, str], ...] | None, dict[str, str] | None]] = field(default_factory=list)
+    writes: list[tuple[str, str, dict[str, object] | None]] = field(default_factory=list)
 
-    async def request(
+    @asynccontextmanager
+    async def stream(
         self,
         method: str,
         url: str,
@@ -44,9 +47,13 @@ class RoutedTransport:  # mutable-ok: records calls for assertions
         json: dict[str, object] | None = None,
         headers: dict[str, str] | None = None,
         timeout: float,
-    ) -> httpx.Response:
-        assert method == "GET", "fleet reads never write"
+    ) -> AsyncIterator[httpx.Response]:
         self.calls.append((url, None if params is None else tuple(params), headers))
+        if method not in {"GET", "HEAD"}:
+            self.writes.append((method, url, json))
+        yield self._answer(url)
+
+    def _answer(self, url: str) -> httpx.Response:
         outcome: Final = next(self.routes[url], None)
         if outcome is None:
             raise AssertionError(f"no scripted outcome left for {url}")
@@ -76,14 +83,10 @@ class Minter:
 
 
 def rig(
-    routes: Mapping[str, list[httpx.Response | Exception]], usage_max_window_days: int = 366
+    routes: Mapping[str, list[httpx.Response | Exception]], **overrides: object
 ) -> tuple[TestClient, RoutedTransport, Minter]:
     settings: Final = ControlPlaneSettings.model_validate(
-        {
-            "LITELLM_MASTER_KEY": MASTER_KEY,
-            "dataplanes": DATAPLANES,
-            "usage_max_window_days": usage_max_window_days,
-        }
+        {"LITELLM_MASTER_KEY": MASTER_KEY, "dataplanes": DATAPLANES, **overrides}
     )
     queues: defaultdict[str, Iterator[httpx.Response | Exception]] = defaultdict(lambda: iter(()))
     queues.update({url: iter(outcomes) for url, outcomes in routes.items()})

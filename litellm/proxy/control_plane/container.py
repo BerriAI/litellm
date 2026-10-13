@@ -2,6 +2,7 @@
 
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
@@ -13,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # params is an untyped dict upstream
 )
+from litellm.proxy.control_plane.audit.log import AuditLog, build_audit_log
 from litellm.proxy.control_plane.auth.jwt import JwksKeyLookup, SessionTokenCodec, TokenVerifier, build_token_verifier
 from litellm.proxy.control_plane.auth.login import LoginService, LoginThrottle
 from litellm.proxy.control_plane.auth.rbac import (
@@ -41,6 +43,7 @@ class Container:
     registry: DataplaneRegistry
     dataplane_client: DataplaneClient
     fanout: Fanout
+    audit_log: AuditLog
 
 
 class InvalidRolePolicy(ValueError):
@@ -85,7 +88,7 @@ class HandlerTransport:
 
     handler: AsyncHTTPHandler
 
-    async def request(
+    def stream(
         self,
         method: str,
         url: str,
@@ -94,9 +97,9 @@ class HandlerTransport:
         json: dict[str, object] | None = None,  # mutable-ok: httpx takes dict
         headers: dict[str, str] | None = None,  # mutable-ok: httpx takes dict
         timeout: float,
-    ) -> httpx.Response:
+    ) -> AbstractAsyncContextManager[httpx.Response]:
         httpx_params: Final = tuple(params) if params is not None else None
-        return await self.handler.client.request(
+        return self.handler.client.stream(
             method, url, params=httpx_params, json=json, headers=headers, timeout=timeout, follow_redirects=False
         )
 
@@ -146,4 +149,5 @@ def build_container(
             retry=RetryPolicy(attempts=settings.dataplane_retry_attempts),
         ),
         fanout=Fanout(concurrency=settings.fanout_concurrency),
+        audit_log=build_audit_log(settings.audit_capacity),
     )

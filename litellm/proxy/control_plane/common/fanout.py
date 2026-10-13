@@ -7,7 +7,12 @@ from typing import Final, Generic, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.proxy.control_plane.dataplanes.client import CallResult, DataplaneReply, DataplaneUnreachable
+from litellm.proxy.control_plane.dataplanes.client import (
+    CallResult,
+    DataplaneReply,
+    DataplaneResponseTooLarge,
+    DataplaneUnreachable,
+)
 from litellm.proxy.control_plane.dataplanes.credentials import CredentialUnavailable
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane
 
@@ -82,6 +87,8 @@ def parse_reply(result: CallResult, shape: TypeAdapter[M]) -> M | Failure:
             return Failure(f"HTTP {status} with the {credential} credential")
         case DataplaneUnreachable(detail=detail, attempts=attempts):
             return Failure(f"unreachable after {attempts} attempt(s): {detail}")
+        case DataplaneResponseTooLarge(limit_bytes=limit_bytes):
+            return Failure(f"response exceeded {limit_bytes} bytes")
         case CredentialUnavailable(reason=reason):
             return Failure(f"no usable credential: {reason}")
 
