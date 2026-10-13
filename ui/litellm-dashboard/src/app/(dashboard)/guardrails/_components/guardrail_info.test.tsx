@@ -427,6 +427,18 @@ describe("Guardrail Info when the guardrail cannot be loaded", () => {
       expect(networking.deleteGuardrailCall).toHaveBeenCalledWith("tok", "123");
     });
 
+    it("hides Delete while the settings are being edited", async () => {
+      mockDbGuardrail();
+      render(<GuardrailInfoView guardrailId="123" onClose={() => {}} onDeleted={() => {}} accessToken="tok" isAdmin />);
+
+      fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Edit Settings" }));
+
+      expect(await screen.findByRole("button", { name: "Save Changes" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
+    });
+
     it("does not call onDeleted when the delete request fails", async () => {
       mockDbGuardrail();
       vi.mocked(networking.deleteGuardrailCall).mockRejectedValue(new Error("boom"));
