@@ -13,7 +13,6 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 
 
 # together_ai/moonshotai/Kimi-K3
@@ -1935,5 +1934,3 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         plain=TOGETHER_AI_ZAI_ORG_GLM_5_3_INPUT_TEXT, streamed=TOGETHER_AI_ZAI_ORG_GLM_5_3_STREAM_FULL_USAGE
     ),
 )
-
-BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = ()

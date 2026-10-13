@@ -17,7 +17,6 @@ from integration.cost_calculation.cost_tracking_case import (
     WavUpload,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 
 
 # nova-next
@@ -1166,5 +1165,3 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=TEXT_COMPLETIONS_OPENAI_BASIC, streamed=TEXT_COMPLETIONS_OPENAI_STREAM_USAGE),
 )
-
-BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = ()
