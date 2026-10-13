@@ -42,3 +42,12 @@ class DataplaneIdentityResponse(LiteLLMBaseModel):
     user_id: str | None
     user_email: str | None
     user_role: str | None
+
+
+class UnreachableDataplane(LiteLLMBaseModel):
+    """A dataplane that did not answer a fleet-wide call, named so the caller knows what the numbers miss."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    reason: str

@@ -2,15 +2,16 @@
 
 from typing import Annotated, Final
 
-from fastapi import Depends
+from fastapi import Depends, Query
 from fastapi.security import HTTPAuthorizationCredentials
 
 from litellm.proxy.control_plane.auth.dependencies import bearer_scheme, get_principal
 from litellm.proxy.control_plane.auth.rbac import Principal
 from litellm.proxy.control_plane.common.exceptions import ControlPlaneException, forbidden, not_found, unauthorized
+from litellm.proxy.control_plane.common.fanout import Fanout
 from litellm.proxy.control_plane.dataplanes.client import DataplaneClient
 from litellm.proxy.control_plane.dataplanes.credentials import Caller
-from litellm.proxy.control_plane.dataplanes.registry import Dataplane, DataplaneRegistry
+from litellm.proxy.control_plane.dataplanes.registry import Dataplane, DataplaneRegistry, visible_to
 
 
 def get_registry() -> DataplaneRegistry:
@@ -19,6 +20,10 @@ def get_registry() -> DataplaneRegistry:
 
 def get_dataplane_client() -> DataplaneClient:
     raise RuntimeError("get_dataplane_client is not bound, build the app with create_app")
+
+
+def get_fanout() -> Fanout:
+    raise RuntimeError("get_fanout is not bound, build the app with create_app")
 
 
 async def get_caller(
@@ -41,3 +46,13 @@ async def dataplane_access(
     if not principal.dataplanes.allows(dataplane_id):
         raise ControlPlaneException(forbidden(f"Not bound to dataplane {dataplane_id!r}."))
     return dataplane
+
+
+async def selected_dataplanes(
+    principal: Annotated[Principal, Depends(get_principal)],
+    registry: Annotated[DataplaneRegistry, Depends(get_registry)],
+    dataplane: Annotated[str | None, Query(description="Restrict a fleet-wide call to one dataplane id.")] = None,
+) -> tuple[Dataplane, ...]:
+    if dataplane is None:
+        return visible_to(registry, principal)
+    return (await dataplane_access(dataplane, principal, registry),)
