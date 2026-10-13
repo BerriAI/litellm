@@ -14,6 +14,20 @@ from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.utils import get_model_info_helper
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
+# Backends whose chat completions route is dead for responses-mode models (ChatGPT answers 403), so a
+# deployment-level mode must not pull them off the Responses API.
+RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
+_ROUTABLE_MODES: Final = frozenset({"chat", "responses"})
+
+
+def deployment_routing_mode(deployment_model_info: Mapping[str, object] | None, custom_llm_provider: str) -> str | None:
+    """The mode a router deployment's own ``model_info`` pins its chat requests to, or ``None`` to defer
+    to the shared cost-map row. Lets two deployments of one backend model route differently without
+    either rewriting the shared row the SDK and the other deployments read."""
+    if deployment_model_info is None or custom_llm_provider in RESPONSES_ONLY_PROVIDERS:
+        return None
+    mode: Final = deployment_model_info.get("mode")
+    return mode if isinstance(mode, str) and mode in _ROUTABLE_MODES else None
 _OPENAI_API_HOST: Final = "api.openai.com"
 
 
@@ -44,8 +58,13 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
-) -> tuple[dict, str]:
+    deployment_model_info: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object], str]:
     model_info: dict[str, object] = {}
+    pinned_mode: Final = deployment_routing_mode(deployment_model_info, custom_llm_provider)
+    if pinned_mode is not None:
+        model_info["mode"] = pinned_mode
+        return model_info, model.replace("responses/", "") if pinned_mode == "responses" else model
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
     # Returns early with minimal model_info; callers only inspect the "mode" key.
@@ -56,7 +75,7 @@ def responses_api_bridge_check(
 
     try:
         model_info = cast(
-            dict,
+            dict[str, object],
             get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
         )
         if model_info.get("mode") is None and model.startswith("responses/"):

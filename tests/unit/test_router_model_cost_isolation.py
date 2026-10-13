@@ -2100,6 +2100,7 @@ def test_repointing_a_deployment_drops_its_previous_backend_key(monkeypatch):
         ("openai/gpt-4o", None, ("openai/gpt-4o",)),
         ("responses/gpt-4o", "openai", ("openai/responses/gpt-4o", "openai/gpt-4o")),
         ("responses/gpt-4o", None, ("responses/gpt-4o", "gpt-4o")),
+        ("bedrock_mantle/openai.gpt-5.6-sol", "bedrock_mantle", ("bedrock_mantle/openai.gpt-5.6-sol",)),
     ],
 )
 def test_backend_cost_map_keys_matches_what_registration_writes(model, custom_llm_provider, expected):
@@ -2107,11 +2108,59 @@ def test_backend_cost_map_keys_matches_what_registration_writes(model, custom_ll
     The withdrawal path drops exactly the keys the registration wrote, so the two
     have to agree on the provider prefix and on the responses/ alias. The first
     key is also the one the registration uses as the shared backend key, so its
-    position is load-bearing rather than incidental.
+    position is load-bearing rather than incidental. A model that already carries
+    its provider prefix is not prefixed twice, or the downgrade guard reads a key
+    that does not exist and never fires.
     """
     keys = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
     assert keys == expected
-    assert keys[0] == (model if custom_llm_provider is None else f"{custom_llm_provider}/{model}")
+    assert keys[0] in litellm.model_cost or not keys[0].startswith("bedrock_mantle/"), keys
+
+
+def test_mantle_chat_deployment_does_not_rewrite_the_shared_responses_row():
+    """
+    A Bedrock Mantle deployment that pins ``mode: chat`` routes its own chat
+    requests to Chat Completions, while the shared cost-map row keeps
+    ``mode: responses`` for every other deployment and plain SDK calls.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    backend_model = "bedrock_mantle/openai.gpt-5.6-sol"
+    model_keys = {
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+        "mantle-chat-pinned": copy.deepcopy(litellm.model_cost.get("mantle-chat-pinned")),
+    }
+
+    try:
+        litellm.model_cost[backend_model] = {
+            **(model_keys[backend_model] or {}),
+            "litellm_provider": "bedrock_mantle",
+            "mode": "responses",
+        }
+        _invalidate_model_cost_lowercase_map()
+
+        router = Router(model_list=[])
+        with patch.object(Router, "_add_deployment", lambda self, deployment: deployment):
+            router._create_deployment(
+                deployment_info={},
+                _model_name="mantle-chat",
+                _litellm_params={"model": backend_model, "custom_llm_provider": "bedrock_mantle"},
+                _model_info={"id": "mantle-chat-pinned", "mode": "chat"},
+            )
+
+        assert litellm.model_cost[backend_model]["mode"] == "responses"
+        assert "bedrock_mantle/bedrock_mantle/openai.gpt-5.6-sol" not in litellm.model_cost
+
+        shared_info, _ = responses_api_bridge_check(model=backend_model, custom_llm_provider="bedrock_mantle")
+        assert shared_info["mode"] == "responses"
+        pinned_info, _ = responses_api_bridge_check(
+            model=backend_model,
+            custom_llm_provider="bedrock_mantle",
+            deployment_model_info={"id": "mantle-chat-pinned", "mode": "chat"},
+        )
+        assert pinned_info["mode"] == "chat"
+    finally:
+        _restore_model_cost_entries(model_keys)
 
 
 def test_a_discarded_router_stops_contributing_to_later_reloads(monkeypatch):

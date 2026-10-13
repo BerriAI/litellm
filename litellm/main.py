@@ -5479,6 +5479,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
+            deployment_model_info=model_info if isinstance(model_info, Mapping) else None,
         )
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
@@ -5776,6 +5777,7 @@ def completion(
                 reasoning_effort=reasoning_effort,
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
+                deployment_model_info=model_info if isinstance(model_info, Mapping) else None,
             )
 
         # Use base_model (the true underlying model) for Azure model-type

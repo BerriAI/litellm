@@ -250,6 +250,7 @@ def _deployment(
     *,
     base: str = _OPENAI_BASE,
     api_key: str = _API_KEY,
+    model_info: Mapping[str, JsonValue] | None = _CHAT_INFO,
     **extra: JsonValue,
 ) -> str:
     reasoning: Final[Mapping[str, JsonValue]] = (
@@ -260,7 +261,7 @@ def _deployment(
         custom_llm_provider="bedrock_mantle",
         api_base=wire.url + base,
         api_key=api_key,
-        model_info=_CHAT_INFO,
+        model_info=model_info,
         **reasoning,
         **extra,
     )
@@ -460,6 +461,22 @@ async def test_async_anthropic_sdk_messages_stream_reaches_mantle_as_max_complet
         assert attempt.body["stream"] is True, attempt.body
         _renamed(attempt, 1000)
         _assert_logged(message.id, model, "success")
+
+
+def test_a_chat_mode_deployment_leaves_its_unpinned_sibling_on_the_responses_api(gateway: Gateway) -> None:
+    pinned_marker: Final = uuid.uuid4().hex
+    sibling_marker: Final = uuid.uuid4().hex
+    with wire_server(_mantle) as wire, gateway.scenario() as scenario:
+        pinned: Final = _deployment(scenario, wire, _GPT56)
+        sibling: Final = _deployment(scenario, wire, _GPT56, model_info=None)
+        for model, marker in ((pinned, pinned_marker), (sibling, sibling_marker)):
+            response = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
+            assert response.status_code == 200, response.text
+            assert _answer(marker) in response.text, response.text
+        pinned_attempt, sibling_attempt = _attempts(wire)
+        assert (pinned_attempt.target, _marker_in(pinned_attempt)) == (_CHAT_TARGET, pinned_marker), pinned_attempt
+        assert sibling_attempt.target in _RESPONSES_TARGETS, sibling_attempt
+        assert _marker_in(sibling_attempt) == sibling_marker, sibling_attempt
 
 
 def test_responses_max_output_tokens_is_forwarded_natively_on_both_legs(gateway: Gateway) -> None:
