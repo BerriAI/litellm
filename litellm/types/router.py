@@ -56,6 +56,17 @@ from .utils import (
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
 
 
+class FallbackSkipReason(str, enum.Enum):
+    NOT_AUTHORIZED = "not_authorized"
+    OVER_BUDGET = "over_budget"
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedFallbackTarget:
+    target: str
+    reason: FallbackSkipReason
+
+
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
     api_base: str
 

@@ -38,6 +38,7 @@ from litellm.router_utils.fallback_event_handlers import (
     routed_deployment_id,
     run_async_fallback,
 )
+from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from typing import Dict
@@ -1419,6 +1420,19 @@ class TestHasUnattemptedFallbackTarget:
         assert has_unattempted_fallback_target(None, {}) is False
 
 
+def test_attempted_fallback_targets_deduplicates_skips_in_order_and_keeps_first_reason() -> None:
+    attempted: Final = AttemptedFallbackTargets()
+    attempted.record_skip("a", FallbackSkipReason.NOT_AUTHORIZED)
+    attempted.record_skip("a", FallbackSkipReason.NOT_AUTHORIZED)
+    attempted.record_skip("b", FallbackSkipReason.OVER_BUDGET)
+    attempted.record_skip("a", FallbackSkipReason.OVER_BUDGET)
+
+    assert attempted.skipped == (
+        SkippedFallbackTarget("a", FallbackSkipReason.NOT_AUTHORIZED),
+        SkippedFallbackTarget("b", FallbackSkipReason.OVER_BUDGET),
+    )
+
+
 def test_get_fallback_model_group_matches_provider_prefixed_key():
     """A bare model group routed via a wildcard (e.g. "gpt-4o" through
     "openai/*") must match a fallback keyed on the provider-prefixed name,
@@ -1602,6 +1616,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def setup_and_teardown():
     """
@@ -1621,6 +1636,7 @@ def setup_and_teardown():
     yield
     loop.close()
     asyncio.set_event_loop(None)
+
 
 REFUSAL_RESPONSE: dict[str, Any] = {
     "id": "msg_refusal",
@@ -1647,8 +1663,10 @@ OK_RESPONSE: dict[str, Any] = {
     "usage": {"input_tokens": 25, "output_tokens": 2},
 }
 
+
 def _sse(event: str, data: dict[str, Any]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
 
 REFUSAL_STREAM_FRAMES: tuple[bytes, ...] = (
     _sse("message_start", {"type": "message_start", "message": {**REFUSAL_RESPONSE, "stop_reason": None}}),
@@ -1672,9 +1690,11 @@ OK_STREAM_FRAMES: tuple[bytes, ...] = (
     _sse("message_stop", {"type": "message_stop"}),
 )
 
+
 def _split_frames_mid_data_line(frames: tuple[bytes, ...]) -> tuple[bytes, ...]:
     """Split each frame's data line in half, modeling a transport chunk boundary."""
     return tuple(part for frame in frames for part in (frame[: len(frame) // 2], frame[len(frame) // 2 :]))
+
 
 class _FrameStream(httpx.AsyncByteStream):
     def __init__(self, frames: tuple[bytes, ...]) -> None:
@@ -1686,6 +1706,7 @@ class _FrameStream(httpx.AsyncByteStream):
 
     async def aclose(self) -> None:
         return None
+
 
 class FakeAnthropicUpstream:
     """Intercepts the third-party transport (httpx.AsyncClient.send): refuses on fable
@@ -1724,6 +1745,7 @@ class FakeAnthropicUpstream:
 
         return patch("httpx.AsyncClient.send", new=_send)
 
+
 FABLE_TIER = {
     "model_name": "fable-tier",
     "litellm_params": {"model": "anthropic/claude-fable-5", "api_key": "sk-test"},
@@ -1734,11 +1756,14 @@ OPUS_TARGET = {
     "litellm_params": {"model": "anthropic/claude-opus-5", "api_key": "sk-test"},
 }
 
+
 def _router(content_policy_fallbacks: list | None) -> Router:
     return Router(model_list=[FABLE_TIER, OPUS_TARGET], content_policy_fallbacks=content_policy_fallbacks)
 
+
 async def _collect(stream: AsyncIterator[bytes]) -> bytes:
     return b"".join([chunk async for chunk in stream])
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1755,6 +1780,7 @@ async def test_non_streaming_refusal_with_fallback_row_returns_fallback_response
     assert response["id"] == "msg_ok"
     assert len(fake.calls) == 2
     assert "claude-opus-5" in fake.calls[1]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1780,6 +1806,7 @@ async def test_non_streaming_refusal_passes_through_untouched(content_policy_fal
     assert response.get("stop_details") == upstream_body.get("stop_details")
     assert len(fake.calls) == 1
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_streaming_refusal_with_fallback_row_streams_fallback_frames():
@@ -1795,6 +1822,7 @@ async def test_streaming_refusal_with_fallback_row_streams_fallback_frames():
     assert b'"refusal"' not in body
     assert b"text_delta" in body
     assert len(fake.calls) == 2
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1812,6 +1840,7 @@ async def test_streaming_refusal_split_across_chunks_still_falls_back():
     assert b"text_delta" in body
     assert len(fake.calls) == 2
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_streaming_refusal_without_fallback_row_passes_frames_through():
@@ -1827,6 +1856,7 @@ async def test_streaming_refusal_without_fallback_row_passes_frames_through():
     assert b'"stop_reason": "refusal"' in body
     assert b"stop_details" in body
     assert len(fake.calls) == 1
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1861,6 +1891,7 @@ async def test_streaming_refusal_on_routed_tier_matches_tier_keyed_row_without_i
     assert b"text_delta" in body
     assert len(fake.calls) == 2
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_caller_forged_tier_stamp_cannot_pick_the_streaming_fallback_chain():
@@ -1879,6 +1910,7 @@ async def test_caller_forged_tier_stamp_cannot_pick_the_streaming_fallback_chain
 
     assert b'"stop_reason": "refusal"' in body
     assert len(fake.calls) == 1
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1916,6 +1948,7 @@ async def test_tier_stamp_never_reaches_provider_bound_metadata():
     for body in fake.bodies:
         assert body.get("metadata") == {"user_id": "u1"}
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_record_pre_routing_selection_writes_only_the_internal_bucket():
     """The Anthropic request's own metadata field must never carry the tier stamp."""
@@ -1925,6 +1958,7 @@ def test_record_pre_routing_selection_writes_only_the_internal_bucket():
 
     assert kwargs["litellm_metadata"] == {PRE_ROUTING_SELECTED_MODEL_KEY: "tier-x"}
     assert kwargs["metadata"] == {"user_id": "u1"}
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -1949,6 +1983,7 @@ async def test_generic_only_row_recovers_safeguard_refusal(stream):
     assert len(fake.calls) == 2
     assert "claude-opus-5" in fake.calls[1]
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_configured_content_policy_list_stays_authoritative_over_generic_rows():
@@ -1967,6 +2002,7 @@ async def test_configured_content_policy_list_stays_authoritative_over_generic_r
     assert response["stop_reason"] == "refusal"
     assert len(fake.calls) == 1
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_refusal_fallback_available_arms_on_generic_rows_only_without_content_policy():
     router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"tier-group": ["opus-target"]}])
@@ -1975,6 +2011,7 @@ def test_refusal_fallback_available_arms_on_generic_rows_only_without_content_po
     assert router._refusal_fallback_available("router-group", stamped) is True
     assert router._refusal_fallback_available("router-group", {}) is False
     assert router._refusal_fallback_available("router-group", {"content_policy_fallbacks": [{"other": ["x"]}]}) is False
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_chat_content_filter_gate_unchanged_by_generic_rows():
@@ -1986,6 +2023,7 @@ def test_chat_content_filter_gate_unchanged_by_generic_rows():
     response = ModelResponse(choices=[Choices(finish_reason="content_filter")])
 
     assert router._should_raise_content_policy_error(model="fable-tier", response=response, kwargs={}) is False
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
@@ -2012,6 +2050,7 @@ async def test_disable_fallbacks_returns_the_refusal_instead_of_raising(stream):
         assert body["stop_reason"] == "refusal"
     assert len(fake.calls) == 1
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio
 async def test_disable_fallbacks_beats_a_content_policy_row_too():
@@ -2031,6 +2070,7 @@ async def test_disable_fallbacks_beats_a_content_policy_row_too():
 
     assert response["stop_reason"] == "refusal"
     assert len(fake.calls) == 1
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_refusal_gate_keys_on_pre_routing_tier_stamp():
@@ -2059,12 +2099,14 @@ def test_refusal_gate_keys_on_pre_routing_tier_stamp():
         is False
     )
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_has_content_policy_fallback_default_fallbacks_arm():
     router = Router(model_list=[OPUS_TARGET], fallbacks=[{"*": ["opus-target"]}])
 
     assert router._has_content_policy_fallback("any-group", {}) is True
     assert router._has_content_policy_fallback("any-group", {"content_policy_fallbacks": [{"other": ["x"]}]}) is False
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_get_fallback_model_group_for_lookup_groups_orders_tier_before_requested():
@@ -2078,6 +2120,7 @@ def test_get_fallback_model_group_for_lookup_groups_orders_tier_before_requested
         fallbacks=fallbacks, lookup_groups=("tier9", "smart-router")
     ) == ["backup-b"]
     assert router._get_fallback_model_group_for_lookup_groups(fallbacks=fallbacks, lookup_groups=()) is None
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_refusal_gate_ignores_other_generic_call_types():

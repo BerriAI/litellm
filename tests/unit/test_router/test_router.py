@@ -17803,6 +17803,48 @@ def _router_with_failing_primary(fallback_access_check) -> Router:
     )
 
 
+class _DenyFallbackBudgetCheck:
+    async def __call__(
+        self, *, model: str, request_kwargs: Mapping[str, object], llm_router: Router
+    ) -> bool:
+        return False
+
+
+def _router_with_failing_fallback_chain(
+    fallback_targets: tuple[str, ...],
+    *,
+    fallback_access_check: _AllowlistFallbackAccessCheck | None = None,
+    fallback_budget_check: _DenyFallbackBudgetCheck | None = None,
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/primary",
+                    "api_key": "k",
+                    "mock_response": Exception("primary is down"),
+                },
+            },
+            *(
+                {
+                    "model_name": target,
+                    "litellm_params": {
+                        "model": f"openai/{target}",
+                        "api_key": "k",
+                        "mock_response": Exception(f"{target} is down"),
+                    },
+                }
+                for target in fallback_targets
+            ),
+        ],
+        fallbacks=[{"primary": list(fallback_targets)}],
+        num_retries=0,
+        fallback_access_check=fallback_access_check,
+        fallback_budget_check=fallback_budget_check,
+    )
+
+
 @pytest.mark.asyncio
 async def test_fallback_access_check_blocks_config_fallback_the_caller_cannot_use():
     access_check = _AllowlistFallbackAccessCheck(allowed_models=frozenset())
@@ -17812,6 +17854,59 @@ async def test_fallback_access_check_blocks_config_fallback_the_caller_cannot_us
         await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert access_check.checked_models == ["secret-fallback"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_reports_denied_fallback_as_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    access_check: Final = _AllowlistFallbackAccessCheck(allowed_models=frozenset())
+    router: Final = _router_with_failing_primary(access_check)
+    primary_only_router: Final = Router(model_list=router.model_list, fallbacks=[], num_retries=0)
+
+    with pytest.raises(litellm.InternalServerError) as primary_exception:
+        await primary_only_router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    with pytest.raises(litellm.InternalServerError) as fallback_exception:
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    message: Final = str(fallback_exception.value)
+    assert type(fallback_exception.value) is type(primary_exception.value)
+    assert fallback_exception.value.status_code == primary_exception.value.status_code
+    assert message.count("primary is down") == 1
+    assert "Fallback to secret-fallback was skipped because the caller is not authorized to call it." in message
+    assert "also failed" not in message
+
+
+@pytest.mark.asyncio
+async def test_fallback_access_check_separates_denied_and_failed_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    access_check: Final = _AllowlistFallbackAccessCheck(allowed_models=frozenset({"allowed-fallback"}))
+    router: Final = _router_with_failing_fallback_chain(
+        ("secret-fallback", "allowed-fallback"),
+        fallback_access_check=access_check,
+    )
+
+    with pytest.raises(litellm.InternalServerError) as exception:
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    message: Final = str(exception.value)
+    assert "Fallback to allowed-fallback also failed:" in message
+    assert "Fallback to secret-fallback was skipped because the caller is not authorized" in message
+
+
+@pytest.mark.asyncio
+async def test_fallback_budget_check_reports_skipped_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
+    router: Final = _router_with_failing_fallback_chain(
+        ("paid-fallback",),
+        fallback_budget_check=_DenyFallbackBudgetCheck(),
+    )
+
+    with pytest.raises(litellm.InternalServerError) as exception:
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    message: Final = str(exception.value)
+    assert "Fallback to paid-fallback was skipped because the caller is over budget for it." in message
+    assert "also failed" not in message
 
 
 @pytest.mark.asyncio
