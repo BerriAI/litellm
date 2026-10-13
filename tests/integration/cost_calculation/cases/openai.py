@@ -10544,7 +10544,91 @@ GPT_6_1_SOL_MESSAGES_BRIDGED_JSON: Final = GPT_6_1_SOL_RESPONSES_NATIVE_JSON.mod
     }
 )
 
+GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-sol-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6-sol"),
+    }
+)
+
+GPT_6_SOL_CHAT_BRIDGED_JSON: Final = GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6-sol-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+
+GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_LUNA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-luna-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6-luna"),
+    }
+)
+
+GPT_6_LUNA_CHAT_BRIDGED_JSON: Final = GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6-luna-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+
+GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_ASTRA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-astra-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6-astra"),
+    }
+)
+
+GPT_6_ASTRA_CHAT_BRIDGED_JSON: Final = GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6-astra-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+
+GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_1_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-sol-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6.1-sol"),
+    }
+)
+
+GPT_6_1_SOL_CHAT_BRIDGED_JSON: Final = GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-sol-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_SOL_CHAT_BRIDGED_JSON,
+    GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_LUNA_CHAT_BRIDGED_JSON,
+    GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_ASTRA_CHAT_BRIDGED_JSON,
+    GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_1_SOL_CHAT_BRIDGED_JSON,
     GPT_5_3_CODEX_INPUT_TEXT,
     GPT_5_3_CODEX_CACHE_READ,
     GPT_5_3_CODEX_REASONING,
@@ -10753,4 +10837,8 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_JSON, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_SOL_CHAT_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_LUNA_CHAT_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_ASTRA_CHAT_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_1_SOL_CHAT_BRIDGED_JSON),
 )
