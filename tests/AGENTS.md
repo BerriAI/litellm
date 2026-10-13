@@ -32,6 +32,11 @@ behind an `if` (a poll that ends in `pytest.fail` is fine), `except Exception` a
 What the assertion depends on goes in the test. Everything else in conftest. A rate in a fixture three
 directories up makes a failed assertion unreadable. Extend the file that already covers the behaviour
 
+A module `make bootstrap` leaves out, meaning the `ci` group and the extras, is reached behind
+`pytest.importorskip("<module>", reason="<what needs it>")`. A bootstrapped worktree then skips the test
+instead of reporting a ModuleNotFoundError that reads like a real red. `make install-test-deps` installs
+every group and extra
+
 ## Writing it so a human can read it
 
 Name says what broke: `test_send_batched_with_valid_data` says nothing. Build, one call, assert, on one
