@@ -142,6 +142,7 @@ class MarketplacePluginEntry(LiteLLMBaseModel):
     homepage: str | None = None
     keywords: list[str] | None = None
     category: str | None = None
+    installationPreference: InstallationPreference | None = None
 
 
 class MarketplaceResponse(LiteLLMBaseModel):

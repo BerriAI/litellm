@@ -27,6 +27,7 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
 )
 from litellm.proxy.proxy_server import LitellmUserRoles
 from litellm.types.proxy.claude_code_endpoints import (
+    MarketplaceResponse,
     RegisterPluginRequest,
     UpdatePluginRequest,
 )
@@ -818,3 +819,40 @@ async def test_register_plugin_git_subdir():
     assert response.plugin.source["url"] == "https://github.com/test-org/monorepo.git"
     assert response.plugin.source["path"] == "plugins/my-plugin"
     assert response.plugin.enabled is True
+
+
+def test_marketplace_response_round_trips_installation_preference():
+    catalog: Final = {
+        "name": "litellm",
+        "owner": {"name": "LiteLLM", "email": "support@litellm.ai"},
+        "plugins": [
+            {
+                "name": "auto",
+                "source": {"source": "url", "url": "https://example.com/auto.tgz"},
+                "installationPreference": "auto_install",
+            },
+            {"name": "manual", "source": {"source": "url", "url": "https://example.com/manual.tgz"}},
+        ],
+    }
+
+    round_tripped: Final = MarketplaceResponse.model_validate(catalog).model_dump(exclude_none=True)
+
+    assert round_tripped["plugins"][0]["installationPreference"] == "auto_install"
+    assert "installationPreference" not in round_tripped["plugins"][1]
+
+
+def test_marketplace_response_rejects_unknown_installation_preference():
+    catalog: Final = {
+        "name": "litellm",
+        "owner": {"name": "LiteLLM", "email": "support@litellm.ai"},
+        "plugins": [
+            {
+                "name": "auto",
+                "source": {"source": "url", "url": "https://example.com/auto.tgz"},
+                "installationPreference": "sometimes",
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        MarketplaceResponse.model_validate(catalog)
