@@ -3,6 +3,7 @@ import sys
 import traceback
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Final, Literal
 from unittest import mock
 
@@ -3296,3 +3297,50 @@ def test_get_litellm_model_info(data):
     ):
         get_litellm_model_info(model=model)
         get_info_mock.assert_called_once_with(data["expected"])
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cache_params", "expected_type", "expected_host", "expected_port"),
+    (
+        ({"mode": "default_off"}, "redis", "127.0.0.1", 6384),
+        ({"mode": "default_off", "host": "127.0.0.2", "port": 6385}, "redis", "127.0.0.2", 6385),
+        ({"mode": "default_off", "url": "redis://127.0.0.3:6386/3"}, "redis", "127.0.0.3", 6386),
+        ({"mode": "default_off", "type": "redis", "host": "127.0.0.2", "port": 6385}, "redis", "127.0.0.2", 6385),
+        ({"mode": "default_off", "type": "local"}, "local", None, None),
+    ),
+)
+async def test_cache_options_preserve_resolved_backend_and_explicit_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache_params: dict[str, str | int],
+    expected_type: Literal["redis", "local"],
+    expected_host: str | None,
+    expected_port: int | None,
+) -> None:
+    from pytest_socket import socket_allow_hosts
+
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    socket_allow_hosts([], allow_unix_socket=True)
+    monkeypatch.setenv("REDIS_HOST", "127.0.0.1")
+    monkeypatch.setenv("REDIS_PORT", "6384")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    config_path: Final = tmp_path / "cache.yaml"
+    config_path.write_text(
+        json.dumps({"model_list": [], "litellm_settings": {"cache": True, "cache_params": cache_params}})
+    )
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+
+    cache: Final = litellm.cache
+    assert cache is not None
+    assert cache.type == expected_type
+    assert cache.mode == cache_params["mode"]
+    if expected_type == "redis":
+        assert isinstance(cache.cache, RedisCache)
+        connection: Final = cache.cache.redis_client.connection_pool.connection_kwargs
+        assert (connection["host"], connection["port"]) == (expected_host, expected_port)
