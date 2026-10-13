@@ -5995,7 +5995,7 @@ def completion(
             response = _complete_vercel_ai_gateway(_dispatch_ctx)
         elif custom_llm_provider == "palm":
             raise ValueError(
-                "Palm was decommisioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
+                "Palm was decommissioned on October 2024. Please use the `gemini/` route for Gemini Google AI Studio Models. Announcement: https://ai.google.dev/palm_docs/palm?hl=en"
             )
         elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
             response = _complete_vertex_ai_beta(_dispatch_ctx)
