@@ -528,10 +528,9 @@ class ChunkProcessor:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
-                tool_calls: Final = _normalize_tool_calls(delta.get("tool_calls"))
                 choice_index = choice.get("index", 0)
 
-                for tool_call in tool_calls:
+                for tool_call in _normalize_tool_calls(delta.get("tool_calls")):
                     # Handle both dict and object formats
                     if not tool_call:
                         continue
