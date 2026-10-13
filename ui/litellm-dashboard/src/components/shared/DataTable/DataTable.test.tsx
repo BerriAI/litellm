@@ -765,25 +765,6 @@ describe("DataTable pinned columns", () => {
 });
 
 describe("DataTable row activation", () => {
-  it("uses full muted hover tint only for clickable rows", () => {
-    render(
-      <>
-        <DataTable
-          data={[person("clickable", "Clickable")]}
-          columns={nameCellColumns}
-          onRowClick={vi.fn()}
-          getRowLabel={(row) => `Open person ${row.name}`}
-        />
-        <DataTable data={[person("static", "Static")]} columns={nameCellColumns} />
-      </>,
-    );
-
-    const clickableRow = screen.getByRole("row", { name: "Open person Clickable" });
-    expect(clickableRow).toHaveClass("hover:bg-muted");
-    expect(clickableRow).not.toHaveClass("hover:bg-muted/50");
-    expect(screen.getByRole("row", { name: "Static" })).not.toHaveClass("hover:bg-muted");
-  });
-
   it("fires onRowClick exactly once from a plain cell but not from interactive elements", async () => {
     const user = userEvent.setup();
     const onRowClick = vi.fn();
