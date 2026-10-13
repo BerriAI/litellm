@@ -343,6 +343,22 @@ def test_in_memory_cache_refresh_ttl_moves_the_eviction_deadline_without_adding_
     assert cache.get_cache("third") is None
 
 
+@pytest.mark.timeout(10)
+def test_in_memory_cache_nan_ttl_stores_nothing_and_leaves_the_next_write_working() -> None:
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=2, clock=clock)
+    cache.set_cache("live", "v", ttl=60)
+    cache.set_cache("nan", "v", ttl="nan")
+    assert cache.refresh_ttl("live", float("nan")) is False
+    cache.set_cache("next", "v", ttl=60)
+    cache.set_cache("live", "v2", ttl=60)
+    assert cache.get_cache("nan") is None
+    assert cache.get_cache("next") == "v"
+    assert cache.get_cache("live") == "v2"
+    clock.return_value = 60.001
+    assert cache.get_cache("live") is None
+
+
 def test_in_memory_cache_refresh_ttl_never_evicts_a_neighbour_from_a_full_cache() -> None:
     clock: Final = MagicMock(return_value=0.0)
     cache: Final = InMemoryCache(max_size_in_memory=2, clock=clock)

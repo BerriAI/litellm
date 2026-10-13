@@ -10,6 +10,7 @@ Has 4 methods:
 
 import heapq
 import json
+import math
 import sys
 import threading
 import time
@@ -176,14 +177,14 @@ class InMemoryCache(BaseCache):
         if not self.check_value_size(value):
             return
 
+        if self.allow_ttl_override(key):
+            ttl: Final = float(kwargs["ttl"]) if "ttl" in kwargs and kwargs["ttl"] is not None else self.default_ttl
+            expiry: Final = self._clock() + ttl
+            if math.isnan(expiry):
+                return
+            self.ttl_dict[key] = expiry
+            heapq.heappush(self.expiration_heap, (expiry, key))
         self.cache_dict[key] = value
-        if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
-            if "ttl" in kwargs and kwargs["ttl"] is not None:
-                self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
-                heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
-            else:
-                self.ttl_dict[key] = self._clock() + self.default_ttl
-                heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -191,9 +192,10 @@ class InMemoryCache(BaseCache):
     def refresh_ttl(self, key: str, ttl: float) -> bool:
         now: Final = self._clock()
         self._prune_heap_roots(now)
-        if key not in self.cache_dict:
+        expiry: Final = now + float(ttl)
+        if key not in self.cache_dict or math.isnan(expiry):
             return False
-        self.ttl_dict[key] = now + float(ttl)
+        self.ttl_dict[key] = expiry
         return True
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
