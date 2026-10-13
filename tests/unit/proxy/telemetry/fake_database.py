@@ -13,6 +13,7 @@ class SettingsDatabase:
     fail_reads: bool = False
     instance_id: str = "persisted-install"
     hash_secret: str = "persisted-secret"
+    inserted: tuple[str, ...] = ()
 
     async def query_raw(self, query: LiteralString, *args: object) -> object:
         if self.fail_reads:
@@ -23,6 +24,7 @@ class SettingsDatabase:
         return () if stored is None else ({"param_value": json.loads(stored)},)
 
     async def execute_raw(self, query: LiteralString, *args: object) -> int:
+        self.inserted = (*self.inserted, str(args[0]) if args else "")
         if args and args[0] == "telemetry_settings":
             self.stored_groups = str(args[1])
         return 1

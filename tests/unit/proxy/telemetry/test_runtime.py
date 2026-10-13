@@ -110,6 +110,32 @@ async def test_stored_groups_are_picked_up_at_the_next_window_without_a_restart(
 
 
 @pytest.mark.asyncio
+async def test_a_proxy_that_never_opts_in_registers_no_logger_and_writes_nothing() -> None:
+    db: Final = SettingsDatabase()
+    registered: Final[list[TelemetryAttemptLogger]] = []  # mutable-ok: captures the register callback
+    runtime: Final = TelemetryRuntime()
+    await runtime.start(
+        litellm_version="1.0.0",
+        settings=TelemetrySettings(),
+        db=lambda: db,
+        register=registered.append,
+        http_client=_offline,
+    )
+    await runtime.refresh()
+    assert (runtime.sink, registered, db.inserted) == (None, [], ())
+
+    for stored in ('{"groups": ["heartbeat"], "destination": "local_table"}', '{"groups": []}'):
+        db.stored_groups = stored
+        await runtime.refresh()
+    db.stored_groups = '{"groups": ["heartbeat"], "destination": "local_table"}'
+    await runtime.refresh()
+    assert runtime.sink is not None
+    assert len(registered) == 1
+    assert db.inserted.count("telemetry_deployment_hash_secret") == 1
+    await runtime.stop()
+
+
+@pytest.mark.asyncio
 async def test_invalid_stored_groups_are_ignored_and_telemetry_stays_off() -> None:
     db: Final = SettingsDatabase(stored_groups='{"groups": ["token_info"]}')
     runtime: Final = await _started(TelemetrySettings(), db)

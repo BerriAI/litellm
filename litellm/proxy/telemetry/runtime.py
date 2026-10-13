@@ -115,6 +115,7 @@ class TelemetryRuntime:
         self._exporters: Mapping[TelemetryDestination, _RememberingExporter] = MappingProxyType({})
         self._applied: tuple[TelemetryConsent, TelemetryDestination | None] | None = None
         self._instance: InstanceInfo | None = None
+        self._attach_logger: Callable[[], Awaitable[None]] | None = None
         self._flush_task: asyncio.Task[None] | None = None
         self._flushing: asyncio.Future[None] | None = None
         self._pending: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: strong refs keep finalizers alive
@@ -152,15 +153,28 @@ class TelemetryRuntime:
         self.store = store
         endpoint: Final = str(settings.endpoint) if settings.endpoint is not None else None
         self._exporters = MappingProxyType(dict(_available_exporters(endpoint, store, http_client)))
-        register(
-            TelemetryAttemptLogger(
-                lambda: self.sink,
-                deployment_hasher(await deployment_hash_secret(store, hash_secret)),
-                blocks_enabled=self._counts_blocks,
+
+        async def attach_logger() -> None:
+            register(
+                TelemetryAttemptLogger(
+                    lambda: self.sink,
+                    deployment_hasher(await deployment_hash_secret(store, hash_secret)),
+                    blocks_enabled=self._counts_blocks,
+                )
             )
-        )
+
+        self._attach_logger = attach_logger
         await self.refresh()
         self._flush_task = asyncio.create_task(self._flush_every(flush_interval_s))
+
+    async def _attach_logger_once(self) -> None:
+        """Registers the attempt logger and creates its hash secret the first time a sink is built, so a proxy that never
+        opts in carries no callback and writes nothing. It stays registered after groups are turned off, returning
+        early, since removing it could skip in-flight calls"""
+        attach: Final = self._attach_logger
+        self._attach_logger = None
+        if attach is not None:
+            await attach()
 
     def _counts_blocks(self) -> bool:
         sink: Final = self.sink
@@ -208,6 +222,7 @@ class TelemetryRuntime:
             )
             if sink is not None:
                 sink.set_instance(await self._instance_info())
+                await self._attach_logger_once()
             self.sink, self.destination, self._applied = sink, destination, (consent, destination)
             _log_applied(consent, destination, recording=sink is not None)
         except store_read_errors() as e:
