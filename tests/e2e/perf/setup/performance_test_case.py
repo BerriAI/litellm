@@ -22,6 +22,10 @@ Metric = Literal[
     "header_added_s",
     "ttft_added_s",
     "non_200",
+    "db_commits_per_request",
+    "db_rows_written_per_request",
+    "db_rows_read_per_request",
+    "redis_commands_per_request",
     "rss_growth_mb",
     "wall_seconds",
 ]
