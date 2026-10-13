@@ -34,7 +34,6 @@ from httpx import HTTPStatusError, Response
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -302,16 +301,12 @@ class NewRelicMetricsLogger(CustomBatchLogger):
         await self._final_drain()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        if is_batch_line_item_event(kwargs):
-            return
         try:
             await self._log_async_event(standard_logging_object=kwargs.get("standard_logging_object", None))
         except Exception as e:  # noqa: BLE001  # logging must never break the request path
             verbose_logger.exception("New Relic Metrics Layer Error - %s\n%s", e, traceback.format_exc())
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        if is_batch_line_item_event(kwargs):
-            return
         try:
             await self._log_async_event(standard_logging_object=kwargs.get("standard_logging_object", None))
         except Exception as e:  # noqa: BLE001  # logging must never break the request path

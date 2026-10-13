@@ -33,7 +33,6 @@ from litellm.integrations.otel.model.semconv import (
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import to_seconds
-from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -222,8 +221,6 @@ class GenAIMetricRecorder:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        if is_batch_line_item_event(kwargs):
-            return
         common_attrs: Final = self._filter_attributes(self._bounded_attributes(kwargs))
         duration_s: Final = (end_time - start_time).total_seconds()
         usage_is_replayed: Final = is_unbilled_non_inference_call_from_params(
@@ -269,8 +266,6 @@ class GenAIMetricRecorder:
         ``gen_ai.token.type``, so an operator's include/exclude list cannot strip
         the discriminator and silently merge failures back into the success series.
         """
-        if is_batch_line_item_event(kwargs):
-            return
         attributes: Final = {
             **self._filter_attributes(self._bounded_attributes(kwargs)),
             Error.TYPE: resolve_error_type(kwargs),

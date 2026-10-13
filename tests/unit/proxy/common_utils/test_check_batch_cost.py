@@ -1446,10 +1446,10 @@ class TestCheckBatchCost:
                 Logging, "async_success_handler", new_callable=AsyncMock
             ) as success_handler,
         ):
-            output_route = provider.get("https://api.openai.com/v1/files/file-output-123/content").mock(
+            provider.get("https://api.openai.com/v1/files/file-output-123/content").mock(
                 return_value=httpx.Response(200, content=f"{succeeded_line}\n{rejected_line}\n".encode())
             )
-            error_route = provider.get("https://api.openai.com/v1/files/file-error-456/content").mock(
+            provider.get("https://api.openai.com/v1/files/file-error-456/content").mock(
                 return_value=httpx.Response(200, content=f"{error_file_lines}\n\n".encode())
             )
             await check_batch_cost_instance.check_batch_cost()
@@ -1458,10 +1458,6 @@ class TestCheckBatchCost:
         assert len(spend_log_calls) == 1
         handler_kwargs = spend_log_calls[0]
         assert handler_kwargs["batch_successful_requests"] == 1
-        assert output_route.call_count == 1
-        assert error_route.call_count == 1
-        assert handler_kwargs["batch_output_file_content"] == f"{succeeded_line}\n{rejected_line}\n".encode()
-        assert handler_kwargs["batch_error_file_content"] == f"{error_file_lines}\n\n".encode()
         assert handler_kwargs["batch_failed_requests"] == 3, (
             "2 error-file lines must add to the output file's 1 rejected request"
         )
@@ -3225,3 +3221,307 @@ class TestMultiPodBatchCostClaim:
         assert self._claim_calls(prisma) == []
         assert journal == ["fetch", "bill", "finalize"]
         logging_obj.async_success_handler.assert_awaited_once()
+
+
+class TestBatchLineItemsFromThePoller:
+    """When batch_line_item_callbacks is set, the poller hands every line of a finished batch to those loggers
+    after the spend log is written, and a sink failure never unbills or re-polls the batch."""
+
+    _INPUT = b'{"custom_id":"ok-1","body":{"messages":[{"role":"user","content":"hi"}]}}\n'
+    _OUTPUT = (
+        b'{"custom_id":"ok-1","response":{"status_code":200,"body":{"model":"gpt-4",'
+        b'"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}}\n'
+    )
+    _ERROR = b'{"custom_id":"ok-1","response":{"status_code":400,"body":{"error":{"message":"expired"}}}}\n'
+
+    @staticmethod
+    def _recording_logger(journal: list, error: Exception | None = None):
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _Recorder(CustomLogger):
+            def __init__(self):
+                super().__init__()
+                self.payloads = []
+
+            async def async_log_batch_line_items(self, payload):
+                journal.append("lines")
+                self.payloads.append(payload)
+                if error is not None:
+                    raise error
+
+        return _Recorder()
+
+    @staticmethod
+    def _setup(journal: list, *, status="completed", output_file_id=_CLAIM_OUTPUT_FILE_ID, error_file_id=None):
+        row = _FakeManagedObjectRow()
+        prisma = TestMultiPodBatchCostClaim._prisma(row, journal)
+        router = TestMultiPodBatchCostClaim._router()
+        response = router.aretrieve_batch.return_value
+        response.status = status
+        response.output_file_id = output_file_id
+        response.error_file_id = error_file_id
+        response.input_file_id = "file-input-1"
+        return row, TestMultiPodBatchCostClaim._instance(prisma, router)
+
+    @classmethod
+    @contextmanager
+    def _provider(cls, journal: list):
+        """The provider's batch files by id, and a spend-log writer that journals each write."""
+        files = {"file-input-1": cls._INPUT, _CLAIM_OUTPUT_FILE_ID: cls._OUTPUT, "file-err-1": cls._ERROR}
+
+        async def _afile_content(**kwargs):
+            journal.append(f"read {kwargs['file_id']}")
+            content = MagicMock()
+            content.content = files[kwargs["file_id"]]
+            return content
+
+        def _is_b64(file_id):
+            if file_id == _CLAIM_UNIFIED_BATCH_ID:
+                return "llm_model_id,model-123;llm_batch_id,batch-456;"
+            return False
+
+        logging_obj = MagicMock()
+        logging_obj.async_success_handler = AsyncMock(side_effect=lambda **kwargs: journal.append("bill"))
+        with (
+            patch(_IS_B64, side_effect=_is_b64),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch("litellm.files.main.afile_content", new=AsyncMock(side_effect=_afile_content)),
+            patch("litellm.litellm_core_utils.litellm_logging.Logging", return_value=logging_obj),
+        ):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_lines_reach_the_callbacks_after_the_spend_log_of_the_claimed_batch(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+
+        assert journal == [
+            f"read {_CLAIM_OUTPUT_FILE_ID}",
+            "claim",
+            "bill",
+            "read file-input-1",
+            "lines",
+            "finalize",
+        ]
+        (payload,) = logger.payloads
+        assert payload["batch_id"] == _CLAIM_UNIFIED_BATCH_ID
+        assert payload["finished_at"] == 2
+        (line,) = payload["lines"]
+        assert (line["custom_id"], line["status"]) == ("ok-1", "success")
+        assert line["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        assert line["metadata"]["user_api_key_user_id"] == "user-1"
+        assert row.batch_processed is True
+
+    @pytest.mark.asyncio
+    async def test_a_creator_that_cannot_be_looked_up_gets_lines_without_bodies(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+
+        (payload,) = logger.payloads
+        assert [(line["request"], line["response"]) for line in payload["lines"]] == [(None, None)]
+
+    @pytest.mark.asyncio
+    async def test_a_creator_with_logging_on_gets_the_request_and_response(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        row.api_key = "cli-session-user-1"
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+
+        ((line,),) = [payload["lines"] for payload in logger.payloads]
+        assert line["request"] == json.loads(self._INPUT)
+        assert line["response"] == json.loads(self._OUTPUT)
+
+    @pytest.mark.asyncio
+    async def test_a_failing_sink_leaves_the_batch_billed_and_retired(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        monkeypatch.setattr(
+            litellm, "batch_line_item_callbacks", (self._recording_logger(journal, RuntimeError("bucket gone")),)
+        )
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+
+        assert [step for step in journal if not step.startswith("read")] == ["claim", "bill", "lines", "finalize"]
+        assert row.batch_processed is True
+        assert row.status == "complete"
+
+    @pytest.mark.asyncio
+    async def test_without_callbacks_only_the_output_file_is_read(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", ())
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
+
+    @pytest.mark.asyncio
+    async def test_a_batch_where_every_line_failed_sends_its_error_lines_before_it_is_retired(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal, status="expired", output_file_id=None, error_file_id="file-err-1")
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+
+        assert journal == ["read file-err-1", "read file-input-1", "lines", "finalize"]
+        (payload,) = logger.payloads
+        assert [(line["custom_id"], line["status"], line["response_cost"]) for line in payload["lines"]] == [
+            ("ok-1", "failure", 0.0)
+        ]
+        assert row.batch_processed is True
+
+    @pytest.mark.asyncio
+    async def test_a_terminal_batch_with_no_lines_sends_nothing(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal, status="failed", output_file_id=None, error_file_id=None)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+
+        assert journal == ["finalize"]
+        assert logger.payloads == []
+
+
+class TestCreatorTurnedOffMessageLogging:
+    """Batch line items drop the request and response when the creating key or team turned off message logging,
+    when the proxy did, or when the creator can no longer be read."""
+
+    @staticmethod
+    def _instance(key_row=None, team_row=None, error: Exception | None = None):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+        prisma = MagicMock()
+        prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_row, side_effect=error)
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        return CheckBatchCost(proxy_logging_obj=MagicMock(), prisma_client=prisma, llm_router=MagicMock())
+
+    @staticmethod
+    def _job(api_key="hash-alice", team_id=None, created_by="alice"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(id="job-1", api_key=api_key, team_id=team_id, created_by=created_by)
+
+    @staticmethod
+    def _logging(value: str) -> dict:
+        return {
+            "logging": [
+                {
+                    "callback_name": "s3_v2",
+                    "callback_type": "success",
+                    "callback_vars": {"turn_off_message_logging": value},
+                }
+            ]
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_value", "proxy_wide", "expected"),
+        [("true", False, True), ("false", True, False), (None, True, True), (None, False, False)],
+    )
+    async def test_the_key_setting_wins_and_the_proxy_setting_fills_in(
+        self, monkeypatch, key_value, proxy_wide, expected
+    ):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", proxy_wide)
+        metadata = self._logging(key_value) if key_value is not None else {}
+        instance = self._instance(key_row=SimpleNamespace(metadata=metadata))
+
+        assert await instance._creator_turned_off_message_logging(self._job()) is expected
+
+    @pytest.mark.asyncio
+    async def test_a_team_that_turned_off_message_logging_covers_its_keys(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance = self._instance(
+            key_row=SimpleNamespace(metadata={}), team_row=SimpleNamespace(metadata=self._logging("true"))
+        )
+
+        assert await instance._creator_turned_off_message_logging(self._job(team_id="team-alpha")) is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("job_fields", "key_row", "team_row"),
+        [
+            ({"api_key": None}, None, None),
+            ({}, None, None),
+            ({"team_id": "team-gone"}, "present", None),
+        ],
+        ids=["legacy-row-without-key", "deleted-key", "deleted-team"],
+    )
+    async def test_a_creator_that_is_gone_counts_as_turned_off(self, monkeypatch, job_fields, key_row, team_row):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance = self._instance(key_row=SimpleNamespace(metadata={}) if key_row else None, team_row=team_row)
+
+        assert await instance._creator_turned_off_message_logging(self._job(**job_fields)) is True
+
+    @pytest.mark.asyncio
+    async def test_a_failed_lookup_counts_as_turned_off(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance = self._instance(error=Exception("db down"))
+
+        assert await instance._creator_turned_off_message_logging(self._job()) is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("api_key", ["litellm_proxy_master_key", "cli-session-alice"])
+    async def test_the_master_key_and_cli_sessions_have_no_key_row_to_read(self, monkeypatch, api_key):
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance = self._instance()
+
+        assert await instance._creator_turned_off_message_logging(self._job(api_key=api_key)) is False
+        instance.prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()

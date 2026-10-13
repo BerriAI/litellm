@@ -15,7 +15,6 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
@@ -115,8 +114,6 @@ class PromptCachingDeploymentCheck(CustomLogger):
         return healthy_deployments
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_line_item_event(kwargs):
-            return
         standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
         if standard_logging_object is None:

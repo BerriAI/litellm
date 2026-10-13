@@ -29,11 +29,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import is_web_search_tool_responses
-from litellm.litellm_core_utils.core_helpers import (
-    get_litellm_metadata_from_kwargs,
-    independent_snapshot,
-    is_batch_line_item_event,
-)
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, independent_snapshot
 from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
 from litellm.litellm_core_utils.llm_judge import (
     default_router_provider,
@@ -949,8 +945,6 @@ class ShadowEvalLogger(CustomLogger):
         *,
         guardrail_snapshot: GuardrailRequestSnapshot | None = None,
     ) -> None:
-        if is_batch_line_item_event(kwargs):
-            return
         try:
             payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")  # pyright: ignore[reportAssignmentType]  # untyped callback kwargs
             if payload is None:

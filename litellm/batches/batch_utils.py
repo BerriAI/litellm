@@ -1,9 +1,9 @@
 import json
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
-from typing import Any, Final, Literal, TypeAlias, cast
+from typing import Any, Final, Literal, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,8 +20,6 @@ from litellm.types.utils import ModelInfo, Usage
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
 
-BatchProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"]
-
 
 @dataclass(frozen=True, slots=True)
 class BatchCostUsageResult:
@@ -34,14 +32,6 @@ class BatchCostUsageResult:
     failed_requests: int
     prompt_cost: float = 0.0
     completion_cost: float = 0.0
-
-
-@dataclass(frozen=True, slots=True)
-class BatchResultFiles:
-    """Raw JSONL bytes of a completed batch's result files; None means not fetched."""
-
-    output: bytes | None
-    error: bytes | None
 
 
 _COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
@@ -80,8 +70,8 @@ def batch_cost_is_final(batch: Batch) -> bool:
 
 
 async def calculate_batch_cost_and_usage(
-    file_content_dictionary: list[dict[str, object]],
-    custom_llm_provider: BatchProvider,
+    file_content_dictionary: Sequence[dict[str, object]],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
 ) -> BatchCostUsageResult:
@@ -108,7 +98,7 @@ async def calculate_batch_cost_and_usage(
 
 async def handle_completed_batch(
     batch: Batch,
-    custom_llm_provider: BatchProvider,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
     model_name: str | None = None,
     litellm_params: dict[str, object] | None = None,
     model_info: ModelInfo | None = None,
@@ -126,46 +116,29 @@ async def handle_completed_batch(
             threaded through so a deployment's configured rates win over the
             global cost map.
     """
-    return (
-        await handle_completed_batch_with_files(
-            batch,
-            custom_llm_provider,
-            model_name=model_name,
-            litellm_params=litellm_params,
-            model_info=model_info,
-        )
-    )[0]
-
-
-async def handle_completed_batch_with_files(
-    batch: Batch,
-    custom_llm_provider: BatchProvider,
-    model_name: str | None = None,
-    litellm_params: Mapping[str, object] | None = None,
-    model_info: ModelInfo | None = None,
-) -> "tuple[BatchCostUsageResult, BatchResultFiles]":
-    """_handle_completed_batch plus the raw output/error bytes it fetched, so
-    downstream line-item logging reuses them instead of refetching."""
+    # A completed batch whose request lines all failed has no output file - the
+    # results are written to a separate error_file_id and output_file_id is None.
+    # There is nothing to price or measure, so report an empty result set instead
+    # of calling _fetch_batch_output_file_content, which raises on a missing
+    # output file. Without this guard the logging worker crashes on every
+    # aretrieve_batch poll and the completed batch's zero-cost accounting is lost.
+    # The generic retrieval helper keeps raising for callers that explicitly ask
+    # for a missing output file.
     if batch.output_file_id is None:
-        only_error_file_content: Final = await fetch_batch_error_file_content(
-            batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
-        )
-        return (
-            BatchCostUsageResult(
-                cost=0.0,
-                usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
-                models=[],
-                successful_requests=0,
-                failed_requests=count_error_file_failed_requests_from_content(only_error_file_content),
+        return BatchCostUsageResult(
+            cost=0.0,
+            usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+            models=[],
+            successful_requests=0,
+            failed_requests=await count_error_file_failed_requests(
+                batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
             ),
-            BatchResultFiles(output=None, error=only_error_file_content),
         )
 
     file_content = await _fetch_batch_output_file_content(batch, custom_llm_provider, litellm_params=litellm_params)
-    error_file_content: Final = await fetch_batch_error_file_content(
+    error_file_failed_requests: Final = await count_error_file_failed_requests(
         batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
     )
-    error_file_failed_requests: Final = count_error_file_failed_requests_from_content(error_file_content)
 
     output_file_result: Final = (
         calculate_vertex_ai_batch_cost_and_usage(
@@ -182,14 +155,11 @@ async def handle_completed_batch_with_files(
         )
     )
 
-    result: Final = (
-        output_file_result
-        if not error_file_failed_requests
-        else dataclasses_replace(
-            output_file_result, failed_requests=output_file_result.failed_requests + error_file_failed_requests
-        )
+    if not error_file_failed_requests:
+        return output_file_result
+    return dataclasses_replace(
+        output_file_result, failed_requests=output_file_result.failed_requests + error_file_failed_requests
     )
-    return result, BatchResultFiles(output=file_content, error=error_file_content)
 
 
 _handle_completed_batch = handle_completed_batch
@@ -217,7 +187,7 @@ class _BatchOutputLineStats:
 
 def _classify_output_line_stats(
     entries: Iterable[dict[str, object]],
-    custom_llm_provider: BatchProvider,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
 ) -> Iterator[_BatchOutputLineStats | _LineOutcome]:
@@ -236,7 +206,7 @@ def _classify_output_line_stats(
 
 def _safe_output_line_stats(
     entry: Mapping[str, object],
-    custom_llm_provider: BatchProvider,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
 ) -> _BatchOutputLineStats | None:
@@ -258,7 +228,7 @@ def _safe_output_line_stats(
 
 def _compute_output_line_stats(
     entry: Mapping[str, object],
-    custom_llm_provider: BatchProvider,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     model_info: ModelInfo | None,
 ) -> _BatchOutputLineStats:
@@ -300,7 +270,7 @@ def _ocr_usage_info_from_response_body(response_body: Mapping[str, object]) -> O
 def _output_line_cost(
     response_body: Mapping[str, object],
     usage: Usage,
-    custom_llm_provider: BatchProvider,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None,
     response_model: str | None,
     model_info: ModelInfo | None,
@@ -329,7 +299,7 @@ def _output_line_cost(
 
 def _aggregate_batch_cost_usage_models(
     entries: Iterable[dict[str, object]],
-    custom_llm_provider: BatchProvider,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
 ) -> BatchCostUsageResult:
@@ -466,9 +436,9 @@ def _provider_output_file_id(output_file_id: str) -> str:
     return extracted
 
 
-async def _fetch_batch_managed_file_content(
+async def fetch_batch_managed_file_content(
     file_id: str,
-    custom_llm_provider: BatchProvider = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"] = "openai",
     litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
@@ -497,9 +467,12 @@ async def _fetch_batch_managed_file_content(
     return _file_content.content
 
 
+_fetch_batch_managed_file_content: Final = fetch_batch_managed_file_content
+
+
 async def _fetch_batch_output_file_content(
     batch: Batch,
-    custom_llm_provider: BatchProvider = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"] = "openai",
     litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
@@ -519,30 +492,9 @@ async def _fetch_batch_output_file_content(
     )
 
 
-async def fetch_batch_error_file_content(
-    batch: Batch,
-    custom_llm_provider: BatchProvider,
-    litellm_params: Mapping[str, object] | None,
-) -> bytes | None:
-    """Fetch the batch's separate error file bytes; None when it has none or the fetch fails."""
-    if batch.error_file_id is None:
-        return None
-    try:
-        return await _fetch_batch_managed_file_content(
-            batch.error_file_id, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
-        )
-    except Exception as e:  # noqa: BLE001  # a failed/missing error file must not abort cost tracking for the batch
-        verbose_logger.debug("Failed to fetch batch error file %s: %s", batch.error_file_id, e)
-        return None
-
-
-def count_error_file_failed_requests_from_content(content: bytes | None) -> int:
-    return 0 if content is None else sum(1 for _ in iter_batch_input_lines(content))
-
-
 async def count_error_file_failed_requests(
     batch: Batch,
-    custom_llm_provider: BatchProvider,
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
     litellm_params: Mapping[str, object] | None,
 ) -> int:
     """Count failed requests reported only in the batch's separate error file.
@@ -552,11 +504,16 @@ async def count_error_file_failed_requests(
     ``error_file_id`` - they never appear in the output file at all, so
     counting failures from the output file alone silently undercounts them.
     """
-    return count_error_file_failed_requests_from_content(
-        await fetch_batch_error_file_content(
-            batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
+    if batch.error_file_id is None:
+        return 0
+    try:
+        error_file_content = await _fetch_batch_managed_file_content(
+            batch.error_file_id, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
         )
-    )
+    except Exception as e:  # noqa: BLE001  # a failed/missing error file must not abort cost tracking for the batch
+        verbose_logger.debug("Failed to fetch batch error file %s: %s", batch.error_file_id, e)
+        return 0
+    return sum(1 for _ in iter_batch_input_lines(error_file_content))
 
 
 def extract_file_access_credentials(

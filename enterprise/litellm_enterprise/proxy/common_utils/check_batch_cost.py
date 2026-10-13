@@ -2,16 +2,18 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     CLI_SESSION_KEY_PREFIX,
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
@@ -23,6 +25,7 @@ from litellm.repositories.verification_token_repository import VerificationToken
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
+    from litellm.batches.batch_line_items import BatchFileProvider
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.repositories.prisma_protocols import TableActions
@@ -101,6 +104,11 @@ def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.L
 
 def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
     return TeamRepository(prisma_client).table
+
+
+def _row_metadata(row: object) -> dict[str, object]:
+    metadata: Final = getattr(row, "metadata", None)
+    return cast(dict[str, object], metadata) if isinstance(metadata, dict) else {}  # cast-ok: prisma Json object column
 
 
 class CheckBatchCost:
@@ -735,10 +743,9 @@ class CheckBatchCost:
 
         """
         from litellm.batches.batch_utils import (
+            count_error_file_failed_requests,
             get_file_content_as_dictionary,
             calculate_batch_cost_and_usage,
-            count_error_file_failed_requests_from_content,
-            fetch_batch_error_file_content,
         )
         from litellm.files.main import afile_content
         from litellm.files.types import FileContentCallOptions
@@ -875,7 +882,7 @@ class CheckBatchCost:
             model_name=model_name,
             model_info=deployment_model_info,
         )
-        error_file_content = await fetch_batch_error_file_content(
+        error_file_failed_requests: Final = await count_error_file_failed_requests(
             response,
             custom_llm_provider=batch_file_provider,
             litellm_params={
@@ -883,7 +890,6 @@ class CheckBatchCost:
                 "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
             },
         )
-        error_file_failed_requests: Final = count_error_file_failed_requests_from_content(error_file_content)
         batch_result: Final = (
             output_file_result
             if not error_file_failed_requests
@@ -923,7 +929,6 @@ class CheckBatchCost:
             optional_params={},
             custom_llm_provider=str(llm_provider) if llm_provider else None,
         )
-        logging_obj._litellm_internal_model_credentials = MappingProxyType(dict(credentials))  # pyright: ignore[reportPrivateUsage]  # trusted credentials transport, consumed by batch_line_item_logging
 
         if not await self._claim_job_for_costing(job):
             verbose_proxy_logger.info(
@@ -942,8 +947,6 @@ class CheckBatchCost:
                 batch_failed_requests=batch_result.failed_requests,
                 batch_prompt_cost=batch_result.prompt_cost,
                 batch_completion_cost=batch_result.completion_cost,
-                batch_output_file_content=content_bytes,
-                batch_error_file_content=error_file_content,
             )
         except Exception:
             await self._release_job_claim(job)
@@ -959,7 +962,127 @@ class CheckBatchCost:
                     api_provider=str(llm_provider) if llm_provider else None,
                 )
 
+        await self._store_batch_line_items(job, response, model_id, batch_id, content_bytes)
+
         return model_name, str(llm_provider) if llm_provider else None
+
+    async def _store_batch_line_items(
+        self,
+        job: "_ManagedObjectRow",
+        response: "LiteLLMBatch",
+        model_id: str,
+        batch_id: str,
+        output_content: bytes,
+    ) -> None:
+        """Send every line of a finished batch to batch_line_item_callbacks. Failures are logged, never raised,
+        so the batch stays billed whether or not its lines were stored."""
+        if not litellm.batch_line_item_callbacks:
+            return
+        from litellm.batches.batch_line_items import (
+            BatchFileProvider,
+            BatchLineItemSource,
+            build_batch_line_items,
+            dispatch_batch_line_items,
+            line_item_metadata,
+        )
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+        from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+        try:
+            deployment_info: Final = self.llm_router.get_deployment(model_id=model_id)
+            if deployment_info is None:
+                return
+            litellm_model_name: Final = deployment_info.litellm_params.model
+            model_name, llm_provider, _, _ = get_llm_provider(
+                model=litellm_model_name,
+                custom_llm_provider=deployment_info.litellm_params.custom_llm_provider,
+            )
+            cost_provider: Final = cast(BatchFileProvider, llm_provider)
+            credentials: Final = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+            file_access: Final = {
+                **credentials,
+                "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
+            }
+            error_content: Final = await self._batch_file_content(response.error_file_id, cost_provider, file_access)
+            if not output_content and not error_content:
+                return
+            source: Final = BatchLineItemSource(
+                batch_id=job.unified_object_id,
+                finished_at=response.completed_at
+                or response.failed_at
+                or response.expired_at
+                or response.cancelled_at
+                or response.created_at,
+                model=model_name,
+                custom_llm_provider=llm_provider,
+                cost_provider=cost_provider,
+                model_info=deployment_pricing_model_info(model_id=model_id, deployment_model=litellm_model_name),
+                metadata=line_item_metadata(await self._build_creator_attribution_metadata(job, batch_id)),
+            )
+            payload: Final = await build_batch_line_items(
+                source,
+                await self._batch_file_content(response.input_file_id, cost_provider, file_access),
+                (output_content, error_content),
+            )
+            await dispatch_batch_line_items(payload, redact_bodies=await self._creator_turned_off_message_logging(job))
+        except Exception as error:  # noqa: BLE001  # storing the lines is best effort, the batch is already billed
+            verbose_proxy_logger.exception(
+                f"CheckBatchCost: the line items of batch {batch_id} (job {job.id}) were not stored: {error}"
+            )
+
+    @staticmethod
+    async def _batch_file_content(
+        file_id: str | None, custom_llm_provider: "BatchFileProvider", file_access: Mapping[str, object]
+    ) -> bytes:
+        """A batch file's raw JSONL, or nothing when the batch has no such file or the provider will not serve it."""
+        from litellm.batches.batch_utils import fetch_batch_managed_file_content
+
+        if not file_id:
+            return b""
+        try:
+            return await fetch_batch_managed_file_content(
+                file_id, custom_llm_provider=custom_llm_provider, litellm_params=file_access
+            )
+        except Exception as error:  # noqa: BLE001  # a missing input or error file leaves those lines out, not the rest
+            verbose_proxy_logger.warning(f"CheckBatchCost: could not read batch file {file_id}: {error}")
+            return b""
+
+    async def _creator_turned_off_message_logging(self, job: "_ManagedObjectRow") -> bool:
+        """Whether the creating key's or team's logging settings turn off message logging, falling back to the
+        proxy-wide setting. A key or team that can no longer be read counts as turned off."""
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
+        from litellm.proxy.proxy_server import proxy_config
+        from litellm.secret_managers.main import str_to_bool
+
+        api_key: Final = getattr(job, "api_key", None)
+        team_id: Final = getattr(job, "team_id", None)
+        has_key_row: Final = api_key is not None and api_key not in (
+            LITELLM_PROXY_MASTER_KEY_ALIAS,
+            f"{CLI_SESSION_KEY_PREFIX}-{job.created_by}",
+        )
+        try:
+            key_row: Final = (
+                await _token_table(self.prisma_client).find_unique(where={"token": api_key}) if has_key_row else None
+            )
+            team_row: Final = (
+                await _team_table(self.prisma_client).find_unique(where={"team_id": team_id}) if team_id else None
+            )
+        except Exception as error:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: could not read the logging settings of batch job {job.id}'s creator, "
+                f"so its line items are stored without request and response: {error}"
+            )
+            return True
+        if api_key is None or (has_key_row and key_row is None) or (team_id and team_row is None):
+            return True
+        settings: Final = get_dynamic_logging_metadata(
+            UserAPIKeyAuth(metadata=_row_metadata(key_row), team_metadata=_row_metadata(team_row), team_id=team_id),
+            proxy_config,
+        )
+        callback_vars: Final = (settings.callback_vars if settings is not None else None) or {}
+        creator_setting: Final = str_to_bool(callback_vars.get("turn_off_message_logging"))
+        return creator_setting if creator_setting is not None else litellm.turn_off_message_logging is True
 
     async def check_batch_cost(self):
         """
@@ -1117,6 +1240,7 @@ class CheckBatchCost:
                         f"has not appeared yet; leaving job {job.id} for the next poll cycle"
                     )
                     continue
+                await self._store_batch_line_items(job, response, model_id, batch_id, b"")
                 await self._finalize_unbilled_terminal_job(job, response)
 
         # Record polling run metrics (always, even if nothing was processed)

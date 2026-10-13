@@ -9,7 +9,6 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import print_verbose
@@ -31,7 +30,7 @@ class LowestTPMLoggingHandler(CustomLogger):
 
     @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
             """
@@ -86,7 +85,7 @@ class LowestTPMLoggingHandler(CustomLogger):
 
     @with_service_target("router_usage")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
             """

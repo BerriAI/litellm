@@ -3313,9 +3313,6 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_failed_requests: ReadOnly[int | None]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
-    batch_id: NotRequired[ReadOnly[str | None]]
-    batch_custom_id: NotRequired[ReadOnly[str | None]]
-    batch_line_status_code: NotRequired[ReadOnly[int | None]]
 
 
 class StandardLoggingModelInformation(TypedDict):
@@ -3648,6 +3645,44 @@ class StandardAuditLogPayload(TypedDict):
     object_id: str
     before_value: str | None
     updated_values: str | None
+
+
+class StandardBatchLineItemUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class StandardBatchLineItemMetadata(TypedDict):
+    user_api_key_hash: ReadOnly[str | None]
+    user_api_key_alias: ReadOnly[str | None]
+    user_api_key_team_id: ReadOnly[str | None]
+    user_api_key_team_alias: ReadOnly[str | None]
+    user_api_key_user_id: ReadOnly[str | None]
+    user_api_key_org_id: ReadOnly[str | None]
+
+
+class StandardBatchLineItem(TypedDict):
+    """One line of a finished batch, the request line next to the output or error line the provider wrote for it."""
+
+    batch_id: ReadOnly[str]
+    custom_id: ReadOnly[str | None]
+    status: ReadOnly[Literal["success", "failure"]]
+    request: ReadOnly[Mapping[str, object] | None]
+    response: ReadOnly[Mapping[str, object] | None]
+    usage: ReadOnly[StandardBatchLineItemUsage | None]
+    response_cost: ReadOnly[float]
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str | None]
+    metadata: ReadOnly[StandardBatchLineItemMetadata]
+
+
+class StandardBatchLineItemsPayload(TypedDict):
+    """Every line of one finished batch, dispatched to batch_line_item_callbacks."""
+
+    batch_id: ReadOnly[str]
+    finished_at: ReadOnly[int]
+    lines: ReadOnly[tuple[StandardBatchLineItem, ...]]
 
 
 class ClassifierAudit(TypedDict, total=False):

@@ -83,7 +83,6 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
     get_parent_otel_span_from_kwargs,
-    is_batch_line_item_event,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -8419,7 +8418,7 @@ class Router:
             # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
             if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
                 return
-            if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
+            if is_batch_retrieve_call_type(kwargs.get("call_type")):
                 return
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if standard_logging_object is None:
@@ -8567,7 +8566,7 @@ class Router:
         - key: str - The key used to increment the cache
         - None: if no key is found
         """
-        if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return None
         id = None
         if kwargs["litellm_params"].get("metadata") is None:
@@ -8607,8 +8606,6 @@ class Router:
         - False if the deployment should not be put in cooldown
         """
         verbose_router_logger.debug("Router: Entering 'deployment_callback_on_failure'")
-        if is_batch_line_item_event(kwargs):
-            return False
         try:
             exception: Final = kwargs.get("exception", None)
 
@@ -8723,7 +8720,7 @@ class Router:
         """
         Update RPM usage for a deployment
         """
-        if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         deployment_name: Final = kwargs["litellm_params"]["metadata"].get(
             "deployment", None

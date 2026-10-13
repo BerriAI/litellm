@@ -281,41 +281,6 @@ AUTO_CACHING_MODEL = "anthropic/claude-sonnet-4-5"
 
 
 @pytest.mark.asyncio
-async def test_batch_line_item_event_does_not_pin_a_deployment():
-    """A completed batch's JSONL lines are logged as events of their own, but the
-    batch API served them, not the deployment's realtime endpoint, so a line must
-    not record a cached prefix that later pins live traffic to that deployment."""
-    cache = DualCache()
-    check = PromptCachingDeploymentCheck(cache=cache)
-    model = AUTO_CACHING_MODEL
-    deployments = _deployments(model, model, model)
-    messages = _messages(word_count=3000)
-    assert is_prompt_caching_valid_prompt(model=model, messages=messages) is True
-
-    await check.async_log_success_event(
-        kwargs={
-            "litellm_params": {"batch_parent_id": "batch_1"},
-            "standard_logging_object": {
-                "call_type": "acompletion",
-                "model": model,
-                "messages": messages,
-                "model_id": "dep-2",
-            },
-        },
-        response_obj=None,
-        start_time=None,
-        end_time=None,
-    )
-    filtered = await check.async_filter_deployments(
-        model=MODEL_GROUP_ALIAS,
-        healthy_deployments=deployments,
-        messages=messages,
-    )
-
-    assert filtered == deployments
-
-
-@pytest.mark.asyncio
 async def test_replayed_redacted_thinking_block_still_records_and_pins():
     """
     A model that returns no reasoning summary (gpt-5.x through the /v1/messages bridge, Anthropic with

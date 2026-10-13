@@ -32,6 +32,7 @@ from litellm.constants import (
     S3_PARTITION_GRANULARITY_ENV_VAR,
 )
 from litellm.integrations.adaptive_concurrency import AdaptiveConcurrencyLimiter, PutSample
+from litellm.integrations.batch_line_item_objects import batch_line_items_ndjson, batch_line_items_object_name
 from litellm.integrations.s3 import (
     get_s3_object_download_filename,
     get_s3_object_key,
@@ -57,7 +58,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity, s3BatchLoggingElement
-from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardBatchLineItemsPayload, StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
 
@@ -510,6 +511,28 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 await self.flush_queue()
         except Exception as e:
             verbose_logger.exception("S3 audit log error: %s", e)
+
+    async def async_log_batch_line_items(self, payload: StandardBatchLineItemsPayload) -> None:
+        """Upload the batch's lines as one NDJSON object under <s3_path>/batch_line_items/."""
+        object_name: Final = batch_line_items_object_name(payload)
+        s3_path: Final = cast(str | None, self.s3_path)  # cast-ok: s3_path is set from untyped callback params
+        s3_object_key: Final = (f"{s3_path.rstrip('/')}/" if s3_path else "") + object_name
+        delivered: Final = await self.async_upload_data_to_s3(
+            s3BatchLoggingElement(
+                payload={},
+                body=batch_line_items_ndjson(payload),
+                content_type="application/x-ndjson",
+                s3_object_key=s3_object_key,
+                s3_object_download_filename=object_name.rsplit("/", 1)[-1],
+            )
+        )
+        if not delivered:
+            verbose_logger.error(
+                "s3 logging: the %d line items of batch %s were not stored at %s",
+                len(payload["lines"]),
+                payload["batch_id"],
+                s3_object_key,
+            )
 
     async def _async_log_event_base(self, kwargs, response_obj, start_time, end_time):
         try:

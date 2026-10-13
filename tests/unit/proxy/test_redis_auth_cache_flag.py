@@ -74,7 +74,6 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
         patch.object(ps, "spend_counter_cache", fresh_spend_cache),
         patch.object(ps, "cli_sso_session_cache", fresh_cli_sso_cache),
         patch.object(ps, "litellm_config_cache", fresh_config_cache),
-        patch.object(ps, "batch_line_item_claim_cache", DualCache()),
         patch.object(ps, "llm_router", None),
         # Cache is locally imported inside _init_cache: patch it at source.
         patch("litellm.Cache", return_value=mock_litellm_cache),
@@ -185,12 +184,10 @@ class TestRedisAuthCacheFlag:
             ps.cli_sso_session_cache,
             ps.user_api_key_cache,
             ps.litellm_config_cache,
-            ps.batch_line_item_claim_cache,
         )
         with ExitStack() as detached:
             for cache in touched_caches:
                 detached.enter_context(patch.object(cache, "redis_cache", None))
             ps._attach_redis_usage_cache(fake_redis, enable_redis_auth_cache=False)
             assert limiter_cache.redis_cache is fake_redis
-            assert ps.batch_line_item_claim_cache.redis_cache is fake_redis
             assert ps.user_api_key_cache.redis_cache is None
