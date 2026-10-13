@@ -15,7 +15,7 @@ describe("DeprecationBanner", () => {
     render(<DeprecationBanner featureName="Workflows" />);
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      /^Workflows is deprecatedWorkflows will be removed in the near future\. If you rely on this feature, please share feedback on the deprecation discussion\.$/,
+      /^Workflows is deprecatedWorkflows will be removed in the near future\. See the deprecation discussion for details\.$/,
     );
   });
 

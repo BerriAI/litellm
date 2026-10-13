@@ -19,7 +19,7 @@ export const DeprecationBanner: React.FC<DeprecationBannerProps> = ({ featureNam
     <div className="min-w-0 flex-1">
       <p className="font-medium">{`${featureName} is deprecated`}</p>
       <p className="mt-1 break-words text-muted-foreground">
-        {`${featureName} will be removed in the near future. If you rely on this feature, please share feedback on the `}
+        {`${featureName} will be removed in the near future. See the `}
         <Link
           href={DEPRECATION_DISCUSSION_URL}
           target="_blank"
@@ -28,7 +28,7 @@ export const DeprecationBanner: React.FC<DeprecationBannerProps> = ({ featureNam
         >
           deprecation discussion
         </Link>
-        .
+        {" for details."}
       </p>
     </div>
   </div>
