@@ -67,6 +67,7 @@ export const toKeyMetadata = (metadata: components["schemas"]["KeyMetadata"] | u
   team_id: metadata?.team_id ?? null,
   user_id: metadata?.user_id,
   user_email: metadata?.user_email,
+  user_alias: metadata?.user_alias,
   key_exists: metadata?.key_exists,
 });
 
