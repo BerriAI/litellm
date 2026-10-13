@@ -605,6 +605,10 @@ DEEPSEEK_OFF_PEAK_WINDOWS: Final = (
     {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
 )
 DEEPSEEK_HALVED_RATES: Final = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS: Final = (
+    "tencent/deepseek-v4-pro-0813",
+    "tencent/deepseek-v4.1-flash",
+)
 
 
 def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
@@ -634,6 +638,20 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
     }
     assert drifted == {}
     assert all(name in rows for name in DEEPSEEK_PRICED_ROWS)
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
+    """Tencent TokenHub applies the DeepSeek weekday peak windows and half-rate off-peak prices
+    to these models (tencentcloud.com/products/tokenhub, read 2026-10-13)."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    drifted: Final = {
+        name: deepseek_off_peak_drift(entry)
+        for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS
+        if isinstance(entry := rows.get(name), dict) and deepseek_off_peak_drift(entry) is not None
+    }
+    assert drifted == {}
+    assert all(name in rows for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS)
 
 
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
