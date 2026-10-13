@@ -80,7 +80,7 @@ export function LiteAdminHomeComposer({
               aria-label="Send message"
               disabled={submitDisabled || isLoading}
               onClick={onSubmit}
-              className="rounded-lg bg-info text-white shadow-xs hover:bg-info/90"
+              className="rounded-lg bg-info text-info-foreground shadow-xs hover:bg-info/90"
             >
               <ArrowUp className="size-4" />
             </Button>

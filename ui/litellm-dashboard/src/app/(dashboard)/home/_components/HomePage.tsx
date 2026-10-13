@@ -35,7 +35,7 @@ export default function HomePage() {
           <PageHeaderControls className="mt-0">
             <Button
               render={<a href={uiHref("api-keys?create=true")} />}
-              className="bg-info text-white shadow-xs hover:bg-info/90"
+              className="bg-info text-info-foreground shadow-xs hover:bg-info/90"
             >
               <Plus />
               Create New Virtual Key
