@@ -10202,6 +10202,36 @@ class TestPassthroughHeadersAcceptImmutableMappings:
         # the excluded hop-by-hop header is still dropped
         assert "transfer-encoding" not in merged
 
+    def test_streaming_passthrough_replaces_upstream_traceresponse_when_gateway_injects_one(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        pytest.importorskip("opentelemetry.instrumentation.propagators")
+        from opentelemetry.instrumentation.propagators import (
+            TraceResponsePropagator,
+            get_global_response_propagator,
+            set_global_response_propagator,
+        )
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+        is_otel_v2_enabled.cache_clear()
+        previous_propagator: Final = get_global_response_propagator()
+        try:
+            set_global_response_propagator(TraceResponsePropagator())
+            merged: Final = ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
+                response_headers=httpx.Headers(
+                    {"content-type": "text/event-stream", "traceresponse": "upstream-trace"}
+                ),
+                custom_headers=MappingProxyType({}),
+            )
+        finally:
+            set_global_response_propagator(previous_propagator)
+
+        assert merged["content-type"] == "text/event-stream"
+        assert "traceresponse" not in merged
+
 
 @pytest.mark.asyncio
 async def test_handle_llm_api_exception_forwards_provider_headers_on_http_status_error():

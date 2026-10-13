@@ -49,6 +49,7 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.otel.mount import is_trace_response_propagator_enabled
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
@@ -1819,6 +1820,7 @@ class ProxyBaseLLMRequestProcessing:
 
         Proxy/custom headers win on key collisions.
         """
+        gateway_owned_trace_headers: Final = ("traceresponse",) if is_trace_response_propagator_enabled() else ()
         excluded_headers: Final = {
             "transfer-encoding",
             "content-encoding",
@@ -1830,6 +1832,7 @@ class ProxyBaseLLMRequestProcessing:
             "te",
             "trailer",
             "upgrade",
+            *gateway_owned_trace_headers,
         }
 
         merged_headers: Final = {
