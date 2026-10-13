@@ -746,6 +746,43 @@ def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
     assert invalid_metadata == ()
 
 
+class TestBedrockClaude35SonnetContextWindow:
+    @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+    def test_bare_model_ids_match_us_and_eu_siblings(self, path: Path):
+        rows = json.loads(path.read_text())
+        for model in (
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        ):
+            assert rows[model]["max_input_tokens"] == rows[f"us.{model}"]["max_input_tokens"]
+            assert rows[model]["max_input_tokens"] == rows[f"eu.{model}"]["max_input_tokens"]
+
+    @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+    def test_bare_model_ids_have_200k_context_window(self, path: Path):
+        rows = json.loads(path.read_text())
+        # Claude 3.5 Sonnet context window is 200K tokens, https://www.anthropic.com/news/claude-3-5-sonnet (accessed 2026-10-13)
+        for model in (
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        ):
+            assert rows[model]["max_input_tokens"] == 200000
+
+    @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+    def test_bare_model_ids_have_no_above_200k_pricing(self, path: Path):
+        rows = json.loads(path.read_text())
+        above_200k_fields = (
+            "input_cost_per_token_above_200k_tokens",
+            "output_cost_per_token_above_200k_tokens",
+            "cache_creation_input_token_cost_above_200k_tokens",
+            "cache_read_input_token_cost_above_200k_tokens",
+        )
+        for model in (
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        ):
+            assert not set(above_200k_fields).intersection(rows[model])
+
+
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
 MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "decisions", "evaluation"})
 VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
