@@ -316,3 +316,51 @@ def test_judge_user_message_is_data_not_instructions() -> None:
     files = (_file("litellm/llms/openai/x.py", patch="@@ -1 +1 @@\n-a\n+b"),)
     message = bot.judge_user_message(_pr(), files, RULES)
     assert "## Diff" in message and "--- litellm/llms/openai/x.py" in message and "(small by rule)" in message
+
+
+def test_decisions_request_asks_one_choice_question_per_verdict_field() -> None:
+    request = bot.decisions_request("gpt-6-luna", "prompt", "diff")
+    names = [q["name"] for q in request["questions"]]
+    assert names == ["tier", "change_kind", "blast_radius"]
+    assert all(q["type"] == "choice" for q in request["questions"])
+    assert [c["value"] for c in request["questions"][0]["choices"]] == ["low", "medium", "high"]
+    assert request["input"].startswith("prompt") and request["input"].endswith("diff")
+
+
+def _decisions(tier: str, kind: str = "additive", radius: str = "one_provider_or_page") -> str:
+    answers = [
+        {"type": "choice", "name": "tier", "choice": tier, "probabilities": [], "confidence": 0.9},
+        {"type": "choice", "name": "change_kind", "choice": kind, "probabilities": [], "confidence": 0.8},
+        {"type": "choice", "name": "blast_radius", "choice": radius, "probabilities": [], "confidence": 0.7},
+    ]
+    return json.dumps({"model": "gpt-6-luna", "answers": answers, "usage": {"input_tokens": 1}})
+
+
+def test_parse_decisions_verdict() -> None:
+    verdict = bot.parse_decisions_verdict(_decisions("medium", "scoped_behavior_change", "shared_helper"))
+    assert isinstance(verdict, bot.Verdict)
+    assert verdict.tier == "medium" and verdict.change_kind == "scoped_behavior_change"
+    assert "tier: medium (confidence 0.90)" in verdict.reasons and verdict.look_at == ""
+    assert isinstance(bot.parse_decisions_verdict(_decisions("approve")), str)
+    missing = json.dumps(
+        {"model": "m", "answers": [{"type": "choice", "name": "tier", "choice": "low", "confidence": 1}]}
+    )
+    assert isinstance(bot.parse_decisions_verdict(missing), str)
+    assert isinstance(bot.parse_decisions_verdict("{}"), str)
+
+
+def test_judge_route_variable_picks_the_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    monkeypatch.setenv("LITELLM_API_BASE", "https://gw")
+    monkeypatch.setenv("LITELLM_API_KEY", "k")
+    monkeypatch.setenv("STAMPBOT_JUDGE_MODEL", "m")
+    prompt = ROOT / ".github" / "stampbot" / "judge_prompt.md"
+    schema = ROOT / ".github" / "stampbot" / "judge.schema.json"
+    with httpx.Client() as http:
+        monkeypatch.setenv("STAMPBOT_JUDGE_ROUTE", "decisions")
+        assert isinstance(bot._judge_from_env(http, prompt, schema), bot.DecisionsJudgeClient)
+        monkeypatch.delenv("STAMPBOT_JUDGE_ROUTE")
+        assert isinstance(bot._judge_from_env(http, prompt, schema), bot.JudgeClient)
+        monkeypatch.delenv("STAMPBOT_JUDGE_MODEL")
+        assert bot._judge_from_env(http, prompt, schema) is None

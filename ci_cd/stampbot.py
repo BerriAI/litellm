@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Literal
 
 import httpx
@@ -456,6 +457,95 @@ def parse_verdict(raw: str) -> Verdict | str:
         return f"judge verdict did not match the schema: {error.error_count()} error(s)"
 
 
+class DecisionChoiceAnswer(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    name: str | None = None
+    choice: str | bool
+    confidence: float = 0.0
+
+
+class DecisionsResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    answers: tuple[DecisionChoiceAnswer, ...]
+
+
+DECISION_QUESTIONS: Final[Mapping[str, tuple[str, tuple[str, ...]]]] = MappingProxyType(
+    {
+        "tier": (
+            "How much human review does this pull request need before it merges? low means an additive or confined "
+            "change a bot may approve, medium means a human should read it, high means a human must read it closely "
+            "(request hot path, boot path, default behavior change, public API change, existing price change, money, "
+            "auth or data retention).",
+            ("low", "medium", "high"),
+        ),
+        "change_kind": (
+            "What kind of change is this?",
+            ("additive", "scoped_behavior_change", "default_behavior_change", "public_api_change", "price_change"),
+        ),
+        "blast_radius": (
+            "How far does this change reach?",
+            ("one_provider_or_page", "shared_helper", "request_hot_path", "boot_path"),
+        ),
+    }
+)
+
+
+def decisions_request(model: str, prompt: str, user_message: str) -> Mapping[str, object]:
+    questions: Final = tuple(
+        {
+            "type": "choice",
+            "name": name,
+            "instructions": instructions,
+            "choices": tuple({"value": value} for value in values),
+        }
+        for name, (instructions, values) in DECISION_QUESTIONS.items()
+    )
+    return {"model": model, "input": f"{prompt}\n\n{user_message}", "questions": questions}
+
+
+def parse_decisions_verdict(raw: str) -> Verdict | str:
+    try:
+        answers: Final = DecisionsResponse.model_validate_json(raw).answers
+    except ValidationError:
+        return "judge response was not a decisions response with choice answers"
+    picked: Final = {answer.name: answer for answer in answers if answer.name is not None}
+    if set(picked) != set(DECISION_QUESTIONS):
+        return f"judge answered {sorted(picked)} instead of {sorted(DECISION_QUESTIONS)}"
+    reasons: Final = "\n".join(f"{name}: {a.choice} (confidence {a.confidence:.2f})" for name, a in picked.items())
+    try:
+        return Verdict.model_validate(
+            {
+                "tier": picked["tier"].choice,
+                "change_kind": picked["change_kind"].choice,
+                "blast_radius": picked["blast_radius"].choice,
+                "reasons": reasons,
+                "look_at": "",
+            }
+        )
+    except ValidationError as error:
+        return f"judge verdict did not match the schema: {error.error_count()} error(s)"
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionsJudgeClient:
+    api_base: str
+    api_key: str
+    model: str
+    prompt: str
+    http: httpx.Client
+
+    def judge(self, user_message: str) -> Judgement:
+        response: Final = self.http.post(
+            f"{self.api_base.rstrip('/')}/v1/decisions",
+            json=decisions_request(self.model, self.prompt, user_message),
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=180,
+        )
+        if response.status_code != 200:
+            return Judgement(self.model, f"judge call failed with HTTP {response.status_code}")
+        return Judgement(self.model, parse_decisions_verdict(response.text))
+
+
 @dataclass(frozen=True, slots=True)
 class GitHub:
     repo: str
@@ -576,7 +666,7 @@ class GitHub:
         ).raise_for_status()
 
 
-def evaluate(github: GitHub, number: int, rules: Rules, judge: JudgeClient | None) -> Evaluation:
+def evaluate(github: GitHub, number: int, rules: Rules, judge: JudgeClient | DecisionsJudgeClient | None) -> Evaluation:
     pr: Final = github.pull_request(number)
     files: Final = github.files(number)
     findings: Final = compute_findings(
@@ -672,13 +762,16 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
-def _judge_from_env(http: httpx.Client, prompt_path: Path, schema_path: Path) -> JudgeClient | None:
+def _judge_from_env(
+    http: httpx.Client, prompt_path: Path, schema_path: Path
+) -> JudgeClient | DecisionsJudgeClient | None:
     api_base, api_key, model = _env("LITELLM_API_BASE"), _env("LITELLM_API_KEY"), _env("STAMPBOT_JUDGE_MODEL")
     if not (api_base and api_key and model):
         return None
-    return JudgeClient(
-        api_base, api_key, model, prompt_path.read_text(), SCHEMA_ADAPTER.validate_json(schema_path.read_text()), http
-    )
+    if _env("STAMPBOT_JUDGE_ROUTE", "chat") == "decisions":
+        return DecisionsJudgeClient(api_base, api_key, model, prompt_path.read_text(), http)
+    schema: Final = SCHEMA_ADAPTER.validate_json(schema_path.read_text())
+    return JudgeClient(api_base, api_key, model, prompt_path.read_text(), schema, http)
 
 
 def gate_commenter(

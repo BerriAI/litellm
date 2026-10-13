@@ -75,5 +75,6 @@ jobs:
           LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
           STAMPBOT_JUDGE_MODEL: ${{ vars.STAMPBOT_JUDGE_MODEL }}
+          STAMPBOT_JUDGE_ROUTE: ${{ vars.STAMPBOT_JUDGE_ROUTE || 'chat' }}
         run: |
           uv run --frozen python ci_cd/stampbot.py
