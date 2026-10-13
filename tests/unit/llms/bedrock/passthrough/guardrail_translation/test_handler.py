@@ -3079,6 +3079,22 @@ class TestConverseTextMaskTheRowsLeaveOut:
         assert data["data"] == unchanged
 
     @pytest.mark.asyncio
+    async def test_text_mask_on_a_tool_call_argument_fails_closed_when_the_rows_mask_only_the_turn_with_that_token(
+        self,
+    ):
+        data = _tool_loop_with_card_data(card_line="4111 1111 1111 1111")
+
+        def mask_argument_in_texts_and_turn_in_rows(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
+            texts = list(inputs["texts"])
+            texts[1] = "****"
+            return {"texts": texts, "structured_messages": _content_masked_rows(inputs)}
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(
+                data, _ScriptedGuardrail(mask_argument_in_texts_and_turn_in_rows)
+            )
+
+    @pytest.mark.asyncio
     async def test_text_mask_equal_to_a_masked_turn_still_fails_closed_when_the_rows_leave_its_own_field(self):
         data = _tool_loop_with_card_data(card_line="4111 1111 1111 1111")
         guard = _ScriptedGuardrail(
@@ -3108,15 +3124,24 @@ def _system_and_user_card_data() -> dict:
 
 class TestConverseTextsNextToRewrittenRows:
     @pytest.mark.asyncio
-    async def test_shorter_texts_give_way_to_the_rewritten_rows(self):
+    async def test_shorter_texts_the_rows_hold_give_way_to_the_rewritten_rows(self):
         guard = _ScriptedGuardrail(
-            lambda inputs: {"texts": ["Card [CARD] on file."], "structured_messages": _card_rows_masked(inputs)}
+            lambda inputs: {"texts": ["Card **** on file."], "structured_messages": _card_rows_masked(inputs)}
         )
 
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(_system_and_user_card_data(), guard)
 
         assert result["data"]["system"] == [{"text": "Card **** on file."}]
         assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "My card is ****."}]}]
+
+    @pytest.mark.asyncio
+    async def test_shorter_texts_with_a_mask_the_rows_do_not_hold_fail_closed(self):
+        guard = _ScriptedGuardrail(
+            lambda inputs: {"texts": ["Card [CARD] on file."], "structured_messages": _card_rows_masked(inputs)}
+        )
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(_system_and_user_card_data(), guard)
 
     @pytest.mark.asyncio
     async def test_texts_that_empty_a_row_give_way_to_the_rewritten_rows(self):

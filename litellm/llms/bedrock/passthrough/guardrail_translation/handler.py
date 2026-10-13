@@ -3,7 +3,7 @@ from collections import Counter, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from itertools import dropwhile, zip_longest
+from itertools import dropwhile
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
 from pydantic import InstanceOf, TypeAdapter
@@ -342,9 +342,10 @@ def _edits_drop_a_text_change(
     scope: _Scope,
 ) -> bool:
     """
-    Whether applying only the row and tool edits leaves a string the guardrail changed in its returned texts at its
-    original value. A changed text still counts as kept when the edited body holds it elsewhere, since texts rebuilt
-    from the rows list the same strings in another layout.
+    Whether the row and tool edits alone leave out a change the guardrail made in its returned texts. Texts of the
+    length that was sent are read position by position, so a changed string whose field the edits leave at its
+    original value is dropped. Texts of another length cannot be placed, so each of them must already be in the
+    edited body, as many times as it is returned, the way texts rebuilt from the rows are.
     """
     rewritten: Final = copy.deepcopy(dict(body))
     _, holders = _extract_converse_texts(
@@ -355,15 +356,11 @@ def _edits_drop_a_text_change(
         return True
     _write_back_structured_edits(writes)
     edited: Final = [container[key] for container, key in holders]
-    dropped: Final = Counter(
-        returned
-        for before, returned, after in zip(texts, guardrailed_texts, edited)
-        if returned != before and after == before
-    )
-    elsewhere: Final = Counter(
-        after for after, returned in zip_longest(edited, guardrailed_texts[: len(edited)]) if after != returned
-    )
-    return bool(dropped - elsewhere)
+    if len(guardrailed_texts) == len(texts):
+        return any(
+            returned != before and after == before for before, returned, after in zip(texts, guardrailed_texts, edited)
+        )
+    return bool(Counter(guardrailed_texts) - Counter(edited))
 
 
 def _extract_converse_output_texts(
