@@ -60,6 +60,7 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
     outcome: Final = run_plan(case, plan, setup)
     run_finished: Final = time.monotonic()
     rss_after: Final = read_rss_everywhere(proxy)
+    rss_read: Final = time.monotonic()
     assert outcome.records, f"locust wrote no records (exit {outcome.locust_exit}):\n{outcome.locust_output}"
     served_call_ids: Final = tuple(
         record.call_id for record in outcome.records if record.ok and not record.blocked and record.call_id
@@ -67,12 +68,16 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
     spend_share: Final = _spend_logged_share(
         proxy, served_call_ids[:: max(1, len(served_call_ids) // _SPEND_SAMPLE)][:_SPEND_SAMPLE]
     )
+    spend_read: Final = time.monotonic()
     db_after: Final = read_db_counters()
     redis_after: Final = read_redis_counters()
+    mock_requests: Final = tuple(seen for url in mock_urls.values() for seen in read_mock_requests(url))
+    guardrail_calls: Final = tuple(read_guardrail_calls(guardrail_url())) if case.guardrails else ()
+    mocks_read: Final = time.monotonic()
     observation: Final = Observation(
         records=outcome.records,
-        mock_requests=tuple(seen for url in mock_urls.values() for seen in read_mock_requests(url)),
-        guardrail_calls=tuple(read_guardrail_calls(guardrail_url())) if case.guardrails else (),
+        mock_requests=mock_requests,
+        guardrail_calls=guardrail_calls,
         rss_before=rss_before,
         rss_after=rss_after,
         wall_seconds=outcome.wall_seconds,
@@ -86,7 +91,8 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
     print(render(case, observation, rows))
     print(
         f"  phases: setup {run_started - setup_started:.0f}s, locust {run_finished - run_started:.0f}s, "
-        f"observe {time.monotonic() - run_finished:.0f}s; locust exit {outcome.locust_exit}"
+        f"observe {time.monotonic() - run_finished:.0f}s (rss {rss_read - run_finished:.0f}s, spend sample "
+        f"{spend_read - rss_read:.0f}s, mock logs {mocks_read - spend_read:.0f}s); locust exit {outcome.locust_exit}"
     )
     assert len(outcome.records) == len(plan), (
         f"{len(plan)} planned, {len(outcome.records)} recorded; locust said:\n{outcome.locust_output}"
