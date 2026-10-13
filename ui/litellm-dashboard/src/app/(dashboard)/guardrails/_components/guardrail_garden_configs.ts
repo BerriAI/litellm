@@ -379,4 +379,10 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  wingback: {
+    provider: "Wingback",
+    guardrailNameSuggestion: "Wingback Runtime Security",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 };

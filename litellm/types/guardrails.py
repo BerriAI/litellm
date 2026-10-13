@@ -73,6 +73,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.typesafe import (
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.wingback import (
+    WingbackGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
     XecGuardConfigModel,
 )
@@ -152,6 +155,7 @@ class SupportedGuardrailIntegrations(Enum):
     AGENT_365 = "agent_365"
     LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
+    WINGBACK = "wingback"
     DECISION_MODEL = "decision_model"
 
 
@@ -1347,6 +1351,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
     Agent365GuardrailConfigModel,
+    WingbackGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     decision_model: str | None = Field(
