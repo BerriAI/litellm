@@ -213,12 +213,9 @@ jobs:
             tests/code_coverage_tests/test_provider_replay_harness.py \
             tests/code_coverage_tests/test_provider_cache.py
 
-      - name: Check for circular imports
+      - name: Check layer imports
         if: steps.changes.outputs.decision != 'skip'
-        run: |
-          cd litellm
-          uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py
-          cd ..
+        run: uv run --no-sync python scripts/check_layer_imports.py --base "$GATE_BASE_SHA"
 
       - name: Check import safety
         if: steps.changes.outputs.decision != 'skip'
