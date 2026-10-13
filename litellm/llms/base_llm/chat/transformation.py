@@ -424,9 +424,12 @@ class BaseConfig(ABC):
         json_mode: bool | None,
         optional_params: Mapping[str, object],
     ) -> object:
-        return self.get_model_response_iterator(
-            streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode
-        )
+        if sync_stream:
+            return self.get_model_response_iterator(
+                streaming_response=streaming_response, sync_stream=True, json_mode=json_mode
+            )
+        # FIXME: async streams never got json_mode, passing it changes every provider whose iterator reads it
+        return self.get_model_response_iterator(streaming_response=streaming_response, sync_stream=False)
 
     async def get_async_custom_stream_wrapper(
         self,
