@@ -2216,3 +2216,42 @@ def test_completion_with_prompt_caching_anthropic_model(
     assert response.usage.total_tokens == 1666
     assert response.usage.cache_read_input_tokens == 0
     assert response.usage.cache_creation_input_tokens == 1545
+
+
+def test_get_optional_params_keeps_service_tier_for_databricks() -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-claude-opus-5",
+        custom_llm_provider="databricks",
+        service_tier="priority",
+        drop_params=True,
+    )
+
+    assert optional_params["service_tier"] == "priority"
+
+
+@pytest.mark.parametrize("served_tier", ["priority", "default", None])
+def test_transform_response_carries_served_service_tier(served_tier: str | None) -> None:
+    raw_response: Final = MagicMock()
+    raw_response.json.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "dbrx",
+        **({"service_tier": served_tier} if served_tier is not None else {}),
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    result: Final = DatabricksConfig().transform_response(
+        model="databricks/dbrx",
+        raw_response=raw_response,
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.to_dict().get("service_tier") == served_tier

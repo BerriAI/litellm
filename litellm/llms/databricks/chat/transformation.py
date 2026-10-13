@@ -285,6 +285,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             "tool_choice",
             "reasoning_effort",
             "thinking",
+            "service_tier",
         ]
 
     @staticmethod
@@ -697,6 +698,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model_response.id = completion_response["id"]
         model_response.created = completion_response["created"]
         setattr(model_response, "usage", Usage(**completion_response["usage"]))
+        served_tier: Final = completion_response.get("service_tier")
+        if isinstance(served_tier, str) and served_tier:
+            setattr(model_response, "service_tier", served_tier)  # noqa: B010  # no declared field
 
         model_response.choices = self._transform_dbrx_choices(
             choices=completion_response["choices"],
