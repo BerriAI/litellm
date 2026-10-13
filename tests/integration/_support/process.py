@@ -40,9 +40,9 @@ CONFIGURATION: Final = TypeAdapter(dict[str, object])
 MCP_COVERAGE_CONFIG: Final = Path(__file__).resolve().parents[1] / "mcp_coverage.toml"
 
 
-def proxy_database_environment() -> Mapping[str, str]:
-    writer: Final = os.environ.get("INTEGRATION_PROXY_DATABASE_URL", "")
-    reader: Final = os.environ.get("INTEGRATION_PROXY_READ_REPLICA_URL", "")
+def proxy_database_environment(inherited: Mapping[str, str] = os.environ) -> Mapping[str, str]:
+    writer: Final = inherited.get("INTEGRATION_PROXY_DATABASE_URL", "")
+    reader: Final = inherited.get("INTEGRATION_PROXY_READ_REPLICA_URL", "")
     return MappingProxyType(
         {
             **({"DATABASE_URL": writer} if writer else {}),
@@ -129,6 +129,18 @@ def _is_stopped(process: psutil.Process) -> bool:
         return False
 
 
+def _suspend(process: psutil.Process) -> None:
+    process.suspend()
+    deadline: Final = time.monotonic() + STRICT_HEALTHCHECK_SECONDS
+    while not _is_stopped(process) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if _is_stopped(process):
+        return
+    with suppress(psutil.NoSuchProcess):
+        process.resume()
+    raise AssertionError(f"Process {process.pid} did not stop within {STRICT_HEALTHCHECK_SECONDS}s of SIGSTOP")
+
+
 def _is_reaped(process: psutil.Process) -> bool:
     try:
         process.status()
@@ -152,7 +164,7 @@ class WorkerKill:
     fired: threading.Event
 
     def freeze(self) -> psutil.Process:
-        self.victim.suspend()
+        _suspend(self.victim)
         return self.victim
 
     def __call__(self) -> None:
@@ -235,7 +247,7 @@ class OwnedProxy:
         )
         assert pid == self.process.pid or pid in self.worker_pids(), f"{pid} is not part of this proxy"
         target: Final = psutil.Process(pid)
-        target.suspend()
+        _suspend(target)
         try:
             yield target
         finally:
@@ -307,7 +319,7 @@ def kill_stray_process(pid: int) -> None:
 @contextmanager
 def paused(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> Iterator[None]:
     target: Final = psutil.Process(process.pid)
-    target.suspend()
+    _suspend(target)
     try:
         yield
     finally:
@@ -326,6 +338,7 @@ def owned_proxy(
     workers: int = 1,
     database_setup: tuple[str, ...] = DB_PUSH,
     coverage_file: Path | None = None,
+    inherited: Mapping[str, str] = os.environ,
 ) -> Iterator[Gateway]:
     with owned_proxy_process(
         gateway,
@@ -336,6 +349,7 @@ def owned_proxy(
         workers=workers,
         database_setup=database_setup,
         coverage_file=coverage_file,
+        inherited=inherited,
     ) as owned:
         yield owned.gateway
 
@@ -381,8 +395,13 @@ class _Launch:
     started: float
 
 
+def _wall_clock(monotonic: float) -> float:
+    return time.time() - (time.monotonic() - monotonic)
+
+
 def _stop_launch(launch: _Launch) -> None:
     started: Final = time.monotonic()
+    stop_started_at: Final = time.time()
     exit_before: Final = launch.process.poll()
     exception_before: Final = sys.exc_info()[0]
     try:
@@ -399,6 +418,9 @@ def _stop_launch(launch: _Launch) -> None:
                     "exception_at_record": exception_at_record.__name__ if exception_at_record else None,
                     "cleanup_seconds": time.monotonic() - started,
                     "process_lifetime_seconds": time.monotonic() - launch.started,
+                    "spawned_at": _wall_clock(launch.started),
+                    "stop_started_at": stop_started_at,
+                    "stopped_at": time.time(),
                 },
                 indent=2,
             )
@@ -439,7 +461,51 @@ def _owns_listener(launch: _Launch) -> bool:
     return False
 
 
-def _readiness_pids(launch: _Launch, workers: int) -> Iterator[int]:
+@dataclass(frozen=True, slots=True)
+class BootPhases:
+    prisma_started: float | None = None
+    prisma_finished: float | None = None
+    listening: float | None = None
+    first_ready: float | None = None
+    ready_pids: frozenset[int] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class _Probe:
+    elapsed: float
+    listening: bool
+    prisma: bool
+    ready_pid: int | None
+
+
+def _runs_prisma(process: psutil.Process) -> bool:
+    try:
+        return any(Path(part).name == "prisma" for part in process.cmdline())
+    except psutil.Error:
+        return False
+
+
+def _prisma_running(launch: _Launch) -> bool:
+    try:
+        children: Final = psutil.Process(launch.process.pid).children()
+    except psutil.Error:
+        return False
+    return any(_runs_prisma(child) for child in children)
+
+
+def _answer(client: httpx.Client, launch: _Launch) -> tuple[bool, int | None]:
+    try:
+        response: Final = client.get("/health/integration-readiness", timeout=2)
+    except httpx.ConnectError:
+        return False, None
+    except httpx.TransportError:
+        return True, None
+    identity: Final = response.headers.get("x-integration-worker-pid", "")
+    ready: Final = response.status_code == 200 and identity.isdecimal() and _owns_listener(launch)
+    return True, int(identity) if ready else None
+
+
+def _probes(launch: _Launch, workers: int) -> Iterator[_Probe]:
     with httpx.Client(
         base_url=f"http://127.0.0.1:{launch.port}",
         timeout=15,
@@ -448,19 +514,27 @@ def _readiness_pids(launch: _Launch, workers: int) -> Iterator[int]:
     ) as client:
         deadline: Final = time.monotonic() + readiness_seconds(workers)
         while launch.process.poll() is None:
-            try:
-                response: Final = client.get("/health/integration-readiness", timeout=2)
-                identity: Final = response.headers.get("x-integration-worker-pid", "")
-                if response.status_code == 200 and identity.isdecimal() and _owns_listener(launch):
-                    yield int(identity)
-            except httpx.TransportError:
-                pass
+            elapsed: Final = time.monotonic() - launch.started
+            listening, ready_pid = _answer(client, launch)
+            yield _Probe(elapsed, listening, not listening and _prisma_running(launch), ready_pid)
             assert time.monotonic() < deadline, "Owned proxy readiness deadline exceeded"
             time.sleep(0.1)
 
 
-def _ready_workers(pids: frozenset[int], pid: int) -> frozenset[int]:
-    return pids | frozenset((pid,))
+def _first(recorded: float | None, observed: bool, elapsed: float) -> float | None:
+    return recorded if recorded is not None or not observed else elapsed
+
+
+def _observe(phases: BootPhases, probe: _Probe) -> BootPhases:
+    prisma_started: Final = _first(phases.prisma_started, probe.prisma, probe.elapsed)
+    prisma_finished: Final = _first(phases.prisma_finished, prisma_started is not None, probe.elapsed)
+    return BootPhases(
+        prisma_started=prisma_started,
+        prisma_finished=None if probe.prisma else prisma_finished,
+        listening=_first(phases.listening, probe.listening, probe.elapsed),
+        first_ready=_first(phases.first_ready, probe.ready_pid is not None, probe.elapsed),
+        ready_pids=phases.ready_pids | frozenset(() if probe.ready_pid is None else (probe.ready_pid,)),
+    )
 
 
 def _ready_worker_pid(member: psutil.Process) -> int | None:
@@ -475,13 +549,24 @@ def _ready_worker_pid(member: psutil.Process) -> int | None:
         return None
 
 
-def _wait_until_ready(launch: _Launch, workers: int = 1) -> None:
-    for ready in accumulate(_readiness_pids(launch, workers), _ready_workers, initial=frozenset[int]()):
-        members: Final = frozenset(
-            pid for member in group_members(launch.process.pid) if (pid := _ready_worker_pid(member)) is not None
-        )
-        if len(ready & members) >= max(1, workers):
-            return
+def _serves_all(launch: _Launch, phases: BootPhases, workers: int) -> bool:
+    if len(phases.ready_pids) < max(1, workers):
+        return False
+    members: Final = frozenset(
+        pid for member in group_members(launch.process.pid) if (pid := _ready_worker_pid(member)) is not None
+    )
+    return len(phases.ready_pids & members) >= max(1, workers)
+
+
+def _wait_until_ready(launch: _Launch, workers: int = 1) -> BootPhases | None:
+    return next(
+        (
+            phases
+            for phases in accumulate(_probes(launch, workers), _observe, initial=BootPhases())
+            if _serves_all(launch, phases, workers)
+        ),
+        None,
+    )
 
 
 def _launch_until_bound(
@@ -489,7 +574,7 @@ def _launch_until_bound(
 ) -> _Launch:
     launch: Final = _launch(command, root, environment, output)
     try:
-        _wait_until_ready(launch, workers)
+        phases: Final = _wait_until_ready(launch, workers)
         exit_code: Final = launch.process.poll()
         assert exit_code is None or (attempts > 1 and _lost_port_race(exit_code, launch.log)), (
             "Owned proxy exited before readiness"
@@ -498,12 +583,21 @@ def _launch_until_bound(
         _stop_launch(launch)
         raise
     if exit_code is None:
+        assert phases is not None
         launch.log.with_suffix(".startup.json").write_text(
             json.dumps(
                 {
                     "root_pid": launch.process.pid,
                     "readiness_seconds": time.monotonic() - launch.started,
                     "logical_cpus": os.cpu_count(),
+                    "workers": workers,
+                    "spawned_at": _wall_clock(launch.started),
+                    "phases": {
+                        "prisma_started": phases.prisma_started,
+                        "prisma_finished": phases.prisma_finished,
+                        "listening": phases.listening,
+                        "first_ready": phases.first_ready,
+                    },
                 }
             )
             + "\n"
@@ -517,14 +611,14 @@ def _proxy_root() -> Path:
     return Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
 
 
-def worker_configuration(config: Path, directory: Path) -> Path:
-    if os.environ.get("INTEGRATION_WORKER_ISOLATION") != "1":
+def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, str] = os.environ) -> Path:
+    if inherited.get("INTEGRATION_WORKER_ISOLATION") != "1":
         return config
 
     def endpoint(match: re.Match[str]) -> str:
         if match.group(1) == "8190":
-            return os.environ["INTEGRATION_UPSTREAM_URL"]
-        return f"http://127.0.0.1:{os.environ['INTEGRATION_PROVIDER_PORT']}"
+            return inherited["INTEGRATION_UPSTREAM_URL"]
+        return f"http://127.0.0.1:{inherited['INTEGRATION_PROVIDER_PORT']}"
 
     contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
     directory.mkdir(parents=True, exist_ok=True)
@@ -547,9 +641,12 @@ def worker_configuration(config: Path, directory: Path) -> Path:
 
 
 def _proxy_environment(
-    gateway: Gateway, overrides: Mapping[str, str], remove_environment: tuple[str, ...]
+    gateway: Gateway,
+    overrides: Mapping[str, str],
+    remove_environment: tuple[str, ...],
+    source: Mapping[str, str] = os.environ,
 ) -> Mapping[str, str]:
-    inherited: Final = {**os.environ, **proxy_database_environment()}
+    inherited: Final = {**source, **proxy_database_environment(source)}
     writer: Final = overrides.get("DATABASE_URL")
     reader: Final = inherited.get("DATABASE_URL_READ_REPLICA")
     unpaired_reader: Final = (
@@ -567,7 +664,7 @@ def _proxy_environment(
         {
             **{name: value for name, value in inherited.items() if name not in removed},
             "LITELLM_MASTER_KEY": gateway.key,
-            "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
+            "LITELLM_SALT_KEY": source.get("LITELLM_SALT_KEY", "sk-integration-salt"),
             "STORE_MODEL_IN_DB": "True",
             "PYTHON_DOTENV_DISABLED": "1",
             **overrides,
@@ -628,13 +725,17 @@ def owned_proxy_process(
     extra_arguments: tuple[str, ...] = (),
     coverage_file: Path | None = None,
     healthcheck: WorkerHealthcheck = WorkerHealthcheck.STRICT,
+    inherited: Mapping[str, str] = os.environ,
 ) -> Iterator[OwnedProxy]:
     assert "--timeout_worker_healthcheck" not in extra_arguments, "Choose the worker healthcheck with `healthcheck`"
     root: Final = _proxy_root()
     environment: Final = _proxy_environment(
-        gateway, {**overrides, **({"COVERAGE_FILE": str(coverage_file)} if coverage_file else {})}, remove_environment
+        gateway,
+        {**overrides, **({"COVERAGE_FILE": str(coverage_file)} if coverage_file else {})},
+        remove_environment,
+        inherited,
     )
-    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output: Final = Path(inherited.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     command: Final = (
         sys.executable,
@@ -642,7 +743,7 @@ def owned_proxy_process(
         *(("coverage", "run", f"--rcfile={MCP_COVERAGE_CONFIG}", "-m") if coverage_file else ()),
         "integration._support.proxy",
         "--config",
-        str(worker_configuration(config or root / "tests/integration/proxy_config.yaml", directory)),
+        str(worker_configuration(config or root / "tests/integration/proxy_config.yaml", directory, inherited)),
         "--host",
         "127.0.0.1",
         "--num_workers",
@@ -786,13 +887,21 @@ class UpstreamSlot:
     It runs from the harness's own checkout, never ``INTEGRATION_PROXY_ROOT``: the double belongs to the tests,
     the proxy root only names the litellm under test."""
 
-    __slots__ = ("certificate", "directory", "port", "process", "root")
+    __slots__ = ("certificate", "directory", "inherited", "port", "process", "root")
 
-    def __init__(self, directory: Path, port: int, root: Path, certificate: UpstreamCertificate | None = None) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        port: int,
+        root: Path,
+        certificate: UpstreamCertificate | None = None,
+        inherited: Mapping[str, str] = os.environ,
+    ) -> None:
         self.directory = directory
         self.port = port
         self.root = root
         self.certificate = certificate
+        self.inherited = inherited
         self.process: subprocess.Popen[bytes] | None = None
 
     @property
@@ -807,7 +916,7 @@ class UpstreamSlot:
 
     def start(self) -> None:
         assert self.process is None, "Owned upstream is already running"
-        output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR") or self.directory)
+        output: Final = Path(self.inherited.get("INTEGRATION_RESULTS_DIR") or self.directory)
         log_path: Final = output / f"owned-upstream-{self.port}-{uuid.uuid4().hex}.log"
         with log_path.open("w") as log:
             process: Final = subprocess.Popen(
@@ -820,7 +929,7 @@ class UpstreamSlot:
                     *self._tls_arguments(),
                 ],
                 cwd=self.root,
-                env=dict(os.environ),
+                env=dict(self.inherited),
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
@@ -856,9 +965,11 @@ def _harness_root() -> Path:
 
 
 @contextmanager
-def owned_upstream(directory: Path, *, tls: bool = False, port: int | None = None) -> Generator[UpstreamSlot]:
+def owned_upstream(
+    directory: Path, *, tls: bool = False, port: int | None = None, inherited: Mapping[str, str] = os.environ
+) -> Generator[UpstreamSlot]:
     certificate: Final = self_signed_certificate(directory) if tls else None
-    slot: Final = UpstreamSlot(directory, port or _free_port(), _harness_root(), certificate)
+    slot: Final = UpstreamSlot(directory, port or _free_port(), _harness_root(), certificate, inherited)
     try:
         slot.start()
         yield slot
