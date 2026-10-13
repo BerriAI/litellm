@@ -108,6 +108,7 @@ from litellm.utils import (
     get_valid_models,
     is_cached_message,
     is_prompt_caching_valid_prompt,
+    print_verbose,
     trim_messages,
     validate_environment,
     validate_chat_completion_tool_choice,
@@ -6667,6 +6668,39 @@ class TestFinalOptionalParamsLineRedaction:
 
         assert "'max_tokens': 17" in printed
         assert "'temperature': 0.25" in printed
+
+
+class TestPrintVerboseRedaction:
+    """print_verbose() must not leak secrets to stdout when callers pass dicts like
+    model_call_details that contain api_key fields."""
+
+    SECRET_VALUE: Final = "sk-ant-test-DO-NOT-LEAK-12345"
+
+    def _payload(self) -> Mapping[str, object]:
+        return {
+            "model": "claude-3-5-sonnet-20241022",
+            "api_key": self.SECRET_VALUE,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    def test_utils_print_verbose_redacts_stdout_when_set_verbose(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "set_verbose", True)
+        print_verbose(self._payload())
+        out: Final = capsys.readouterr().out
+        assert self.SECRET_VALUE not in out, f"api_key leaked to stdout: {out!r}"
+        assert "'api_key': 'REDACTED'" in out
+        assert "'model': 'claude-3-5-sonnet-20241022'" in out
+
+    def test_utils_print_verbose_routes_through_logger_redacted(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "set_verbose", False)
+        caplog.set_level(logging.DEBUG, logger="LiteLLM")
+        print_verbose(self._payload())
+        leaked: Final = [r.getMessage() for r in caplog.records if self.SECRET_VALUE in r.getMessage()]
+        assert not leaked, f"api_key leaked through verbose_logger: {leaked!r}"
 
 
 class TestDropParamsStringCoercion:

@@ -541,7 +541,7 @@ last_fetched_at_keys: Final = None
 
 ############################################################
 def print_verbose(
-    print_statement,
+    print_statement: object,
     logger_only: bool = False,
     log_level: Literal["DEBUG", "INFO", "ERROR"] = "DEBUG",
 ):
@@ -553,7 +553,12 @@ def print_verbose(
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
-            print(print_statement)  # noqa: T201
+            stdout_statement: Final = (
+                redact_credentials_in_payload(print_statement)
+                if isinstance(print_statement, Mapping)
+                else print_statement
+            )
+            print(stdout_statement)  # noqa: T201
     except Exception:
         pass
 
