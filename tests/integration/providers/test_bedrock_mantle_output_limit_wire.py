@@ -421,7 +421,7 @@ def test_stream_with_tools_carries_the_deployment_limit_as_max_completion_tokens
         text: Final = _stream_text(
             gateway,
             "/v1/chat/completions",
-            _chat_body(model, marker, stream=True, stream_options={"include_usage": True}, tools=_TOOLS),
+            _chat_body(model, marker, stream=True, stream_options={"include_usage": True}, tools=list(_TOOLS)),
         )
         assert f"marker-{marker}" in text and text.rstrip().endswith("data: [DONE]"), text
         (attempt,) = _attempts(wire)

@@ -4,14 +4,16 @@ Test automatic routing to xAI Responses API when tools are present
 
 import json
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.main import responses_api_bridge_check
+from litellm.types.llms.openai import OpenAIWebSearchOptions
 
 
 class _RecordingResponsesHandler:
@@ -45,7 +47,6 @@ class TestXAIResponsesAutoRouting:
         # Should not auto-route to responses mode without tools
         assert model_info.get("mode") != "responses"
         assert updated_model == model
-
 
     def test_responses_api_bridge_check_with_empty_tools(self):
         """Test that with empty tools list, xAI does not route to Responses API"""
@@ -106,9 +107,6 @@ class TestXAIResponsesAutoRouting:
         assert model_info.get("mode") == "responses"
         assert updated_model == "grok-3"  # prefix removed
 
-
-
-
     def test_responses_api_bridge_check_with_web_search_options(self):
         """Test auto-routing with web_search_options"""
         model = "grok-4-1-fast"
@@ -119,7 +117,7 @@ class TestXAIResponsesAutoRouting:
         model_info, updated_model = responses_api_bridge_check(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
+            web_search_options=cast(OpenAIWebSearchOptions | None, web_search_options),
         )
 
         # Should auto-route with web_search_options
@@ -136,7 +134,7 @@ class TestXAIResponsesAutoRouting:
         model_info, updated_model = responses_api_bridge_check(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            web_search_options=web_search_options,
+            web_search_options=cast(OpenAIWebSearchOptions | None, web_search_options),
         )
 
         # Should auto-route with both present
@@ -155,9 +153,7 @@ class TestXAIResponsesAutoRouting:
         assert updated_model == "grok-not-in-cost-map"
 
     @patch("litellm.completion_extras.responses_api_bridge.completion")
-    def test_completion_with_tools_routes_to_responses_api(
-        self, mock_responses_completion
-    ):
+    def test_completion_with_tools_routes_to_responses_api(self, mock_responses_completion):
         """Test that completion() with tools routes to Responses API"""
         # Mock the responses_api_bridge.completion to avoid actual API calls
         mock_responses_completion.return_value = MagicMock()

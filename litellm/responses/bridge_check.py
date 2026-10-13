@@ -52,6 +52,21 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
     )
 
 
+def bridge_deployment_info(model_info: object) -> Mapping[str, object] | None:
+    """The router deployment's ``model_info`` when the call carries one, read without narrowing the
+    caller's variable (``litellm.completion`` reuses it for pricing registration)."""
+    return cast(Mapping[str, object], model_info) if isinstance(model_info, Mapping) else None
+
+
+def backend_serves_chat_completions(shared_model_info: Mapping[str, object]) -> bool:
+    """Whether the shared cost-map row lets a deployment pin ``mode: chat``. Responses-only backends
+    (``gpt-5.1-codex``, ``o3-pro``, ``gpt-5.4-pro``) list only ``/v1/responses`` and must stay bridged."""
+    supported_endpoints: Final = shared_model_info.get("supported_endpoints")
+    if not isinstance(supported_endpoints, Sequence) or isinstance(supported_endpoints, str):
+        return True
+    return "/v1/chat/completions" in supported_endpoints
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -81,11 +96,12 @@ def responses_api_bridge_check(
         verbose_logger.debug("Error getting model info: %s", e)
         lookup_failed = True
 
-    # A deployment's own mode replaces only the shared-row mode. The capability rules below still run,
-    # so a pin cannot send a request Chat Completions rejects (gpt-5.4+ function tools with reasoning,
-    # xAI web search, an explicit ``responses/`` prefix) off the Responses API.
+    # A deployment's own mode replaces only the shared-row mode, and only where the backend serves that
+    # endpoint. The capability rules below still run, so a pin cannot send a request Chat Completions
+    # rejects (gpt-5.4+ function tools with reasoning, xAI web search, a ``responses/`` prefix) off the
+    # Responses API.
     pinned_mode: Final = deployment_routing_mode(deployment_model_info, custom_llm_provider)
-    if pinned_mode is not None:
+    if pinned_mode == "responses" or (pinned_mode == "chat" and backend_serves_chat_completions(model_info)):
         model_info["mode"] = pinned_mode
         if pinned_mode == "responses":
             model = model.replace("responses/", "")

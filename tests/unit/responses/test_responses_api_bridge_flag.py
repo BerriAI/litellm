@@ -20,7 +20,11 @@ from pydantic import JsonValue
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.responses.bridge_check import deployment_routing_mode, responses_api_bridge_check
+from litellm.responses.bridge_check import (
+    backend_serves_chat_completions,
+    deployment_routing_mode,
+    responses_api_bridge_check,
+)
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -661,3 +665,40 @@ def test_a_chat_pin_keeps_a_plain_gpt_5_4_chat_request_on_chat_completions() -> 
     info, model = responses_api_bridge_check(model="gpt-5.4", custom_llm_provider="openai", deployment_model_info=_CHAT)
     assert (info["mode"], model) == ("chat", "gpt-5.4")
     assert litellm.model_cost["gpt-5.4"]["mode"] == shared_mode
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider",
+    [("gpt-5.1-codex", "azure"), ("o3-pro", "openai"), ("gpt-5.4-pro", "openai")],
+)
+def test_a_chat_pin_cannot_pull_a_responses_only_model_off_the_responses_api(
+    model: str, custom_llm_provider: str
+) -> None:
+    """These rows list only ``/v1/responses`` in ``supported_endpoints``, so a deployment pin to chat has
+    nowhere to send the request and the bridge keeps it."""
+    cost_map: Final = cast(dict[str, dict[str, object]], litellm.model_cost)
+    assert not backend_serves_chat_completions(
+        cost_map[f"{custom_llm_provider}/{model}" if custom_llm_provider == "azure" else model]
+    )
+    info, routed_model = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base="https://example.openai.azure.com" if custom_llm_provider == "azure" else None,
+        deployment_model_info=_CHAT,
+    )
+    assert (info["mode"], routed_model) == ("responses", model)
+
+
+@pytest.mark.parametrize(
+    "shared_model_info, expected",
+    [
+        ({}, True),
+        ({"supported_endpoints": ["/v1/chat/completions", "/v1/responses"]}, True),
+        ({"supported_endpoints": ["/v1/responses", "/v1/batch"]}, False),
+        ({"supported_endpoints": "/v1/chat/completions"}, True),
+    ],
+)
+def test_backend_serves_chat_completions_reads_the_shared_row(
+    shared_model_info: Mapping[str, JsonValue], expected: bool
+) -> None:
+    assert backend_serves_chat_completions(shared_model_info) is expected
