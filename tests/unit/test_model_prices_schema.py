@@ -605,6 +605,26 @@ DEEPSEEK_OFF_PEAK_WINDOWS: Final = (
     {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
 )
 DEEPSEEK_HALVED_RATES: Final = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS: Final = (
+    "tencent/deepseek-v4-pro-0813",
+    "tencent/deepseek-v4.1-flash",
+)
+TENCENT_TOKENHUB_GLM_ROWS: Final = MappingProxyType(
+    {
+        "tencent/glm-5.3-flashx": (3.7e-07, 1.25e-06, 7.5e-08, True, True),
+        "tencent/glm-5.3-flash": (1.5e-07, 5e-07, 3e-08, True, True),
+        "tencent/glm-5.3": (1.4e-06, 4.4e-06, 2.6e-07, False, False),
+        "tencent/glm-5.2": (1.4e-06, 4.4e-06, 2.6e-07, False, False),
+    }
+)
+TENCENT_TOKENHUB_KIMI_ROWS: Final = MappingProxyType(
+    {
+        "tencent/kimi-k3": (3e-06, 1.5e-05, 3e-07, 1000000, False, False),
+        "tencent/kimi-k2.8-preview": (1e-06, 4e-06, 2.5e-07, 1000000, False, False),
+        "tencent/kimi-k2.7-code-highspeed": (1.9e-06, 8e-06, 3.8e-07, 256000, False, False),
+        "tencent/kimi-k2.7-code": (9.5e-07, 4e-06, 1.9e-07, 256000, False, False),
+    }
+)
 
 
 def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
@@ -634,6 +654,96 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
     }
     assert drifted == {}
     assert all(name in rows for name in DEEPSEEK_PRICED_ROWS)
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
+    """Tencent TokenHub applies the DeepSeek weekday peak windows and half-rate off-peak prices
+    to these models (tencentcloud.com/document/product/1300/78937, read 2026-10-13)."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    drifted: Final = {
+        name: deepseek_off_peak_drift(entry)
+        for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS
+        if isinstance(entry := rows.get(name), dict) and deepseek_off_peak_drift(entry) is not None
+    }
+    invalid_timezones: Final = tuple(
+        name
+        for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS
+        if isinstance(entry := rows.get(name), dict)
+        and isinstance(block := entry.get("off_peak_pricing"), dict)
+        and block.get("weekday_timezone") != "Asia/Shanghai"
+    )
+    assert drifted == {}
+    assert all(name in rows for name in TENCENT_TOKENHUB_DEEPSEEK_PRICED_ROWS)
+    assert invalid_timezones == ()
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
+    """TokenHub publishes these prices and capabilities in its official model catalog and rate card
+    (tencentcloud.com/document/product/1300/78934 and /78937, read 2026-10-13)."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    actual: Final = MappingProxyType(
+        {
+            name: (
+                entry.get("input_cost_per_token"),
+                entry.get("output_cost_per_token"),
+                entry.get("cache_read_input_token_cost"),
+                entry.get("supports_vision", False),
+                entry.get("supports_video_input", False),
+            )
+            for name in TENCENT_TOKENHUB_GLM_ROWS
+            if isinstance(entry := rows.get(name), dict)
+        }
+    )
+    invalid_metadata: Final = tuple(
+        name
+        for name in TENCENT_TOKENHUB_GLM_ROWS
+        if not isinstance(entry := rows.get(name), dict)
+        or entry.get("litellm_provider") != "tencent"
+        or entry.get("max_input_tokens") != 1000000
+        or entry.get("max_output_tokens") != 128000
+        or entry.get("max_tokens") != 128000
+        or entry.get("input_cost_per_token_cache_hit") != entry.get("cache_read_input_token_cost")
+    )
+    assert actual == TENCENT_TOKENHUB_GLM_ROWS
+    assert invalid_metadata == ()
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
+    """TokenHub publishes these Kimi prices and capabilities in its official model catalog and rate card
+    (tencentcloud.com/document/product/1300/78934 and /78937, read 2026-10-13)."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    actual: Final = MappingProxyType(
+        {
+            name: (
+                entry.get("input_cost_per_token"),
+                entry.get("output_cost_per_token"),
+                entry.get("cache_read_input_token_cost"),
+                entry.get("max_tokens"),
+                entry.get("supports_vision", False),
+                entry.get("supports_video_input", False),
+            )
+            for name in TENCENT_TOKENHUB_KIMI_ROWS
+            if isinstance(entry := rows.get(name), dict)
+        }
+    )
+    invalid_metadata: Final = tuple(
+        name
+        for name, expected in TENCENT_TOKENHUB_KIMI_ROWS.items()
+        if not isinstance(entry := rows.get(name), dict)
+        or entry.get("litellm_provider") != "tencent"
+        or entry.get("max_input_tokens") != expected[3]
+        or entry.get("max_output_tokens") != expected[3]
+        or entry.get("input_cost_per_token_cache_hit") != entry.get("cache_read_input_token_cost")
+        or not entry.get("supports_reasoning")
+        or not entry.get("supports_response_schema")
+        or not entry.get("supports_function_calling")
+        or not entry.get("supports_prompt_caching")
+    )
+    assert actual == TENCENT_TOKENHUB_KIMI_ROWS
+    assert invalid_metadata == ()
 
 
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
