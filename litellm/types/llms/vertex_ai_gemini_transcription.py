@@ -22,6 +22,8 @@ class VertexGeminiTranscriptionContent(TypedDict):
 
 class VertexGeminiTranscriptionAudioConfig(TypedDict, total=False):
     languageCodes: ReadOnly[tuple[str, ...]]
+    mode: ReadOnly[Literal["SMART", "VERBATIM"]]
+    customVocabulary: ReadOnly[tuple[str, ...]]
 
 
 class VertexGeminiTranscriptionGenerationConfig(TypedDict):

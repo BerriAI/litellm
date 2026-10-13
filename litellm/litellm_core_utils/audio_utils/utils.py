@@ -5,7 +5,7 @@ Utils used for litellm.transcription() and litellm.atranscription()
 import hashlib
 import os
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from litellm.types.files import (
     AUDIO_FILE_TYPES,
@@ -401,3 +401,43 @@ def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
     if (audio[1] & _ADTS_SYNC_AND_LAYER_MASK) == _ADTS_SYNC_AND_LAYER:
         return _adts_aac_frame_media_type(audio)
     return _mpeg_audio_frame_media_type(audio)
+
+
+GeminiTranscriptionMode = Literal["smart", "verbatim"]
+GEMINI_TRANSCRIPTION_MODES: Final[frozenset[str]] = frozenset(("smart", "verbatim"))
+
+
+def normalize_gemini_transcription_mode(mode: object) -> GeminiTranscriptionMode | None:
+    """
+    Parse the provider-specific `mode` param Gemini 3.5 Transcribe accepts
+    (https://ai.google.dev/gemini-api/docs/transcribe): `smart` cleans up
+    disfluencies and self-corrections, `verbatim` (Google's default) keeps them.
+    Case-insensitive; None when the caller sent nothing.
+
+    Raises ValueError (unknown value) or TypeError (not a string) so the provider
+    config can turn it into a 400.
+    """
+    if mode is None:
+        return None
+    if not isinstance(mode, str):
+        raise TypeError(f"Unsupported transcription mode {mode!r}. Supported values: smart, verbatim")
+    if mode.lower() not in GEMINI_TRANSCRIPTION_MODES:
+        raise ValueError(f"Unsupported transcription mode {mode!r}. Supported values: smart, verbatim")
+    return "smart" if mode.lower() == "smart" else "verbatim"
+
+
+def normalize_custom_vocabulary(custom_vocabulary: object) -> tuple[str, ...]:
+    """
+    Parse the provider-specific `custom_vocabulary` param: a sequence of terms, or
+    a comma-separated string (what a multipart form field arrives as). Blank
+    terms are dropped and order is kept.
+    """
+    if custom_vocabulary is None:
+        return ()
+    if isinstance(custom_vocabulary, str):
+        raw_terms: tuple[object, ...] = tuple(custom_vocabulary.split(","))
+    elif isinstance(custom_vocabulary, (list, tuple)):
+        raw_terms = tuple(custom_vocabulary)
+    else:
+        raise TypeError("custom_vocabulary must be a list of terms or a comma-separated string")
+    return tuple(term.strip() for term in raw_terms if isinstance(term, str) and term.strip())

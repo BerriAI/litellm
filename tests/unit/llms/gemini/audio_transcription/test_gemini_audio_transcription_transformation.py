@@ -1,5 +1,6 @@
 import base64
 import json
+from collections.abc import Mapping
 
 import httpx
 import pytest
@@ -212,6 +213,105 @@ class TestTransformRequest:
             litellm_params={},
         )
         assert "generation_config" not in request_data.data
+
+
+class TestSmartModeAndVocabulary:
+    def test_smart_mode_sends_smart_transcription_config(self, config: GeminiAudioTranscriptionConfig) -> None:
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"mode": "SMART", "language": "en"},
+            litellm_params={},
+        )
+        transcription_config = json.loads(json.dumps(request_data.data["generation_config"]["transcription_config"]))
+        assert transcription_config == {"language_codes": ["en-US"], "mode": {"type": "smart"}}
+
+    def test_verbatim_mode_is_sent_explicitly(self, config: GeminiAudioTranscriptionConfig) -> None:
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"mode": "verbatim"},
+            litellm_params={},
+        )
+        transcription_config = json.loads(json.dumps(request_data.data["generation_config"]["transcription_config"]))
+        assert transcription_config == {"mode": {"type": "verbatim"}}
+
+    def test_verbatim_mode_keeps_word_timestamps(self, config: GeminiAudioTranscriptionConfig) -> None:
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"mode": "verbatim", "timestamp_granularities": ["word"]},
+            litellm_params={},
+        )
+        mode = json.loads(json.dumps(request_data.data["generation_config"]["transcription_config"]["mode"]))
+        assert mode["type"] == "verbatim"
+        assert mode["timestamp_granularities"] == ["word"]
+
+    @pytest.mark.parametrize(
+        "optional_params",
+        [
+            {"mode": "smart", "timestamp_granularities": ["word"]},
+            {"mode": "smart", "response_format": "srt"},
+        ],
+    )
+    def test_smart_mode_with_word_timestamps_is_rejected(
+        self, config: GeminiAudioTranscriptionConfig, optional_params: Mapping[str, object]
+    ) -> None:
+        with pytest.raises(GeminiError, match="smart transcription mode cannot be combined") as excinfo:
+            config.transform_audio_transcription_request(
+                model="gemini-3.5-transcribe",
+                audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+                optional_params=optional_params,
+                litellm_params={},
+            )
+        assert excinfo.value.status_code == 400
+
+    def test_unknown_mode_is_rejected(self, config: GeminiAudioTranscriptionConfig) -> None:
+        with pytest.raises(GeminiError, match="Unsupported transcription mode") as excinfo:
+            config.transform_audio_transcription_request(
+                model="gemini-3.5-transcribe",
+                audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+                optional_params={"mode": "loud"},
+                litellm_params={},
+            )
+        assert excinfo.value.status_code == 400
+
+    @pytest.mark.parametrize(
+        "custom_vocabulary",
+        [["LiteLLM", "Kubernetes"], "LiteLLM, Kubernetes"],
+    )
+    def test_custom_vocabulary_accepts_list_or_comma_separated_string(
+        self, config: GeminiAudioTranscriptionConfig, custom_vocabulary: list[str] | str
+    ) -> None:
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"custom_vocabulary": custom_vocabulary},
+            litellm_params={},
+        )
+        transcription_config = json.loads(json.dumps(request_data.data["generation_config"]["transcription_config"]))
+        assert transcription_config == {"custom_vocabulary": ["LiteLLM", "Kubernetes"]}
+
+    def test_empty_vocabulary_sends_no_transcription_config(self, config: GeminiAudioTranscriptionConfig) -> None:
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"custom_vocabulary": " , "},
+            litellm_params={},
+        )
+        assert "generation_config" not in request_data.data
+
+    def test_mode_and_vocabulary_reach_optional_params_as_provider_specific_params(self) -> None:
+        optional_params = litellm.utils.get_optional_params_transcription(
+            model="gemini-3.5-transcribe",
+            custom_llm_provider="gemini",
+            language="en",
+            mode="smart",
+            custom_vocabulary=["LiteLLM"],
+        )
+        assert optional_params["mode"] == "smart"
+        assert optional_params["custom_vocabulary"] == ["LiteLLM"]
+        assert optional_params["language"] == "en"
 
 
 class TestTransformResponse:
