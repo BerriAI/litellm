@@ -177,7 +177,9 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
         yield chunk
 
 
-def _maskable_text_slots(messages: list) -> list[tuple[dict, str]]:
+def _maskable_text_slots(
+    messages: Sequence[object],
+) -> list[tuple[dict, str]]:  # mutable-ok: slots alias message dicts the hooks rewrite in place
     """
     ``(container, key)`` pairs whose string value is message text to scan.
 
@@ -186,8 +188,10 @@ def _maskable_text_slots(messages: list) -> list[tuple[dict, str]]:
     or a list of text blocks). Without them, code-interpreter output such as
     ``pdftotext`` of an attached file reaches the provider unmasked.
     """
-    slots: list[tuple[dict, str]] = []
+    slots: Final[list[tuple[dict, str]]] = []  # mutable-ok: accumulator handed back to the caller
     for m in messages:
+        if not isinstance(m, dict):
+            continue
         content = m.get("content", None)
         if isinstance(content, str):
             slots.append((m, "content"))
