@@ -3,12 +3,14 @@ import copy
 import json
 import os
 import re
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import ModelResponse, completion
@@ -1775,7 +1777,7 @@ def test_client_metadata_stripped_from_converse_request(model):
     assert fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
 
-def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
+def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch: pytest.MonkeyPatch):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -1784,7 +1786,7 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
         config = AmazonConverseConfig()
         optional_params = config.map_openai_params(
             model="anthropic.claude-sonnet-5",
-            non_default_params={"parallel_tool_calls": False},
+            non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
             optional_params={},
             drop_params=False,
         )
@@ -1820,7 +1822,7 @@ def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
     config = AmazonConverseConfig()
     optional_params = config.map_openai_params(
         model=model,
-        non_default_params={"parallel_tool_calls": False},
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
         optional_params={},
         drop_params=False,
     )
@@ -1832,6 +1834,7 @@ def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
         messages=None,
     )
 
+    assert "toolConfig" in data
     assert "tool_choice" not in data.get("additionalModelRequestFields", {})
 
 
@@ -5516,6 +5519,99 @@ def test_parallel_tool_use_merge_preserves_user_tool_choice_type():
         "type": "tool",
         "name": "get_weather",
         "disable_parallel_tool_use": True,
+    }
+
+
+_CONVERSE_TOOL_CHOICE_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+_STRING_KEYED: Final = TypeAdapter(dict[str, object])
+_COMPUTER_USE_TOOL: Final = {
+    "type": "computer_20250124",
+    "name": "computer",
+    "display_height_px": 768,
+    "display_width_px": 1024,
+    "display_number": 0,
+}
+
+
+def _converse_request_body(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    return _STRING_KEYED.validate_python(
+        AmazonConverseConfig().transform_request(
+            model=_CONVERSE_TOOL_CHOICE_MODEL,
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params=dict(optional_params),
+            litellm_params={},
+            headers={},
+        )
+    )
+
+
+def _parallel_tool_calls_disabled_params() -> Mapping[str, object]:
+    return _STRING_KEYED.validate_python(
+        AmazonConverseConfig().map_openai_params(
+            model=_CONVERSE_TOOL_CHOICE_MODEL,
+            non_default_params={"parallel_tool_calls": False},
+            optional_params={},
+            drop_params=False,
+        )
+    )
+
+
+def test_transform_request_drops_tool_choice_when_no_tools():
+    """
+    Bedrock Converse rejects toolChoice when there is no toolConfig. A caller can
+    send tool_choice without tools (some OpenAI-compatible clients do this), which
+    previously leaked through into the request.
+    """
+    result: Final = _converse_request_body({"tool_choice": {"auto": {}}})
+
+    assert "toolConfig" not in result
+    serialized: Final = json.dumps(result)
+    assert "tool_choice" not in serialized
+    assert "toolChoice" not in serialized
+
+
+def test_transform_request_drops_parallel_tool_use_when_no_tools():
+    """
+    parallel_tool_calls=false maps to a disable_parallel_tool_use tool_choice block
+    that is merged into additionalModelRequestFields. Without tools there is no
+    toolConfig for it to apply to, so it must not be sent.
+    """
+    optional_params: Final = _parallel_tool_calls_disabled_params()
+    assert "_parallel_tool_use_config" in optional_params
+
+    result: Final = _converse_request_body(optional_params)
+
+    assert "toolConfig" not in result
+    assert "tool_choice" not in json.dumps(result)
+
+
+def test_transform_request_drops_parallel_tool_use_when_only_tool_search_tools():
+    """
+    Raw tools can be present yet produce no toolConfig: tool_search tools are
+    filtered out of the Converse request. The parallel_tool_use guard must key off
+    the processed tools (same source of truth as tool_choice), not the raw tools
+    list.
+    """
+    mapped_params: Final = _parallel_tool_calls_disabled_params()
+    assert "_parallel_tool_use_config" in mapped_params
+
+    result: Final = _converse_request_body(
+        {**mapped_params, "tools": [{"type": "tool_search_tool_regex_20251119", "name": "search"}]}
+    )
+
+    assert "toolConfig" not in result
+    assert "tool_choice" not in json.dumps(result)
+
+
+def test_transform_request_keeps_parallel_tool_use_when_only_computer_use_tools():
+    """Computer use tools ride in additionalModelRequestFields.tools rather than toolConfig, and still count as tools."""
+    result: Final = _converse_request_body({**_parallel_tool_calls_disabled_params(), "tools": [_COMPUTER_USE_TOOL]})
+
+    assert "toolConfig" not in result
+    assert result["additionalModelRequestFields"] == {
+        "tools": [_COMPUTER_USE_TOOL],
+        "anthropic_beta": ["computer-use-2025-01-24"],
+        "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
     }
 
 

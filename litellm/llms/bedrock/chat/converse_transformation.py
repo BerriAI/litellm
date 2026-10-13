@@ -1668,13 +1668,6 @@ class AmazonConverseConfig(BaseConfig):
         additional_request_params = {k: v for k, v in inference_params.items() if k not in total_supported_params}
         inference_params = {k: v for k, v in inference_params.items() if k in total_supported_params}
 
-        # Handle parallel_tool_calls configuration
-        parallel_tool_use_config: Final = additional_request_params.pop("_parallel_tool_use_config", None)
-        if parallel_tool_use_config is not None and bedrock_converse_supports_parallel_tool_use_config(model):
-            additional_request_params = self._merge_parallel_tool_use_config(
-                additional_request_params, parallel_tool_use_config
-            )
-
         additional_request_params.pop("parallel_tool_calls", None)
         additional_request_params.pop("client_metadata", None)
 
@@ -1970,15 +1963,25 @@ class AmazonConverseConfig(BaseConfig):
                         AnthropicCacheControlHook.record_gateway_injection(litellm_params, 1)
                     break
 
+        parallel_tool_use_config: Final = additional_request_params.pop("_parallel_tool_use_config", None)
+        request_has_tools: Final = len(bedrock_tools) > 0 or "tools" in additional_request_params
+        additional_model_request_fields: Final = (
+            self._merge_parallel_tool_use_config(additional_request_params, parallel_tool_use_config)
+            if parallel_tool_use_config is not None
+            and request_has_tools
+            and bedrock_converse_supports_parallel_tool_use_config(model)
+            else additional_request_params
+        )
+
+        tool_choice_values: Final[ToolChoiceValuesBlock] = inference_params.pop("tool_choice", None)
         bedrock_tool_config: ToolConfigBlock | None = None
         if len(bedrock_tools) > 0:
-            tool_choice_values: Final[ToolChoiceValuesBlock] = inference_params.pop("tool_choice", None)
             bedrock_tool_config = ToolConfigBlock(
                 tools=bedrock_tools,
             )
             if tool_choice_values is not None:
                 bedrock_tool_config["toolChoice"] = tool_choice_values
-                self._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
+                self._drop_tool_choice_type_conflicting_with_tool_config(additional_model_request_fields)
 
         config_block_entries: Final = tuple(
             (config_name, config_class, inference_params.pop(config_name, None))
@@ -1988,9 +1991,9 @@ class AmazonConverseConfig(BaseConfig):
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
         }
-        if additional_request_params:
-            data["additionalModelRequestFields"] = additional_request_params
-            if "thinking" in additional_request_params:
+        if additional_model_request_fields:
+            data["additionalModelRequestFields"] = additional_model_request_fields
+            if "thinking" in additional_model_request_fields:
                 data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:
             data["system"] = system_content_blocks
