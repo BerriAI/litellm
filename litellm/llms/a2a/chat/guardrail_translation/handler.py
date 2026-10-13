@@ -444,7 +444,7 @@ class A2AGuardrailHandler(BaseTranslation):
         if depth >= max_depth:
             return ()
 
-        def _scan(part_idx: int, part: dict[str, Any]) -> tuple[tuple[str, tuple[str, ...], int, str], ...]:
+        def _scan(part_idx: int, part: _A2ATextPart) -> tuple[tuple[str, tuple[str, ...], int, str], ...]:
             kind: Final = part.get("kind")
             if kind == "text":
                 text: Final = part.get("text", "")
