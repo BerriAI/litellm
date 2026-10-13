@@ -64,6 +64,8 @@ The following arguments are supported:
 
 * `metadata` - (Optional) Metadata associated with this key. This can be used to store additional, custom information about the key.
 
+* `metadata_json` - (Optional) JSON object of metadata entries whose values are not strings, e.g. `jsonencode({ enabled = true })`. Merged with `metadata` before sending; a key may be set in only one of the two, and keys with their own attribute (`tags`, `guardrails`, `model_rpm_limit`, …) are rejected. Entries not declared in either stay untouched on the proxy.
+
 * `tpm_limit` - (Optional) Tokens per minute limit for this key. This sets a rate limit based on the number of tokens processed.
 
 * `rpm_limit` - (Optional) Requests per minute limit for this key. This sets a rate limit based on the number of API calls.

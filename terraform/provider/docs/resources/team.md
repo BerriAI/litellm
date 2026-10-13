@@ -60,6 +60,11 @@ resource "litellm_team" "advanced_team" {
     project    = "AI Research"
     cost_center = "R&D-001"
   }
+
+  # Metadata values that must keep their JSON type
+  metadata_json = jsonencode({
+    enabled = true
+  })
 }
 ```
 
@@ -111,6 +116,8 @@ The following arguments are supported:
 * `models` - (Optional) List of model names that this team can access.
 
 * `metadata` - (Optional) A map of string metadata key-value pairs associated with the team. `tags` and `soft_budget_alerting_emails` are stored by the proxy under metadata but are managed through their own attributes below, not this map.
+
+* `metadata_json` - (Optional) JSON object of metadata entries whose values are not strings, such as booleans. Merged with `metadata` before sending; a key may be set in only one of the two, and keys with their own attribute (`tags`, `soft_budget_alerting_emails`, `model_rpm_limit`, `model_tpm_limit`) are rejected.
 
 * `tags` - (Optional) List of tags applied to the team, used for [spend tracking](https://docs.litellm.ai/docs/proxy/enterprise#tracking-spend-for-custom-tags) and [tag-based routing](https://docs.litellm.ai/docs/proxy/tag_routing).
 

@@ -46,6 +46,7 @@ In addition to all arguments above, the following attributes are exported:
 * `max_parallel_requests` - Maximum parallel requests allowed.
 * `budget_duration` - Budget reset duration.
 * `metadata` - Map of string metadata values for the key.
+* `metadata_json` - Every metadata entry the proxy stores for the key, JSON encoded with value types intact.
 * `tags` - Tags attached to the key.
 * `blocked` - Whether the key is blocked.
 * `expires` - Expiry timestamp, if set.

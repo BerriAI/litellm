@@ -63,6 +63,7 @@ func dataSourceLiteLLMTeam() *schema.Resource {
 				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
+			"metadata_json": computedMetadataJSONSchema("Every metadata entry the proxy stores, JSON encoded with value types intact"),
 			"tags": {
 				Type:     schema.TypeList,
 				Computed: true,
@@ -149,6 +150,7 @@ func dataSourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 
 	metadata, tags, alertEmails := splitTeamMetadata(team.Metadata)
 	d.Set("metadata", metadata)
+	d.Set("metadata_json", encodeMetadataJSON(team.Metadata))
 	d.Set("tags", tags)
 	d.Set("soft_budget_alerting_emails", alertEmails)
 
