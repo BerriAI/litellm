@@ -38,6 +38,7 @@ class LoadShape:
     spawn_rate: float
     warmup_seconds: float
     measured_seconds: float
+    roll_seconds: float = 0.0
     processes: int = 1
 
 
@@ -52,6 +53,15 @@ class PerfRun:
             f"{self.load.requests_per_second:.0f} rps, {self.load.latency_summary()}, "
             f"worst worker RSS growth {self.rss_growth_mb:.1f} MB; by endpoint: {self.load.endpoint_summary()}"
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PerfPhases:
+    """`steady` is the stack as deployed, left alone. `roll` is the window after it in which the lane
+    upgrades the stack under the same load (None when `LoadShape.roll_seconds` is 0, as on a dev box)."""
+
+    steady: PerfRun
+    roll: PerfRun | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +158,7 @@ class PerfRig:
             self.resources.defer(lambda key=key: self.proxy.delete_key(key))
         return MockedGroup(name=name, keys=keys)
 
-    def measure(self, group: MockedGroup, endpoints: tuple[str, ...], shape: LoadShape) -> PerfRun:
+    def measure(self, group: MockedGroup, endpoints: tuple[str, ...], shape: LoadShape) -> PerfPhases:
         def drive(seconds: float) -> LoadResult:
             return run_gateway_load(
                 base_url=PROXY_BASE_URL,
@@ -164,9 +174,16 @@ class PerfRig:
         warmup: Final = drive(shape.warmup_seconds)
         assert warmup.requests > 0, f"warm-up sent nothing: {warmup.diagnosis()}"
         before: Final = _sample_workers(self.proxy)
-        load: Final = drive(shape.measured_seconds)
-        after: Final = _sample_workers(self.proxy)
-        return PerfRun(load=load, rss_growth_mb=_worst_worker_growth_mb(before, after))
+        steady_load: Final = drive(shape.measured_seconds)
+        after_steady: Final = _sample_workers(self.proxy)
+        steady: Final = PerfRun(load=steady_load, rss_growth_mb=_worst_worker_growth_mb(before, after_steady))
+        if shape.roll_seconds <= 0:
+            return PerfPhases(steady=steady, roll=None)
+        roll_load: Final = drive(shape.roll_seconds)
+        after_roll: Final = _sample_workers(self.proxy)
+        return PerfPhases(
+            steady=steady, roll=PerfRun(load=roll_load, rss_growth_mb=_worst_worker_growth_mb(after_steady, after_roll))
+        )
 
     def problems(self, label: str, run: PerfRun, budget: PerfBudget) -> tuple[str, ...]:
         """Everything wrong with the run, empty when it held the budget, printed so the build log carries the numbers."""

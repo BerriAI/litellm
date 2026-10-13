@@ -1,6 +1,8 @@
 """Live perf: the gateway serves 1k requests per second over mocked deployments of every major provider
 that answer with provider-like delays, with zero failures, latency ceilings set from those delays plus a
-gateway overhead allowance, and no worker growing its RSS past a flat ceiling.
+gateway overhead allowance, and no worker growing its RSS past a flat ceiling. With E2E_PERF_ROLL_SECONDS set
+the same load keeps running through a second window in which the CI lane upgrades the stack to the
+candidate, and that window carries its own, looser budget.
 
 Deselected unless E2E_PERF_TESTS is set.
 """
@@ -39,6 +41,7 @@ SHAPE: Final = LoadShape(
     spawn_rate=float(os.environ.get("E2E_PERF_SPAWN_RATE", "100")),
     warmup_seconds=float(os.environ.get("E2E_PERF_WARMUP_SECONDS", "15")),
     measured_seconds=float(os.environ.get("E2E_PERF_MEASURED_SECONDS", "60")),
+    roll_seconds=float(os.environ.get("E2E_PERF_ROLL_SECONDS", "0")),
     processes=int(os.environ.get("E2E_PERF_LOCUST_PROCESSES", "4")),
 )
 BUDGET: Final = PerfBudget(
@@ -48,11 +51,21 @@ BUDGET: Final = PerfBudget(
     p99_ceiling_seconds=max(MOCK_DELAYS_SECONDS) + 2 * GATEWAY_OVERHEAD_ALLOWANCE_SECONDS,
     rss_growth_ceiling_mb=150.0,
 )
+ROLL_BUDGET: Final = PerfBudget(
+    min_requests_per_second=0.8 * TARGET_RPS,
+    p50_ceiling_seconds=BUDGET.p50_ceiling_seconds,
+    p90_ceiling_seconds=BUDGET.p99_ceiling_seconds,
+    p99_ceiling_seconds=BUDGET.p99_ceiling_seconds + 2.0,
+    rss_growth_ceiling_mb=BUDGET.rss_growth_ceiling_mb,
+)
 
 
 class TestThousandRps:
     def test_gateway_holds_1k_rps_over_mocked_providers(self, perf_rig: PerfRig) -> None:
         group: Final = perf_rig.mocked_group(PROVIDER_MODELS, MOCK_DELAYS_SECONDS)
-        run: Final = perf_rig.measure(group, ENDPOINTS, SHAPE)
-        problems: Final = perf_rig.problems("1k rps", run, BUDGET)
-        assert not problems, "; ".join((*problems, run.report()))
+        phases: Final = perf_rig.measure(group, ENDPOINTS, SHAPE)
+        steady_problems: Final = perf_rig.problems("1k rps steady", phases.steady, BUDGET)
+        roll_problems: Final = (
+            perf_rig.problems("1k rps under the rolling upgrade", phases.roll, ROLL_BUDGET) if phases.roll else ()
+        )
+        assert not (*steady_problems, *roll_problems), "; ".join((*steady_problems, *roll_problems))
