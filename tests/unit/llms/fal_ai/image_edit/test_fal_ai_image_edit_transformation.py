@@ -3,11 +3,16 @@ import io
 import json
 import tempfile
 from pathlib import Path
+from typing import Final
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
-from litellm.llms.fal_ai.image_edit import FalAIImageEditConfig
+import litellm
+from litellm.images.utils import ImageEditRequestUtils
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.fal_ai.image_edit import FalAIImageEditConfig, get_fal_ai_image_edit_config
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageResponse, LlmProviders
@@ -155,4 +160,131 @@ def test_transform_request_requires_an_image(image):
             image_edit_optional_request_params={},
             litellm_params=GenericLiteLLMParams(),
             headers={},
+        )
+
+
+@pytest.mark.parametrize("model", ["fal-ai/nano-banana-2", "fal-ai/nano-banana-pro/edit"])
+@pytest.mark.parametrize(
+    "size,expected_aspect_ratio,expected_resolution",
+    [
+        ("1792x1024", "16:9", "1K"),
+        ("1024x768", "4:3", "1K"),
+        ("928x1152", "4:5", "1K"),
+        ("512x512", "1:1", "0.5K"),
+        ("767x767", "1:1", "0.5K"),
+        ("768x768", "1:1", "1K"),
+        ("1535x1535", "1:1", "1K"),
+        ("1536x1536", "1:1", "2K"),
+        ("2752x1536", "16:9", "2K"),
+        ("3071x3071", "1:1", "2K"),
+        ("3072x3072", "1:1", "4K"),
+        ("5504x3072", "16:9", "4K"),
+        ("auto", "auto", None),
+        ("not-a-size", "1:1", None),
+        (None, None, None),
+    ],
+)
+def test_nano_banana_edit_maps_size_to_aspect_ratio_and_resolution(
+    model: str, size: str | None, expected_aspect_ratio: str | None, expected_resolution: str | None
+) -> None:
+    resolution: Final = "1K" if expected_resolution == "0.5K" and "nano-banana-pro" in model else expected_resolution
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert TypeAdapter(dict[str, object]).validate_json(request.content) == {
+            "prompt": "Make the wall blue",
+            "image_urls": ["https://example.com/room.png"],
+            "num_images": 1,
+            **({"aspect_ratio": expected_aspect_ratio} if expected_aspect_ratio else {}),
+            **({"resolution": resolution} if resolution else {}),
+        }
+        return httpx.Response(200, json={"images": [{"url": "https://example.com/edited.png"}]})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+        response: Final = litellm.image_edit(
+            model=f"fal_ai/{model}",
+            image="https://example.com/room.png",
+            prompt="Make the wall blue",
+            n=1,
+            size=size,
+            api_key="test-key",
+            client=HTTPHandler(client=http_client),
+        )
+    assert isinstance(response, ImageResponse)
+    assert response.data is not None
+    assert [item.url for item in response.data] == ["https://example.com/edited.png"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["fal-ai/nano-banana-2/edit", "fal-ai/nano-banana-pro"])
+@pytest.mark.parametrize("use_extra_body", [False, True])
+@pytest.mark.parametrize("overrides", [("aspect_ratio", "resolution"), ("aspect_ratio",), ("resolution",)])
+async def test_nano_banana_edit_forwards_native_controls_and_preserves_inline_images(
+    model: str, use_extra_body: bool, overrides: tuple[str, ...]
+) -> None:
+    controls: Final = {
+        **({"aspect_ratio": "4:3"} if "aspect_ratio" in overrides else {}),
+        **({"resolution": "2K"} if "resolution" in overrides else {}),
+        "system_prompt": "Preserve the room",
+        "sync_mode": use_extra_body,
+    }
+    image_url: Final = "data:image/png;base64," + base64.b64encode(PNG_BYTES).decode()
+    output_url: Final = image_url if use_extra_body else "https://example.com/edited.png"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == f"https://fal.run/{model.removesuffix('/edit')}/edit"
+        assert request.headers["Authorization"] == "Key test-key"
+        assert TypeAdapter(dict[str, object]).validate_json(request.content) == {
+            "prompt": "Apply the swatch to the wall",
+            "image_urls": [image_url, "https://example.com/swatch.png"],
+            "num_images": 2,
+            "aspect_ratio": "1:1",
+            "resolution": "4K",
+            **controls,
+        }
+        return httpx.Response(200, json={"images": [{"url": output_url}]})
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    async with client.client:
+        response: Final = await litellm.aimage_edit(
+            model=f"fal_ai/{model}",
+            image=[PNG_BYTES, "https://example.com/swatch.png"],
+            prompt="Apply the swatch to the wall",
+            n=2,
+            size="4096x4096",
+            api_key="test-key",
+            client=client,
+            **(
+                {"aspect_ratio": "1:1", "extra_body": {**controls, "_litellm_undeclared_sentinel": "internal"}}
+                if use_extra_body
+                else controls
+            ),
+        )
+    assert response.data is not None
+    assert [item.url for item in response.data] == [output_url]
+
+
+@pytest.mark.parametrize("size,expected_ratio", [("4096x1024", "4:1"), ("1024x8192", "1:8")])
+def test_nano_banana_2_edit_maps_extreme_sizes(size: str, expected_ratio: str) -> None:
+    config: Final = get_fal_ai_image_edit_config("fal-ai/nano-banana-2/edit")
+    assert config.map_openai_params(ImageEditOptionalRequestParams(size=size), "fal-ai/nano-banana-2/edit", False) == {
+        "aspect_ratio": expected_ratio,
+        "resolution": "2K",
+    }
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        ImageEditOptionalRequestParams(quality="high"),
+        ImageEditOptionalRequestParams(background="transparent"),
+        ImageEditOptionalRequestParams(mask="https://example.com/mask.png"),
+    ],
+)
+def test_nano_banana_edit_rejects_gpt_specific_params(params: ImageEditOptionalRequestParams) -> None:
+    model: Final = "fal-ai/nano-banana-2"
+    with pytest.raises(litellm.UnsupportedParamsError, match="not supported"):
+        ImageEditRequestUtils.get_optional_params_image_edit(
+            model=model,
+            image_edit_provider_config=get_fal_ai_image_edit_config(model),
+            image_edit_optional_params=params,
         )

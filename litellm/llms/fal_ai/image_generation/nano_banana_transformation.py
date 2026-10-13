@@ -1,9 +1,26 @@
+from collections.abc import Sequence
 from typing import Final
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 
 from .transformation import FalAIBaseConfig
+
+
+def map_nano_banana_aspect_ratio(size: str, supported_aspect_ratios: Sequence[str]) -> str:
+    if not isinstance(size, str) or "x" not in size:
+        return "1:1"
+    try:
+        width, height = (int(part) for part in size.split("x"))
+        target: Final = width / height
+    except (ValueError, ZeroDivisionError):
+        return "1:1"
+
+    def ratio_of(aspect_ratio: str) -> float:
+        w, h = (int(part) for part in aspect_ratio.split(":"))
+        return w / h
+
+    return min(supported_aspect_ratios, key=lambda aspect_ratio: abs(ratio_of(aspect_ratio) - target))
 
 
 class FalAINanoBananaConfig(FalAIBaseConfig):
@@ -78,22 +95,7 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         return optional_params
 
     def _map_aspect_ratio(self, size: str) -> str:
-        if not isinstance(size, str) or "x" not in size:
-            return "1:1"
-        try:
-            width, height = (int(part) for part in size.split("x"))
-            target: Final = width / height
-        except (ValueError, ZeroDivisionError):
-            return "1:1"
-
-        def ratio_of(aspect_ratio: str) -> float:
-            w, h = (int(part) for part in aspect_ratio.split(":"))
-            return w / h
-
-        return min(
-            self.SUPPORTED_ASPECT_RATIOS,
-            key=lambda aspect_ratio: abs(ratio_of(aspect_ratio) - target),
-        )
+        return map_nano_banana_aspect_ratio(size, self.SUPPORTED_ASPECT_RATIOS)
 
     def transform_image_generation_request(
         self,

@@ -836,13 +836,17 @@ def image_edit(
             raise ValueError(f"image edit is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
+        provider_supported_params: Final = frozenset(image_edit_provider_config.get_supported_openai_params(model))
+        extra_provider_params: Final = {
+            key: value for key, value in (extra_body or {}).items() if key in provider_supported_params
+        }
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
-                local_vars,
-                provider_supported_params=frozenset(
-                    image_edit_provider_config.get_supported_openai_params(model)
-                ).intersection(non_default_params),
+                {**local_vars, **extra_provider_params},
+                provider_supported_params=provider_supported_params.intersection(
+                    non_default_params.keys() | extra_provider_params.keys()
+                ),
             )
         )
         # Get optional parameters for the responses API
