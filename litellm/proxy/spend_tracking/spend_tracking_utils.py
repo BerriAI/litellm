@@ -1751,9 +1751,9 @@ def _placeholder_stored_request_body_metadata(
         {
             "model_group": persisted_model_group,
             "error_information": _scrub_raw_model_from_error_information(
-                cast(
+                cast(  # cast-ok: validated mapping is the logging error-information contract
                     StandardLoggingPayloadErrorInformation, error_information
-                ),  # cast-ok: validated mapping is the logging error-information contract
+                ),
                 raw_model,
             )
             if isinstance(error_information, Mapping)
