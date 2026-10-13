@@ -58,7 +58,7 @@ class V1MConfig(OpenAIGPTConfig):
             "state": extracted_state or user_prompt or "General State Assessment",
             "questions": {
                 "decision": {
-                    "prompt": user_prompt = "Evaluate state validity.",
+                    "prompt": user_prompt or "Evaluate state validity.",
                     "instructions": "Determine probabilistic confidence and classification.",
                     "type": "choice",
                     "criteria": {
