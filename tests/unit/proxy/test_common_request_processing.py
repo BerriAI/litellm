@@ -30,7 +30,9 @@ from litellm.constants import (
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -5993,7 +5995,7 @@ class TestAllmPassthroughStreamingProviderGate:
         }
         return ProxyBaseLLMRequestProcessing(data=data)
 
-    async def _run(self, processing_obj, monkeypatch, chunks, stream=None):
+    async def _run(self, processing_obj, monkeypatch, chunks, stream=None, streaming_iterator_hook=None):
         import litellm.proxy.common_request_processing as crp
         from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
 
@@ -6016,6 +6018,8 @@ class TestAllmPassthroughStreamingProviderGate:
         proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
         proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
         proxy_logging_obj.post_call_success_hook = AsyncMock()
+        if streaming_iterator_hook is not None:
+            proxy_logging_obj.async_post_call_streaming_iterator_hook = streaming_iterator_hook
 
         return await processing_obj.base_process_llm_request(
             request=MagicMock(spec=Request, headers={}),
@@ -6101,6 +6105,10 @@ class TestAllmPassthroughStreamingProviderGate:
             ProxyBaseLLMRequestProcessing,
             "_has_post_call_guardrails_for_passthrough",
             return_value=True,
+        ), patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_passthrough_stream_scans_incrementally",
+            return_value=False,
         ), patch(
             "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
             "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
@@ -6129,6 +6137,10 @@ class TestAllmPassthroughStreamingProviderGate:
             ProxyBaseLLMRequestProcessing,
             "_has_post_call_guardrails_for_passthrough",
             return_value=True,
+        ), patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_passthrough_stream_scans_incrementally",
+            return_value=False,
         ), patch(
             "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
             "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
@@ -6171,6 +6183,130 @@ class TestAllmPassthroughStreamingProviderGate:
         assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
         streamed = [chunk async for chunk in result.body_iterator]
         assert streamed == chunks
+
+    @staticmethod
+    def _event_stream_frame(event_type: str, payload: dict) -> bytes:
+        import struct
+        from binascii import crc32
+
+        def hdr(name: str, value: str) -> bytes:
+            n, v = name.encode(), value.encode()
+            return struct.pack("!B", len(n)) + n + struct.pack("!B", 7) + struct.pack("!H", len(v)) + v
+
+        headers = (
+            hdr(":event-type", event_type) + hdr(":content-type", "application/json") + hdr(":message-type", "event")
+        )
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        prelude = struct.pack("!II", 12 + len(headers) + len(body) + 4, len(headers))
+        prelude_crc = crc32(prelude) & 0xFFFFFFFF
+        message = struct.pack("!I", prelude_crc) + headers + body
+        return prelude + message + struct.pack("!I", crc32(message, prelude_crc) & 0xFFFFFFFF)
+
+    class _ScanGuardrail(CustomGuardrail):
+        def __init__(self, block_word: str | None = None, mask_response_content: bool = False) -> None:
+            super().__init__(
+                guardrail_name="scan",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+                mask_response_content=mask_response_content,
+            )
+            self.block_word = block_word
+            self.seen_texts: list[list[str]] = []
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            texts = list(inputs.get("texts", []))
+            self.seen_texts.append(texts)
+            if self.block_word and any(self.block_word in t for t in texts):
+                raise HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+            return inputs
+
+    def _converse_stream_processing_obj(self) -> ProxyBaseLLMRequestProcessing:
+        processing_obj = self._build_processing_obj("bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream")
+        processing_obj.data["litellm_logging_obj"].call_type = "allm_passthrough_route"
+        processing_obj.data["litellm_logging_obj"]._on_deferred_stream_complete = None
+        return processing_obj
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_with_scanning_guardrail_relays_frames_before_upstream_finishes(
+        self, monkeypatch
+    ):
+        """LIT-9515: a post_call guardrail that scans through apply_guardrail must not hold the stream until
+        Bedrock finishes. The first frame reaches the client while the upstream is still generating, and the
+        guardrail sees the streamed text."""
+        guardrail = self._ScanGuardrail()
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        release = asyncio.Event()
+        frames = [
+            self._event_stream_frame("messageStart", {"role": "assistant"}),
+            self._event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "hello "}}),
+            self._event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "world"}}),
+            self._event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+        ]
+
+        async def upstream():
+            yield frames[0]
+            await release.wait()
+            for frame in frames[1:]:
+                yield frame
+
+        real_hook = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook
+        result = await self._run(
+            self._converse_stream_processing_obj(),
+            monkeypatch,
+            [],
+            stream=upstream(),
+            streaming_iterator_hook=real_hook,
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert result.media_type == "application/vnd.amazon.eventstream"
+        assert "content-length" not in {k.lower() for k in result.headers}
+        body = result.body_iterator.__aiter__()
+        first = await asyncio.wait_for(body.__anext__(), timeout=2)
+        assert first == frames[0]
+        release.set()
+        rest = [chunk async for chunk in body]
+        assert [first, *rest] == frames
+        assert guardrail.seen_texts[-1] == ["hello world"]
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_block_ends_with_an_event_stream_exception_frame(self, monkeypatch):
+        from botocore.eventstream import EventStreamBuffer
+
+        guardrail = self._ScanGuardrail(block_word="secret")
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        frames = [
+            self._event_stream_frame("messageStart", {"role": "assistant"}),
+            self._event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "the secret is"}}),
+            self._event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+        ]
+        real_hook = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook
+        result = await self._run(
+            self._converse_stream_processing_obj(), monkeypatch, frames, streaming_iterator_hook=real_hook
+        )
+
+        streamed = [chunk async for chunk in result.body_iterator]
+        assert streamed[0] == frames[0]
+        buf = EventStreamBuffer()
+        buf.add_data(streamed[-1])
+        message = next(iter(buf))
+        assert message.headers[":message-type"] == "exception"
+        assert json.loads(message.payload) == {"message": "Violated guardrail policy"}
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_with_masking_guardrail_keeps_buffered_rewrite_path(self, monkeypatch):
+        monkeypatch.setattr(litellm, "callbacks", [self._ScanGuardrail(mask_response_content=True)])
+        with patch(
+            "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
+            "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
+            new=AsyncMock(return_value=b"masked-body"),
+        ) as mock_handler:
+            result = await self._run(self._converse_stream_processing_obj(), monkeypatch, [b"raw-1", b"raw-2"])
+
+        assert isinstance(result, Response)
+        assert not isinstance(result, StreamingResponse)
+        assert result.body == b"masked-body"
+        mock_handler.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_non_bedrock_stream_keeps_default_content_type(self, monkeypatch):

@@ -194,6 +194,23 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
     }
 
 
+_NATIVE_LOGGING_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.pass_through.value,
+        CallTypes.allm_passthrough_route.value,
+        CallTypes.ocr.value,
+        CallTypes.aocr.value,
+    }
+)
+
+
+def _native_call_type_from_logging(litellm_logging_obj: object) -> CallTypesLiteral | None:
+    """Call type of a request whose route is not in API_ROUTE_TO_CALL_TYPES and whose response chunks carry
+    no OpenAI shape to infer from (pass-through and OCR), read from its logging object."""
+    logging_call_type: Final = getattr(litellm_logging_obj, "call_type", None)
+    return logging_call_type if logging_call_type in _NATIVE_LOGGING_CALL_TYPES else None
+
+
 def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
     """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
     if "litellm_metadata" not in data:
@@ -361,17 +378,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             call_type = infer_call_type(call_type=None, completion_response=response)
 
         if call_type is None:
-            litellm_logging_obj: Final = data.get("litellm_logging_obj")
-            logging_call_type: Final = (
-                getattr(litellm_logging_obj, "call_type", None) if litellm_logging_obj is not None else None
-            )
-            if logging_call_type in (
-                CallTypes.pass_through.value,
-                CallTypes.allm_passthrough_route.value,
-                CallTypes.ocr.value,
-                CallTypes.aocr.value,
-            ):
-                call_type = logging_call_type
+            call_type = _native_call_type_from_logging(data.get("litellm_logging_obj"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request data is an untyped dict
 
         if call_type is None:
             verbose_proxy_logger.warning(
@@ -1231,7 +1238,11 @@ class UnifiedLLMGuardrails(CustomLogger):
                         call_type = call_types[0].value
 
                 if call_type is None:
-                    call_type = infer_call_type(call_type=None, completion_response=item)
+                    call_type = infer_call_type(
+                        call_type=None, completion_response=item
+                    ) or _native_call_type_from_logging(
+                        request_data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request data is an untyped dict
+                    )
 
                 # If call type not supported, just pass through all chunks
                 if call_type is None or CallTypes(call_type) not in mappings:

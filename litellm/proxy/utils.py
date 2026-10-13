@@ -353,7 +353,9 @@ class _UpdateManyBatch(Protocol):
 
 unified_guardrail: Final = UnifiedLLMGuardrails()
 
-NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset({CallTypes.anthropic_messages})
+NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset(
+    {CallTypes.anthropic_messages, CallTypes.allm_passthrough_route}
+)
 
 
 def print_verbose(print_statement: object):
@@ -2970,14 +2972,21 @@ class ProxyLogging:
     _callback_capabilities = callback_capabilities
 
     @staticmethod
-    def _stream_requires_guardrail_translation(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    def _stream_requires_guardrail_translation(
+        user_api_key_dict: UserAPIKeyAuth, request_data: Mapping[str, object] | None = None
+    ) -> bool:
         route: Final = user_api_key_dict.request_route
-        if not route:
+        call_types: Final = get_call_types_for_route(route) if route else None
+        if call_types:
+            return call_types[0] in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES
+        logging_obj: Final = (request_data or {}).get("litellm_logging_obj")
+        logging_call_type: Final = getattr(logging_obj, "call_type", None)
+        if not isinstance(logging_call_type, str):
             return False
-        call_types: Final = get_call_types_for_route(route)
-        if not call_types:
+        try:
+            return CallTypes(logging_call_type) in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES
+        except ValueError:
             return False
-        return call_types[0] in NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES
 
     @staticmethod
     def has_post_call_response_headers_callbacks() -> bool:
@@ -4041,7 +4050,10 @@ class ProxyLogging:
         request_data = check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
         current_response = response
-        stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
+        stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(
+            user_api_key_dict,
+            request_data,  # pyright: ignore[reportUnknownArgumentType]  # request data is an untyped dict
+        )
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect

@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 from fastapi import HTTPException
 
@@ -1060,3 +1062,26 @@ async def test_parallel_post_call_guardrails_keep_native_hook_when_opted_out(mon
 
     assert opted_out.native_hooks_ran == ["post_call"]
     assert routed.native_hooks_ran == []
+
+
+def test_stream_requires_guardrail_translation_falls_back_to_passthrough_logging_call_type():
+    """LIT-9515: /bedrock/model/<alias>/converse-stream is not in API_ROUTE_TO_CALL_TYPES, so the
+    passthrough stream resolves its call type from the logging object and still gets translated."""
+    logging_obj = MagicMock()
+    logging_obj.call_type = "allm_passthrough_route"
+    assert (
+        ProxyLogging._stream_requires_guardrail_translation(
+            UserAPIKeyAuth(request_route="/bedrock/model/x/converse-stream"),
+            {"litellm_logging_obj": logging_obj},
+        )
+        is True
+    )
+    logging_obj.call_type = "acompletion"
+    assert (
+        ProxyLogging._stream_requires_guardrail_translation(
+            UserAPIKeyAuth(request_route="/bedrock/model/x/converse-stream"),
+            {"litellm_logging_obj": logging_obj},
+        )
+        is False
+    )
+    assert ProxyLogging._stream_requires_guardrail_translation(UserAPIKeyAuth(request_route=None), {}) is False

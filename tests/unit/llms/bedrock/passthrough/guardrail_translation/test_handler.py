@@ -14,7 +14,10 @@ from datetime import datetime
 from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
 
+import json
+
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -1342,3 +1345,166 @@ class TestDeAnonymizeConverseStream:
 
         hook_spy.assert_not_called()
         assert result is stream_bytes
+
+
+async def _chunked(data: bytes, size: int):
+    for i in range(0, len(data), size):
+        yield data[i : i + size]
+
+
+class _BlockOnWordGuardrail(CustomGuardrail):
+    def __init__(self, word: str) -> None:
+        super().__init__(guardrail_name="block-word", event_hook=GuardrailEventHooks.post_call, default_on=True)
+        self.word = word
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        if any(self.word in text for text in inputs.get("texts", [])):
+            raise HTTPException(status_code=400, detail={"error": f"blocked: {self.word}"})
+        return inputs
+
+
+class TestIterEventStreamFrames:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chunk_size", [1, 7, 64, 10_000])
+    async def test_reassembles_whole_frames_regardless_of_chunk_boundaries(self, chunk_size: int):
+        frames = [
+            _build_event_stream_frame("messageStart", {"role": "assistant"}),
+            _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "hello "}}),
+            _build_event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+        ]
+        items = [
+            item
+            async for item in BedrockPassthroughGuardrailHandler.iter_event_stream_frames(
+                _chunked(b"".join(frames), chunk_size)
+            )
+        ]
+        assert items == frames
+
+    @pytest.mark.asyncio
+    async def test_trailing_partial_bytes_are_still_relayed(self):
+        frame = _build_event_stream_frame("messageStart", {"role": "assistant"})
+        items = [
+            item
+            async for item in BedrockPassthroughGuardrailHandler.iter_event_stream_frames(
+                _chunked(frame + b"\x00\x00\x00", 1000)
+            )
+        ]
+        assert items == [frame, b"\x00\x00\x00"]
+
+
+class TestStreamingScan:
+    def _frames(self) -> list[bytes]:
+        return [
+            _build_event_stream_frame("messageStart", {"role": "assistant"}),
+            _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "The card is "}}),
+            _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": _TEST_CARD}}),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"toolUse": {"input": '{"q":"weather"}'}}}
+            ),
+        ]
+
+    def test_scan_key_groups_text_per_content_block_and_tracks_end(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        key = handler.get_streaming_scan_key(self._frames())
+        assert key is not None
+        assert key.texts == (f"The card is {_TEST_CARD}", '{"q":"weather"}')
+        assert key.stream_ended is False
+        assert handler._check_streaming_has_ended(self._frames()) is False
+        ended = [*self._frames(), _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})]
+        assert handler._check_streaming_has_ended(ended) is True
+        assert handler.get_streaming_scan_key(ended).stream_ended is True
+
+    @staticmethod
+    def _invoke_chunk(obj: dict) -> bytes:
+        import base64
+
+        return _build_event_stream_frame("chunk", {"bytes": base64.b64encode(json.dumps(obj).encode()).decode()})
+
+    @pytest.mark.parametrize(
+        ("chunks", "expected_texts", "stop_chunk"),
+        [
+            (
+                [
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi "}},
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "there"}},
+                ],
+                ("Hi there",),
+                {"type": "message_stop", "amazon-bedrock-invocationMetrics": {"outputTokenCount": 3}},
+            ),
+            (
+                [
+                    {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "nova "}}},
+                    {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "says"}}},
+                ],
+                ("nova says",),
+                {"messageStop": {"stopReason": "end_turn"}},
+            ),
+            ([{"generation": "llama says"}], ("llama says",), {"generation": "", "stop_reason": "stop", "amazon-bedrock-invocationMetrics": {}}),
+            ([{"completions": [{"data": {"text": "ai21 says"}}]}], ("ai21 says",), {"amazon-bedrock-invocationMetrics": {}}),
+        ],
+        ids=["anthropic", "nova", "llama", "ai21"],
+    )
+    def test_scan_key_reads_invoke_response_stream_chunks(self, chunks: list, expected_texts: tuple, stop_chunk: dict):
+        frames = [self._invoke_chunk(c) for c in chunks]
+        handler = BedrockPassthroughGuardrailHandler()
+        key = handler.get_streaming_scan_key(frames)
+        assert key is not None
+        assert key.texts == expected_texts
+        assert handler._check_streaming_has_ended(frames) is False
+        assert handler._check_streaming_has_ended([*frames, self._invoke_chunk(stop_chunk)]) is True
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_scans_each_block_as_a_response_text(self):
+        guardrail = _CardMaskingGuardrail()
+        frames = self._frames()
+        result = await BedrockPassthroughGuardrailHandler().process_output_streaming_response(
+            responses_so_far=frames,
+            guardrail_to_apply=guardrail,
+            request_data={"model": "claude", "custom_llm_provider": "bedrock"},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+        assert result == frames
+        assert guardrail.received_texts == [[f"The card is {_TEST_CARD}", '{"q":"weather"}']]
+
+    @pytest.mark.asyncio
+    async def test_process_output_streaming_response_propagates_a_block(self):
+        with pytest.raises(HTTPException):
+            await BedrockPassthroughGuardrailHandler().process_output_streaming_response(
+                responses_so_far=self._frames(),
+                guardrail_to_apply=_BlockOnWordGuardrail(_TEST_CARD),
+                request_data={"model": "claude", "custom_llm_provider": "bedrock"},
+            )
+
+    def test_stream_error_frame_is_an_aws_exception_the_sdk_can_read(self):
+        from botocore.eventstream import EventStreamBuffer
+
+        (frame,) = BedrockPassthroughGuardrailHandler().build_stream_error_items(
+            HTTPException(status_code=400, detail={"error": "Violated guardrail policy"}),
+            responses_so_far=self._frames(),
+        )
+        buf = EventStreamBuffer()
+        buf.add_data(frame)
+        msg = next(iter(buf))
+        assert msg.headers[":message-type"] == "exception"
+        assert msg.headers[":exception-type"] == "validationException"
+        assert msg.to_response_dict()["status_code"] == 400
+        assert json.loads(msg.payload) == {"message": "Violated guardrail policy"}
+
+    def test_dispatcher_routes_frames_to_the_bedrock_handler(self):
+        from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
+
+        dispatcher = LlmPassthroughRouteHandler()
+        key = dispatcher.get_streaming_scan_key(self._frames())
+        assert key is not None and key.texts[0] == f"The card is {_TEST_CARD}"
+        assert dispatcher.get_streaming_scan_key([b"not a frame"]) is None
+        assert LlmPassthroughRouteHandler.supports_event_stream_scan("bedrock", "model/x/converse-stream")
+        assert LlmPassthroughRouteHandler.supports_event_stream_scan("bedrock", "model/x/invoke-with-response-stream")
+        assert not LlmPassthroughRouteHandler.supports_event_stream_scan("bedrock", "model/x/converse")
+        assert not LlmPassthroughRouteHandler.supports_event_stream_scan("anthropic", "v1/messages")

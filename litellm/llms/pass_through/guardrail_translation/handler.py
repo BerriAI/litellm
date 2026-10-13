@@ -6,16 +6,19 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
-from collections.abc import Mapping
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation, StreamingScanKey
 from litellm.types.passthrough_endpoints.pass_through_endpoints import PassThroughGuardrailSettings
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
+    from litellm.exceptions import ModifyResponseException
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
@@ -261,6 +264,99 @@ class LlmPassthroughRouteHandler(BaseTranslation):
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
         )
+
+    @staticmethod
+    def supports_event_stream_scan(provider: str | None, endpoint: str | None) -> bool:
+        """True when the provider handler can scan this endpoint's event stream frame by frame."""
+        handler_cls: Final = _get_provider_handlers().get(provider or "")
+        endpoint_check: Final = getattr(handler_cls, "event_stream_endpoint_is_scannable", None)
+        if endpoint_check is None:
+            return False
+        return endpoint_check(endpoint or "")
+
+    @staticmethod
+    def iter_event_stream_frames(provider: str | None, chunks: AsyncIterable[bytes]) -> AsyncGenerator[bytes, None]:
+        handler_cls: Final = _get_provider_handlers().get(provider or "")
+        splitter: Final = getattr(handler_cls, "iter_event_stream_frames", None)
+        if splitter is None:
+            raise ValueError(f"no event-stream frame splitter for provider={provider}")
+        return splitter(chunks)
+
+    @staticmethod
+    def _stream_handler_for(
+        responses_so_far: Sequence[object] | None, provider: str | None = None
+    ) -> BaseTranslation | None:
+        """The provider handler that owns a streamed response: by ``custom_llm_provider`` when the caller has it,
+        otherwise the handler that recognizes the frames (the streaming loop instantiates translations without
+        request context)."""
+        handlers: Final = _get_provider_handlers()
+        by_provider: Final = handlers.get(provider or "")
+        if by_provider is not None:
+            return by_provider()
+        first_item: Final = next(iter(responses_so_far or ()), None)
+        if first_item is None:
+            return None
+        for handler_cls in handlers.values():
+            if (recognizes := getattr(handler_cls, "is_event_stream_item", None)) is not None and recognizes(
+                first_item
+            ):
+                return handler_cls()
+        return None
+
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        handler: Final = self._stream_handler_for(responses_so_far)
+        return None if handler is None else handler.get_streaming_scan_key(responses_so_far)
+
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
+        handler: Final = self._stream_handler_for(responses_so_far)
+        ended: Final = getattr(handler, "_check_streaming_has_ended", None)
+        return False if ended is None else ended(responses_so_far)
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far: Sequence[object],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: Mapping[str, object] | None = None,
+        stream_transform_sink: object | None = None,
+        deliver_ended_stream_rewrites: bool = False,
+    ) -> object:
+        provider: Final = (request_data or {}).get("custom_llm_provider")
+        handler: Final = self._stream_handler_for(responses_so_far, str(provider) if provider else None)
+        if handler is None:
+            verbose_proxy_logger.debug(
+                "LlmPassthroughRouteHandler: no stream handler for provider=%s, skipping guardrail", provider
+            )
+            return responses_so_far
+        return await handler.process_output_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # BaseTranslation signature is untyped
+            responses_so_far=list(responses_so_far),
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            request_data=dict(request_data) if request_data is not None else None,
+        )
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes] | None:
+        handler: Final = self._stream_handler_for(responses_so_far, exc.request_data.get("custom_llm_provider"))
+        if handler is None:
+            return None
+        return handler.build_block_sse_chunks(exc, stream_started=stream_started, responses_so_far=responses_so_far)
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
+        handler: Final = self._stream_handler_for(responses_so_far)
+        if handler is None:
+            return None
+        return handler.build_stream_error_items(exc, responses_so_far=responses_so_far)
 
     @staticmethod
     def is_event_stream_response(provider: str | None, content_type: str) -> bool:
