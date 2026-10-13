@@ -45812,13 +45812,13 @@
         "supports_prompt_caching": true
     },
     "together_ai/moonshotai/Kimi-K3": {
-        "cache_read_input_token_cost": 2.7e-07,
-        "input_cost_per_token": 2.7e-06,
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 1.35e-05,
+        "output_cost_per_token": 1.5e-05,
         "reasoning_effort_levels": [
             "low",
             "high",
