@@ -3286,6 +3286,43 @@ def test_extract_cache_creation_tokens_created_cache_tokens_null():
     assert _extract_cache_creation_tokens(usage_obj) == 0
 
 
+def test_parse_prompt_tokens_details_vllm_created_cache_tokens():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
+    from litellm.types.utils import Usage
+
+    # vLLM >= v0.26.0 emits created_cache_tokens (APC prefix-cache writes); the
+    # cost-side parse must surface it as cache_creation_tokens.
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        prompt_tokens_details={"cached_tokens": 500, "created_cache_tokens": 450},
+    )
+    details = parse_prompt_tokens_details(usage)
+    assert details["cache_creation_tokens"] == 450
+    assert details["cache_hit_tokens"] == 500
+
+
+def test_parse_prompt_tokens_details_created_cache_tokens_precedence():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
+    from litellm.types.utils import Usage
+
+    # created_cache_tokens is the last-resort candidate at this site too:
+    # the existing fields win when present.
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        prompt_tokens_details={"cache_write_tokens": 200, "created_cache_tokens": 450},
+    )
+    assert parse_prompt_tokens_details(usage)["cache_creation_tokens"] == 200
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        prompt_tokens_details={"cache_creation_tokens": 300, "created_cache_tokens": 450},
+    )
+    assert parse_prompt_tokens_details(usage)["cache_creation_tokens"] == 300
+
+
 def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():
     """
     Anthropic providers report cache tokens at the top level of Usage, and

@@ -1813,6 +1813,9 @@ class PromptTokensDetailsWrapper(
     cache_creation_tokens: int | None = None
     """Number of cache creation tokens sent to the model. Anthropic/Bedrock naming; kept in sync with cache_write_tokens (assigning either mirrors to the other)."""
 
+    created_cache_tokens: int | None = None
+    """Number of cache creation tokens sent to the model. vLLM (>= v0.26.0) naming (prompt_tokens_details.created_cache_tokens, APC prefix-cache writes); lowest-priority candidate, not mirrored to the canonical pair."""
+
     cache_creation_token_details: CacheCreationTokenDetails | None = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
@@ -1863,6 +1866,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_write_tokens
         if self.cache_creation_tokens is None:
             del self.cache_creation_tokens
+        if self.created_cache_tokens is None:
+            del self.created_cache_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
         if self.cached_tokens_details is None:
