@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -51,7 +51,9 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.proxy.management_endpoints.customer_endpoints import (
     BlockUsersResponse,
+    BulkUpdateCustomerResponse,
     CustomerResponse,
+    CustomerUpdateResult,
     DeleteCustomersResponse,
     UnblockUsersResponse,
 )
@@ -593,76 +595,10 @@ async def end_user_info(
         raise handle_exception_on_proxy(e)
 
 
-@router.post(
-    "/customer/update",
-    tags=["Customer Management"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=CustomerResponse,
-)
-@router.post(
-    "/end_user/update",
-    tags=["Customer Management"],
-    include_in_schema=False,
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def update_end_user(
+async def _update_single_customer(
     data: UpdateCustomerRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> CustomerResponse:
-    """
-    Example curl 
-
-    Parameters:
-    - user_id: str
-    - alias: Optional[str] = None  # human-friendly alias
-    - blocked: bool = False  # allow/disallow requests for this end-user
-    - max_budget: Optional[float] = None
-    - budget_id: Optional[str] = None  # give either a budget_id or max_budget
-    - allowed_model_region: Optional[AllowedModelRegion] = (
-        None  # require all user requests to use models in this specific region
-    )
-    - default_model: Optional[str] = (
-        None  # if no equivalent model in allowed region - default all requests to this model
-    )
-    - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
-    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
-        Supported fields:
-        * mcp_servers: List[str] - List of allowed MCP server IDs
-        * mcp_access_groups: List[str] - List of MCP access group names
-        * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
-        * vector_stores: List[str] - List of allowed vector store IDs
-        * agents: List[str] - List of allowed agent IDs
-        * agent_access_groups: List[str] - List of agent access group names
-        Example: {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}
-        IF null or {} then no object-level restrictions apply.
-
-    Example curl:
-    ```
-    curl --location 'http://0.0.0.0:4000/customer/update' \
-    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "user_id": "test-litellm-user-4",
-        "budget_id": "paid_tier",
-        "models": ["gpt-4o-mini"]
-    }'
-
-    # Updating object permissions
-    curl -L -X POST 'http://localhost:4000/customer/update' \
-    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
-    --header 'Content-Type: application/json' \
-    --data '{
-        "user_id": "user_1",
-        "object_permission": {
-          "mcp_servers": ["server_3"],
-          "vector_stores": ["vector_store_2", "vector_store_3"]
-        }
-      }'
-
-    See below for all params
-    ```
-    """
-
+    user_api_key_dict: UserAPIKeyAuth,
+) -> CustomerResponse | ProxyException:
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
@@ -770,7 +706,144 @@ async def update_end_user(
 
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_end_user(): Exception occured - %s", e)
-        raise handle_exception_on_proxy(e)
+        return handle_exception_on_proxy(e)
+
+
+@router.post(
+    "/customer/update",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=CustomerResponse,
+)
+@router.post(
+    "/end_user/update",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_end_user(
+    data: UpdateCustomerRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> CustomerResponse:
+    """
+    Example curl
+
+    Parameters:
+    - user_id: str
+    - alias: Optional[str] = None  # human-friendly alias
+    - blocked: bool = False  # allow/disallow requests for this end-user
+    - max_budget: Optional[float] = None
+    - budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    - allowed_model_region: Optional[AllowedModelRegion] = (
+        None  # require all user requests to use models in this specific region
+    )
+    - default_model: Optional[str] = (
+        None  # if no equivalent model in allowed region - default all requests to this model
+    )
+    - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
+    - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
+        Supported fields:
+        * mcp_servers: List[str] - List of allowed MCP server IDs
+        * mcp_access_groups: List[str] - List of MCP access group names
+        * mcp_toolsets: List[str] - List of allowed MCP toolset IDs
+        * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
+        * vector_stores: List[str] - List of allowed vector store IDs
+        * agents: List[str] - List of allowed agent IDs
+        * agent_access_groups: List[str] - List of agent access group names
+        Example: {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}
+        Omitted permission fields retain their existing values. Supplying null or {} leaves permissions unchanged.
+
+    Example curl:
+    ```
+    curl --location 'http://0.0.0.0:4000/customer/update' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "test-litellm-user-4",
+        "budget_id": "paid_tier",
+        "models": ["gpt-4o-mini"]
+    }'
+
+    # Updating object permissions
+    curl -L -X POST 'http://localhost:4000/customer/update' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "user_id": "user_1",
+        "object_permission": {
+          "mcp_servers": ["server_3"],
+          "vector_stores": ["vector_store_2", "vector_store_3"]
+        }
+      }'
+
+    See below for all params
+    ```
+    """
+
+    result: Final = await _update_single_customer(data=data, user_api_key_dict=user_api_key_dict)
+    if isinstance(result, ProxyException):
+        raise result
+    return result
+
+
+async def _update_customer_result(
+    data: UpdateCustomerRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> CustomerUpdateResult:
+    result: Final = await _update_single_customer(data=data, user_api_key_dict=user_api_key_dict)
+    if isinstance(result, ProxyException):
+        return CustomerUpdateResult(user_id=data.user_id, success=False, error=str(result))
+    return CustomerUpdateResult(user_id=data.user_id, success=True, updated_customer=result)
+
+
+@router.post(
+    "/customer/bulk_update",
+    tags=["Customer Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BulkUpdateCustomerResponse,
+)
+@router.post(
+    "/end_user/bulk_update",
+    tags=["Customer Management"],
+    include_in_schema=False,
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BulkUpdateCustomerResponse,
+)
+async def bulk_customer_update(
+    data: BulkUpdateCustomerRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> BulkUpdateCustomerResponse:
+    """Update up to 500 customers independently using the same fields as `/customer/update`.
+
+    Supply a `customers` array of customer updates. Each result contains the `user_id`,
+    `success`, and either `updated_customer` or `error`, in request order. A failed update
+    does not prevent the remaining customers from being updated. Object permission fields
+    omitted from an update retain their existing values, and supplied permission lists
+    replace that field. Only proxy admins can update customers.
+
+    Example request body:
+    ```json
+    {
+      "customers": [
+        {"user_id": "customer-1", "object_permission": {"mcp_toolsets": ["toolset-1"]}},
+        {"user_id": "customer-2", "models": ["model-1"]}
+      ]
+    }
+    ```
+    """
+    results: Final = tuple(
+        [
+            await _update_customer_result(data=customer, user_api_key_dict=user_api_key_dict)
+            for customer in data.customers
+        ]
+    )
+    successful_updates: Final = sum(result.success for result in results)
+    return BulkUpdateCustomerResponse(
+        results=results,
+        total_requested=len(results),
+        successful_updates=successful_updates,
+        failed_updates=len(results) - successful_updates,
+    )
 
 
 @router.post(

@@ -1836,6 +1836,14 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
+class BulkUpdateCustomerRequest(LiteLLMPydanticObjectBase):
+    model_config = ConfigDict(frozen=True)
+
+    customers: tuple[UpdateCustomerRequest, ...] = Field(
+        min_length=1, max_length=500, description="Customer updates processed independently in request order"
+    )
+
+
 class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
     """
     Delete multiple Customers

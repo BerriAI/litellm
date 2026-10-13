@@ -4172,6 +4172,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/customer/bulk_update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Customer Update
+         * @description Update up to 500 customers independently using the same fields as `/customer/update`.
+         *
+         *     Supply a `customers` array of customer updates. Each result contains the `user_id`,
+         *     `success`, and either `updated_customer` or `error`, in request order. A failed update
+         *     does not prevent the remaining customers from being updated. Object permission fields
+         *     omitted from an update retain their existing values, and supplied permission lists
+         *     replace that field. Only proxy admins can update customers.
+         *
+         *     Example request body:
+         *     ```json
+         *     {
+         *       "customers": [
+         *         {"user_id": "customer-1", "object_permission": {"mcp_toolsets": ["toolset-1"]}},
+         *         {"user_id": "customer-2", "models": ["model-1"]}
+         *       ]
+         *     }
+         *     ```
+         */
+        post: operations["bulk_customer_update_customer_bulk_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/daily/activity": {
         parameters: {
             query?: never;
@@ -4501,12 +4537,13 @@ export interface paths {
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
          *         * mcp_access_groups: List[str] - List of MCP access group names
+         *         * mcp_toolsets: List[str] - List of allowed MCP toolset IDs
          *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
          *         * vector_stores: List[str] - List of allowed vector store IDs
          *         * agents: List[str] - List of allowed agent IDs
          *         * agent_access_groups: List[str] - List of agent access group names
          *         Example: {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}
-         *         IF null or {} then no object-level restrictions apply.
+         *         Omitted permission fields retain their existing values. Supplying null or {} leaves permissions unchanged.
          *
          *     Example curl:
          *     ```
@@ -4849,6 +4886,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/end_user/bulk_update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Customer Update
+         * @description Update up to 500 customers independently using the same fields as `/customer/update`.
+         *
+         *     Supply a `customers` array of customer updates. Each result contains the `user_id`,
+         *     `success`, and either `updated_customer` or `error`, in request order. A failed update
+         *     does not prevent the remaining customers from being updated. Object permission fields
+         *     omitted from an update retain their existing values, and supplied permission lists
+         *     replace that field. Only proxy admins can update customers.
+         *
+         *     Example request body:
+         *     ```json
+         *     {
+         *       "customers": [
+         *         {"user_id": "customer-1", "object_permission": {"mcp_toolsets": ["toolset-1"]}},
+         *         {"user_id": "customer-2", "models": ["model-1"]}
+         *       ]
+         *     }
+         *     ```
+         */
+        post: operations["bulk_customer_update_end_user_bulk_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/end_user/daily/activity": {
         parameters: {
             query?: never;
@@ -5178,12 +5251,13 @@ export interface paths {
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
          *         * mcp_access_groups: List[str] - List of MCP access group names
+         *         * mcp_toolsets: List[str] - List of allowed MCP toolset IDs
          *         * mcp_tool_permissions: Dict[str, List[str]] - Map of server ID to allowed tool names
          *         * vector_stores: List[str] - List of allowed vector store IDs
          *         * agents: List[str] - List of allowed agent IDs
          *         * agent_access_groups: List[str] - List of agent access group names
          *         Example: {"mcp_servers": ["server_1"], "vector_stores": ["vector_store_1"]}
-         *         IF null or {} then no object-level restrictions apply.
+         *         Omitted permission fields retain their existing values. Supplying null or {} leaves permissions unchanged.
          *
          *     Example curl:
          *     ```
@@ -27724,6 +27798,25 @@ export interface components {
             /** Data */
             data: components["schemas"]["TeamMemberDeleteResult"][];
         };
+        /** BulkUpdateCustomerRequest */
+        BulkUpdateCustomerRequest: {
+            /**
+             * Customers
+             * @description Customer updates processed independently in request order
+             */
+            customers: components["schemas"]["UpdateCustomerRequest"][];
+        };
+        /** BulkUpdateCustomerResponse */
+        BulkUpdateCustomerResponse: {
+            /** Failed Updates */
+            failed_updates: number;
+            /** Results */
+            results: components["schemas"]["CustomerUpdateResult"][];
+            /** Successful Updates */
+            successful_updates: number;
+            /** Total Requested */
+            total_requested: number;
+        };
         /**
          * BulkUpdateKeyRequest
          * @description Request for bulk key updates
@@ -30903,6 +30996,16 @@ export interface components {
              * @default 0
              */
             spend: number;
+            /** User Id */
+            user_id: string;
+        };
+        /** CustomerUpdateResult */
+        CustomerUpdateResult: {
+            /** Error */
+            error?: string | null;
+            /** Success */
+            success: boolean;
+            updated_customer?: components["schemas"]["CustomerResponse"] | null;
             /** User Id */
             user_id: string;
         };
@@ -56357,6 +56460,39 @@ export interface operations {
             };
         };
     };
+    bulk_customer_update_customer_bulk_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkUpdateCustomerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkUpdateCustomerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_customer_daily_activity_customer_daily_activity_get: {
         parameters: {
             query?: {
@@ -57363,6 +57499,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_customer_update_end_user_bulk_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkUpdateCustomerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkUpdateCustomerResponse"];
                 };
             };
             /** @description Validation Error */
