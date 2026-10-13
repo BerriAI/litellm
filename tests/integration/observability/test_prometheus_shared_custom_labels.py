@@ -211,6 +211,7 @@ def _shared_labels(sample: Sample) -> tuple[str | None, ...]:
 def test_a_project_key_call_on_every_endpoint_lands_in_the_request_latency_and_project_metrics(
     rig: _Rig, call: _Call
 ) -> None:
+    rig.upstream.drain()
     with rig.gateway.scenario() as scenario:
         owner: Final = _project_key(scenario, call.model)
         assert _send(rig.gateway, call, owner.key) == 200
@@ -239,6 +240,7 @@ def test_a_project_key_call_on_every_endpoint_lands_in_the_request_latency_and_p
 
 
 def test_a_failed_project_key_call_counts_as_one_failed_request_with_each_shared_label_once(rig: _Rig) -> None:
+    rig.upstream.drain()
     with rig.gateway.scenario() as scenario:
         owner: Final = _project_key(scenario, _DOWN)
         call: Final = _Call("/v1/chat/completions", _DOWN, stream=False)
@@ -259,6 +261,7 @@ def test_a_failed_project_key_call_counts_as_one_failed_request_with_each_shared
 
 
 def test_request_metadata_fills_the_shared_labels_on_the_request_and_project_metrics(rig: _Rig) -> None:
+    rig.upstream.drain()
     with rig.gateway.scenario() as scenario:
         owner: Final = _project_key(scenario, _GPT)
         call: Final = _Call("/v1/chat/completions", _GPT, stream=False)
@@ -286,6 +289,7 @@ def test_request_metadata_fills_the_shared_labels_on_the_request_and_project_met
 
 
 def test_a_key_outside_any_team_or_project_still_counts_its_request(rig: _Rig) -> None:
+    rig.upstream.drain()
     with rig.gateway.scenario() as scenario:
         key: Final = scenario.key()
         hashed: Final = sha256(key.encode()).hexdigest()
@@ -306,6 +310,7 @@ def test_a_key_outside_any_team_or_project_still_counts_its_request(rig: _Rig) -
 def test_a_mixed_burst_through_an_upstream_outage_counts_every_request_once_and_never_fails_the_callback(
     rig: _Rig,
 ) -> None:
+    rig.upstream.drain()
     with rig.gateway.scenario() as scenario:
         owner: Final = _project_key(scenario, _GPT)
         before: Final = _total(scrape(rig.gateway), _CALLBACK_FAILURES, callback_name="PrometheusLogger")

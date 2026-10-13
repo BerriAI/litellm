@@ -120,6 +120,7 @@ def _project_gauges(rig: _Rig, project: str) -> tuple[Sample, ...]:
 def test_a_project_key_with_per_model_limits_exports_its_project_gauges_with_project_alias_as_a_custom_label(
     rig: _Rig,
 ) -> None:
+    rig.upstream.drain()
     with rig.gateway.scenario() as scenario:
         team: Final = scenario.team()
         alias: Final = f"integration-project-{uuid.uuid4().hex}"
@@ -154,6 +155,7 @@ def test_a_project_key_with_per_model_limits_exports_its_project_gauges_with_pro
 
 
 def test_a_project_key_with_per_model_limits_still_counts_its_request_and_latency(rig: _Rig) -> None:
+    rig.upstream.drain()
     with rig.gateway.scenario() as scenario:
         team: Final = scenario.team()
         alias: Final = f"integration-project-{uuid.uuid4().hex}"
