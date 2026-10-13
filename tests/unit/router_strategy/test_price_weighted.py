@@ -299,6 +299,25 @@ async def test_demoted_deployment_recovers_after_two_health_windows() -> None:
     assert _selected_id(handler.get_available_deployments(MODEL_GROUP, deployments)) == "cheapest"
 
 
+def test_previous_bucket_weight_allows_recovery_before_expiration() -> None:
+    window: Final = 1.0
+    deployments: Final = (_deployment("cheapest"), _deployment("expensive"))
+    handler: Final = _handler(
+        {"cheapest": (1.0, 1.0), "expensive": (10.0, 10.0)},
+        routing_args={"health_window_seconds": window, "top_n": 1},
+    )
+    kwargs: Final = _failure_kwargs("cheapest", _failure("500"))
+    for _ in range(3):
+        handler.log_failure_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+
+    failed_at: Final = time.time()
+    next_boundary: Final = (int(failed_at // window) + 1) * window
+    recovery_time: Final = next_boundary + 0.6 * window
+    time.sleep(max(0.0, recovery_time - time.time()))
+
+    assert _selected_id(handler.get_available_deployments(MODEL_GROUP, deployments)) == "cheapest"
+
+
 def test_bad_request_does_not_demote_a_deployment() -> None:
     deployments: Final = (_deployment("cheapest"), _deployment("expensive"))
     handler: Final = _handler(

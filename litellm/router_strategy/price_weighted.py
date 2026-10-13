@@ -89,16 +89,6 @@ class _CacheAccess:
             key=key, value=1, ttl=ttl
         )
 
-    def set_cache(self, key: str, value: object, *, ttl: float) -> None:
-        self._cache.set_cache(  # pyright: ignore[reportUnknownMemberType]  # untyped DualCache API
-            key=key, value=value, ttl=ttl
-        )
-
-    async def async_set_cache(self, key: str, value: object, *, ttl: float) -> None:
-        await self._cache.async_set_cache(  # pyright: ignore[reportUnknownMemberType]  # untyped DualCache API
-            key=key, value=value, ttl=ttl
-        )
-
     def batch_get_cache(self, keys: Sequence[str]) -> tuple[object | None, ...] | None:
         return _CACHE_VALUES_ADAPTER.validate_python(
             self._cache.batch_get_cache(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped DualCache API
@@ -133,11 +123,15 @@ def _callback_deployment_id(payload: _CallbackPayload) -> str | None:
     return None if deployment_id is None else str(deployment_id)
 
 
+def _counter_key(deployment_id: str, bucket: int, counter: str) -> str:
+    return f"price_weighted:{deployment_id}:{bucket}:{counter}"
+
+
 def _candidate_counter_keys(candidate: _Candidate, buckets: tuple[int, int]) -> tuple[str, ...]:
     if candidate.deployment_id is None:
         return ()
-    attempts_keys: Final = tuple(f"price_weighted:{candidate.deployment_id}:{bucket}:attempts" for bucket in buckets)
-    failures_keys: Final = tuple(f"price_weighted:{candidate.deployment_id}:{bucket}:failures" for bucket in buckets)
+    attempts_keys: Final = tuple(_counter_key(candidate.deployment_id, bucket, "attempts") for bucket in buckets)
+    failures_keys: Final = tuple(_counter_key(candidate.deployment_id, bucket, "failures") for bucket in buckets)
     return attempts_keys + failures_keys
 
 
@@ -213,27 +207,23 @@ class PriceWeightedLoggingHandler(CustomLogger):
     def _counter_bucket(self) -> int:
         return int(time.time() // self.routing_args.health_window_seconds)
 
-    def _counter_buckets(self) -> tuple[int, int]:
-        current_bucket: Final = self._counter_bucket()
+    def _counter_buckets(self, now: float) -> tuple[int, int]:
+        current_bucket: Final = int(now // self.routing_args.health_window_seconds)
         return current_bucket, current_bucket - 1
 
     def _counter_ttl(self) -> int:
         return max(1, ceil(2 * self.routing_args.health_window_seconds))
 
-    @staticmethod
-    def _counter_key(deployment_id: str, bucket: int, counter: str) -> str:
-        return f"price_weighted:{deployment_id}:{bucket}:{counter}"
-
     def _increment_counters(self, deployment_id: str, *, failure: bool) -> None:
         bucket: Final = self._counter_bucket()
         ttl: Final = self._counter_ttl()
         self.router_cache.increment_cache(
-            key=self._counter_key(deployment_id, bucket, "attempts"),
+            key=_counter_key(deployment_id, bucket, "attempts"),
             ttl=ttl,
         )
         if failure:
             self.router_cache.increment_cache(
-                key=self._counter_key(deployment_id, bucket, "failures"),
+                key=_counter_key(deployment_id, bucket, "failures"),
                 ttl=ttl,
             )
 
@@ -241,12 +231,12 @@ class PriceWeightedLoggingHandler(CustomLogger):
         bucket: Final = self._counter_bucket()
         ttl: Final = self._counter_ttl()
         await self.router_cache.async_increment_cache(
-            key=self._counter_key(deployment_id, bucket, "attempts"),
+            key=_counter_key(deployment_id, bucket, "attempts"),
             ttl=ttl,
         )
         if failure:
             await self.router_cache.async_increment_cache(
-                key=self._counter_key(deployment_id, bucket, "failures"),
+                key=_counter_key(deployment_id, bucket, "failures"),
                 ttl=ttl,
             )
 
@@ -385,12 +375,15 @@ class PriceWeightedLoggingHandler(CustomLogger):
         counter_keys: tuple[str, ...],
         cache_values: Sequence[object | None] | None,
         buckets: tuple[int, int],
+        previous_bucket_weight: float,
     ) -> tuple[_Candidate, ...]:
         if cache_values is None:
             return candidates
         values_by_key: Final = MappingProxyType(dict(zip(counter_keys, cache_values)))
         stable: Final = tuple(
-            candidate for candidate in candidates if not self._is_candidate_demoted(candidate, values_by_key, buckets)
+            candidate
+            for candidate in candidates
+            if not self._is_candidate_demoted(candidate, values_by_key, buckets, previous_bucket_weight)
         )
         return stable if stable else candidates
 
@@ -399,16 +392,20 @@ class PriceWeightedLoggingHandler(CustomLogger):
         candidate: _Candidate,
         values_by_key: Mapping[str, object | None],
         buckets: tuple[int, int],
+        previous_bucket_weight: float,
     ) -> bool:
         if candidate.deployment_id is None:
             return False
-        attempts: Final = sum(
-            _counter_value(values_by_key.get(self._counter_key(candidate.deployment_id, bucket, "attempts")))
-            for bucket in buckets
+        current_bucket, previous_bucket = buckets
+        attempts: Final = _counter_value(
+            values_by_key.get(_counter_key(candidate.deployment_id, current_bucket, "attempts"))
+        ) + previous_bucket_weight * _counter_value(
+            values_by_key.get(_counter_key(candidate.deployment_id, previous_bucket, "attempts"))
         )
-        failures: Final = sum(
-            _counter_value(values_by_key.get(self._counter_key(candidate.deployment_id, bucket, "failures")))
-            for bucket in buckets
+        failures: Final = _counter_value(
+            values_by_key.get(_counter_key(candidate.deployment_id, current_bucket, "failures"))
+        ) + previous_bucket_weight * _counter_value(
+            values_by_key.get(_counter_key(candidate.deployment_id, previous_bucket, "failures"))
         )
         return (
             failures >= self.routing_args.demotion_min_failures
@@ -440,6 +437,7 @@ class PriceWeightedLoggingHandler(CustomLogger):
         counter_keys: tuple[str, ...],
         cache_values: Sequence[object | None] | None,
         buckets: tuple[int, int],
+        previous_bucket_weight: float,
     ) -> DeploymentTypedDict | None:
         if not candidates:
             return None
@@ -448,6 +446,7 @@ class PriceWeightedLoggingHandler(CustomLogger):
             counter_keys=counter_keys,
             cache_values=cache_values,
             buckets=buckets,
+            previous_bucket_weight=previous_bucket_weight,
         )
         return self._pick_candidate(candidates=stable_candidates)
 
@@ -468,7 +467,10 @@ class PriceWeightedLoggingHandler(CustomLogger):
             messages=messages,
             input=input,
         )
-        buckets: Final = self._counter_buckets()
+        now: Final = time.time()
+        window: Final = self.routing_args.health_window_seconds
+        buckets: Final = self._counter_buckets(now)
+        previous_bucket_weight: Final = 1.0 - (now % window) / window
         counter_keys: Final = _counter_keys(candidates, buckets)
         cache_values: Final = self.router_cache.batch_get_cache(counter_keys) if counter_keys else ()
         return self._select_deployment(
@@ -476,6 +478,7 @@ class PriceWeightedLoggingHandler(CustomLogger):
             counter_keys=counter_keys,
             cache_values=cache_values,
             buckets=buckets,
+            previous_bucket_weight=previous_bucket_weight,
         )
 
     @with_service_target("router_usage")
@@ -495,7 +498,10 @@ class PriceWeightedLoggingHandler(CustomLogger):
             messages=messages,
             input=input,
         )
-        buckets: Final = self._counter_buckets()
+        now: Final = time.time()
+        window: Final = self.routing_args.health_window_seconds
+        buckets: Final = self._counter_buckets(now)
+        previous_bucket_weight: Final = 1.0 - (now % window) / window
         counter_keys: Final = _counter_keys(candidates, buckets)
         cache_values: Final = await self.router_cache.async_batch_get_cache(counter_keys) if counter_keys else ()
         return self._select_deployment(
@@ -503,4 +509,5 @@ class PriceWeightedLoggingHandler(CustomLogger):
             counter_keys=counter_keys,
             cache_values=cache_values,
             buckets=buckets,
+            previous_bucket_weight=previous_bucket_weight,
         )
