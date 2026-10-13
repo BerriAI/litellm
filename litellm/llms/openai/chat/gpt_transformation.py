@@ -21,7 +21,6 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    cache_control_as_prompt_cache_breakpoint,
     drop_non_python_regex_patterns,
     drop_tool_reference_parts_from_tool_messages,
     flatten_combinators_and_drop_non_python_regex_patterns,
@@ -29,7 +28,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     system_messages_first,
     tool_with_sanitized_parameters,
-    with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -45,10 +43,8 @@ from litellm.types.llms.openai import (
     ChatCompletionFileObjectFile,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
-    ChatCompletionTextObject,
     OpenAIChatCompletionChoices,
     OpenAIMessageContentListBlock,
-    PromptCacheBreakpoint,
 )
 from litellm.types.utils import (
     ChatCompletionMessageCustomToolCall,
@@ -77,9 +73,7 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
-_CONTENT_PARTS: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(tuple[Mapping[str, object], ...])
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_PROMPT_CACHE_BREAKPOINT_ROLES: Final = frozenset({"system", "developer", "user", "tool"})
 
 
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -93,41 +87,6 @@ def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | Non
     except ValidationError:
         return None
     return extra_body.get("prompt_cache_options")
-
-
-def _content_parts(content: object) -> tuple[Mapping[str, object], ...] | None:
-    try:
-        return _CONTENT_PARTS.validate_python(content)
-    except ValidationError:
-        return None
-
-
-def _message_with_prompt_cache_breakpoints(message: AllMessageValues) -> AllMessageValues:
-    """Each ``cache_control`` on a system, developer, user or tool message becomes a
-    ``prompt_cache_breakpoint`` on the same part (a tool part caches on live gpt-5.6,
-    2026-10-12). Marks on any other role are left for the strip that follows."""
-    fields: Final[Mapping[str, object]] = dict(message)
-    if fields.get("role") not in _PROMPT_CACHE_BREAKPOINT_ROLES:
-        return message
-    content: Final = fields.get("content")
-    message_mark: Final = fields.get("cache_control")
-    unmarked: Final = {key: value for key, value in fields.items() if key != "cache_control"}
-    if isinstance(content, str):
-        if message_mark is None:
-            return message
-        text_part: Final = ChatCompletionTextObject(type="text", text=content)
-        marked_text: Final = with_prompt_cache_breakpoint(text_part, PromptCacheBreakpoint(mode="explicit"))
-        return cast(AllMessageValues, {**unmarked, "content": [marked_text]})  # cast-ok: string content as one part
-    parts: Final = _content_parts(content)
-    if parts is None:
-        return message
-    renamed: Final = tuple(cache_control_as_prompt_cache_breakpoint(part) for part in parts)
-    marked_parts: Final = (
-        (*renamed[:-1], with_prompt_cache_breakpoint(renamed[-1], PromptCacheBreakpoint(mode="explicit")))
-        if renamed and message_mark is not None
-        else renamed
-    )
-    return cast(AllMessageValues, {**unmarked, "content": list(marked_parts)})  # cast-ok: same shape, marks renamed
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -527,7 +486,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
             return messages, tools
         renamed: Final = (
-            [_message_with_prompt_cache_breakpoints(message) for message in messages]
+            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
             if reads_breakpoints
             else list(messages)
         )
