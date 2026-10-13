@@ -236,7 +236,7 @@ class Lines:
     errors: tuple[dict[str, JsonValue], ...]
 
 
-def _routes(lines: Lines) -> RoutedResponse:
+def _routes(lines: Lines, *, finished: bool = True) -> RoutedResponse:
     has_output: Final = bool(lines.outputs)
     completed: Final[dict[str, JsonValue]] = {
         "id": "batch-$REQUEST_ID",
@@ -267,7 +267,12 @@ def _routes(lines: Lines) -> RoutedResponse:
                 content_type="application/json",
                 body={**completed, "status": "validating", "output_file_id": None, "error_file_id": None},
             ),
-            "GET /batches/batch-$REQUEST_ID": JsonResponse(content_type="application/json", body=completed),
+            "GET /batches/batch-$REQUEST_ID": JsonResponse(
+                content_type="application/json",
+                body=completed
+                if finished
+                else {**completed, "status": "in_progress", "output_file_id": None, "error_file_id": None},
+            ),
             "GET /files/file-in-$REQUEST_ID/content": TextResponse(
                 content_type="application/jsonl", body=_jsonl(lines.inputs)
             ),
@@ -290,8 +295,8 @@ class SubmittedBatch:
     handle: ScenarioHandle
 
 
-def _submit(rig: Rig, lines: Lines, key_fields: Mapping[str, JsonValue]) -> SubmittedBatch:
-    handle: Final = register_scenario(f"batch-line-items-{uuid.uuid4().hex}", _routes(lines))
+def _submit(rig: Rig, lines: Lines, key_fields: Mapping[str, JsonValue], *, finished: bool = True) -> SubmittedBatch:
+    handle: Final = register_scenario(f"batch-line-items-{uuid.uuid4().hex}", _routes(lines, finished=finished))
     model: Final = string_value(
         rig.gateway.post(
             "/model/new",
@@ -328,6 +333,18 @@ def _submit(rig: Rig, lines: Lines, key_fields: Mapping[str, JsonValue]) -> Subm
     )
     assert created.is_success, created.text
     return SubmittedBatch(string_value(JSON_OBJECT.validate_json(created.content)["id"]), key, handle)
+
+
+def _quiet_logging() -> dict[str, JsonValue]:
+    return {
+        "logging": [
+            {
+                "callback_name": "s3_v2",
+                "callback_type": "success",
+                "callback_vars": {"turn_off_message_logging": "true"},
+            }
+        ]
+    }
 
 
 def _object_name(prefix: str, batch_id: str) -> str:
@@ -413,21 +430,7 @@ def test_a_key_that_turned_off_message_logging_gets_its_lines_without_request_or
     lines: Final = Lines(
         inputs=(_input_line("quiet-1", "a private question"),), outputs=(_success_line("quiet-1"),), errors=()
     )
-    batch: Final = _submit(
-        rig,
-        lines,
-        {
-            "metadata": {
-                "logging": [
-                    {
-                        "callback_name": "s3_v2",
-                        "callback_type": "success",
-                        "callback_vars": {"turn_off_message_logging": "true"},
-                    }
-                ]
-            }
-        },
-    )
+    batch: Final = _submit(rig, lines, {"metadata": _quiet_logging()})
     name: Final = _object_name(f"{S3_PREFIX}/", batch.batch_id)
     try:
         records: Final = _written(rig.s3, name)
@@ -445,6 +448,53 @@ def test_a_key_that_turned_off_message_logging_gets_its_lines_without_request_or
         "total_tokens": PROMPT_TOKENS + COMPLETION_TOKENS,
     }
     assert b"a private question" not in rig.s3.objects()[name]
+
+
+def test_a_team_that_turned_off_message_logging_gets_its_members_lines_without_request_or_response(rig: Rig) -> None:
+    team_id: Final = string_value(
+        rig.gateway.post("/team/new", {"team_alias": f"quiet-{uuid.uuid4().hex[:8]}", "metadata": _quiet_logging()})[
+            "team_id"
+        ]
+    )
+    lines: Final = Lines(
+        inputs=(_input_line("team-1", "a team secret"),), outputs=(_success_line("team-1"),), errors=()
+    )
+    batch: Final = _submit(rig, lines, {"team_id": team_id})
+    name: Final = _object_name(f"{S3_PREFIX}/", batch.batch_id)
+    try:
+        records: Final = _written(rig.s3, name)
+    finally:
+        delete_scenario(batch.handle)
+
+    assert [(record["custom_id"], record["request"], record["response"]) for record in records] == [
+        ("team-1", None, None)
+    ]
+    assert isinstance(records[0]["metadata"], dict)
+    assert records[0]["metadata"]["user_api_key_team_id"] == team_id
+    assert b"a team secret" not in rig.s3.objects()[name]
+
+
+def test_a_batch_whose_creating_key_was_deleted_gets_its_lines_without_request_or_response(rig: Rig) -> None:
+    lines: Final = Lines(
+        inputs=(_input_line("orphan-1", "asked before the key was deleted"),),
+        outputs=(_success_line("orphan-1"),),
+        errors=(),
+    )
+    batch: Final = _submit(rig, lines, {}, finished=False)
+    name: Final = _object_name(f"{S3_PREFIX}/", batch.batch_id)
+    try:
+        rig.gateway.post("/key/delete", {"keys": [batch.key]})
+        register_scenario(batch.handle.scenario_id, _routes(lines))
+        records: Final = _written(rig.s3, name)
+        spend: Final = _batch_spend(rig, batch.key)
+    finally:
+        delete_scenario(batch.handle)
+
+    assert [(record["custom_id"], record["status"], record["request"], record["response"]) for record in records] == [
+        ("orphan-1", "success", None, None)
+    ]
+    assert records[0]["response_cost"] == pytest.approx(spend)
+    assert b"asked before the key was deleted" not in rig.s3.objects()[name]
 
 
 def test_a_batch_where_every_line_failed_still_writes_its_error_lines(rig: Rig) -> None:
