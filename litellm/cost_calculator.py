@@ -855,6 +855,22 @@ def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | Non
     return own_model_info["litellm_provider"]
 
 
+_BEDROCK_CROSS_REGION_PREFIXES: Final = ("us.", "eu.", "apac.", "us-gov.", "global.", "au.", "ca.")
+
+
+def _is_bedrock_region_stripped_form(deployment_model: str, response_model: str) -> bool:
+    """True when ``response_model`` is ``deployment_model`` with a Bedrock
+    cross-region inference-profile prefix (``eu.``/``us.``/``apac.``/...)
+    removed - the shape Bedrock reports back for cross-region profiles."""
+    deployment_bare: Final = deployment_model.split("/")[-1]
+    if deployment_bare == response_model:
+        return False
+    if not deployment_bare.endswith(response_model):
+        return False
+    prefix: Final = deployment_bare[: len(deployment_bare) - len(response_model)]
+    return prefix in _BEDROCK_CROSS_REGION_PREFIXES
+
+
 def select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -908,7 +924,25 @@ def select_model_name_for_cost_calc(
             return_model = hidden_params.get("model", model)
 
     if return_model is None and completion_response_model is not None:
-        return_model = completion_response_model
+        is_bedrock_deployment: Final = custom_llm_provider == "bedrock" or (
+            model is not None and (model.startswith("bedrock/") or "/bedrock/" in model)
+        )
+        # A Bedrock cross-region inference profile (eu./us./apac./...)
+        # reports the region-stripped model id in the response, which
+        # prices at the GLOBAL rate instead of the profile's regional
+        # rate. The deployment model keeps the prefix, so spend logs and
+        # budgets book the regional rate and stay consistent with the
+        # streamed usage.cost (#46286).
+        selected_response_model: Final = (
+            model
+            if (
+                is_bedrock_deployment
+                and model is not None
+                and _is_bedrock_region_stripped_form(model, completion_response_model)
+            )
+            else completion_response_model
+        )
+        return_model = selected_response_model
 
     if return_model is None and model is not None:
         return_model = model
