@@ -2501,6 +2501,38 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
         assert marked == unmarked
         assert "prompt_cache_breakpoint" not in json.dumps(marked["input"])
 
+    def test_a_breakpoint_the_client_wrote_on_the_same_block_wins_over_the_mark_ttl_included(self) -> None:
+        kept = {"mode": "explicit", "ttl": "30m"}
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "a",
+                            "prompt_cache_breakpoint": kept,
+                            "cache_control": _EPHEMERAL,
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "b", "prompt_cache_breakpoint": kept}],
+                    "cache_control": _EPHEMERAL,
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            {"role": "user", "content": [{"type": "input_text", "text": "a", "prompt_cache_breakpoint": kept}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "b", "prompt_cache_breakpoint": kept}]},
+        ]
+
     def test_marks_on_parts_openai_does_not_cache_are_dropped_and_the_item_mark_skips_them(self) -> None:
         audio = {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}}
         result = OpenAIResponsesAPIConfig().transform_responses_api_request(
