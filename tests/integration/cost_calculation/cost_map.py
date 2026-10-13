@@ -56,13 +56,10 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "output_cost_per_token_decisions": 0.0,
         "output_cost_per_token_above_272k_tokens": 7.5e-07,
         "output_cost_per_token_above_272k_tokens_decisions": 0.0,
-        "input_cost_per_token_above_272k_tokens": 2e-07,
         "input_cost_per_token_above_272k_tokens_flex": 1e-07,
         "input_cost_per_token_above_272k_tokens_priority": 4e-07,
-        "output_cost_per_token_above_272k_tokens": 1e-06,
         "output_cost_per_token_above_272k_tokens_flex": 5e-07,
         "output_cost_per_token_above_272k_tokens_priority": 2e-06,
-        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
     },
     "perplexity/sonar-next": {
         "litellm_provider": "perplexity",
