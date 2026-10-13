@@ -18,6 +18,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm._logging import redact_string, verbose_proxy_logger
 from litellm.constants import (
+    BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS,
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
     BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY,
     BEDROCK_REALTIME_SDK_DISTRIBUTION,
@@ -235,9 +236,14 @@ async def _ack_session_update(
 class BedrockRealtime(BaseAWSLLM):
     """Handler for Bedrock Nova Sonic realtime speech-to-speech API."""
 
-    def __init__(self, sdk_version_lookup: Callable[[], str | None] = _installed_sdk_version):
+    def __init__(
+        self,
+        sdk_version_lookup: Callable[[], str | None] = _installed_sdk_version,
+        close_timeout: float = BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS,
+    ):
         super().__init__()
         self._sdk_version_lookup: Final = sdk_version_lookup
+        self._close_timeout: Final = close_timeout
 
     async def async_realtime(
         self,
@@ -504,11 +510,20 @@ class BedrockRealtime(BaseAWSLLM):
                 ):
                     break
         finally:
-            for close_message in transformation_config.session_close_messages():
+
+            async def close_bedrock_input() -> None:
+                for close_message in transformation_config.session_close_messages():
+                    with contextlib.suppress(Exception):
+                        await send_to_bedrock(close_message)
                 with contextlib.suppress(Exception):
-                    await send_to_bedrock(close_message)
-            with contextlib.suppress(Exception):
-                await bedrock_stream.input_stream.close()
+                    await bedrock_stream.input_stream.close()
+
+            try:
+                await asyncio.wait_for(close_bedrock_input(), self._close_timeout)
+            except (asyncio.TimeoutError, TimeoutError):
+                verbose_proxy_logger.debug(
+                    "Bedrock Realtime: timed out closing Bedrock input stream after %.1fs", self._close_timeout
+                )
 
     async def _forward_bedrock_to_client(
         self,

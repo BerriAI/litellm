@@ -68,6 +68,20 @@ class FailOnPromptEndStream(FakeInputStream):
         self.sent.append(event)
 
 
+class HangingCloseInputStream(FakeInputStream):
+    """Models a CRT input stream on an already-ended h2 stream: close sends and close() never complete"""
+
+    async def send(self, event):
+        payload = json.loads(event.value.bytes_.decode("utf-8"))
+        if "promptEnd" in payload.get("event", {}) or "sessionEnd" in payload.get("event", {}):
+            await asyncio.Future()
+        else:
+            self.sent.append(event)
+
+    async def close(self):
+        await asyncio.Future()
+
+
 class FakeBedrockStream:
     def __init__(self, input_stream=None):
         self.input_stream = input_stream if input_stream is not None else FakeInputStream()
@@ -416,6 +430,21 @@ class TestBedrockRealtimeHandler:
             await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
 
         assert stream.input_stream.closed
+
+    @pytest.mark.asyncio
+    async def test_close_flush_is_bounded_when_input_stream_never_completes(self, stub_aws_models):
+        handler = BedrockRealtime(close_timeout=0.05)
+        config = BedrockRealtimeConfig()
+        stream = FakeBedrockStream(input_stream=HangingCloseInputStream())
+        client_ws = DisconnectingClientWS(
+            [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
+        )
+
+        await asyncio.wait_for(
+            handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}), 2
+        )
+
+        assert not stream.input_stream.closed
 
     @pytest.mark.asyncio
     async def test_close_flush_continues_after_partial_send_failure(self, stub_aws_models):
