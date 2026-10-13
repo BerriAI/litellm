@@ -84,7 +84,7 @@ def test_reload_replaces_every_worker_and_shutdown_leaves_none(
         after_env: Final = _assert_replaced(owned, after_source, workers)
         response: Final = owned.gateway.request("GET", "/health/readiness")
         assert response.status_code == 200, response.text
-        owned.process.terminate()
+        owned.begin_shutdown()
         owned.process.wait(timeout=graceful_stop_seconds())
         assert all(not psutil.pid_exists(pid) for pid in after_env), owned.log.read_text()
         assert owned.process.returncode == 0, owned.log.read_text()
