@@ -292,6 +292,33 @@ def test_get_microsoft_callback_response_fails_the_login_when_graph_returns_an_e
     assert exc_info.value.detail == "SSO login failed: Microsoft Graph returned an error instead of the user profile"
 
 
+@pytest.mark.parametrize("empty_error", [None, ""])
+def test_get_microsoft_callback_response_signs_in_a_profile_with_an_empty_error_field(stubbed_graph_api, empty_error):
+    mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
+    profile = {"id": "msft123", "mail": "microsoft_user@example.com", "displayName": "Microsoft User"}
+
+    with patch.dict(
+        os.environ,
+        {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
+    ):
+        with patch(
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
+            new=AsyncMock(return_value={**profile, "error": empty_error}),
+        ):
+            result = asyncio.run(
+                MicrosoftSSOHandler.get_microsoft_callback_response(
+                    request=mock_request,
+                    microsoft_client_id="mock_client_id",
+                    redirect_url="http://mock_redirect_url",
+                )
+            )
+
+    assert isinstance(result, CustomOpenID)
+    assert result.id == "msft123"
+    assert result.email == "microsoft_user@example.com"
+
+
 def test_get_microsoft_callback_response_raw_sso_response_keeps_the_graph_error(stubbed_graph_api):
     mock_request = MagicMock(spec=Request)
     graph_error = GRAPH_ERROR_BODIES[0]

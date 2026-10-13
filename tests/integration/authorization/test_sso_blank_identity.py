@@ -690,6 +690,21 @@ def test_a_graph_reply_without_a_profile_falls_back_to_the_blank_id_refusal(
     assert _blank_accounts() == (), _blank_accounts()
 
 
+def test_a_profile_with_an_empty_error_field_still_signs_in(
+    entra: OwnedProxy, graph: Graph, gateway_module: Gateway
+) -> None:
+    proxy: Final = entra.gateway
+    subject: Final = str(uuid.uuid4())
+    email: Final = f"empty-error-{uuid.uuid4().hex[:12]}@example.com"
+    profile: Final = {**JSON_OBJECT.validate_json(_profile(subject, email).body), "error": None}
+    with gateway_module.scenario() as scenario:
+        _forget_sign_in(scenario, email)
+        callback: Final = _dashboard_sign_in(proxy, graph, graph.profile(Reply(body=json.dumps(profile).encode())))
+        assert callback.status_code == 303, f"{callback.status_code} {callback.text}"
+        session: Final = _session(callback)
+        assert session is not None and session["user_id"] == subject, session
+
+
 def test_sso_debug_callback_still_shows_the_graph_error(entra: OwnedProxy, graph: Graph, clean_slate: None) -> None:
     proxy: Final = entra.gateway
     with _browser() as browser:

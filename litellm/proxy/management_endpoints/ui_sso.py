@@ -4400,7 +4400,7 @@ class MicrosoftSSOHandler:
             )
             or {}
         )
-        if not return_raw_sso_response and "error" in original_msft_result:
+        if not return_raw_sso_response and "error" in original_msft_result and original_msft_result["error"]:
             verbose_proxy_logger.warning("Microsoft SSO login failed: Graph /me returned an error instead of a profile")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
