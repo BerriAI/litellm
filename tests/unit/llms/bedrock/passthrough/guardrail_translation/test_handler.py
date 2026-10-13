@@ -652,6 +652,10 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         assert call_args.kwargs["inputs"].get("model") == "anthropic.claude-3-sonnet"
 
 
+def _nested_request_fields() -> dict[str, object]:
+    return {"system": "Answer briefly.", "thinking": {"type": "enabled"}, "anthropic_beta": ["beta-1"]}
+
+
 def _profile_converse_data() -> dict:
     return {
         "endpoint": "model/anthropic.claude-sonnet/converse",
@@ -1015,7 +1019,7 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
             "endpoint": "model/test/converse",
             "data": {
                 "messages": [{"role": "user", "content": [{"text": "card 4111 1111 1111 1111 please"}]}],
-                "additionalModelRequestFields": {"system": "Answer briefly."},
+                "additionalModelRequestFields": _nested_request_fields(),
             },
         }
 
@@ -1029,7 +1033,7 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         )
 
         assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "card [CARD] please"}]}]
-        assert result["data"]["additionalModelRequestFields"] == {"system": "Answer briefly."}
+        assert result["data"]["additionalModelRequestFields"] == _nested_request_fields()
 
     @pytest.mark.asyncio
     async def test_flat_text_guardrail_gets_request_field_texts_last_as_on_main(self, monkeypatch):
@@ -1046,13 +1050,19 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
             "data": {
                 "system": [{"text": "You are a support bot."}],
                 "messages": [{"role": "user", "content": [{"text": "What is 2+2?"}]}],
-                "additionalModelRequestFields": {"system": "Answer briefly."},
+                "additionalModelRequestFields": _nested_request_fields(),
             },
         }
 
         await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
 
-        assert received[-1]["texts"] == ["You are a support bot.", "What is 2+2?", "Answer briefly."]
+        assert received[-1]["texts"] == [
+            "You are a support bot.",
+            "What is 2+2?",
+            "Answer briefly.",
+            "beta-1",
+            "enabled",
+        ]
 
     @pytest.mark.asyncio
     async def test_request_fields_without_strings_add_no_row(self):
