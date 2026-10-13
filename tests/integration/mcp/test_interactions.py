@@ -413,6 +413,9 @@ def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_pat
         ("tools", "legacy"),
         ("tools", "pages"),
         ("tools", "fanout"),
+        ("tools", "setup-race"),
+        ("tools", "metadata"),
+        ("tools", "config-change"),
     ],
 )
 def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
@@ -450,6 +453,8 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
     disconnected: Final = Event()
     connected: Final = Event()
     listener_credentials = []
+    catalog_credentials = []
+    setup_changed = Event()
 
     class ObservedBus(InMemorySubscriptionBus):
         def subscribe(self, listener: Callable[[ServerEvent], None]) -> Callable[[], None]:
@@ -470,7 +475,15 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         "async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:\n"
         "    if api_key != 'sk-subscriptions-test':\n"
         "        raise HTTPException(status_code=401, detail='Unknown caller')\n"
-        "    return UserAPIKeyAuth.model_validate_json(Path(__file__).with_suffix('.json').read_text())\n"
+        "    import json\n"
+        "    data = json.loads(Path(__file__).with_suffix('.json').read_text())\n"
+        "    change = data.pop('subscription_test_update', None)\n"
+        "    if change:\n"
+        "        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager as manager\n"
+        "        server = manager.config_mcp_servers['subscription-server']\n"
+        "        fields = {'authorization_url': 'https://authorization.example/authorize'} if change == 'metadata' else {'url': server.url.rstrip('/') + '/changed'}\n"
+        "        manager.config_mcp_servers[server.server_id] = server.model_copy(update=fields)\n"
+        "    return UserAPIKeyAuth.model_validate(data)\n"
     )
     identity: Final = {
         "api_key": "sk-subscriptions-test",
@@ -487,6 +500,11 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
     upstream_listener: Final = ListenHandler(bus)
 
     async def control_listen(ctx, call_next):
+        if ctx.method == "tools/list":
+            catalog_credentials.append(ctx.request.headers.get("authorization"))
+            if access == "setup-race" and connected.is_set() and not setup_changed.is_set():
+                setup_changed.set()
+                await change_tools()
         if ctx.method == "subscriptions/listen":
             listener_credentials.append(ctx.request.headers.get("authorization"))
             return await upstream_listener(ctx, SubscriptionsListenRequestParams.model_validate(ctx.params))
@@ -559,6 +577,11 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                             assert listener_credentials == [None, None], (
                                 "Unscoped caller credential reached multiple upstreams"
                             )
+                            assert catalog_credentials and all(value is None for value in catalog_credentials), (
+                                "Unscoped caller credential reached catalog listings"
+                            )
+                        if access in ("metadata", "config-change"):
+                            auth_state.write_text(json.dumps({**identity, "subscription_test_update": access}))
                         if access in ("revoked", "identity", "team", "org", "end-user", "idle"):
                             changed_identity = (
                                 {
@@ -585,12 +608,13 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                                 await asyncio.wait_for(anext(subscription), 20)
                             assert await asyncio.to_thread(disconnected.wait, 3)
                             return
-                        async with streamable_http_client(upstream_url + "/mcp") as direct_streams:
-                            async with ClientSession(direct_streams[0], direct_streams[1]) as direct:
-                                direct.adopt(DiscoverResult.model_validate(await direct.send_discover("2026-07-28")))
-                                changed = await direct.call_tool("change_tools", {})
-                                assert not changed.is_error
-                        if access in ("revoked", "identity", "team", "org", "end-user", "idle", "upstream-ended"):
+                        if access != "setup-race":
+                            async with streamable_http_client(upstream_url + "/mcp") as direct_streams:
+                                async with ClientSession(direct_streams[0], direct_streams[1]) as direct:
+                                    direct.adopt(DiscoverResult.model_validate(await direct.send_discover("2026-07-28")))
+                                    changed = await direct.call_tool("change_tools", {})
+                                    assert not changed.is_error
+                        if access in ("revoked", "identity", "team", "org", "end-user", "idle", "upstream-ended", "config-change"):
                             with pytest.raises((SubscriptionLost, StopAsyncIteration)):
                                 await asyncio.wait_for(anext(subscription), 5)
                             assert await asyncio.to_thread(disconnected.wait, 3)
@@ -609,6 +633,10 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                             "updated": ResourceUpdated(uri="test://value"),
                         }
                         assert event == expected[event_kind]
+                        if access == "fanout":
+                            assert all(value is None for value in catalog_credentials), (
+                                "Unscoped caller credential reached refreshed catalogs"
+                            )
                         if event_kind == "tools":
                             assert subscription.honored.tools_list_changed
                             after = await session.list_tools()

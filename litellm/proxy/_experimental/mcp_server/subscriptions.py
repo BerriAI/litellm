@@ -38,6 +38,9 @@ from mcp.types import (
 from litellm.constants import MCP_TOOL_LISTING_MAX_PAGES, MCP_TOOL_LISTING_TIMEOUT
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server import operations
+from litellm.proxy._experimental.mcp_server.catalog import (
+    _configuration_identity as configuration_identity,  # pyright: ignore[reportPrivateUsage]  # reuse catalog-owned configuration identity without treating discovered metadata as configuration
+)
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -193,8 +196,8 @@ class GatewaySubscriptions:
         async def check() -> OperationContext:
             fresh: Final = await authorize()
             current: Final = await self._resolve_targets(fresh)
-            if tuple((item.server, item.credential) for item in current) != tuple(
-                (item.server, item.credential) for item in targets
+            if tuple((configuration_identity(item.server), item.credential) for item in current) != tuple(
+                (configuration_identity(item.server), item.credential) for item in targets
             ):
                 raise MCPError(code=-32001, message="Subscription authorization or upstream configuration changed")
             return fresh
@@ -209,6 +212,12 @@ class GatewaySubscriptions:
 
             async def connected(session: ClientSession) -> None:
                 requested: Final = params.notifications
+                requested_events: Final = tuple(
+                    event
+                    for event in (ToolsListChanged(), PromptsListChanged(), ResourcesListChanged())
+                    if event_matches(requested, frozenset(), event)
+                )
+                baseline: Final = {event: await _listing(event, context) for event in requested_events}
                 async with listen(
                     session,
                     tools_list_changed=bool(requested.tools_list_changed),
@@ -216,21 +225,25 @@ class GatewaySubscriptions:
                     resources_list_changed=bool(requested.resources_list_changed),
                     resource_subscriptions=requested.resource_subscriptions or (),
                 ) as subscription:
-                    scoped: Final = replace(context, mcp_servers=(target.server.server_id,))
                     events: Final = tuple(
-                        event
-                        for event in (ToolsListChanged(), PromptsListChanged(), ResourcesListChanged())
-                        if event_matches(subscription.honored, frozenset(), event)
+                        event for event in requested_events if event_matches(subscription.honored, frozenset(), event)
                     )
-                    previous: Final = {event: await _listing(event, scoped) for event in events}
+                    setup_context: Final = await check()
+                    catalog: Final = operations.global_mcp_server_manager
+                    catalog.invalidate_discovery_lists(target.server.server_id)
+                    catalog._drop_listed_tools(target.server.server_id)  # pyright: ignore[reportPrivateUsage]  # refresh the setup snapshot through the same catalog owner as event delivery
+                    previous: Final = {event: await _listing(event, setup_context) for event in events}
+                    setup_changes: Final = tuple(event for event in events if baseline[event] != previous[event])
                     task_status.started(subscription.honored)
                     await bus.ready.wait()
+                    for event in setup_changes:
+                        await bus.publish(event)
                     async for event in subscription:
                         fresh = await check()
                         manager = operations.global_mcp_server_manager
                         manager.invalidate_discovery_lists(target.server.server_id)
                         manager._drop_listed_tools(target.server.server_id)  # pyright: ignore[reportPrivateUsage]  # evict served catalogs without invalidating OAuth metadata
-                        listing = await _listing(event, replace(fresh, mcp_servers=(target.server.server_id,)))
+                        listing = await _listing(event, fresh)
                         if not isinstance(event, ResourceUpdated):
                             if previous.get(event) == listing:
                                 continue
