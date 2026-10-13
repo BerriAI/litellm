@@ -17,6 +17,11 @@ def _worker_pids(owned: OwnedProxy) -> frozenset[int]:
     return frozenset(int(match.group(1)) for match in STARTED_WORKER.finditer(owned.log.read_text()))
 
 
+def _launched_config(owned: OwnedProxy) -> Path:
+    arguments: Final = psutil.Process(owned.process.pid).cmdline()
+    return Path(arguments[arguments.index("--config") + 1])
+
+
 def _config(model: str) -> str:
     return json.dumps(
         {
@@ -74,7 +79,7 @@ def test_reload_replaces_every_worker_and_shutdown_leaves_none(
         initial: Final = eventually(
             lambda: _worker_pids(owned), lambda pids: len(pids) == workers, seconds=graceful_stop_seconds()
         )
-        config.write_text(_config("after-reload"))
+        _launched_config(owned).write_text(_config("after-reload"))
         after_config: Final = _assert_replaced(owned, initial, workers)
         for _ in range(2 * workers):
             _assert_models(owned.gateway)
