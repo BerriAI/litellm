@@ -1446,6 +1446,7 @@ _RESPONSES_WS_PER_TURN_DICT_KEYS: Final = frozenset({"metadata", "litellm_metada
 def _responses_ws_turn_request_data(
     connection_request_data: Mapping[str, object], turn_logging_obj: "LiteLLMLoggingObj"
 ) -> dict[str, object]:
+    turn_proxy_server_request: Final = turn_logging_obj.litellm_params.get("proxy_server_request")
     return {
         **{key: value for key, value in connection_request_data.items() if key not in _RESPONSES_WS_FIRST_FRAME_KEYS},
         **{
@@ -1453,6 +1454,7 @@ def _responses_ws_turn_request_data(
             for key, value in connection_request_data.items()
             if key in _RESPONSES_WS_PER_TURN_DICT_KEYS and isinstance(value, dict)
         },
+        **({"proxy_server_request": turn_proxy_server_request} if isinstance(turn_proxy_server_request, dict) else {}),
         "litellm_call_id": turn_logging_obj.litellm_call_id,
         "litellm_logging_obj": turn_logging_obj,
     }

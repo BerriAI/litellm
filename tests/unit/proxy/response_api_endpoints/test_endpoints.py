@@ -822,12 +822,15 @@ class TestResponsesWSFirstFrameModelAuth:
                     "metadata": connection_metadata,
                     "litellm_metadata": {},
                     "litellm_call_id": "connection-call",
+                    "proxy_server_request": {"url": "ws://testserver/v1/responses", "body": {"input": "first turn"}},
                 },
                 MagicMock(),
             )
         )
+        turn_proxy_server_request = {"url": "ws://testserver/v1/responses", "body": {"input": "second turn"}}
         turn_logging_obj = MagicMock()
         turn_logging_obj.litellm_call_id = "turn-2-call"
+        turn_logging_obj.litellm_params = {"proxy_server_request": turn_proxy_server_request}
         failure = litellm.BadRequestError(
             message="previous_response_not_found", model="gpt-4o-mini", llm_provider="openai"
         )
@@ -879,6 +882,7 @@ class TestResponsesWSFirstFrameModelAuth:
         assert turn_request["metadata"] is not connection_metadata
         assert "input" not in turn_request
         assert "first_message" not in turn_request
+        assert turn_request["proxy_server_request"] == turn_proxy_server_request
         proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once_with(user_api_key_dict)
 
     @pytest.mark.asyncio

@@ -5224,7 +5224,7 @@ async def test_tag_429_names_the_tag_that_is_over_its_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_websocket_turns_count_toward_the_connection_tag_tpm_v3(monkeypatch):
+async def test_only_tagged_websocket_turns_count_toward_the_connection_tag_tpm_v3(monkeypatch):
     monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
     monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
     _request_stash.set(None)
@@ -5242,11 +5242,15 @@ async def test_websocket_turns_count_toward_the_connection_tag_tpm_v3(monkeypatc
     )
     tokens_before_turns: Final = int(await local_cache.async_get_cache("{tag:cell-1}:tokens") or 0)
 
-    for turn_call_id in ("turn-1-call", "turn-2-call"):
+    calls_in_the_connection = (("turn-1-call", ["cell-1"]), ("nested-untagged-call", []), ("turn-2-call", ["cell-1"]))
+    for call_id, request_tags in calls_in_the_connection:
         await handler.async_log_success_event(
             kwargs={
-                "litellm_call_id": turn_call_id,
-                "standard_logging_object": {"metadata": {"user_api_key_hash": user_api_key_dict.api_key}},
+                "litellm_call_id": call_id,
+                "standard_logging_object": {
+                    "metadata": {"user_api_key_hash": user_api_key_dict.api_key},
+                    "request_tags": request_tags,
+                },
                 "model": "gpt-4o-mini",
             },
             response_obj=ModelResponse(usage=Usage(prompt_tokens=60, completion_tokens=60, total_tokens=120)),

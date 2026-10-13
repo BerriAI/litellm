@@ -10,7 +10,7 @@ import itertools
 import logging
 import os
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping, Sequence, Set
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -742,11 +742,13 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
     return stash
 
 
-def _tpm_limited_tags(call_stash: RequestRateLimiterStash | None) -> frozenset[str]:
+def _tpm_limited_tags(call_stash: RequestRateLimiterStash | None, call_tags: Iterable[object]) -> frozenset[str]:
     if call_stash is not None:
         return call_stash.tpm_limited_tags
     connection: Final = get_request_stash()
-    return connection.tpm_limited_tags if connection is not None and connection.websocket_connection else frozenset()
+    if connection is None or not connection.websocket_connection:
+        return frozenset()
+    return connection.tpm_limited_tags.intersection(call_tags)
 
 
 def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
@@ -776,6 +778,7 @@ def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
 
 
 _RESPONSES_WS_TURN_EVENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_REQUEST_TAGS: Final = TypeAdapter(tuple[object, ...])
 
 
 def _unmodeled_response_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:
@@ -5070,7 +5073,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         targets: Final = self._collect_tpm_scope_targets(
             standard_logging_metadata=standard_logging_metadata,
             kwargs=kwargs,
-            tpm_limited_tags=_tpm_limited_tags(stash),
+            tpm_limited_tags=_tpm_limited_tags(
+                stash, _REQUEST_TAGS.validate_python(standard_logging_object.get("request_tags") or ())
+            ),
             model_group=reconcile_model.group if reconcile_model is not None else None,
         )
         targets.extend(
