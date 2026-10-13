@@ -2861,8 +2861,13 @@ def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
         ),
         pytest.param(
             _STREAMED_RISK_SCHEMA,
-            {"note": "read-only window", **_STREAMED_RISK_OBJECT},
-            id="undeclared_first_key_holding_a_scalar",
+            {"rev": 2, **_STREAMED_RISK_OBJECT},
+            id="undeclared_first_key_holding_a_number",
+        ),
+        pytest.param(
+            {"type": "object", "properties": {"score": {"type": "integer"}}},
+            {"note": "read-only window", "meta": {"score": 7}},
+            id="string_first_key_on_a_schema_without_required_keys",
         ),
     ],
 )
@@ -2875,6 +2880,38 @@ def test_streamed_json_mode_answer_that_cannot_be_an_envelope_streams_as_it_arri
 
     assert "".join(contents) == encoded
     assert contents[2:5] == (encoded[:12], encoded[12:24], encoded[24:])
+
+
+def test_streamed_json_mode_string_label_answer_streams_once_the_next_key_is_declared():
+    answer = json.dumps({"note": "read-only window", **_STREAMED_RISK_OBJECT})
+
+    contents = _streamed_json_mode_contents((answer[:12], answer[12:40], answer[40:]))
+
+    assert "".join(contents) == answer
+    assert contents[2] == ""
+    assert contents[3] == answer[:40]
+    assert contents[4] == answer[40:]
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        pytest.param(
+            {"parameter_name": "RiskAssessment", "parameter_value": _STREAMED_RISK_OBJECT}, id="schema_name_label"
+        ),
+        pytest.param(
+            {"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME, "PARAMETER_VALUE": _STREAMED_RISK_OBJECT},
+            id="foreign_tool_name_key",
+        ),
+    ],
+)
+def test_streamed_json_mode_string_label_envelope_is_unwrapped_when_the_block_ends(envelope: dict[str, object]):
+    encoded = json.dumps(envelope)
+
+    contents = _streamed_json_mode_contents((encoded[:12], encoded[12:40], encoded[40:]))
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+    assert contents[:-2] == ("",) * (len(contents) - 2)
 
 
 def test_streamed_json_mode_two_level_envelope_is_unwrapped_when_the_block_ends():

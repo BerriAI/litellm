@@ -7410,6 +7410,30 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
         ),
         pytest.param(
             _RISK_SCHEMA,
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="string_label_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME, "PARAMETER_VALUE": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="foreign_tool_name_key_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"note": "read-only window", **_RISK_OBJECT},
+            {"note": "read-only window", **_RISK_OBJECT},
+            id="string_label_beside_schema_keys",
+        ),
+        pytest.param(
+            {**_RISK_SCHEMA, "required": "tier"},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            id="string_label_when_required_is_malformed",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
             {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": json.dumps(_RISK_OBJECT)},
             _RISK_OBJECT,
             id="tool_name_envelope_holding_encoded_json",
