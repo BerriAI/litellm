@@ -87,6 +87,25 @@ async def test_async_yields_multiple_content_chunks_with_lossless_join():
     assert reassembled == text
 
 
+@pytest.mark.parametrize("content", ["", "Hello world! How are you?"], ids=["single_frame", "sliced"])
+@pytest.mark.asyncio
+async def test_async_and_sync_replays_carry_the_cached_provider_specific_fields(content):
+    provider_specific_fields = {"stop_reason": "refusal", "stop_details": {"category": "cyber"}}
+
+    def payload():
+        cached = _async_payload(content=content)
+        cached["choices"][0]["message"]["provider_specific_fields"] = provider_specific_fields
+        return cached
+
+    async_chunks = await _collect_async(payload())
+    sync_chunks = list(convert_to_streaming_response(payload()))
+
+    assert [c.choices[0].delta.provider_specific_fields for c in async_chunks] == [
+        c.choices[0].delta.provider_specific_fields for c in sync_chunks
+    ]
+    assert async_chunks[0].choices[0].delta.provider_specific_fields == provider_specific_fields
+
+
 @pytest.mark.asyncio
 async def test_async_finish_reason_only_on_last_chunk():
     chunks = await _collect_async(_async_payload())

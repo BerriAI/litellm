@@ -222,6 +222,9 @@ async def convert_to_streaming_response_async(
             role=choice["message"]["role"],
             function_call=choice["message"].get("function_call", None),
             tool_calls=choice["message"].get("tool_calls", None),
+            provider_specific_fields=_CACHED_MESSAGE_PROVIDER_FIELDS.validate_python(choice["message"]).get(
+                "provider_specific_fields"
+            ),
         )
         finish_reason = choice.get("finish_reason", None)
 
@@ -388,6 +391,13 @@ class _ParallelToolUseArgs(TypedDict):
 
 
 _PARALLEL_TOOL_USE_ARGS: Final = TypeAdapter(_ParallelToolUseArgs)
+
+
+class _CachedMessageProviderFields(TypedDict, total=False):
+    provider_specific_fields: ReadOnly[object]
+
+
+_CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
 
 
 def handle_invalid_parallel_tool_calls(
