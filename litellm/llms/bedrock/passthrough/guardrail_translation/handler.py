@@ -49,10 +49,18 @@ _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
 _EVENT_STREAM_MEDIA_TYPE: Final = "application/vnd.amazon.eventstream"
 # Handed rows, these scan only part of the conversation (the latest user turn, the last row, the turns
-# after the last assistant turn, or no tool results) or rebuild their returned texts from the rows, while
+# after the last assistant turn, or no tool results) or rebuild or place their returned texts by the rows, while
 # the flat texts carry every string of the body in the order the write-back expects.
 _FLAT_TEXT_PROVIDERS: Final = frozenset(
-    {"openai_moderation", "llm_as_a_judge", "crowdstrike_aidr", "prompt_security", "panw_prisma_airs", "hiddenlayer"}
+    {
+        "bedrock",
+        "openai_moderation",
+        "llm_as_a_judge",
+        "crowdstrike_aidr",
+        "prompt_security",
+        "panw_prisma_airs",
+        "hiddenlayer",
+    }
 )
 
 

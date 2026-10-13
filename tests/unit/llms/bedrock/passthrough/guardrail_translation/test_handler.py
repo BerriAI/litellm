@@ -23,6 +23,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr import CrowdStrikeAIDRHandler
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
@@ -2731,6 +2732,12 @@ _FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
     ),
     lambda: HiddenlayerGuardrail(guardrail_name="hiddenlayer", api_base="http://127.0.0.1:9"),
     lambda: HiddenlayerGuardrailV2(guardrail_name="hiddenlayer-v2", api_base="http://127.0.0.1:9"),
+    lambda: BedrockGuardrail(
+        guardrail_name="bedrock",
+        guardrailIdentifier="gr-test",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    ),
 )
 
 
@@ -2774,6 +2781,7 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
             "panw-prisma-airs",
             "hiddenlayer",
             "hiddenlayer-v2",
+            "bedrock-latest-user",
         ],
     )
     async def test_guardrail_gets_every_flat_text_and_its_mask_reaches_every_turn(self, make_guardrail, monkeypatch):
@@ -2799,6 +2807,58 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
         assert "structured_messages" not in received[-1]
         assert "tools" not in received[-1]
         assert "4111" not in json.dumps({key: value for key, value in result["data"].items() if key != "toolConfig"})
+
+
+class TestConverseBedrockGuardrailLatestUserTurn:
+    @pytest.mark.asyncio
+    async def test_latest_user_scan_never_writes_its_mask_into_tool_call_arguments(self, monkeypatch):
+        guardrail = BedrockGuardrail(
+            guardrail_name="bedrock",
+            guardrailIdentifier="gr-test",
+            guardrailVersion="DRAFT",
+            experimental_use_latest_role_message_only=True,
+            mask_request_content=True,
+        )
+
+        async def anonymize(source, messages=None, response=None, request_data=None, logging_event_type=None):
+            texts = [
+                part["text"] if isinstance(part, dict) else part
+                for message in messages or []
+                for part in (message["content"] if isinstance(message["content"], list) else [message["content"]])
+            ]
+            if not any("4111 1111 1111 1111" in text for text in texts):
+                return {"action": "NONE", "outputs": []}
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": text.replace("4111 1111 1111 1111", "{CARD}")} for text in texts],
+            }
+
+        monkeypatch.setattr(guardrail, "make_bedrock_api_request", anonymize)
+        data = {
+            "endpoint": "model/anthropic.claude-sonnet/converse",
+            "custom_llm_provider": "bedrock",
+            "data": {
+                "messages": [
+                    {"role": "user", "content": [{"text": "hi"}]},
+                    {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "count", "input": {}}}]},
+                    {"role": "user", "content": [{"toolResult": {"toolUseId": "t1", "content": [{"json": {"n": 5}}]}}]},
+                    {"role": "user", "content": [{"text": "pay with card 4111 1111 1111 1111"}]},
+                    {
+                        "role": "assistant",
+                        "content": [{"toolUse": {"toolUseId": "t2", "name": "lookup", "input": {"q": "booking 42"}}}],
+                    },
+                    {"role": "user", "content": [{"toolResult": {"toolUseId": "t2", "content": [{"text": "done"}]}}]},
+                ]
+            },
+        }
+        original = copy.deepcopy(data["data"]["messages"])
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+        messages = result["data"]["messages"]
+        assert [message for index, message in enumerate(messages) if index != 3] == [
+            message for index, message in enumerate(original) if index != 3
+        ]
 
 
 def _row_text(message: Mapping[str, object]) -> str:

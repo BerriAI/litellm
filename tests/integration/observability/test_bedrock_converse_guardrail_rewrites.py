@@ -202,6 +202,26 @@ def _headroom_compressed(body: Mapping[str, JsonValue]) -> Reply:
     )
 
 
+def _bedrock_guardrail_verdict(body: Mapping[str, JsonValue]) -> Reply:
+    texts: Final = tuple(
+        str(object_value(object_value(item).get("text")).get("text"))
+        for item in list_value(body.get("content") or [])
+        if "text" in object_value(item)
+    )
+    if not any(_CARD_PATTERN.search(text) for text in texts):
+        return Reply(body=json.dumps({"action": "NONE", "outputs": [], "assessments": []}).encode())
+    anonymized: Final = {"type": "CREDIT_DEBIT_CARD_NUMBER", "match": _CARD, "action": "ANONYMIZED"}
+    return Reply(
+        body=json.dumps(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": _CARD_PATTERN.sub(_MASK, text)} for text in texts],
+                "assessments": [{"sensitiveInformationPolicy": {"piiEntities": [anonymized]}}],
+            }
+        ).encode()
+    )
+
+
 def _vendor(request: Request) -> Reply:
     if request.target.startswith("/akto/"):
         return _akto_verdict(request.body)
@@ -240,6 +260,8 @@ def _vendor(request: Request) -> Reply:
     if request.target == "/hiddenlayer-v2/detection/v2/request-evaluations":
         evaluated: Final = body.get("messages")
         return Reply(body=json.dumps({"messages": _masked(evaluated)} if isinstance(evaluated, list) else {}).encode())
+    if request.target.startswith("/bedrock-guardrail/guardrail/"):
+        return _bedrock_guardrail_verdict(body)
     if request.target == "/promptguard/api/v1/guard":
         messages: Final = body.get("messages")
         if _CARD_PATTERN.search(json.dumps(messages)) is None:
@@ -309,6 +331,20 @@ def _guardrails(vendor_url: str) -> tuple[dict[str, JsonValue], ...]:
         _guardrail("hiddenlayer", {"guardrail": "hiddenlayer", "api_base": f"{vendor_url}/hiddenlayer", "version": 1}),
         _guardrail(
             "hiddenlayer-v2", {"guardrail": "hiddenlayer", "api_base": f"{vendor_url}/hiddenlayer-v2", "version": 2}
+        ),
+        _guardrail(
+            "bedrock-latest-user",
+            {
+                "guardrail": "bedrock",
+                "guardrailIdentifier": "gr-scripted",
+                "guardrailVersion": "DRAFT",
+                "aws_region_name": "us-east-1",
+                "aws_access_key_id": "AKIASCRIPTEDGUARDRAIL",
+                "aws_secret_access_key": "scripted-secret",
+                "aws_bedrock_runtime_endpoint": f"{vendor_url}/bedrock-guardrail",
+                "mask_request_content": True,
+                "experimental_use_latest_role_message_only": True,
+            },
         ),
     )
 
@@ -586,6 +622,26 @@ def test_hiddenlayer_v2_leaves_every_field_of_a_tool_loop_in_place(rig: _Rig) ->
     }
     sent: Final = _forwarded(rig, _converse(rig, "hiddenlayer-v2", body))
     assert {"system": sent["system"], "messages": sent["messages"]} == body
+
+
+def test_latest_user_bedrock_guardrail_leaves_tool_call_arguments_in_place(rig: _Rig) -> None:
+    sent: Final[list[JsonValue]] = [
+        _user({"text": "hi"}),
+        _assistant({"toolUse": {"toolUseId": "tooluse_count", "name": "count", "input": {}}}),
+        _user({"toolResult": {"toolUseId": "tooluse_count", "content": [{"json": {"n": 5}}], "status": "success"}}),
+        _user({"text": f"pay with card {_CARD}"}),
+        _assistant({"toolUse": {"toolUseId": "tooluse_lookup", "name": "lookup_card", "input": {"q": "booking 42"}}}),
+        _user(_tool_result({"text": "done"})),
+    ]
+
+    forwarded: Final = list_value(
+        _forwarded(rig, _converse(rig, "bedrock-latest-user", {"messages": sent}))["messages"]
+    )
+
+    assert len(forwarded) == len(sent)
+    assert [row for index, row in enumerate(forwarded) if index != 3] == [
+        row for index, row in enumerate(sent) if index != 3
+    ]
 
 
 def test_texts_rebuilt_from_rows_never_overwrite_other_fields(rig: _Rig) -> None:
