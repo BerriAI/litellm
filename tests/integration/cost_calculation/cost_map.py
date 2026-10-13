@@ -604,6 +604,18 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token": 7.5e-07,
         "output_cost_per_token": 4.5e-06,
     },
+    "azure_ai/claude-haiku-4-5": {
+        "litellm_provider": "azure_ai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01,
+        },
+        "web_search_billing_unit": "per_query",
+    },
     "groq/qwen/qwen3.8-27b": {
         "litellm_provider": "groq",
         "mode": "chat",
