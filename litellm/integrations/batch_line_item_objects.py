@@ -8,7 +8,18 @@ from litellm.types.utils import StandardBatchLineItemsPayload
 
 
 def batch_line_items_ndjson(payload: StandardBatchLineItemsPayload) -> str:
-    return "".join(f"{json.dumps(line, default=str, ensure_ascii=False)}\n" for line in payload["lines"])
+    return "".join(f"{_ndjson_line(line)}\n" for line in payload["lines"])
+
+
+def _ndjson_line(line: object) -> str:
+    """One line as JSON, with non-ASCII text kept readable. A line holding a lone surrogate, which a provider's
+    JSON escapes can carry, has no UTF-8 form, so that line alone is written with every non-ASCII character escaped."""
+    text: Final = json.dumps(line, default=str, ensure_ascii=False)
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return json.dumps(line, default=str)
+    return text
 
 
 def batch_line_items_object_name(payload: StandardBatchLineItemsPayload) -> str:

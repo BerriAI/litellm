@@ -524,7 +524,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             s3_object_key=s3_object_key,
             s3_object_download_filename=object_name.rsplit("/", 1)[-1],
         )
-        delivered: Final = await self.async_upload_data_to_s3(element)
+        # hashing a whole batch's object is CPU-bound too, so it is also prepared off the event loop
+        prepared_put: Final = await asyncio.to_thread(self._prepare_put, element)
+        delivered: Final = await self.async_upload_data_to_s3(element, prepared_put)
         if not delivered:
             # only a log-queue flush reads and clears the drop marks, and this upload is not part of one
             self._flush_dropped.pop(id(element), None)
@@ -579,6 +581,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     async def async_upload_data_to_s3(
         self,
         batch_logging_element: s3BatchLoggingElement,
+        prepared_put: _PreparedPut | None = None,
     ) -> bool:
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
@@ -611,7 +614,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     return error.response
 
             max_retries: Final = 3
-            prepared: Final = self._prepare_put(batch_logging_element)
+            prepared: Final = prepared_put if prepared_put is not None else self._prepare_put(batch_logging_element)
             for attempt in range(max_retries):
                 response = await self._recorded_put(partial(signed_put, prepared))
                 if (

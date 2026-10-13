@@ -279,6 +279,21 @@ async def test_the_object_holds_one_json_line_per_batch_line_under_its_finished_
     )
 
 
+def test_a_line_holding_a_lone_surrogate_is_escaped_so_the_object_still_encodes_as_utf8():
+    payload = _payload()
+    (line, *_) = payload["lines"]
+    surrogate_line = {**line, "custom_id": "emoji-\ud83d", "response": {"body": {"content": "caf\u00e9 \ud83d"}}}
+    readable_line = {**line, "custom_id": "caf\u00e9"}
+
+    ndjson = batch_line_items_ndjson({**payload, "lines": (surrogate_line, readable_line)})
+
+    surrogate_text, readable_text = ndjson.encode("utf-8").decode("utf-8").splitlines()
+    assert json.loads(surrogate_text) == surrogate_line
+    assert "\\ud83d" in surrogate_text
+    assert json.loads(readable_text) == readable_line
+    assert '"custom_id": "caf\u00e9"' in readable_text
+
+
 @pytest.mark.asyncio
 async def test_a_logger_gets_the_request_and_response_unless_message_logging_is_off(monkeypatch):
     payload = _payload()

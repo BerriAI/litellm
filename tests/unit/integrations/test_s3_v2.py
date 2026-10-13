@@ -5635,23 +5635,29 @@ async def test_a_batch_line_items_object_the_bucket_refuses_for_good_is_not_kept
 
 
 @pytest.mark.asyncio
-async def test_batch_line_items_are_serialized_off_the_event_loop(monkeypatch):
+async def test_batch_line_items_are_serialized_and_hashed_off_the_event_loop(monkeypatch):
     import threading
 
     import litellm.integrations.s3_v2 as s3_v2_module
 
     logger, requests = _s3_logger_answering(200, "cold/")
     serialize = s3_v2_module.batch_line_items_ndjson
-    threads = []
+    prepare = logger._prepare_put
+    threads = {}
 
     def _serialize(payload):
-        threads.append(threading.current_thread())
+        threads["serialize"] = threading.current_thread()
         return serialize(payload)
 
+    def _prepare(element):
+        threads["hash"] = threading.current_thread()
+        return prepare(element)
+
     monkeypatch.setattr(s3_v2_module, "batch_line_items_ndjson", _serialize)
+    monkeypatch.setattr(logger, "_prepare_put", _prepare)
 
     await logger.async_log_batch_line_items(_batch_line_items_payload())
 
     assert len(requests) == 1
-    (thread,) = threads
-    assert thread is not threading.main_thread()
+    assert set(threads) == {"serialize", "hash"}
+    assert threading.main_thread() not in threads.values()
