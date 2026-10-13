@@ -806,7 +806,7 @@ async def test_response_headers_hook_stashes_headers_and_returns_none():
     """async_post_call_response_headers_hook must never inject anything into the
     client-facing response -- it exists purely to capture headers off the true
     response object for ThirdLaw's own later use."""
-    g = _make_guardrail()
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
     response = _model_response()
     response._hidden_params["additional_headers"] = {"x-request-id": "req-1"}
     data = _request_data()
@@ -814,7 +814,8 @@ async def test_response_headers_hook_stashes_headers_and_returns_none():
         data=data, user_api_key_dict=UserAPIKeyAuth(), response=response
     )
     assert out is None
-    assert data["_thirdlaw_response_headers"] == {"x-request-id": "req-1"}
+    await g.async_post_call_success_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), response=_model_response())
+    assert _sent_payload(g)["response_headers"] == {"x-request-id": "req-1"}
 
 
 async def test_response_headers_hook_leaves_stash_untouched_when_absent():
@@ -830,10 +831,12 @@ async def test_post_call_success_hook_prefers_the_stash_over_the_response_object
     """When both are present, the response-headers-hook stash wins -- it is the
     reliable source; a direct read off `response` is the fallback."""
     g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    unwrapped = _model_response()
+    unwrapped._hidden_params["additional_headers"] = {"x-request-id": "from-stash"}
     response = _model_response()
     response._hidden_params["additional_headers"] = {"x-request-id": "from-response-object"}
     data = _request_data()
-    data["_thirdlaw_response_headers"] = {"x-request-id": "from-stash"}
+    await g.async_post_call_response_headers_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), response=unwrapped)
     await g.async_post_call_success_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), response=response)
     assert _sent_payload(g)["response_headers"] == {"x-request-id": "from-stash"}
 
@@ -852,11 +855,11 @@ async def test_pre_call_strips_a_caller_forged_response_headers_stash():
 async def test_streaming_never_trusts_a_caller_forged_response_headers_stash():
     """A caller-forged stash entry must not survive to the wire payload, even when the
     stream itself carries no real headers (e.g. another callback's bare generator, as in
-    test_streaming_falls_back_to_the_stash_when_response_carries_no_hidden_params)."""
-    g = _make_guardrail(decisions=[_decision_response({"action": "allow"}), _decision_response({"action": "allow"})])
+    test_streaming_falls_back_to_the_stash_when_response_carries_no_hidden_params). A
+    post_call-only guardrail never runs its pre-call hook, so nothing strips the field first."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
     data = _request_data()
     data["_thirdlaw_response_headers"] = {"x-forged-by": "the caller"}
-    await _run_pre_call(g, data)  # the real proxy always runs this first
 
     async def bare_generator_with_no_hidden_params():
         for chunk in _stream_chunks():
@@ -870,6 +873,35 @@ async def test_streaming_never_trusts_a_caller_forged_response_headers_stash():
         )
     )
     assert "response_headers" not in _sent_payload(g)
+
+
+async def test_post_call_only_never_trusts_a_caller_forged_response_headers_stash():
+    """Without a pre-call run, the headers hook finding no provider headers must not leave the
+    caller's planted value to be posted as if the provider had sent it."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    data = _request_data()
+    data["_thirdlaw_response_headers"] = {"x-forged-by": "the caller"}
+    await g.async_post_call_response_headers_hook(
+        data=data, user_api_key_dict=UserAPIKeyAuth(), response=_model_response()
+    )
+    await g.async_post_call_success_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), response=_model_response())
+    assert "response_headers" not in _sent_payload(g)
+
+
+async def test_query_string_credentials_are_redacted_from_the_request_url():
+    """Google routes authenticate with ``?key=``, so the URL itself carries the LiteLLM key."""
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    data = _request_data()
+    data["proxy_server_request"] = {
+        **data["proxy_server_request"],
+        "url": "http://localhost:4000/v1beta/models/gemini-pro:streamGenerateContent?alt=sse&KEY=sk-caller-key",
+    }
+    await _run_pre_call(g, data)
+    payload = _sent_payload(g)
+    assert "sk-caller-key" not in json.dumps(payload)
+    assert payload["request_url"] == (
+        "http://localhost:4000/v1beta/models/gemini-pro:streamGenerateContent?alt=sse&KEY=***REDACTED***"
+    )
 
 
 async def test_post_call_block_raises():
@@ -1264,8 +1296,12 @@ async def test_streaming_falls_back_to_the_stash_when_response_carries_no_hidden
         for chunk in _stream_chunks():
             yield chunk
 
+    unwrapped = _model_response()
+    unwrapped._hidden_params["additional_headers"] = {"x-request-id": "req-78"}
     request_data = _request_data()
-    request_data["_thirdlaw_response_headers"] = {"x-request-id": "req-78"}
+    await g.async_post_call_response_headers_hook(
+        data=request_data, user_api_key_dict=UserAPIKeyAuth(), response=unwrapped
+    )
 
     await _collect(
         g.async_post_call_streaming_iterator_hook(

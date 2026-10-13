@@ -101,7 +101,7 @@ def _object_field(source: Mapping[str, object], key: str) -> Mapping[str, object
     return _JSON_OBJECT_ADAPTER.validate_python(value) if isinstance(value, Mapping) else None
 
 
-def _accumulated_tool_input(partial_json: Sequence[str]) -> object:
+def _accumulated_tool_input(joined: str) -> object:
     """Assemble a tool block's streamed arguments.
 
     A stream cut mid-block leaves unparseable JSON. Returning an empty input there would
@@ -111,9 +111,6 @@ def _accumulated_tool_input(partial_json: Sequence[str]) -> object:
     So the raw fragment is carried under ``_raw`` instead, keeping the block a well-formed
     object while leaving the text visible to whatever inspects the assembled body.
     """
-    joined: Final = "".join(partial_json)
-    if not joined:
-        return {}
     try:
         return json.loads(joined)
     except json.JSONDecodeError:
@@ -154,7 +151,8 @@ class _ContentBlock:
         if block_type == "thinking":
             return {"thinking": "".join(self.thinking), "signature": "".join(self.signature)}
         if block_type in _TOOL_BLOCK_TYPES:
-            return {"input": _accumulated_tool_input(self.partial_json)}
+            joined: Final = "".join(self.partial_json)
+            return {"input": _accumulated_tool_input(joined)} if joined else _EMPTY_MAP
         return _EMPTY_MAP
 
     def rendered(self) -> Mapping[str, object]:

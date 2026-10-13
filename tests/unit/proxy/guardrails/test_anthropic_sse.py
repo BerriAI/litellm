@@ -188,3 +188,24 @@ def test_a_replayed_body_keeps_its_citations_and_redacted_thinking():
     replayed = assemble_anthropic_sse_body(list(anthropic_sse_chunks_from_body(body)))
     assert replayed is not None
     assert json.loads(json.dumps(replayed["content"])) == content
+
+
+def test_a_tool_input_sent_whole_in_its_block_start_survives_assembly():
+    """Server tool blocks reach the stream with their full input in ``content_block_start`` and no
+    argument deltas. Blanking that input would replay a query to the client that was never scanned."""
+    body: dict[str, object] = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5",
+        "content": [
+            {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "restricted"}}
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 7},
+    }
+    replayed = assemble_anthropic_sse_body(list(anthropic_sse_chunks_from_body(body)))
+    assert replayed is not None
+    assert json.loads(json.dumps(replayed["content"])) == body["content"]
+

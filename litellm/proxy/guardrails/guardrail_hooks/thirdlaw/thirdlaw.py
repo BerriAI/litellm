@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import (
@@ -9,6 +10,7 @@ from typing import (
     TypeAlias,
     cast,  # noqa: TID251  # SSE byte frames ride the ModelResponseStream-typed pipe (bedrock precedent)
 )
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -47,6 +49,7 @@ from litellm.proxy.guardrails.stream_surface import (
     responses_deltas_absent_from_body,
 )
 from litellm.proxy.litellm_pre_call_utils import (
+    _REDACTED_HEADER_VALUE,  # pyright: ignore[reportPrivateUsage]  # same placeholder the proxy redacts headers to
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # shared list
     _UNTRUSTED_ROOT_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # shared list
 )
@@ -190,7 +193,6 @@ _RESPONSE_WRITE_BACK_DENY_KEYS: Final = frozenset({"id"})
 
 _JSON_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_MAP_ADAPTER: Final = TypeAdapter(dict[object, object])
-_STR_MAP_ADAPTER: Final = TypeAdapter(dict[str, str])
 
 # tags metadata rides in as an untyped list; validating through a TypeAdapter (its
 # `validate_python` parameter is `Any`, so it accepts an untyped value without complaint)
@@ -291,9 +293,23 @@ def _proxy_server_request(request_data: Mapping[str, object]) -> Mapping[str, ob
     return _dict_of(request_data.get("proxy_server_request")) or _EMPTY_MAP
 
 
+_CREDENTIAL_QUERY_PARAMS: Final = frozenset({"key"})
+
+
+def _without_query_credentials(url: str) -> str:
+    parts: Final = urlsplit(url)
+    params: Final = parse_qsl(parts.query, keep_blank_values=True)
+    if not any(name.lower() in _CREDENTIAL_QUERY_PARAMS for name, _ in params):
+        return url
+    redacted: Final = tuple(
+        (name, _REDACTED_HEADER_VALUE if name.lower() in _CREDENTIAL_QUERY_PARAMS else value) for name, value in params
+    )
+    return urlunsplit(parts._replace(query=urlencode(redacted, safe="*")))
+
+
 def _request_url(request_data: Mapping[str, object]) -> str | None:
     url: Final = _proxy_server_request(request_data).get("url")
-    return url if isinstance(url, str) else None
+    return _without_query_credentials(url) if isinstance(url, str) else None
 
 
 def _redacted_inbound_headers(request_data: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -373,9 +389,16 @@ def _response_headers(response: object) -> Mapping[str, str] | None:
 _RESPONSE_HEADERS_STASH_KEY: Final = "_thirdlaw_response_headers"
 
 
+@dataclass(frozen=True, slots=True)
+class _StashedResponseHeaders:
+    """A caller's JSON body only decodes to plain types, so it can never plant one of these."""
+
+    headers: Mapping[str, str]
+
+
 def _stashed_response_headers(request_data: Mapping[str, object]) -> Mapping[str, str] | None:
     stashed: Final = request_data.get(_RESPONSE_HEADERS_STASH_KEY)
-    return _STR_MAP_ADAPTER.validate_python(stashed) if isinstance(stashed, Mapping) else None
+    return stashed.headers if isinstance(stashed, _StashedResponseHeaders) else None
 
 
 def _request_body(request_data: Mapping[str, object], prefer_snapshot: bool) -> Mapping[str, object] | None:
@@ -823,7 +846,8 @@ class ThirdlawGuardrail(CustomGuardrail):
         """
         headers: Final = _response_headers(response)
         if headers is not None:
-            data[_RESPONSE_HEADERS_STASH_KEY] = headers  # rebind-ok: only channel to the stream hook
+            stashed: Final = _StashedResponseHeaders(headers)
+            data[_RESPONSE_HEADERS_STASH_KEY] = stashed  # rebind-ok: only channel to the stream hook
 
     @log_guardrail_information
     async def async_pre_call_hook(
