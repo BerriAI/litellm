@@ -1,7 +1,7 @@
 # stdlib imports
 
 # third party imports
-from typing import Final
+from typing import Final, Protocol
 
 import click
 
@@ -35,6 +35,15 @@ from .commands.teams import teams
 from .commands.up import down, up
 from .commands.users import users
 from .interface import interactive_shell
+
+
+class _CliContextObjView(Protocol):
+    @property
+    def obj(self) -> CliContextObj: ...
+
+
+def _cli_context_obj(view: _CliContextObjView) -> CliContextObj:
+    return view.obj
 
 
 def print_version(base_url: str, api_key: str | None):
@@ -135,7 +144,7 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 @click.pass_context
 def version(ctx: click.Context):
     """Show the LiteLLM Proxy CLI and server version."""
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = _cli_context_obj(ctx)
     print_version(ctx_obj.get("base_url"), ctx_obj.get("api_key"))
 
 
