@@ -93,8 +93,10 @@ class PerfBudget:
         return (*throughput, *violations(ceilings))
 
 
-def _mock_params(model: str) -> LiteLLMParamsBody:
-    return LiteLLMParamsBody(model=model, api_key="sk-perf-not-used", mock_response="perf ok")
+def _mock_params(model: str, delay_seconds: float) -> LiteLLMParamsBody:
+    """A deployment that answers after `delay_seconds`, the way a provider does, so the gateway holds the
+    request open (connection, event-loop slot, Redis and spend state) instead of turning it around at once."""
+    return LiteLLMParamsBody(model=model, api_key="sk-perf-not-used", mock_response="perf ok", mock_delay=delay_seconds)
 
 
 def _sample_workers(proxy: ProxyClient) -> dict[WorkerKey, RssReading]:
@@ -128,10 +130,15 @@ class PerfRig:
     proxy: ProxyClient
     resources: ResourceManager
 
-    def mocked_group(self, models: tuple[str, ...], *, key_pool_size: int = 8) -> MockedGroup:
+    def mocked_group(
+        self, models: tuple[str, ...], delays_seconds: tuple[float, ...], *, key_pool_size: int = 8
+    ) -> MockedGroup:
+        """One group over `models`, each deployment answering after its own delay. The router spreads
+        requests over them, so the group's response times carry the jitter of the whole band."""
+        assert len(models) == len(delays_seconds), f"{len(models)} models but {len(delays_seconds)} delays"
         name: Final = f"perf-{unique_marker()}"
-        for model in models:
-            model_id = self.proxy.create_model(name, _mock_params(model))
+        for model, delay_seconds in zip(models, delays_seconds, strict=True):
+            model_id = self.proxy.create_model(name, _mock_params(model, delay_seconds))
             self.resources.defer(lambda model_id=model_id: self.proxy.delete_model(model_id))
         keys: Final = tuple(
             self.proxy.generate_key(KeyGenerateBody(models=[name], key_alias=f"{name}-{index}"))

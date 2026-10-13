@@ -1403,6 +1403,7 @@ class LiteLLMParamsBody(BaseModel):
     auto_router_embedding_model: str | None = None
     tags: list[str] | None = None
     mock_response: str | list[float] | None = None
+    mock_delay: float | None = None
     timeout: float | None = None
     max_retries: int | None = None
     cooldown_time: float | None = None
