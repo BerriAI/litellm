@@ -3996,3 +3996,34 @@ def test_get_batch_cost_rates_claude_haiku_5_5_prompt_length_tiers(
     )
 
     assert (rates.input, rates.output, rates.cache_read, rates.cache_creation) == expected
+
+
+@pytest.mark.parametrize(("speed", "multiplier"), (("fast", 6.0), ("standard", 1.0), (None, 1.0)))
+def test_token_type_cost_breakdown_bills_cache_tokens_at_the_provider_speed_multiplier(
+    monkeypatch: pytest.MonkeyPatch, speed: str | None, multiplier: float
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fast-cache-model",
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 1e-7,
+            "cache_creation_input_token_cost": 1.25e-6,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "provider_specific_entry": {"fast": 6.0},
+        },
+    )
+    usage = Usage(
+        prompt_tokens=800,
+        completion_tokens=50,
+        total_tokens=850,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400, cache_creation_tokens=300),
+        speed=speed,
+    )
+
+    breakdown = get_token_type_cost_breakdown(model="fast-cache-model", custom_llm_provider="anthropic", usage=usage)
+
+    assert breakdown.cache_read_cost == pytest.approx(multiplier * 400 * 1e-7)
+    assert breakdown.cache_creation_cost == pytest.approx(multiplier * 300 * 1.25e-6)

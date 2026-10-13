@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import re
-import signal
 import socket
 import threading
 import time
@@ -25,6 +24,7 @@ import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -1021,16 +1021,20 @@ def test_p02_a_plain_kimi_reply_is_priced_from_its_own_row(rig: _Rig) -> None:
 
 @pytest.mark.timeout(600)
 def test_s07_a_5kb_caller_model_under_the_wildcard_is_a_bounded_4xx_and_liveliness_stays_up(rig: _Rig) -> None:
+    control: Final = timed(
+        lambda: _send(rig.gateway, "chat", _chat_body(f"bedrock/{'a' * 8}", _prompt(), _SYSTEM_AND_USER))
+    )
     rig.wire.drain()
-    started: Final = time.monotonic()
-    outcome: Final = _send(rig.gateway, "chat", _chat_body(f"bedrock/{'a' * 5120}", _prompt(), _SYSTEM_AND_USER))
-    elapsed: Final = time.monotonic() - started
+    oversized: Final = timed(
+        lambda: _send(rig.gateway, "chat", _chat_body(f"bedrock/{'a' * 5120}", _prompt(), _SYSTEM_AND_USER))
+    )
+    outcome: Final = oversized.value
     liveliness: Final = rig.gateway.client.get("/health/liveliness", timeout=5)
     assert liveliness.status_code == 200, liveliness.text
     assert outcome.status in (400, 404), (outcome.status, outcome.raw[:300])
     error: Final = _JSON.validate_python(_JSON.validate_python(json.loads(outcome.raw))["error"])
     assert "a" * 5120 in str(error["message"]), outcome.raw[:300]
-    assert elapsed < 10, elapsed
+    assert_within_factor_of_control(oversized.seconds, control=control.seconds, factor=20)
     assert rig.wire.drain() == ()
     _failure_row(outcome.call_id)
 
@@ -1494,14 +1498,15 @@ async def test_c02_a_worker_killed_mid_traffic_leaves_the_survivor_and_the_respa
             held_by: Final = MappingProxyType({pid: _open_peer_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            psutil.Process(victim_pid).send_signal(signal.SIGKILL)
-            hold.set()
-            served: Final = await burst
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered(item.outcome)
-            received: Final = _received(wire)
-            assert len(received) == 20 and all(item.cache_points == 0 for item in received), received
+            with owned.replacing_worker(victim_pid) as kill:
+                await asyncio.to_thread(kill)
+                hold.set()
+                served: Final = await burst
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_answered(item.outcome)
+                received: Final = _received(wire)
+                assert len(received) == 20 and all(item.cache_points == 0 for item in received), received
             respawned: Final = eventually(
                 lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
                 lambda pids: len(pids) == 3,
@@ -1570,8 +1575,14 @@ def test_c03_a_restart_re_registers_a_stored_deployment_flag_from_the_database(
 
 @pytest.mark.timeout(900)
 async def test_c04_a_slow_peer_under_ten_concurrent_streams_completes_every_call_once(rig: _Rig) -> None:
-    rig.wire.drain()
     calls: Final = tuple(_Call("chat", index, True) for index in range(10))
+    alone_started: Final = time.monotonic()
+    (alone,) = await _burst(
+        _proxy_url(rig.gateway), rig.gateway.key, "kimi-us", calls[:1], f"{_prompt()} {_SLOW_MARKER}"
+    )
+    alone_seconds: Final = time.monotonic() - alone_started
+    _assert_answered(alone.outcome)
+    rig.wire.drain()
     started: Final = time.monotonic()
     served: Final = await _burst(
         _proxy_url(rig.gateway), rig.gateway.key, "kimi-us", calls, f"{_prompt()} {_SLOW_MARKER}"
@@ -1582,5 +1593,5 @@ async def test_c04_a_slow_peer_under_ten_concurrent_streams_completes_every_call
         _assert_answered(item.outcome)
     received: Final = _received(rig.wire)
     assert len(received) == 10 and all(item.cache_points == 0 for item in received), received
-    assert elapsed < 30, elapsed
+    assert_within_factor_of_control(elapsed, control=alone_seconds, factor=len(calls))
     _assert_rows_once(served)

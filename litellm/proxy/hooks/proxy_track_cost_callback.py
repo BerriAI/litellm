@@ -189,6 +189,8 @@ class _ProxyDBLogger(CustomLogger):
             and not (
                 RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
             )
+            or request_route is not None
+            and RouteChecks.is_dashboard_session_info_route(request_route, user_api_key_dict.team_id)
         ):
             return
 
