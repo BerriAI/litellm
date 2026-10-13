@@ -85,7 +85,6 @@ proptest = "1.7.0"
 pyo3 = "0.29.2"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 rand = "0.8"
-static_assertions = "1.1.0"
 macro_rules_attribute = "0.2.3"
 schemars = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "http2", "stream"] }
