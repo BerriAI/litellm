@@ -1,12 +1,15 @@
 """Process-level configuration for the control plane, read once at startup."""
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from litellm.litellm_core_utils.oauth_token_exchange import TokenExchangeProfile
 from litellm.proxy.control_plane.auth.rbac import ADMIN_ROLE
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
@@ -37,6 +40,53 @@ class RoleSpec(BaseModel):
     inherits: tuple[str, ...] = ()
 
 
+class OidcExchangeSpec(BaseModel):
+    """IdP token-exchange client the control plane uses to mint a token for this dataplane's audience."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    token_endpoint: str
+    client_id: str
+    client_secret: SecretStr
+    profile: TokenExchangeProfile = "rfc8693"
+    audience: str | None = None
+    scope: str | None = None
+
+
+class ServiceTokenSpec(BaseModel):
+    """A dataplane virtual key holding the `impersonate` permission, the fallback when no IdP exchange is possible."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    token: SecretStr
+
+
+class DataplaneSpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    url: str = Field(pattern=r"^https?://")
+    name: str | None = None
+    oidc_exchange: OidcExchangeSpec | None = None
+    service_token: ServiceTokenSpec | None = None
+    allow_insecure_http: bool = False
+
+    @model_validator(mode="after")
+    def _https_unless_opted_out(self) -> "DataplaneSpec":
+        if "@" in self.url.partition("://")[2].partition("/")[0]:
+            raise ValueError("dataplane url must not contain userinfo; credentials belong in a credential strategy.")
+        if self.url.startswith("http://") and not self.allow_insecure_http:
+            raise ValueError(
+                f"dataplane url {self.url!r} is plain http, the bearer credential would travel unencrypted. "
+                "Use https or set allow_insecure_http: true for a local or in-cluster dataplane."
+            )
+        return self
+
+
+DataplaneSpecs: TypeAlias = Mapping[str, DataplaneSpec]
+_DATAPLANE_SPECS: Final = TypeAdapter(DataplaneSpecs)
+_YAML_DOCUMENT: Final = TypeAdapter(dict[str, object])
+
+
 class ControlPlaneSettings(BaseSettings):
     model_config = SettingsConfigDict(frozen=True, env_prefix="CONTROL_PLANE_", extra="ignore")
 
@@ -56,7 +106,10 @@ class ControlPlaneSettings(BaseSettings):
     oidc_dataplanes_claim: str = "litellm_dataplanes"
     oidc_email_claim: str = "email"
     oidc_leeway_seconds: int = 30
+    dataplanes: DataplaneSpecs = Field(default_factory=dict)
+    dataplanes_file: str | None = None
     dataplane_timeout_seconds: float = DEFAULT_DATAPLANE_TIMEOUT_SECONDS
+    dataplane_retry_attempts: int = 3
     fanout_concurrency: int = 16
     api_prefix: str = "/api/v1"
 
@@ -94,5 +147,19 @@ class ControlPlaneSettings(BaseSettings):
         )
 
 
+def read_dataplanes_file(path: str) -> DataplaneSpecs:
+    """A yaml file with a top-level `dataplanes:` map keyed by dataplane id, the same shape as the env JSON."""
+    with open(path, encoding="utf-8") as handle:
+        document: Final = _YAML_DOCUMENT.validate_python(yaml.safe_load(handle))
+    return _DATAPLANE_SPECS.validate_python(document.get("dataplanes", {}))
+
+
 def load_settings() -> ControlPlaneSettings:
-    return ControlPlaneSettings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env
+    from_env: Final = ControlPlaneSettings()  # pyright: ignore[reportCallIssue]  # pydantic-settings fills fields from env
+    if from_env.dataplanes_file is None:
+        return from_env
+    if os.environ.get("CONTROL_PLANE_DATAPLANES") is not None:
+        raise ValueError("CONTROL_PLANE_DATAPLANES and CONTROL_PLANE_DATAPLANES_FILE cannot both be set.")
+    return ControlPlaneSettings.model_validate(
+        {**from_env.model_dump(by_alias=True), "dataplanes": read_dataplanes_file(from_env.dataplanes_file)}
+    )

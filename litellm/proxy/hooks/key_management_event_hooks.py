@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     hash_token_if_needed,
@@ -66,20 +67,23 @@ class KeyManagementEventHooks:
             _updated_values: Final = response.model_dump_json(exclude_none=True)
             asyncio.create_task(
                 create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    request_data=with_audit_actor(
+                        LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=get_audit_log_changed_by(
+                                litellm_changed_by=litellm_changed_by,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            ),
+                            changed_by_api_key=user_api_key_dict.api_key,
+                            table_name=LitellmTableNames.KEY_TABLE_NAME,
+                            object_id=response.token_id or "",
+                            action="created",
+                            updated_values=_updated_values,
+                            before_value=None,
                         ),
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=response.token_id or "",
-                        action="created",
-                        updated_values=_updated_values,
-                        before_value=None,
+                        user_api_key_dict,
                     )
                 )
             )
@@ -128,20 +132,23 @@ class KeyManagementEventHooks:
                 **data.model_dump(exclude_none=True),
                 **({"project_id": data.project_id} if "project_id" in data.model_fields_set else {}),
             }
-            audit_log: Final = LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=get_audit_log_changed_by(
-                    litellm_changed_by=litellm_changed_by,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+            audit_log: Final = with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.KEY_TABLE_NAME,
+                    object_id=hash_token_if_needed(data.key),
+                    action="updated",
+                    updated_values=json.dumps(updated_fields, default=str),
+                    before_value=json.dumps(existing_key_row.json(exclude_none=True), default=str),
                 ),
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.KEY_TABLE_NAME,
-                object_id=hash_token_if_needed(data.key),
-                action="updated",
-                updated_values=json.dumps(updated_fields, default=str),
-                before_value=json.dumps(existing_key_row.json(exclude_none=True), default=str),
+                user_api_key_dict,
             )
             masked_values: Final = TypeAdapter(dict[str, object]).validate_json(str(audit_log.updated_values))
             request_data: Final = (
@@ -180,20 +187,23 @@ class KeyManagementEventHooks:
         if is_audit_logging_enabled() and existing_key_row.token is not None:
             asyncio.create_task(
                 create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    request_data=with_audit_actor(
+                        LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=get_audit_log_changed_by(
+                                litellm_changed_by=litellm_changed_by,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            ),
+                            changed_by_api_key=user_api_key_dict.token,
+                            table_name=LitellmTableNames.KEY_TABLE_NAME,
+                            object_id=existing_key_row.token,
+                            action="rotated",
+                            updated_values=response.model_dump_json(exclude_none=True),
+                            before_value=existing_key_row.model_dump_json(exclude_none=True),
                         ),
-                        changed_by_api_key=user_api_key_dict.token,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=existing_key_row.token,
-                        action="rotated",
-                        updated_values=response.model_dump_json(exclude_none=True),
-                        before_value=existing_key_row.model_dump_json(exclude_none=True),
+                        user_api_key_dict,
                     )
                 )
             )
@@ -277,16 +287,19 @@ class KeyManagementEventHooks:
             LiteLLM_VerificationToken.model_validate(key, from_attributes=True) for key in keys_being_deleted
         )
         audit_rows: Final = tuple(
-            LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=changed_by,
-                changed_by_api_key=user_api_key_dict.token,
-                table_name=LitellmTableNames.KEY_TABLE_NAME,
-                object_id=key_row.token,
-                action="deleted",
-                updated_values="{}",
-                before_value=key_row.model_dump_json(exclude_none=True),
+            with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=changed_by,
+                    changed_by_api_key=user_api_key_dict.token,
+                    table_name=LitellmTableNames.KEY_TABLE_NAME,
+                    object_id=key_row.token,
+                    action="deleted",
+                    updated_values="{}",
+                    before_value=key_row.model_dump_json(exclude_none=True),
+                ),
+                user_api_key_dict,
             )
             for key_row in key_rows
             if key_row.token is not None
