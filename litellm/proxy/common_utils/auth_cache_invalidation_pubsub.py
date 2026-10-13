@@ -182,17 +182,23 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
 
 
 class AuthCacheInvalidationSubscriber:
-    __slots__ = ("_additional_in_memory_caches", "_redis_cache", "_task", "_user_api_key_cache")
+    """``counter_cache`` is the one cache a value-carrying message (a spend reset) is written into;
+    a delete reaches every additional cache. Writing a reset's thousands of counters into every
+    additional cache would evict what the others hold, the BYOK credentials among them."""
+
+    __slots__ = ("_additional_in_memory_caches", "_counter_cache", "_redis_cache", "_task", "_user_api_key_cache")
 
     def __init__(
         self,
         redis_cache: "RedisCache",
         user_api_key_cache: "UserApiKeyCache",
         additional_in_memory_caches: Sequence["InMemoryCache"] = (),
+        counter_cache: "InMemoryCache | None" = None,
     ) -> None:
         self._redis_cache = redis_cache
         self._user_api_key_cache = user_api_key_cache
         self._additional_in_memory_caches = tuple(additional_in_memory_caches)
+        self._counter_cache = counter_cache
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -248,9 +254,10 @@ class AuthCacheInvalidationSubscriber:
         if parsed is None:
             return
         if parsed.new_value is not None:
-            for additional_cache in self._additional_in_memory_caches:
-                for cache_key in parsed.cache_keys:
-                    additional_cache.set_cache(cache_key, parsed.new_value, ttl=parsed.ttl)
+            if self._counter_cache is None:
+                return
+            for cache_key in parsed.cache_keys:
+                self._counter_cache.set_cache(cache_key, parsed.new_value, ttl=parsed.ttl)
             return
         for cache_key in parsed.cache_keys:
             self._user_api_key_cache.in_memory_cache_for(cache_key).delete_cache(cache_key)

@@ -2918,6 +2918,7 @@ async def _drain_spend_event_producer_on_shutdown() -> None:
 # Bounds authoritative DB re-reads when enforcing a budget against a
 # stale-low spend counter: at most one DB read per counter per window.
 SPEND_DB_FLOOR_CACHE_TTL_SECONDS: Final = 5
+SPEND_RESET_FENCE_TTL_SECONDS: Final = 2 * SPEND_DB_FLOOR_CACHE_TTL_SECONDS
 SPEND_DB_FLOOR_MARKER_PREFIX: Final = "spend_db_floor:"
 _SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE: Final = 10
 
@@ -3067,7 +3068,10 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
         forget_spend_counter(counter_key)
         try:
             repaired: Final = await spend_counter_cache.redis_cache.async_set_max(
-                key=counter_key, value=db_spend, ttl=spend_counter_redis_ttl()
+                key=counter_key,
+                value=db_spend,
+                ttl=spend_counter_redis_ttl(),
+                fence_key=spend_counter_cache.redis_cache.reset_fence_key(counter_key),
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -3957,8 +3961,6 @@ _IN_MEMORY_COUNTER_KEYS: Final = TypeAdapter(tuple[str, ...])
 
 _SPEND_COUNTER_STORE_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, ValidationError)
 
-_WINDOW_COUNTER_SEGMENT: Final = ":window:"
-
 
 def _spend_counter_keys_in_memory(prefix: str) -> frozenset[str]:
     floor_prefix: Final = f"{SPEND_DB_FLOOR_MARKER_PREFIX}{prefix}"
@@ -3968,58 +3970,99 @@ def _spend_counter_keys_in_memory(prefix: str) -> frozenset[str]:
     )
 
 
-async def _spend_counter_keys_in_redis(redis_cache: RedisCache, prefix: str) -> frozenset[str]:
+async def _spend_counter_keys_in_redis(redis_cache: RedisCache, prefix: str) -> frozenset[str] | Exception:
     namespace_prefix: Final = f"{redis_cache.namespace}:" if redis_cache.namespace else ""
     try:
         scanned: Final = await redis_cache.async_scan_iter(pattern=prefix, count=500, unbounded=True)
-    except _SPEND_COUNTER_STORE_FAILURES:
-        verbose_proxy_logger.warning(
-            "Unable to list the spend counters %s* after the spend reset; budget checks on other pods use the stale "
-            "counters until they expire",
-            prefix,
-            exc_info=True,
-        )
-        return frozenset()
+    except _SPEND_COUNTER_STORE_FAILURES as e:
+        return e
     return frozenset(key.removeprefix(namespace_prefix) for key in scanned)
 
 
-async def _write_spend_counters_to_redis(redis_cache: RedisCache, keys: Sequence[str], value: float) -> None:
+_KEYS_PER_RESET_PIPELINE: Final = DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE // 2
+
+
+async def _write_reset_pipeline(
+    redis_cache: RedisCache, batch: Sequence[str], value: float, ttl: int
+) -> Exception | None:
+    """The fences go first, so a repair that lands between a fence and its counter already finds the fence."""
+    fences: Final = tuple((redis_cache.reset_fence_key(key), 1, SPEND_RESET_FENCE_TTL_SECONDS) for key in batch)
+    try:
+        return await redis_cache.async_set_cache_pipeline_with_ttls((*fences, *((key, value, ttl) for key in batch)))
+    except RedisCircuitBreakerOpenError as e:
+        return e
+
+
+async def _write_spend_counters_to_redis(
+    redis_cache: RedisCache, keys: Sequence[str], value: float
+) -> Exception | None:
     ttl: Final = spend_counter_redis_ttl()
-    for start in range(0, len(keys), DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE):
-        await redis_cache.async_set_cache_pipeline_with_ttls(
-            [(key, value, ttl) for key in keys[start : start + DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE]]
-        )
+    for start in range(0, len(keys), _KEYS_PER_RESET_PIPELINE):
+        if (
+            lost := await _write_reset_pipeline(redis_cache, keys[start : start + _KEYS_PER_RESET_PIPELINE], value, ttl)
+        ) is not None:
+            return lost
+    return None
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
-async def set_spend_counters_with_floor_and_broadcast(counter_keys: Collection[str], value: float) -> None:
+async def set_spend_counters_with_floor_and_broadcast(counter_keys: Collection[str], value: float) -> Exception | None:
     """A spend reset SETs each counter and its spend_db_floor marker on every pod, never
     deletes them: a pod that cached the pre-reset floor within SPEND_DB_FLOOR_CACHE_TTL_SECONDS
-    would otherwise repair the reseeded counter right back to the old total."""
+    would otherwise repair the reseeded counter right back to the old total. The floors are
+    broadcast before the counters so a subscriber never holds the new counter under the old
+    floor, and a reset fence in Redis holds any repair that still races the broadcast.
+
+    Returns the Redis error when the counters could not be written there: this pod and the
+    broadcast still carry the new value, but the other pods fall back to the stale Redis
+    counters once their copies expire, so the caller must not report success."""
     keys: Final = tuple(sorted(counter_keys))
     if len(keys) == 0:
-        return
+        return None
     floor_keys: Final = tuple(f"{SPEND_DB_FLOOR_MARKER_PREFIX}{key}" for key in keys)
     for key, floor_key in zip(keys, floor_keys, strict=True):
         spend_counter_cache.in_memory_cache.set_cache(key=key, value=value, ttl=60)
         spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
     redis_cache: Final = spend_counter_cache.redis_cache
-    if redis_cache is not None:
-        await _write_spend_counters_to_redis(redis_cache, keys, value)
-    await publish_auth_cache_invalidations(keys, new_value=value, ttl=60)
+    lost: Final = None if redis_cache is None else await _write_spend_counters_to_redis(redis_cache, keys, value)
     await publish_auth_cache_invalidations(floor_keys, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+    await publish_auth_cache_invalidations(keys, new_value=value, ttl=60)
+    return lost
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
-async def reset_spend_counters_with_prefix(prefix: str) -> None:
+async def reset_spend_counters_with_prefix(prefix: str) -> Exception | None:
+    """Resets every counter under ``prefix`` this pod or Redis knows; returns the Redis error
+    when the counters there could not be listed or written, with this pod already reset."""
     redis_cache: Final = spend_counter_cache.redis_cache
-    in_redis: Final[frozenset[str]] = (
+    in_redis: Final[frozenset[str] | Exception] = (
         frozenset() if redis_cache is None else await _spend_counter_keys_in_redis(redis_cache, prefix)
     )
+    listed: Final[frozenset[str]] = frozenset() if isinstance(in_redis, Exception) else in_redis
     counters: Final = frozenset(
-        key for key in _spend_counter_keys_in_memory(prefix) | in_redis if _WINDOW_COUNTER_SEGMENT not in key
+        key
+        for key in _spend_counter_keys_in_memory(prefix) | listed
+        if not SpendCounterReseed.is_key_or_team_window_counter(key)
     )
-    await set_spend_counters_with_floor_and_broadcast(counters, value=0.0)
+    lost: Final = await set_spend_counters_with_floor_and_broadcast(counters, value=0.0)
+    return in_redis if isinstance(in_redis, Exception) else lost
+
+
+def raise_if_spend_counters_unwritten(lost: Exception | None, saved: str) -> None:
+    """Maps a lost Redis counter write to the public error: the database write stands, so the
+    caller retries the same request once Redis accepts writes rather than undoing anything."""
+    if lost is None:
+        return
+    raise ProxyException(
+        message=(
+            f"{saved}, but the cached spend counters could not be reset in Redis ({lost}). Budget checks on other "
+            "instances keep the previous spend until those counters expire, so retry this request once Redis "
+            "accepts writes."
+        ),
+        type=ProxyErrorTypes.internal_server_error,
+        param="None",
+        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
 
 
 async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:
@@ -8543,6 +8586,7 @@ class ProxyConfig:
             redis_cache=redis_cache,
             user_api_key_cache=user_api_key_cache,
             additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
+            counter_cache=spend_counter_cache.in_memory_cache,
         )
         self.auth_cache_invalidation_subscriber = subscriber
         subscriber.start()

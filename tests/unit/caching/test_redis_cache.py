@@ -1492,6 +1492,65 @@ async def test_async_set_cache_pipeline_with_ttls_keeps_each_entry_ttl(monkeypat
     ]
 
 
+class _LostPipeline(_SetRecordingPipeline):
+    async def execute(self) -> list[bool]:
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        raise RedisConnectionError("redis down")
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_pipeline_with_ttls_returns_the_error_of_a_lost_write(monkeypatch, redis_no_ping):
+    """A spend reset must not report success on a write Redis never applied, so the lost write comes back
+    as a value while every other caller keeps ignoring it."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    client = MagicMock()
+    client.pipeline = MagicMock(side_effect=(_LostPipeline(), _SetRecordingPipeline()))
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        lost = await redis_cache.async_set_cache_pipeline_with_ttls((("k", 1, 60),))
+        kept = await redis_cache.async_set_cache_pipeline_with_ttls((("k", 1, 60),))
+
+    assert isinstance(lost, RedisConnectionError)
+    assert kept is None
+
+
+@pytest.mark.parametrize("namespace", [None, "ns"])
+def test_reset_fence_key_shares_the_cluster_slot_of_its_counter(namespace, monkeypatch, redis_no_ping):
+    """The repair checks the fence and the counter in one Lua call, which a cluster only runs on one slot."""
+    from redis.crc import key_slot
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    counter = redis_cache.check_and_fix_namespace(key="spend:key:abc")
+    fence = redis_cache.check_and_fix_namespace(key=redis_cache.reset_fence_key("spend:key:abc"))
+
+    assert fence != counter
+    assert key_slot(fence.encode()) == key_slot(counter.encode())
+
+
+@pytest.mark.asyncio
+async def test_async_set_max_declares_the_reset_fence_as_a_second_key(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    client = MagicMock()
+    client.eval = AsyncMock(return_value=b"3.0")
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        held = await redis_cache.async_set_max(
+            key="spend:key:abc", value=12.0, ttl=60, fence_key=redis_cache.reset_fence_key("spend:key:abc")
+        )
+        unfenced = await redis_cache.async_set_max(key="spend:key:abc", value=12.0, ttl=60)
+
+    assert (held, unfenced) == (3.0, 3.0)
+    fenced_call, plain_call = client.eval.await_args_list
+    assert fenced_call.args[1:4] == (2, "ns:spend:key:abc", "ns:{ns:spend:key:abc}:reset_fence")
+    assert plain_call.args[1:3] == (1, "ns:spend:key:abc")
+
+
 class _ListPipeline:
     def __init__(self, rows: list[str]) -> None:
         self.rows = rows

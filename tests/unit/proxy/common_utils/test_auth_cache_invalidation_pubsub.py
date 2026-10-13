@@ -247,11 +247,15 @@ async def test_publish_many_sends_one_message_per_five_hundred_keys() -> None:
 
 
 @pytest.mark.asyncio
-async def test_subscriber_sets_every_key_of_a_multi_key_message_in_additional_caches() -> None:
+async def test_subscriber_sets_every_key_of_a_multi_key_message_in_the_counter_cache_only() -> None:
+    """A global reset broadcasts thousands of counters; written into every additional cache they would evict
+    the BYOK credentials cached next to them."""
     cache = UserApiKeyCache()
     spend_counter_in_memory_cache = InMemoryCache()
     spend_counter_in_memory_cache.set_cache("spend:key:a", 999.0)
     spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:key:a", 999.0)
+    byok_cache = InMemoryCache()
+    byok_cache.set_cache("byok:cred-1", {"api_key": "sk-cred"})
     message = {
         "type": "message",
         "data": json.dumps({"cache_keys": ["spend:key:a", "spend:key:b"], "new_value": 0.0, "ttl": 60}).encode(),
@@ -261,7 +265,8 @@ async def test_subscriber_sets_every_key_of_a_multi_key_message_in_additional_ca
     subscriber = AuthCacheInvalidationSubscriber(
         redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
         user_api_key_cache=cache,
-        additional_in_memory_caches=(spend_counter_in_memory_cache,),
+        additional_in_memory_caches=(spend_counter_in_memory_cache, byok_cache),
+        counter_cache=spend_counter_in_memory_cache,
     )
     subscriber.start()
     try:
@@ -275,6 +280,8 @@ async def test_subscriber_sets_every_key_of_a_multi_key_message_in_additional_ca
     assert spend_counter_in_memory_cache.get_cache("spend:key:a") == 0.0
     assert spend_counter_in_memory_cache.get_cache("spend:key:b") == 0.0
     assert spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:key:a") == 999.0
+    assert byok_cache.get_cache("byok:cred-1") == {"api_key": "sk-cred"}
+    assert byok_cache.get_cache("spend:key:a") is None
 
 
 @pytest.mark.asyncio

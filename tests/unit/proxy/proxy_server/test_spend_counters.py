@@ -57,6 +57,7 @@ def _make_spend_counter_cache(
         cache.redis_cache.async_delete_cache = AsyncMock()
         cache.redis_cache.async_set_cache = AsyncMock()
         cache.redis_cache.async_set_max = AsyncMock()
+        cache.redis_cache.reset_fence_key = lambda key: f"{{{key}}}:reset_fence"
         cache.redis_cache.async_increment_pipeline = AsyncMock(return_value=None)
         cache.redis_cache.get_ttl = MagicMock(return_value=None)
     else:
@@ -135,7 +136,7 @@ async def test_get_current_spend_floors_stale_low_counter_against_db(monkeypatch
     # monotonic set-max so other workers read the corrected total, and a
     # concurrent increment cannot be clobbered
     fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
-        key="spend:key:abc", value=12.0, ttl=ps.spend_counter_redis_ttl()
+        key="spend:key:abc", value=12.0, ttl=ps.spend_counter_redis_ttl(), fence_key="{spend:key:abc}:reset_fence"
     )
 
 
@@ -285,7 +286,10 @@ async def test_get_current_spend_end_user_floor_repairs_a_stale_low_counter(monk
 
     assert result == 12.0
     fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
-        key="spend:end_user:customer-42", value=12.0, ttl=ps.spend_counter_redis_ttl()
+        key="spend:end_user:customer-42",
+        value=12.0,
+        ttl=ps.spend_counter_redis_ttl(),
+        fence_key="{spend:end_user:customer-42}:reset_fence",
     )
 
 
@@ -331,7 +335,7 @@ async def test_get_current_spend_floors_window_against_spend_logs(monkeypatch):
     assert result == 15.0
     assert wfsl.await_count == 1
     fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
-        key=counter_key, value=15.0, ttl=ps.spend_counter_redis_ttl()
+        key=counter_key, value=15.0, ttl=ps.spend_counter_redis_ttl(), fence_key=f"{{{counter_key}}}:reset_fence"
     )
 
 
@@ -374,7 +378,7 @@ async def test_get_current_spend_floors_window_against_maintained_row(monkeypatc
     assert result == 15.0
     fake_prisma.db.litellm_spendlogs.group_by.assert_not_awaited()
     fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
-        key=counter_key, value=15.0, ttl=ps.spend_counter_redis_ttl()
+        key=counter_key, value=15.0, ttl=ps.spend_counter_redis_ttl(), fence_key=f"{{{counter_key}}}:reset_fence"
     )
 
 

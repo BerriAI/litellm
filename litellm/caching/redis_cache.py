@@ -1332,10 +1332,15 @@ class RedisCache(BaseCache):
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     @_redis_circuit_breaker_guard
-    async def async_set_cache_pipeline_with_ttls(self, cache_list: Sequence[tuple[str, object, float | None]]) -> None:
-        """One round trip for writes whose TTLs differ; a ``None`` TTL falls back to the default TTL."""
+    async def async_set_cache_pipeline_with_ttls(
+        self, cache_list: Sequence[tuple[str, object, float | None]]
+    ) -> Exception | None:
+        """One round trip for writes whose TTLs differ; a ``None`` TTL falls back to the default TTL.
+
+        Returns the Redis error when the writes were lost, so a caller that must not report
+        success on a lost write can tell. An open circuit breaker still raises."""
         if len(cache_list) == 0:
-            return
+            return None
         commands: Final = tuple(
             (self.check_and_fix_namespace(key=cache_key), json.dumps(cache_value), self.get_ttl(ttl=ttl))
             for cache_key, cache_value, ttl in cache_list
@@ -1346,16 +1351,6 @@ class RedisCache(BaseCache):
                 for cache_key, json_cache_value, ttl in commands:
                     pipe.set(name=cache_key, value=json_cache_value, ex=None if ttl is None else timedelta(seconds=ttl))
                 await pipe.execute()
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=time.time() - start_time,
-                    call_type="async_set_cache_pipeline_with_ttls",
-                    caller=_get_call_stack_info(),
-                    start_time=start_time,
-                    end_time=time.time(),
-                )
-            )
         except Exception as e:
             asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
@@ -1375,6 +1370,19 @@ class RedisCache(BaseCache):
                 e,
             )
             _record_swallowed_redis_failure(self._circuit_breaker, e)
+            return e
+        else:
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    call_type="async_set_cache_pipeline_with_ttls",
+                    caller=_get_call_stack_info(),
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )
+            return None
 
     async def _set_cache_sadd_helper(
         self,
@@ -1551,12 +1559,18 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    def reset_fence_key(self, key: str) -> str:
+        """Hash-tagged with the namespaced ``key`` so a cluster keeps the fence and the key on one slot."""
+        return f"{{{self.check_and_fix_namespace(key=key)}}}:reset_fence"
+
     @_redis_circuit_breaker_guard
     async def async_set_max(
         self,
         key: str,
         value: float,
         ttl: int | None = None,
+        *,
+        fence_key: str | None = None,
     ) -> float | None:
         """Atomically set ``key`` to ``value`` only when ``value`` is greater
         than the stored value (or the key is unset), refreshing the TTL.
@@ -1566,11 +1580,17 @@ class RedisCache(BaseCache):
         concurrent increment that has already pushed the counter higher. The
         GET/compare/SET runs in a single Lua call, so it is also atomic across
         racing callers and pods. Returns the resulting value.
+
+        While ``fence_key`` exists the write is held and the stored value returned
+        as is: a spend reset sets one (``reset_fence_key``) so a repair still
+        carrying the pre-reset total cannot raise the counter the reset zeroed.
         """
         _redis_client: Final = self.init_async_client()
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
+        keys: Final = (key,) if fence_key is None else (key, self.check_and_fix_namespace(key=fence_key))
         lua: Final = (
+            "if KEYS[2] ~= nil and redis.call('EXISTS', KEYS[2]) == 1 then return redis.call('GET', KEYS[1]) end "
             "local cur = redis.call('GET', KEYS[1]) "
             "if cur == false or tonumber(cur) < tonumber(ARGV[1]) then "
             "redis.call('SET', KEYS[1], ARGV[1]) "
@@ -1580,7 +1600,7 @@ class RedisCache(BaseCache):
         )
         result = cast(
             "str | bytes | int | float | None",
-            await _redis_client.eval(lua, 1, key, str(value), str(int(_used_ttl or 0))),
+            await _redis_client.eval(lua, len(keys), *keys, str(value), str(int(_used_ttl or 0))),
         )
         if result is None:
             return None

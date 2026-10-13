@@ -137,7 +137,7 @@ class SpendCounterReseed:
         # Per-window key/team counters share prefixes with primary counters
         # but don't correspond to a DB row. Do not reject arbitrary entity IDs
         # or tag names that merely contain ":window:".
-        if SpendCounterReseed._is_key_or_team_window_counter(counter_key):
+        if SpendCounterReseed.is_key_or_team_window_counter(counter_key):
             return None
         try:
             row: Final = await bounded_db_lookup(
@@ -199,7 +199,7 @@ class SpendCounterReseed:
         return float(row.spend or 0.0)
 
     @staticmethod
-    def _is_key_or_team_window_counter(counter_key: str) -> bool:
+    def is_key_or_team_window_counter(counter_key: str) -> bool:
         for prefix in ("spend:key:", "spend:team:"):
             if not counter_key.startswith(prefix):
                 continue
