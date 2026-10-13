@@ -3701,7 +3701,7 @@ class ModelResponseIterator:
     def __next__(self) -> Optional["ModelResponseStream"]:
         while True:
             try:
-                chunk = self.response_iterator.__next__()
+                chunk = self.response_iterator.__next__()  # pyright: ignore[reportAttributeAccessIssue]  # sync stream
             except StopIteration:
                 if self.chunk_type == "accumulated_json" and self._json_buffer:
                     result = self.handle_accumulated_json_chunk(chunk="", is_final=True)
@@ -3725,7 +3725,7 @@ class ModelResponseIterator:
 
     # Async iterator
     def __aiter__(self):
-        self.async_response_iterator = self.streaming_response.__aiter__()
+        self.async_response_iterator = self.streaming_response.__aiter__()  # pyright: ignore[reportAttributeAccessIssue]  # async stream
         return self
 
     async def __anext__(self) -> Optional["ModelResponseStream"]:
@@ -3754,14 +3754,14 @@ class ModelResponseIterator:
                 raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     async def aclose(self) -> None:
-        iterator: Final = getattr(
+        iterator: Final = getattr(  # pyright: ignore[reportUnknownVariableType]  # sync or async line iterator
             self,
             "async_response_iterator",
             self.streaming_response,
         )
         if iterator is not None and hasattr(iterator, "aclose"):
             try:
-                await iterator.aclose()
+                await iterator.aclose()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # hasattr guard
             except Exception as e:  # noqa: BLE001
                 verbose_logger.debug("ModelResponseIterator.aclose: error closing iterator: %s", e)
         if self.response is not None:
@@ -3771,10 +3771,10 @@ class ModelResponseIterator:
                 verbose_logger.debug("ModelResponseIterator.aclose: error closing response: %s", e)
 
     def close(self) -> None:
-        iterator: Final = getattr(self, "response_iterator", self.streaming_response)
+        iterator: Final = getattr(self, "response_iterator", self.streaming_response)  # pyright: ignore[reportUnknownVariableType]  # sync or async line iterator
         if iterator is not None and hasattr(iterator, "close"):
             try:
-                iterator.close()
+                iterator.close()  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # hasattr guard
             except Exception as e:  # noqa: BLE001
                 verbose_logger.debug("ModelResponseIterator.close: error closing iterator: %s", e)
         if self.response is not None:
