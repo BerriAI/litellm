@@ -1,6 +1,17 @@
-from typing import Literal
+from typing import Final, Literal
 
-from litellm._logging import verbose_logger
+
+def _get_prompt_from_input(input_data: object, model: str) -> str:
+    if isinstance(input_data, str):
+        return input_data
+    if not isinstance(input_data, list):
+        return ""
+    tokens: Final = tuple(token for token in input_data if isinstance(token, int))
+    if tokens and len(tokens) == len(input_data):
+        import litellm
+
+        return str(litellm.decode(model=model, tokens=tokens))
+    return "".join(_get_prompt_from_input(item, model) for item in input_data)
 
 
 def get_formatted_prompt(
@@ -42,42 +53,10 @@ def get_formatted_prompt(
     elif call_type == "text_completion":
         prompt = data["prompt"]
     elif call_type in ("embedding", "aembedding", "moderation"):
-        if "input" in data:
-            if isinstance(data["input"], str):
-                prompt = data["input"]
-            elif isinstance(data["input"], list):
-                if data["input"] and isinstance(data["input"][0], int):
-                    try:
-                        import litellm
-
-                        prompt = str(
-                            litellm.decode(
-                                model=data["model"] if "model" in data and isinstance(data["model"], str) else "",
-                                tokens=data["input"],
-                            )
-                        )
-                    except (TypeError, ValueError, KeyError, AttributeError) as exc:
-                        verbose_logger.debug("Failed to decode token IDs: %s", exc)
-                elif data["input"] and isinstance(data["input"][0], list):
-                    for token_list in data["input"]:
-                        if isinstance(token_list, list):
-                            try:
-                                import litellm
-
-                                prompt += str(
-                                    litellm.decode(
-                                        model=data["model"]
-                                        if "model" in data and isinstance(data["model"], str)
-                                        else "",
-                                        tokens=token_list,
-                                    )
-                                )
-                            except (TypeError, ValueError, KeyError, AttributeError) as exc:
-                                verbose_logger.debug("Failed to decode token IDs: %s", exc)
-                else:
-                    for m in data["input"]:
-                        if isinstance(m, str):
-                            prompt += m
+        return _get_prompt_from_input(
+            data.get("input"),
+            model=data["model"] if "model" in data and isinstance(data["model"], str) else "",
+        )
     elif (
         call_type
         in (
