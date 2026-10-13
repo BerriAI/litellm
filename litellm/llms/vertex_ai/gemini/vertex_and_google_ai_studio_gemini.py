@@ -1958,19 +1958,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         tool_use_prompt_tokens: Final = usage_metadata.get("toolUsePromptTokenCount") or None
 
-        prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=cached_tokens,
-            audio_tokens=prompt_audio_tokens,
-            text_tokens=prompt_text_tokens,
-            image_tokens=prompt_image_tokens,
-            video_tokens=prompt_video_tokens,
-            tool_use_tokens=tool_use_prompt_tokens,
-        )
-
         billable_tool_use_prompt_tokens: Final = (
             0
             if VertexGeminiConfig._response_has_search_grounding(completion_response)
             else (tool_use_prompt_tokens or 0)
+        )
+        billable_text_tokens: Final = (
+            prompt_text_tokens if prompt_text_tokens is None else prompt_text_tokens + billable_tool_use_prompt_tokens
+        )
+
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens,
+            audio_tokens=prompt_audio_tokens,
+            text_tokens=billable_text_tokens,
+            image_tokens=prompt_image_tokens,
+            video_tokens=prompt_video_tokens,
+            tool_use_tokens=tool_use_prompt_tokens,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
