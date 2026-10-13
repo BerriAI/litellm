@@ -2,7 +2,8 @@
 Tests for SecurityHeadersMiddleware.
 
 Verifies anti-framing / content-type headers are present on every response and
-that HSTS is opt-in via LITELLM_ENABLE_HSTS.
+that HSTS is opt-in via LITELLM_ENABLE_HSTS and Cache-Control: no-store is
+opt-in via LITELLM_ENABLE_NO_STORE.
 """
 
 from starlette.applications import Starlette
@@ -69,3 +70,45 @@ def test_does_not_override_existing_header(monkeypatch):
     assert resp.headers["x-frame-options"] == "SAMEORIGIN"
     # other headers still applied
     assert resp.headers["x-content-type-options"] == "nosniff"
+
+
+def test_no_store_absent_by_default(monkeypatch):
+    monkeypatch.delenv("LITELLM_ENABLE_NO_STORE", raising=False)
+    resp = _make_client(_ok).get("/")
+    assert "cache-control" not in resp.headers
+
+
+def test_no_store_present_when_enabled(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_NO_STORE", "true")
+    resp = _make_client(_ok).get("/")
+    assert resp.headers["cache-control"] == "no-store"
+
+
+def test_no_store_not_enabled_by_arbitrary_value(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_NO_STORE", "1")
+    resp = _make_client(_ok).get("/")
+    assert "cache-control" not in resp.headers
+
+
+def test_no_store_does_not_override_existing_header(monkeypatch):
+    """A route that sets its own Cache-Control must win."""
+
+    async def custom(request):
+        return Response("hi", headers={"Cache-Control": "private, max-age=60"})
+
+    monkeypatch.setenv("LITELLM_ENABLE_NO_STORE", "true")
+    resp = _make_client(custom).get("/")
+    assert resp.headers["cache-control"] == "private, max-age=60"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+
+
+def test_both_hsts_and_no_store_enabled(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_HSTS", "true")
+    monkeypatch.setenv("LITELLM_ENABLE_NO_STORE", "true")
+    resp = _make_client(_ok).get("/")
+    assert resp.headers["strict-transport-security"] == (
+        "max-age=31536000; includeSubDomains"
+    )
+    assert resp.headers["cache-control"] == "no-store"
+    assert resp.headers["x-frame-options"] == "DENY"
+
