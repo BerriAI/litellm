@@ -259,7 +259,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                     variant="ghost"
                     size="icon"
                     aria-label="Clear form"
-                    className="text-muted-foreground hover:text-destructive"
+                    className="hover:text-destructive"
                     onClick={() => handlePayloadChange(clearedPayload)}
                     disabled={rawPayload === clearedPayload || isLoading}
                   >
