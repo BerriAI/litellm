@@ -1,6 +1,10 @@
 mod support;
 
-use litellm_host_python::{Execution, ExecutionBody, ExecutionStep, Suspension};
+use litellm_host::hooks::CallHooks;
+use litellm_host_python::{
+    Execution, ExecutionBody, ExecutionStep, HookStep, PythonCallEvent, PythonOwned, PythonRuntime,
+    Suspension, run_call,
+};
 use pyo3::{
     exceptions::PyBaseException,
     gc::{PyTraverseError, PyVisit},
@@ -8,7 +12,10 @@ use pyo3::{
     types::PyDict,
 };
 use rstest::rstest;
-use support::{Interpreter, install_lifecycle_module, interpreter, lifecycle_binding};
+use support::{
+    Interpreter, Log, OpScript, binding, call_options, install_lifecycle_module, interpreter,
+    lifecycle_binding, success_machine,
+};
 
 struct RetainingHost {
     retained: Option<Py<PyAny>>,
@@ -95,6 +102,50 @@ impl ExecutionBody for ErrorBody {
 #[pyfunction]
 fn error_execution(error: Bound<'_, PyBaseException>) -> Execution {
     Execution::new(ErrorBody(Some(error.unbind())), lifecycle_binding)
+}
+
+struct PausingHooks {
+    retained: Option<Py<PyAny>>,
+    pause: Option<Py<PyAny>>,
+}
+
+impl CallHooks<PythonRuntime> for PausingHooks {
+    fn on_event(&mut self, _: Python<'_>, _: PythonCallEvent<'_>) -> PyResult<HookStep<Self, ()>> {
+        Ok(match self.pause.take() {
+            Some(pause) => {
+                HookStep::Await(pause, |_, _, answer| answer.map(|_| HookStep::Ready(())))
+            }
+            None => HookStep::Ready(()),
+        })
+    }
+}
+
+impl PythonOwned for PausingHooks {
+    fn close(&mut self, _: Python<'_>) {
+        self.retained = None;
+        self.pause = None;
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.retained)?;
+        visit.call(&self.pause)
+    }
+}
+
+#[pyfunction]
+fn paused_call(py: Python<'_>, retained: Py<PyAny>, pause: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    let machine = success_machine();
+    run_call(
+        py,
+        move |_, _, request| Ok(machine(request)),
+        binding(&Log::default(), OpScript::Answer),
+        PausingHooks {
+            retained: Some(retained),
+            pause: Some(pause),
+        },
+        PyDict::new(py).unbind(),
+        call_options(true),
+    )
 }
 
 #[rstest]
@@ -191,6 +242,47 @@ def cycle():
 retained_ref = cycle()
 gc.collect()
 assert retained_ref() is None
+"#
+            ),
+            Some(&locals),
+            Some(&locals),
+        )
+        .unwrap();
+    });
+}
+
+#[rstest]
+fn cycles_through_a_call_suspended_in_a_hook_are_collectable(
+    #[from(interpreter)] _python: Interpreter,
+) {
+    Python::attach(|py| {
+        let locals = PyDict::new(py);
+        locals
+            .set_item("paused_call", wrap_pyfunction!(paused_call, py).unwrap())
+            .unwrap();
+        py.run(
+            pyo3::ffi::c_str!(
+                r#"
+import gc
+import weakref
+
+class Retained:
+    pass
+
+class Pause:
+    def __await__(self):
+        yield
+
+def cycle():
+    retained = Retained()
+    coroutine = paused_call(retained, Pause())
+    coroutine.send(None)
+    retained.coroutine = coroutine
+    return weakref.ref(retained)
+
+reference = cycle()
+gc.collect()
+assert reference() is None
 "#
             ),
             Some(&locals),
