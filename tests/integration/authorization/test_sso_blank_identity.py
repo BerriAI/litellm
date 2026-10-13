@@ -40,6 +40,7 @@ POLL_SECRET_HEADER: Final = "x-litellm-cli-poll-secret"
 CLI_LOGIN_PAGE_TITLE: Final = "<title>LiteLLM CLI Login</title>"
 CLI_SUCCESS_PAGE_TITLE: Final = "<title>CLI Authentication Successful - LiteLLM</title>"
 REFUSED: Final = "SSO login failed: this sign-in did not resolve to a user id"
+GRAPH_REFUSED: Final = "SSO login failed: Microsoft Graph returned an error instead of the user profile"
 LOOKUP_FAILED: Final = "Failed to retrieve user information from SSO"
 BLANK: Final = r"^\s*$"
 COMPLETE_TOKEN_FIELD: Final = re.compile(r'name="browser_complete_token" value="([^"]+)"')
@@ -140,6 +141,7 @@ def _entra_environment(graph_url: str) -> Mapping[str, str]:
         "MICROSOFT_USERINFO_ENDPOINT": f"{graph_url}/v1.0/me",
         "MICROSOFT_GRAPH_ENDPOINT": f"{graph_url}/v1.0",
         "OAUTHLIB_INSECURE_TRANSPORT": "1",
+        "ENABLE_SSO_DEBUG": "true",
     }
 
 
@@ -361,12 +363,14 @@ def _browser() -> httpx.Client:
     return httpx.Client(follow_redirects=False, trust_env=False, timeout=30)
 
 
-def _through_graph(proxy: Gateway, graph: Graph, browser: httpx.Client, entry: str, hint: str) -> httpx.Response:
+def _through_graph(
+    proxy: Gateway, graph: Graph, browser: httpx.Client, entry: str, hint: str, callback: str = "/sso/callback"
+) -> httpx.Response:
     link: Final = browser.get(entry)
     assert link.is_redirect, f"{link.status_code} {link.text}"
     authorize: Final = link.headers["location"]
     assert authorize.startswith(f"{graph.wire.url}/authorize?"), authorize
-    assert parse_qs(urlparse(authorize).query)["redirect_uri"] == [f"{_proxy_url(proxy)}/sso/callback"], authorize
+    assert parse_qs(urlparse(authorize).query)["redirect_uri"] == [f"{_proxy_url(proxy)}{callback}"], authorize
     at_graph: Final = browser.get(f"{authorize}&{urlencode({'login_hint': hint})}")
     assert at_graph.status_code == 302, f"{at_graph.status_code} {at_graph.text}"
     return browser.get(at_graph.headers["location"])
@@ -475,7 +479,7 @@ def test_dashboard_sign_in_is_refused_when_the_graph_profile_lookup_fails(
         assert callback.status_code == 401 and _session(callback) is None, _refusal_report(
             proxy, callback, victim_token
         )
-    assert JSON_OBJECT.validate_json(callback.content)["detail"] == REFUSED, callback.text
+    assert JSON_OBJECT.validate_json(callback.content)["detail"] == GRAPH_REFUSED, callback.text
     assert _blank_accounts() == (), _blank_accounts()
 
 
@@ -489,7 +493,7 @@ def test_cli_sign_in_is_refused_when_the_graph_profile_lookup_fails(
             proxy, graph, browser, session, graph.profile(Reply(status=401, body=GRAPH_ERROR))
         )
         assert callback.status_code == 401, _cli_report(proxy, browser, callback, session)
-    assert JSON_OBJECT.validate_json(callback.content)["detail"] == REFUSED, callback.text
+    assert JSON_OBJECT.validate_json(callback.content)["detail"] == GRAPH_REFUSED, callback.text
     assert _poll(proxy, session) == {"status": "pending"}
     assert _blank_accounts() == (), _blank_accounts()
 
@@ -662,12 +666,44 @@ def test_sign_in_is_refused_while_the_graph_profile_service_is_down(
     )
     callback: Final = _dashboard_sign_in(proxy, graph, graph.profile(outage))
     assert callback.status_code == 401 and _session(callback) is None, f"{callback.status_code} {callback.text}"
+    assert JSON_OBJECT.validate_json(callback.content)["detail"] == GRAPH_REFUSED, callback.text
     session: Final = _start_cli_login(proxy)
     with _browser() as browser:
         cli_callback: Final = _cli_callback(proxy, graph, browser, session, graph.profile(outage))
         assert cli_callback.status_code == 401, _cli_report(proxy, browser, cli_callback, session)
-    assert JSON_OBJECT.validate_json(cli_callback.content)["detail"] == REFUSED, cli_callback.text
+    assert JSON_OBJECT.validate_json(cli_callback.content)["detail"] == GRAPH_REFUSED, cli_callback.text
     assert _poll(proxy, session) == {"status": "pending"}
+    assert _blank_accounts() == (), _blank_accounts()
+
+
+def test_a_graph_reply_without_a_profile_falls_back_to_the_blank_id_refusal(
+    entra: OwnedProxy, graph: Graph, gateway_module: Gateway, clean_slate: None
+) -> None:
+    proxy: Final = entra.gateway
+    with gateway_module.scenario() as scenario:
+        victim_token: Final = _victim(scenario)
+        callback: Final = _dashboard_sign_in(proxy, graph, graph.profile(Reply(body=b"{}")))
+        assert callback.status_code == 401 and _session(callback) is None, _refusal_report(
+            proxy, callback, victim_token
+        )
+    assert JSON_OBJECT.validate_json(callback.content)["detail"] == REFUSED, callback.text
+    assert _blank_accounts() == (), _blank_accounts()
+
+
+def test_sso_debug_callback_still_shows_the_graph_error(entra: OwnedProxy, graph: Graph, clean_slate: None) -> None:
+    proxy: Final = entra.gateway
+    with _browser() as browser:
+        callback: Final = _through_graph(
+            proxy,
+            graph,
+            browser,
+            f"{_proxy_url(proxy)}/sso/debug/login",
+            graph.profile(Reply(status=401, body=GRAPH_ERROR)),
+            callback="/sso/debug/callback",
+        )
+    assert callback.status_code == 200, f"{callback.status_code} {callback.text}"
+    assert "Authentication_MissingOrMalformed" in callback.text, callback.text
+    assert _session(callback) is None
     assert _blank_accounts() == (), _blank_accounts()
 
 

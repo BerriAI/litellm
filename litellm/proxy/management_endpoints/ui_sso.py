@@ -4394,6 +4394,12 @@ class MicrosoftSSOHandler:
             )
             or {}
         )
+        if not return_raw_sso_response and "error" in original_msft_result:
+            verbose_proxy_logger.warning("Microsoft SSO login failed: Graph /me returned an error instead of a profile")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="SSO login failed: Microsoft Graph returned an error instead of the user profile",
+            )
 
         user_team_ids: Final = await MicrosoftSSOHandler.get_user_groups_from_graph_api(
             access_token=microsoft_sso.access_token

@@ -260,6 +260,63 @@ def test_get_microsoft_callback_response(stubbed_graph_api):
     assert result.last_name == "User"
 
 
+GRAPH_ERROR_BODIES: Final = (
+    {"error": {"code": "Authentication_MissingOrMalformed", "message": "Access Token missing or malformed."}},
+    {"error": {"code": "InvalidAuthenticationToken", "message": "IDX14100: JWT is not well formed."}},
+)
+
+
+@pytest.mark.parametrize("graph_error", GRAPH_ERROR_BODIES)
+def test_get_microsoft_callback_response_fails_the_login_when_graph_returns_an_error(stubbed_graph_api, graph_error):
+    mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
+
+    with patch.dict(
+        os.environ,
+        {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
+    ):
+        with patch(
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
+            new=AsyncMock(return_value=graph_error),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(
+                    MicrosoftSSOHandler.get_microsoft_callback_response(
+                        request=mock_request,
+                        microsoft_client_id="mock_client_id",
+                        redirect_url="http://mock_redirect_url",
+                    )
+                )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "SSO login failed: Microsoft Graph returned an error instead of the user profile"
+
+
+def test_get_microsoft_callback_response_raw_sso_response_keeps_the_graph_error(stubbed_graph_api):
+    mock_request = MagicMock(spec=Request)
+    graph_error = GRAPH_ERROR_BODIES[0]
+
+    with patch.dict(
+        os.environ,
+        {"MICROSOFT_CLIENT_SECRET": "mock_secret", "MICROSOFT_TENANT": "mock_tenant"},
+    ):
+        with patch(
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.verify_and_process",
+            new=AsyncMock(return_value=dict(graph_error)),
+        ):
+            result = asyncio.run(
+                MicrosoftSSOHandler.get_microsoft_callback_response(
+                    request=mock_request,
+                    microsoft_client_id="mock_client_id",
+                    redirect_url="http://mock_redirect_url",
+                    return_raw_sso_response=True,
+                )
+            )
+
+    assert isinstance(result, dict)
+    assert result["error"] == graph_error["error"]
+
+
 def test_get_microsoft_callback_response_raw_sso_response(stubbed_graph_api):
     # Arrange
     mock_request = MagicMock(spec=Request)
