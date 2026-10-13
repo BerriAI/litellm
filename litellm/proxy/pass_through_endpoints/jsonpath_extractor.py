@@ -4,7 +4,10 @@ JSONPath Extractor Module
 Extracts field values from data using simple JSONPath-like expressions.
 """
 
-from typing import Any, Final
+from itertools import chain
+from typing import Final
+
+from pydantic import JsonValue
 
 from litellm._logging import verbose_proxy_logger
 
@@ -43,7 +46,7 @@ class JsonPathExtractor:
         return "\n".join(extracted_values)
 
     @staticmethod
-    def evaluate(data: dict, expr: str) -> str | list[str] | None:
+    def evaluate(data: dict, expr: str) -> JsonValue:
         """
         Evaluate a simple JSONPath-like expression.
 
@@ -51,42 +54,23 @@ class JsonPathExtractor:
         - Simple key: "query" -> data["query"]
         - Nested key: "foo.bar" -> data["foo"]["bar"]
         - Array wildcard: "items[*].text" -> [item["text"] for item in data["items"]]
+        - Nested array wildcards: "messages[*].content[*].text" -> flattened list of every block's text
         """
-        if not expr or not data:
+        body: Final[JsonValue] = data
+        return JsonPathExtractor._walk(body, tuple(expr.replace("[*]", ".[*]").split(".")))
+
+    @staticmethod
+    def _walk(current: JsonValue, parts: tuple[str, ...]) -> JsonValue:
+        if not parts:
+            return current
+
+        head, rest = parts[0], parts[1:]
+        if head != "[*]":
+            return JsonPathExtractor._walk(current.get(head), rest) if isinstance(current, dict) else None
+        if not isinstance(current, list):
             return None
+        if not rest:
+            return current
 
-        parts: Final = expr.replace("[*]", ".[*]").split(".")
-        current: Any = data
-
-        for i, part in enumerate(parts):
-            if current is None:
-                return None
-
-            if part == "[*]":
-                # Wildcard - current should be a list
-                if not isinstance(current, list):
-                    return None
-
-                # Get remaining path
-                remaining_path = ".".join(parts[i + 1 :])
-                if not remaining_path:
-                    return current
-
-                # Recursively evaluate remaining path for each item
-                results = []
-                for item in current:
-                    if isinstance(item, dict):
-                        result = JsonPathExtractor.evaluate(item, remaining_path)
-                        if result:
-                            if isinstance(result, list):
-                                results.extend(result)
-                            else:
-                                results.append(result)
-                return results if results else None
-
-            elif isinstance(current, dict):
-                current = current.get(part)
-            else:
-                return None
-
-        return current
+        results: Final = (JsonPathExtractor._walk(item, rest) for item in current)
+        return list(chain.from_iterable(r if isinstance(r, list) else (r,) for r in results if r)) or None
