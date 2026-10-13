@@ -1,3 +1,9 @@
+mod adapter;
+mod chain;
+
+pub use adapter::DynCallHooks;
+pub use chain::{ChainRuntime, HookChain, HookGroupAdapter};
+
 use std::future::{Future, ready};
 
 use crate::{
