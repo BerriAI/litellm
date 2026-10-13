@@ -563,7 +563,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         <div hidden={activityView !== "per-user"}>
           <PerUserUsage
             accessToken={accessToken}
-            selectedTags={[...selectedTags]}
+            selectedTags={selectedTags}
             formatAbbreviatedNumber={formatAbbreviatedNumber}
           />
         </div>

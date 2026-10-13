@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { STACKED_USAGE_PALETTE } from "@/components/shared/charts";
 import UserAgentActivity from "./user_agent_activity";
@@ -11,11 +12,7 @@ vi.mock("./networking", () => ({
   tagWauCall: vi.fn(),
   tagMauCall: vi.fn(),
   tagDistinctCall: vi.fn(),
-}));
-
-// Mock PerUserUsage component
-vi.mock("./per_user_usage", () => ({
-  default: () => <div>Per User Usage</div>,
+  perUserAnalyticsCall: vi.fn(),
 }));
 
 describe("UserAgentActivity", () => {
@@ -24,6 +21,7 @@ describe("UserAgentActivity", () => {
   const mockTagWauCall = vi.mocked(networking.tagWauCall);
   const mockTagMauCall = vi.mocked(networking.tagMauCall);
   const mockTagDistinctCall = vi.mocked(networking.tagDistinctCall);
+  const mockPerUserAnalyticsCall = vi.mocked(networking.perUserAnalyticsCall);
 
   const mockDistinctTagsData = {
     results: [{ tag: "User-Agent: Chrome/1.0" }, { tag: "User-Agent: Firefox/2.0" }, { tag: "User-Agent: Safari/3.0" }],
@@ -102,12 +100,20 @@ describe("UserAgentActivity", () => {
     mockTagWauCall.mockClear();
     mockTagMauCall.mockClear();
     mockTagDistinctCall.mockClear();
+    mockPerUserAnalyticsCall.mockClear();
 
     mockTagDistinctCall.mockResolvedValue(mockDistinctTagsData);
     mockUserAgentSummaryCall.mockResolvedValue(mockSummaryData);
     mockTagDauCall.mockResolvedValue(mockDauData);
     mockTagWauCall.mockResolvedValue(mockWauData);
     mockTagMauCall.mockResolvedValue(mockMauData);
+    mockPerUserAnalyticsCall.mockResolvedValue({
+      results: [],
+      total_count: 0,
+      page: 1,
+      page_size: 50,
+      total_pages: 0,
+    });
   });
 
   it("should render summary cards with user agent data", async () => {
@@ -199,6 +205,54 @@ describe("UserAgentActivity", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Clear user agent filter" }));
 
     expect(onSelectedTagsChange).toHaveBeenCalledWith([]);
+  });
+
+  it("keeps per-user pagination when controlled tags stay unchanged on parent rerender", async () => {
+    const user = userEvent.setup();
+    const selectedTags = ["User-Agent: Chrome/1.0"];
+    const onSelectedTagsChange = vi.fn();
+    const totalUsers = 120;
+    const pageOfUsers = (page: number, pageSize: number) => {
+      const start = (page - 1) * pageSize;
+      const count = Math.max(0, Math.min(pageSize, totalUsers - start));
+      return Array.from({ length: count }, (_, index) => ({
+        user_id: `user-${start + index + 1}`,
+        user_email: null,
+        user_agent: "Chrome/1.0",
+        successful_requests: 5,
+        failed_requests: 0,
+        total_requests: 5,
+        total_tokens: 100,
+        spend: 1,
+      }));
+    };
+    mockPerUserAnalyticsCall.mockImplementation(async (_token, page = 1, pageSize = 50) => ({
+      results: pageOfUsers(page, pageSize),
+      total_count: totalUsers,
+      page,
+      page_size: pageSize,
+      total_pages: Math.ceil(totalUsers / pageSize),
+    }));
+    const props = { ...defaultProps, selectedTags, onSelectedTagsChange };
+    const { rerender } = render(<UserAgentActivity {...props} />);
+
+    await waitFor(() => expect(mockTagDistinctCall).toHaveBeenCalled());
+    await waitFor(() => expect(mockUserAgentSummaryCall).toHaveBeenCalled());
+    await waitFor(() => expect(mockTagDauCall).toHaveBeenCalled());
+    await waitFor(() => expect(mockTagWauCall).toHaveBeenCalled());
+    await waitFor(() => expect(mockTagMauCall).toHaveBeenCalled());
+    await user.click(screen.getByRole("radio", { name: "Per user" }));
+    expect(await screen.findByText("user-1")).toBeInTheDocument();
+    await user.click(screen.getByTestId("pagination-next"));
+    expect(await screen.findByText("user-51")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51-100 of 120");
+
+    const callsBeforeRerender = mockPerUserAnalyticsCall.mock.calls.length;
+    rerender(<UserAgentActivity {...props} />);
+
+    expect(mockPerUserAnalyticsCall).toHaveBeenCalledTimes(callsBeforeRerender);
+    expect(screen.getByText("user-51")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51-100 of 120");
   });
 
   // Walks up from the panel's heading to the nearest ancestor that owns a chart, so the
