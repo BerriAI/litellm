@@ -10508,6 +10508,42 @@ GPT_6_SOL_INPUT_TEXT_ROLLUPS: Final = CostTrackingTestCase(
     ),
 )
 
+GPT_6_LUNA_MESSAGES_BRIDGED_JSON: Final = GPT_6_LUNA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-luna-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+
+GPT_6_ASTRA_MESSAGES_BRIDGED_JSON: Final = GPT_6_ASTRA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-astra-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+
+GPT_6_1_SOL_MESSAGES_BRIDGED_JSON: Final = GPT_6_1_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-sol-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_3_CODEX_INPUT_TEXT,
     GPT_5_3_CODEX_CACHE_READ,
@@ -10714,4 +10750,7 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_JSON, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON),
 )
