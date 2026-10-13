@@ -21,7 +21,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import SamplingMessage, TextContent
-from mcp_tests.mcp_e2e_upstream_server import add, multiply
+from integration._support.mcp_e2e_upstream_server import add, multiply
 from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest

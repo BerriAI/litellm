@@ -1,5 +1,4 @@
 import os
-import signal
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -186,13 +185,6 @@ def _worker_pids(log: str) -> tuple[int, ...]:
     )
 
 
-def _dead(process: psutil.Process) -> bool:
-    try:
-        return process.status() == psutil.STATUS_ZOMBIE
-    except psutil.NoSuchProcess:
-        return True
-
-
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
 def test_every_aws_credential_source_keeps_its_credentials_out_of_the_body_when_a_worker_is_killed(
     gateway: Gateway, tmp_path: Path
@@ -212,11 +204,10 @@ def test_every_aws_credential_source_keeps_its_credentials_out_of_the_body_when_
             _assert_each_source_signed_its_own_clean_body(
                 container, {source: _ask(owned, source) for source in _SIGNERS}
             )
-            victim: Final = psutil.Process(workers[0])
-            victim.send_signal(signal.SIGKILL)
-            eventually(lambda: _dead(victim), bool, seconds=graceful_stop_seconds())
-            _assert_each_source_signed_its_own_clean_body(
-                container, {source: _ask(owned, source) for source in _SIGNERS}
-            )
-            assert psutil.Process(workers[1]).is_running(), workers
+            with owned.replacing_worker(workers[0]) as kill:
+                kill()
+                _assert_each_source_signed_its_own_clean_body(
+                    container, {source: _ask(owned, source) for source in _SIGNERS}
+                )
+                assert psutil.Process(workers[1]).is_running(), workers
             assert owned.process.poll() is None, owned.log.read_text()

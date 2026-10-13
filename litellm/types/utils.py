@@ -195,6 +195,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_thinking_cache_preservation: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
+    supports_video_input: ReadOnly[bool | None]
     supports_embedding_image_input: bool | None
     supports_audio_output: bool | None
     supports_pdf_input: bool | None
@@ -3736,6 +3737,7 @@ ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtoc
 
 
 CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
+EXCLUDED_SERVICES_VAR: Final = "excluded_services"
 
 
 class CaptureMessageContent(str):
@@ -4308,6 +4310,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    CORALBRICKS = "coralbricks"
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
