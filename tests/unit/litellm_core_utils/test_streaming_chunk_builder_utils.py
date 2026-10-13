@@ -15,6 +15,10 @@ from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.types.utils import (
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionDeltaCustomToolCallPayload,
+    ChatCompletionMessageCustomToolCall,
+    Choices,
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Delta,
@@ -25,6 +29,53 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+
+
+@pytest.mark.parametrize("custom", (False, True))
+@pytest.mark.parametrize("as_dict", (False, True))
+@pytest.mark.parametrize("single", (False, True))
+def test_stream_chunk_builder_preserves_single_tool_call(custom: bool, as_dict: bool, single: bool) -> None:
+    tool_call: Final = (
+        ChatCompletionDeltaCustomToolCall(
+            index=0,
+            id="call_one",
+            type="custom",
+            custom=ChatCompletionDeltaCustomToolCallPayload(name="lookup", input='{"key": "value"}'),
+        )
+        if custom
+        else ChatCompletionDeltaToolCall(
+            index=0,
+            id="call_one",
+            type="function",
+            function=Function(name="lookup", arguments='{"key": "value"}'),
+        )
+    )
+    entry: Final = tool_call.model_dump() if as_dict else tool_call
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-single",
+        model="test-model",
+        created=0,
+        choices=[
+            StreamingChoices(index=0, finish_reason="tool_calls", delta=Delta(tool_calls=entry if single else [entry]))
+        ],
+    )
+    response: Final = stream_chunk_builder([chunk])
+    assert response is not None
+    choice: Final = response.choices[0]
+    assert isinstance(choice, Choices)
+    combined: Final = choice.message.tool_calls
+    assert combined is not None and len(combined) == 1
+    assert combined[0].id == "call_one"
+    if custom:
+        assert isinstance(combined[0], ChatCompletionMessageCustomToolCall)
+        assert combined[0].type == "custom"
+        assert combined[0].custom.name == "lookup"
+        assert combined[0].custom.input == '{"key": "value"}'
+    else:
+        assert isinstance(combined[0], ChatCompletionMessageToolCall)
+        assert combined[0].type == "function"
+        assert combined[0].function.name == "lookup"
+        assert combined[0].function.arguments == '{"key": "value"}'
 
 
 def test_get_combined_tool_content():

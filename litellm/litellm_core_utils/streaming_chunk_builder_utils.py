@@ -143,8 +143,17 @@ class _ToolCallFragment(TypedDict, total=False):
     provider_specific_fields: ReadOnly[dict[str, object] | None]
 
 
+_ToolCallEntry: TypeAlias = _ToolCallFragment | ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall
+
+
 class _ToolCallDelta(TypedDict, total=False):
-    tool_calls: ReadOnly[Sequence[_ToolCallFragment | ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall]]
+    tool_calls: ReadOnly[Sequence[_ToolCallEntry] | _ToolCallEntry]
+
+
+def _normalize_tool_calls(tool_calls: Sequence[_ToolCallEntry] | _ToolCallEntry | None) -> Sequence[_ToolCallEntry]:
+    if isinstance(tool_calls, (dict, ChatCompletionDeltaToolCall, ChatCompletionDeltaCustomToolCall)):
+        return (tool_calls,)
+    return tool_calls or ()
 
 
 class _ToolCallChoice(TypedDict, total=False):
@@ -472,7 +481,7 @@ class ChunkProcessor:
                 if not delta:
                     continue
                 choice_index = choice.get("index", 0)
-                for tool_call in delta.get("tool_calls") or ():
+                for tool_call in _normalize_tool_calls(delta.get("tool_calls")):
                     if not tool_call:
                         continue
                     if isinstance(tool_call, dict):
@@ -519,7 +528,7 @@ class ChunkProcessor:
             choices = chunk["choices"]
             for choice in choices:
                 delta = choice.get("delta", {})
-                tool_calls = delta.get("tool_calls") or ()
+                tool_calls: Final = _normalize_tool_calls(delta.get("tool_calls"))
                 choice_index = choice.get("index", 0)
 
                 for tool_call in tool_calls:
