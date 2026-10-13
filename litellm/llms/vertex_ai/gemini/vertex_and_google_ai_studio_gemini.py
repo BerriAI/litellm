@@ -3673,26 +3673,29 @@ class ModelResponseIterator:
             raise
 
     def __next__(self) -> Optional["ModelResponseStream"]:
-        try:
-            chunk: Final = self.response_iterator.__next__()
-        except StopIteration:
-            if self.chunk_type == "accumulated_json" and self._json_buffer:
-                result: Final = self.handle_accumulated_json_chunk(chunk="", is_final=True)
-                if result is not None:
-                    return result
-            if (token := self._pending_hop_token) is not None:
+        while True:
+            try:
+                chunk = self.response_iterator.__next__()
+            except StopIteration:
+                if self.chunk_type == "accumulated_json" and self._json_buffer:
+                    result = self.handle_accumulated_json_chunk(chunk="", is_final=True)
+                    if result is not None:
+                        return result
+                if (token := self._pending_hop_token) is None:
+                    raise StopIteration
                 self._pending_hop_token = None
-                return self._open_next_hop_sync(token) or self.__next__()
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+                if (truncated_end := self._open_next_hop_sync(token)) is not None:
+                    return truncated_end
+                continue
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            return self._common_chunk_parsing_logic(chunk=chunk)
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            try:
+                return self._common_chunk_parsing_logic(chunk=chunk)
+            except StopIteration:
+                raise StopIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     # Async iterator
     def __aiter__(self):
@@ -3700,26 +3703,29 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self) -> Optional["ModelResponseStream"]:
-        try:
-            chunk: Final = await self.async_response_iterator.__anext__()
-        except StopAsyncIteration:
-            if self.chunk_type == "accumulated_json" and self._json_buffer:
-                result: Final = self.handle_accumulated_json_chunk(chunk="", is_final=True)
-                if result is not None:
-                    return result
-            if (token := self._pending_hop_token) is not None:
+        while True:
+            try:
+                chunk = await self.async_response_iterator.__anext__()
+            except StopAsyncIteration:
+                if self.chunk_type == "accumulated_json" and self._json_buffer:
+                    result = self.handle_accumulated_json_chunk(chunk="", is_final=True)
+                    if result is not None:
+                        return result
+                if (token := self._pending_hop_token) is None:
+                    raise StopAsyncIteration
                 self._pending_hop_token = None
-                return await self._open_next_hop_async(token) or await self.__anext__()
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+                if (truncated_end := await self._open_next_hop_async(token)) is not None:
+                    return truncated_end
+                continue
+            except ValueError as e:
+                raise RuntimeError(f"Error receiving chunk from stream: {e}")
 
-        try:
-            return self._common_chunk_parsing_logic(chunk=chunk)
-        except StopAsyncIteration:
-            raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
+            try:
+                return self._common_chunk_parsing_logic(chunk=chunk)
+            except StopAsyncIteration:
+                raise StopAsyncIteration
+            except ValueError as e:
+                raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
     async def aclose(self) -> None:
         iterator: Final = getattr(

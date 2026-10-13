@@ -193,24 +193,16 @@ async def collect_hops_async(
     request_body: RequestBody,
     post: AsyncHopPost,
 ) -> LongDecodeHops:
-    return await _extend_hops_async((first,), output_cap_of(request_body), request_body, post)
-
-
-async def _extend_hops_async(
-    hops: LongDecodeHops,
-    output_cap: int | None,
-    request_body: RequestBody,
-    post: AsyncHopPost,
-) -> LongDecodeHops:
-    token: Final = _unary_next_hop_token(hops, output_cap)
-    if token is None:
-        return hops
-    try:
-        body: Final = parse_body(await post(hop_request(request_body, token)))
-    except HOP_FAILURES as e:
-        log_failed_hop(e)
-        return hops
-    return await _extend_hops_async((*hops, body), output_cap, request_body, post)
+    output_cap: Final = output_cap_of(request_body)
+    hops: LongDecodeHops = (first,)  # rebind-ok: grows by one hop per loop pass, CI bans the recursive form
+    while (token := _unary_next_hop_token(hops, output_cap)) is not None:
+        try:
+            body = parse_body(await post(hop_request(request_body, token)))
+        except HOP_FAILURES as e:
+            log_failed_hop(e)
+            return hops
+        hops = (*hops, body)
+    return hops
 
 
 def collect_hops_sync(
@@ -218,21 +210,13 @@ def collect_hops_sync(
     request_body: RequestBody,
     post: SyncHopPost,
 ) -> LongDecodeHops:
-    return _extend_hops_sync((first,), output_cap_of(request_body), request_body, post)
-
-
-def _extend_hops_sync(
-    hops: LongDecodeHops,
-    output_cap: int | None,
-    request_body: RequestBody,
-    post: SyncHopPost,
-) -> LongDecodeHops:
-    token: Final = _unary_next_hop_token(hops, output_cap)
-    if token is None:
-        return hops
-    try:
-        body: Final = parse_body(post(hop_request(request_body, token)))
-    except HOP_FAILURES as e:
-        log_failed_hop(e)
-        return hops
-    return _extend_hops_sync((*hops, body), output_cap, request_body, post)
+    output_cap: Final = output_cap_of(request_body)
+    hops: LongDecodeHops = (first,)  # rebind-ok: grows by one hop per loop pass, CI bans the recursive form
+    while (token := _unary_next_hop_token(hops, output_cap)) is not None:
+        try:
+            body = parse_body(post(hop_request(request_body, token)))
+        except HOP_FAILURES as e:
+            log_failed_hop(e)
+            return hops
+        hops = (*hops, body)
+    return hops

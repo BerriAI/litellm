@@ -1,5 +1,7 @@
 import json
+import sys
 from collections.abc import Callable, Mapping, Sequence
+from itertools import chain, repeat
 from typing import Final
 
 import httpx
@@ -7,7 +9,13 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.vertex_ai.gemini.long_decode import initial_prompt_tokens_of, with_initial_prompt_tokens
+from litellm.llms.vertex_ai.gemini.long_decode import (
+    collect_hops_async,
+    collect_hops_sync,
+    initial_prompt_tokens_of,
+    with_initial_prompt_tokens,
+)
+from litellm.types.llms.vertex_ai import RequestBody
 from litellm.types.utils import Usage
 
 MODEL: Final = "gemini/gemini-3.8-flash"
@@ -143,6 +151,30 @@ async def test_unary_failed_continuation_hop_returns_the_answer_so_far_with_its_
     assert response.choices[0].finish_reason == "length"
     assert response.choices[0].message.provider_specific_fields["continuation_token"] == "dG9rLTE="
     assert response.usage.completion_tokens == 30
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_long_decode_follows_more_hops_than_the_interpreter_allows_nested_calls(is_async: bool):
+    hop_count: Final = sys.getrecursionlimit() + 50
+    one_token_hop: Final = {**HOP_1, "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1}}
+    responses: Final = chain(
+        repeat(httpx.Response(200, json=one_token_hop), hop_count - 2),
+        (httpx.Response(200, json=HOP_2),),
+    )
+    request_body: Final = RequestBody(contents=[], generationConfig={"max_output_tokens": hop_count * 100})
+
+    async def post_async(_body: RequestBody) -> httpx.Response:
+        return next(responses)
+
+    hops: Final = (
+        await collect_hops_async(one_token_hop, request_body, post_async)
+        if is_async
+        else collect_hops_sync(one_token_hop, request_body, lambda _body: next(responses))
+    )
+
+    assert len(hops) == hop_count
+    assert hops[-1] == HOP_2
 
 
 @pytest.mark.asyncio
