@@ -2,13 +2,15 @@
 
 An owned two-worker proxy lists ``s3_v2`` and ``gcs_bucket`` under ``batch_line_item_callbacks``. Once the batch-cost
 poller logs a finished batch, each sink gets one NDJSON object for the batch holding one record per line. The proxy runs
-on its own database so the shared rig's pollers never claim these batches first
+on its own database so the shared rig's pollers never claim these batches first. Two more owned proxies list an
+unsupported name next to ``s3_v2`` and a null list
 """
 
 import json
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -19,7 +21,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment, string_value
+from integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment, held, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.process import owned_proxy
@@ -44,20 +46,38 @@ POLLER_SECONDS: Final = 150
 
 @dataclass(slots=True)
 class ObjectSink:
-    """Stores every accepted object body by name and answers 503 to any upload whose body holds ``reject``."""
+    """Stores every accepted object body by name and answers 503 to any upload whose body holds ``reject``. An upload
+    whose body holds ``hang`` gets no answer until ``release``, then a 503."""
 
     reject: bytes = b"\x00never"
+    hang: bytes = b"\x00never"
+    released: threading.Event = field(default_factory=threading.Event)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    held: set[str] = field(default_factory=set)  # mutable-ok: written by the sink's request threads
     stored: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: written by the sink's request threads
     attempts: dict[str, int] = field(default_factory=dict)  # mutable-ok: written by the sink's request threads
 
     def accept(self, name: str, body: bytes) -> bool:
         with self.lock:
             self.attempts[name] = self.attempts.get(name, 0) + 1
+            hung: Final = self.hang in body
+            if hung:
+                self.held.add(name)
+        if hung:
+            self.released.wait(timeout=300)
+            return False
+        with self.lock:
             if self.reject in body:
                 return False
             self.stored[name] = body
             return True
+
+    def holding(self) -> frozenset[str]:
+        with self.lock:
+            return frozenset(self.held)
+
+    def release(self) -> None:
+        self.released.set()
 
     def objects(self) -> Mapping[str, bytes]:
         with self.lock:
@@ -103,14 +123,14 @@ class Rig:
     gcs: ObjectSink
 
 
-def _config(directory: Path, s3_url: str) -> Path:
+def _config(directory: Path, s3_url: str, line_item_callbacks: JsonValue) -> Path:
     shipped: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration: Final = {
         **shipped,
         "litellm_settings": {
             **shipped["litellm_settings"],
             "callbacks": ["s3_v2"],
-            "batch_line_item_callbacks": ["s3_v2", "gcs_bucket"],
+            "batch_line_item_callbacks": line_item_callbacks,
             "s3_callback_params": {
                 "s3_bucket_name": S3_BUCKET,
                 "s3_region_name": "us-east-1",
@@ -127,15 +147,15 @@ def _config(directory: Path, s3_url: str) -> Path:
     return path
 
 
-@pytest.fixture(scope="module")
-def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    directory: Final = tmp_path_factory.mktemp("batch-line-items")
+@contextmanager
+def _owned_rig(tmp_path_factory: pytest.TempPathFactory, name: str, line_item_callbacks: JsonValue) -> Iterator[Rig]:
+    directory: Final = tmp_path_factory.mktemp(name)
     certificate, key = write_self_signed_cert(directory, names=("storage.googleapis.com",))
-    s3: Final = ObjectSink(reject=b"sink-down-")
+    s3: Final = ObjectSink(reject=b"sink-down-", hang=b"sink-hang-")
     gcs: Final = ObjectSink()
     with (
         gateway_from_environment() as environment,
-        scratch_database("batch_line_items") as database_url,
+        scratch_database(name.replace("-", "_")) as database_url,
         wire_server(s3_peer(s3)) as s3_wire,
         wire_server(gcs_peer(gcs)) as token_wire,
         wire_server(gcs_peer(gcs), tls=server_context(certificate, key)) as gcs_wire,
@@ -157,11 +177,29 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 "NO_PROXY": "127.0.0.1,localhost",
                 "no_proxy": "127.0.0.1,localhost",
             },
-            config=_config(directory, s3_wire.url),
+            config=_config(directory, s3_wire.url, line_item_callbacks),
             remove_environment=("DATABASE_URL_READ_REPLICA",),
             workers=2,
         ) as candidate:
             yield Rig(candidate, database_url, s3, gcs)
+
+
+@pytest.fixture(scope="module")
+def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _owned_rig(tmp_path_factory, "batch-line-items", ["s3_v2", "gcs_bucket"]) as owned:
+        yield owned
+
+
+@pytest.fixture(scope="module")
+def rig_with_an_unsupported_name(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _owned_rig(tmp_path_factory, "batch-line-items-unsupported", ["s3", "s3_v2"]) as owned:
+        yield owned
+
+
+@pytest.fixture(scope="module")
+def rig_with_a_null_list(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _owned_rig(tmp_path_factory, "batch-line-items-null", None) as owned:
+        yield owned
 
 
 def _input_line(custom_id: str, text: str) -> dict[str, JsonValue]:
@@ -547,3 +585,84 @@ def test_a_failing_bucket_still_bills_the_batch_and_the_other_sink_keeps_its_lin
     s3_name: Final = _object_name(f"{S3_PREFIX}/", batch.batch_id)
     assert rig.s3.tried(s3_name) >= 1
     assert s3_name not in rig.s3.objects()
+
+
+def _hanging_lines() -> Lines:
+    custom_id: Final = f"sink-hang-{uuid.uuid4().hex[:8]}"
+    return Lines(inputs=(_input_line(custom_id, "hangs the bucket"),), outputs=(_success_line(custom_id),), errors=())
+
+
+def test_a_hung_bucket_never_holds_up_billing_the_next_batch(rig: Rig) -> None:
+    """The first hung write holds one worker's poller if the poll waits on it, and the second batch, billed by the
+    other worker, holds that one too, so only a poll that never waits on a write bills the third batch."""
+    first: Final = _submit(rig, _hanging_lines(), {})
+    second: SubmittedBatch | None = None
+    following: SubmittedBatch | None = None
+    try:
+        eventually(rig.s3.holding, lambda names: _object_name(f"{S3_PREFIX}/", first.batch_id) in names, POLLER_SECONDS)
+        second = _submit(rig, _hanging_lines(), {})
+        _batch_spend(rig, second.key)
+        following = _submit(
+            rig,
+            Lines(inputs=(_input_line("after-1", "asked later"),), outputs=(_success_line("after-1"),), errors=()),
+            {},
+        )
+        spend: Final = _batch_spend(rig, following.key)
+        still_holding: Final = rig.s3.holding()
+    finally:
+        rig.s3.release()
+        for batch in (first, second, following):
+            if batch is not None:
+                delete_scenario(batch.handle)
+
+    assert spend > 0
+    assert _object_name(f"{S3_PREFIX}/", first.batch_id) in still_holding
+    assert _object_name(f"{S3_PREFIX}/", first.batch_id) not in rig.s3.objects()
+
+
+def _line_item_objects(rig: Rig) -> frozenset[str]:
+    return frozenset(name for sink in (rig.s3, rig.gcs) for name in sink.objects() if "batch_line_items/" in name)
+
+
+def test_an_unsupported_name_in_the_list_leaves_the_supported_sink_writing(rig_with_an_unsupported_name: Rig) -> None:
+    rig: Final = rig_with_an_unsupported_name
+    lines: Final = Lines(
+        inputs=(_input_line("listed-1", "asked with s3 listed"),), outputs=(_success_line("listed-1"),), errors=()
+    )
+    batch: Final = _submit(rig, lines, {})
+    try:
+        records: Final = _written(rig.s3, _object_name(f"{S3_PREFIX}/", batch.batch_id))
+        spend: Final = _batch_spend(rig, batch.key)
+    finally:
+        delete_scenario(batch.handle)
+
+    assert [(record["custom_id"], record["request"], record["response"]) for record in records] == [
+        ("listed-1", lines.inputs[0], lines.outputs[0])
+    ]
+    assert records[0]["response_cost"] == pytest.approx(spend)
+    assert _line_item_objects(rig) == {_object_name(f"{S3_PREFIX}/", batch.batch_id)}
+
+
+def test_a_null_list_bills_the_batch_and_writes_no_line_items(rig_with_a_null_list: Rig) -> None:
+    rig: Final = rig_with_a_null_list
+    lines: Final = Lines(
+        inputs=(_input_line("null-1", "asked with a null list"),), outputs=(_success_line("null-1"),), errors=()
+    )
+    batch: Final = _submit(rig, lines, {})
+    try:
+        spend: Final = _batch_spend(rig, batch.key)
+        eventually(
+            lambda: read_rows(
+                'SELECT batch_processed FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id = %s',
+                (batch.batch_id,),
+                database_url=rig.database_url,
+            ),
+            lambda rows: rows == [{"batch_processed": True}],
+            POLLER_SECONDS,
+        )
+        stored: Final = held(lambda: _line_item_objects(rig), lambda names: not names, holding=10)
+    finally:
+        delete_scenario(batch.handle)
+
+    assert spend > 0
+    assert stored == frozenset()

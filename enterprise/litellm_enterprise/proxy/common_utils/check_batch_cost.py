@@ -2,6 +2,7 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
@@ -130,6 +131,8 @@ class CheckBatchCost:
         # the guaranteed-failing primary query on every subsequent cycle.
         self._has_batch_processed_column: bool = True
         self.batch_processed_support_confirmed: bool = False
+        self._line_item_stores: Final[set[asyncio.Task[None]]] = set()
+        self._line_item_store_turn: Final = asyncio.Lock()
 
     @staticmethod
     def _is_missing_batch_processed_column_error(err: Exception) -> bool:
@@ -964,6 +967,42 @@ class CheckBatchCost:
 
         return model_name, str(llm_provider) if llm_provider else None, content_bytes
 
+    def _store_batch_line_items_in_background(
+        self,
+        job: "_ManagedObjectRow",
+        response: "LiteLLMBatch",
+        model_id: str,
+        batch_id: str,
+        output_content: bytes,
+    ) -> None:
+        """Store a retired batch's lines off the poll loop, one batch at a time, so a slow or hung bucket never holds up
+        billing or retiring the other batches. While a poll cycle's worth of batches is still waiting, the lines of
+        the next one are dropped with an error."""
+        if not litellm.batch_line_item_callbacks:
+            return
+        if len(self._line_item_stores) >= MAX_OBJECTS_PER_POLL_CYCLE:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: {len(self._line_item_stores)} batches are still waiting to store their line items, "
+                f"so the line items of batch {batch_id} (job {job.id}) were not stored"
+            )
+            return
+        store: Final = asyncio.create_task(
+            self._store_batch_line_items_in_turn(job, response, model_id, batch_id, output_content)
+        )
+        self._line_item_stores.add(store)
+        store.add_done_callback(self._line_item_stores.discard)
+
+    async def _store_batch_line_items_in_turn(
+        self,
+        job: "_ManagedObjectRow",
+        response: "LiteLLMBatch",
+        model_id: str,
+        batch_id: str,
+        output_content: bytes,
+    ) -> None:
+        async with self._line_item_store_turn:
+            await self._store_batch_line_items(job, response, model_id, batch_id, output_content)
+
     async def _store_batch_line_items(
         self,
         job: "_ManagedObjectRow",
@@ -1202,8 +1241,8 @@ class CheckBatchCost:
                             f"CheckBatchCost: output file {response.output_file_id} of batch {batch_id} "
                             f"does not exist at the provider; retiring job {job.id} unbilled"
                         )
-                        await self._store_batch_line_items(job, response, model_id, batch_id, b"")
                         await self._finalize_unbilled_terminal_job(job, response)
+                        self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
                         continue
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to track cost for batch {batch_id} "
@@ -1234,7 +1273,7 @@ class CheckBatchCost:
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
-                await self._store_batch_line_items(job, response, model_id, batch_id, output_content)
+                self._store_batch_line_items_in_background(job, response, model_id, batch_id, output_content)
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
                 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -1247,8 +1286,8 @@ class CheckBatchCost:
                         f"has not appeared yet; leaving job {job.id} for the next poll cycle"
                     )
                     continue
-                await self._store_batch_line_items(job, response, model_id, batch_id, b"")
                 await self._finalize_unbilled_terminal_job(job, response)
+                self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:

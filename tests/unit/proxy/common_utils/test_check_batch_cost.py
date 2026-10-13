@@ -8,6 +8,7 @@ ARN unified_object_id) batches with no managed unified id.
 
 import asyncio
 import json
+import logging
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -3225,7 +3226,8 @@ class TestMultiPodBatchCostClaim:
 
 class TestBatchLineItemsFromThePoller:
     """When batch_line_item_callbacks is set, the poller hands every line of a finished batch to those loggers
-    once the batch is billed and retired, so a slow or failing sink never unbills or re-polls the batch."""
+    once the batch is billed and retired, in the background, so a slow, hung or failing sink never unbills, re-polls
+    or holds up a batch."""
 
     _INPUT = b'{"custom_id":"ok-1","body":{"messages":[{"role":"user","content":"hi"}]}}\n'
     _OUTPUT = (
@@ -3262,6 +3264,11 @@ class TestBatchLineItemsFromThePoller:
         response.error_file_id = error_file_id
         response.input_file_id = "file-input-1"
         return row, TestMultiPodBatchCostClaim._instance(prisma, router)
+
+    @staticmethod
+    async def _stored(instance) -> None:
+        """Wait for the line items the poll handed to the background."""
+        await asyncio.gather(*instance._line_item_stores)
 
     @classmethod
     @contextmanager
@@ -3314,6 +3321,7 @@ class TestBatchLineItemsFromThePoller:
 
         with self._provider(journal):
             await instance.check_batch_cost()
+            await self._stored(instance)
 
         assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize", "lines"]
         (payload,) = logger.payloads
@@ -3336,6 +3344,7 @@ class TestBatchLineItemsFromThePoller:
 
         with self._provider(journal):
             await instance.check_batch_cost()
+            await self._stored(instance)
 
         (payload,) = logger.payloads
         assert [(line["request"], line["response"]) for line in payload["lines"]] == [(None, None)]
@@ -3354,6 +3363,7 @@ class TestBatchLineItemsFromThePoller:
 
         with self._provider(journal):
             await instance.check_batch_cost()
+            await self._stored(instance)
 
         assert journal[-3:] == ["finalize", "read file-input-1", "lines"]
         ((line,),) = [payload["lines"] for payload in logger.payloads]
@@ -3372,6 +3382,7 @@ class TestBatchLineItemsFromThePoller:
 
         with self._provider(journal):
             await instance.check_batch_cost()
+            await self._stored(instance)
 
         assert [step for step in journal if not step.startswith("read")] == ["claim", "bill", "finalize", "lines"]
         assert row.batch_processed is True
@@ -3387,11 +3398,12 @@ class TestBatchLineItemsFromThePoller:
 
         with self._provider(journal):
             await instance.check_batch_cost()
+            await self._stored(instance)
 
         assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
 
     @pytest.mark.asyncio
-    async def test_a_batch_where_every_line_failed_sends_its_error_lines_before_it_is_retired(self, monkeypatch):
+    async def test_a_batch_where_every_line_failed_sends_its_error_lines_after_it_is_retired(self, monkeypatch):
         import litellm
 
         journal: list = []
@@ -3401,8 +3413,9 @@ class TestBatchLineItemsFromThePoller:
 
         with self._provider(journal):
             await instance.check_batch_cost()
+            await self._stored(instance)
 
-        assert journal == ["read file-err-1", "lines", "finalize"]
+        assert journal == ["finalize", "read file-err-1", "lines"]
         (payload,) = logger.payloads
         assert [(line["custom_id"], line["status"], line["response_cost"]) for line in payload["lines"]] == [
             ("ok-1", "failure", 0.0)
@@ -3410,7 +3423,7 @@ class TestBatchLineItemsFromThePoller:
         assert row.batch_processed is True
 
     @pytest.mark.asyncio
-    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_before_it_is_retired(
+    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_after_it_is_retired(
         self, monkeypatch
     ):
         import litellm
@@ -3422,8 +3435,9 @@ class TestBatchLineItemsFromThePoller:
 
         with self._provider(journal):
             await instance.check_batch_cost()
+            await self._stored(instance)
 
-        assert journal == ["read file-out-deleted", "read file-err-1", "lines", "finalize"]
+        assert journal == ["read file-out-deleted", "finalize", "read file-err-1", "lines"]
         (payload,) = logger.payloads
         assert [(line["custom_id"], line["status"]) for line in payload["lines"]] == [("ok-1", "failure")]
         assert row.batch_processed is True
@@ -3439,9 +3453,90 @@ class TestBatchLineItemsFromThePoller:
 
         with self._provider(journal):
             await instance.check_batch_cost()
+            await self._stored(instance)
 
         assert journal == ["finalize"]
         assert logger.payloads == []
+
+    @pytest.mark.asyncio
+    async def test_a_hung_sink_never_holds_up_billing_and_retiring_the_batch(self, monkeypatch):
+        import litellm
+        from litellm.integrations.custom_logger import CustomLogger
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        released = asyncio.Event()
+
+        class _HungSink(CustomLogger):
+            async def async_log_batch_line_items(self, payload):
+                journal.append("lines started")
+                await released.wait()
+                journal.append("lines")
+
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (_HungSink(),))
+
+        with self._provider(journal):
+            await asyncio.wait_for(instance.check_batch_cost(), timeout=5)
+            while "lines started" not in journal:
+                await asyncio.sleep(0)
+            billed_while_hung = (row.batch_processed, row.status, list(journal))
+            released.set()
+            await self._stored(instance)
+
+        assert billed_while_hung == (
+            True,
+            "complete",
+            [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize", "lines started"],
+        )
+        assert journal[-1] == "lines"
+
+    @pytest.mark.asyncio
+    async def test_lines_are_dropped_with_an_error_while_a_poll_cycle_of_batches_is_still_waiting(
+        self, monkeypatch, caplog
+    ):
+        import litellm
+        from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        waiting = [asyncio.create_task(asyncio.sleep(3600)) for _ in range(MAX_OBJECTS_PER_POLL_CYCLE)]
+        instance._line_item_stores.update(waiting)
+
+        try:
+            with self._provider(journal), caplog.at_level(logging.ERROR):
+                await instance.check_batch_cost()
+        finally:
+            for task in waiting:
+                task.cancel()
+
+        assert logger.payloads == []
+        assert row.batch_processed is True
+        assert f"so the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
+
+
+    @pytest.mark.asyncio
+    async def test_batches_store_their_lines_one_at_a_time_in_the_order_they_were_retired(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
+        running: list = []
+
+        async def _store(job, response, model_id, batch_id, output_content):
+            running.append(batch_id)
+            journal.append(f"start {batch_id} with {len(running)} running")
+            await asyncio.sleep(0.01)
+            running.remove(batch_id)
+
+        monkeypatch.setattr(instance, "_store_batch_line_items", _store)
+        for batch_id in ("batch-a", "batch-b", "batch-c"):
+            instance._store_batch_line_items_in_background(MagicMock(), MagicMock(), "model-123", batch_id, b"")
+        await self._stored(instance)
+
+        assert journal == [f"start batch-{name} with 1 running" for name in "abc"]
 
 
 class TestCreatorTurnedOffMessageLogging:
