@@ -40146,6 +40146,11 @@ export interface components {
              */
             id: string;
             /**
+             * Installation Preference
+             * @description Plugin installation preference
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
+            /**
              * Name
              * @description Plugin name
              */
@@ -41565,7 +41570,7 @@ export interface components {
             homepage?: string | null;
             /**
              * Installation Preference
-             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Claude Desktop auto-installs an 'auto_install' plugin when the marketplace is served from its inference gateway origin and the plugin is an archive source with a sha256
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. 'auto_install' and 'required' need an archive source with a sha256, since Claude Desktop installs only those on its own, and only when the archive and marketplace.json share its inference gateway origin. Claude Code 2.1.75 and older reject a marketplace.json that carries the field on any plugin
              */
             installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
@@ -47625,7 +47630,7 @@ export interface components {
             homepage?: string | null;
             /**
              * Installation Preference
-             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Claude Desktop auto-installs an 'auto_install' plugin when the marketplace is served from its inference gateway origin and the plugin is an archive source with a sha256
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. 'auto_install' and 'required' need an archive source with a sha256, since Claude Desktop installs only those on its own, and only when the archive and marketplace.json share its inference gateway origin. Claude Code 2.1.75 and older reject a marketplace.json that carries the field on any plugin
              */
             installation_preference?: ("available" | "auto_install" | "required") | null;
             /**

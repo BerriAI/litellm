@@ -417,14 +417,14 @@ async def test_get_marketplace_omits_installation_preference_when_unset():
 async def test_update_plugin_propagates_installation_preference_to_get_and_list():
     name = "updated-install-plugin"
     await register_plugin(
-        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE),
+        request=RegisterPluginRequest(name=name, source=_ARCHIVE_SOURCE),
         user_api_key_dict=_USER,
     )
 
-    await update_plugin(
+    response = await update_plugin(
         plugin_name=name,
         request=UpdatePluginRequest(
-            source=_GIT_SUBDIR_SOURCE,
+            source=_ARCHIVE_SOURCE,
             installation_preference="auto_install",
         ),
         user_api_key_dict=_USER,
@@ -433,6 +433,7 @@ async def test_update_plugin_propagates_installation_preference_to_get_and_list(
     plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
     listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
 
+    assert response.plugin.installation_preference == "auto_install"
     assert plugin["installation_preference"] == "auto_install"
     assert listed_plugin.installation_preference == "auto_install"
 
@@ -457,7 +458,7 @@ async def test_update_plugin_without_installation_preference_clears_it():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stored_value", ["auto-install", 1, True, None])
-async def test_stored_unknown_installation_preference_is_not_served(stored_value):
+async def test_stored_unknown_installation_preference_is_not_served(stored_value, caplog):
     name = "hand-edited-plugin"
     table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
     await table.create(
@@ -476,6 +477,63 @@ async def test_stored_unknown_installation_preference_is_not_served(stored_value
     assert marketplace["plugins"] == [{"name": name, "source": _ARCHIVE_SOURCE}]
     assert listed_plugin.installation_preference is None
     assert plugin["installation_preference"] is None
+    unknown_value_warnings = [r for r in caplog.records if "unknown installation_preference" in r.getMessage()]
+    assert len(unknown_value_warnings) == (0 if stored_value is None else 3)
+
+
+@pytest.mark.asyncio
+async def test_register_accepts_the_camel_case_installation_preference_key():
+    request = RegisterPluginRequest.model_validate(
+        {"name": "s3-skill", "source": _ARCHIVE_SOURCE, "installationPreference": "auto_install"}
+    )
+
+    response = await register_plugin(request=request, user_api_key_dict=_USER)
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+
+    assert response.plugin.installation_preference == "auto_install"
+    assert (await _read_stored_manifest("s3-skill"))["installation_preference"] == "auto_install"
+    assert marketplace["plugins"][0]["installationPreference"] == "auto_install"
+
+
+_SOURCES_DESKTOP_NEVER_INSTALLS = [
+    {"source": "github", "repo": "org/repo"},
+    {"source": "url", "url": "https://github.com/org/repo.git"},
+    _GIT_SUBDIR_SOURCE,
+    {"source": "archive", "url": "https://artifacts.example.com/plugin.zip"},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preference", ["auto_install", "required"])
+@pytest.mark.parametrize("source", _SOURCES_DESKTOP_NEVER_INSTALLS)
+async def test_self_installing_preference_needs_an_archive_with_sha256(preference, source):
+    with pytest.raises(HTTPException) as register_error:
+        await register_plugin(
+            request=RegisterPluginRequest(name="no-op-plugin", source=source, installation_preference=preference),
+            user_api_key_dict=_USER,
+        )
+    await register_plugin(request=RegisterPluginRequest(name="no-op-plugin", source=source), user_api_key_dict=_USER)
+    with pytest.raises(HTTPException) as update_error:
+        await update_plugin(
+            plugin_name="no-op-plugin",
+            request=UpdatePluginRequest(source=source, installation_preference=preference),
+            user_api_key_dict=_USER,
+        )
+
+    assert register_error.value.status_code == 400
+    assert update_error.value.status_code == 400
+    assert "installationPreference" not in json.loads((await get_marketplace(request=MagicMock())).body)["plugins"][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", _SOURCES_DESKTOP_NEVER_INSTALLS)
+async def test_available_preference_is_accepted_on_any_source(source):
+    response = await register_plugin(
+        request=RegisterPluginRequest(name="listed-plugin", source=source, installation_preference="available"),
+        user_api_key_dict=_USER,
+    )
+
+    assert response.plugin.installation_preference == "available"
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ Claude Code Marketplace endpoint types for LiteLLM Proxy
 
 from typing import Literal, TypeAlias
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -49,10 +49,12 @@ class PluginSpec(LiteLLMBaseModel):
     namespace: str | None = Field(None, description="Skill namespace within domain (e.g., 'workflows')")
     installation_preference: InstallationPreference | None = Field(
         None,
+        validation_alias=AliasChoices("installation_preference", "installationPreference"),
         description=(
-            "Emitted as installationPreference on this plugin's marketplace.json entry. Claude Desktop auto-installs "
-            "an 'auto_install' plugin when the marketplace is served from its inference gateway origin and the "
-            "plugin is an archive source with a sha256"
+            "Emitted as installationPreference on this plugin's marketplace.json entry. 'auto_install' and "
+            "'required' need an archive source with a sha256, since Claude Desktop installs only those on its own, "
+            "and only when the archive and marketplace.json share its inference gateway origin. Claude Code 2.1.75 "
+            "and older reject a marketplace.json that carries the field on any plugin"
         ),
     )
 
@@ -93,6 +95,7 @@ class PluginResponse(LiteLLMBaseModel):
     version: str | None = Field(None, description="Plugin version")
     description: str | None = Field(None, description="Plugin description")
     source: dict[str, str] = Field(..., description="Plugin source reference")
+    installation_preference: InstallationPreference | None = Field(None, description="Plugin installation preference")
     enabled: bool = Field(..., description="Whether plugin is enabled")
 
 

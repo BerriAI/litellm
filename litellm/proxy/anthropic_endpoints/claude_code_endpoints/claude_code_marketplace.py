@@ -80,9 +80,17 @@ _INSTALLATION_PREFERENCES: Final[tuple[InstallationPreference, ...]] = get_args(
 MANIFEST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
+_SELF_INSTALLING_PREFERENCES: Final[frozenset[InstallationPreference]] = frozenset({"auto_install", "required"})
+
+
 def get_installation_preference(manifest: Mapping[str, object]) -> InstallationPreference | None:
     value: Final = manifest.get("installation_preference")
-    return value if value in _INSTALLATION_PREFERENCES else None
+    if value is None or value in _INSTALLATION_PREFERENCES:
+        return value
+    verbose_proxy_logger.warning(
+        "Plugin %s has unknown installation_preference %r, serving it as unset", manifest.get("name"), value
+    )
+    return None
 
 
 async def get_prisma_client() -> object:
@@ -268,6 +276,20 @@ def _validate_plugin_source(source: Mapping[str, str]) -> None:
         )
 
 
+def _validate_installation_preference(spec: PluginSpec) -> None:
+    if spec.installation_preference not in _SELF_INSTALLING_PREFERENCES:
+        return
+    if spec.source.get("source") == "archive" and spec.source.get("sha256"):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"installation_preference '{spec.installation_preference}' needs an archive source with a "
+            "sha256, the only plugins Claude Desktop installs on its own"
+        },
+    )
+
+
 def _build_plugin_manifest(name: str, spec: PluginSpec) -> Mapping[str, object]:
     """Build the stored manifest dict shared by plugin create and update."""
     dumped: Final[Mapping[str, object]] = spec.model_dump(exclude_none=True)
@@ -360,6 +382,7 @@ async def register_plugin(
             )
 
         _validate_plugin_source(request.source)
+        _validate_installation_preference(request)
 
         existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": request.name}
@@ -397,6 +420,7 @@ async def register_plugin(
                 version=plugin.version,
                 description=plugin.description,
                 source=request.source,
+                installation_preference=request.installation_preference,
                 enabled=plugin.enabled,
             ),
         )
@@ -608,6 +632,7 @@ async def update_plugin(
         prisma_client: Final = await get_prisma_client()
 
         _validate_plugin_source(request.source)
+        _validate_installation_preference(request)
 
         existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": plugin_name}
@@ -641,6 +666,7 @@ async def update_plugin(
                 version=plugin.version,
                 description=plugin.description,
                 source=request.source,
+                installation_preference=request.installation_preference,
                 enabled=plugin.enabled,
             ),
         )
