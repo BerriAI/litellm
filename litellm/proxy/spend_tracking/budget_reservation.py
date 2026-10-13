@@ -133,10 +133,18 @@ def get_reserved_counter_keys(budget_reservation: dict | None) -> set:
 _lease_renewals: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
 
 
-def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], counter_keys: frozenset[str]) -> None:
+def _start_reservation_lease_renewal(
+    budget_reservation: Mapping[str, object],
+    counter_keys: frozenset[str],
+    valid_token: UserAPIKeyAuth | None = None,
+) -> None:
     """A reservation lives inside spend counter keys that expire on their Redis TTL. Renew the TTL
     while the request is in flight so a request longer than the TTL does not drop its
-    reservation and admit concurrent requests against the DB floor on any worker."""
+    reservation and admit concurrent requests against the DB floor on any worker.
+
+    ``valid_token`` opts into mid-session enforcement: a non-throttled counter
+    that goes over budget while the session runs cuts the request off instead of
+    letting a long-lived session spend past its cap (R2-22)."""
     from litellm.proxy.proxy_server import spend_counter_store
 
     redis_ttl: Final = spend_counter_store.redis_ttl
@@ -148,6 +156,7 @@ def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], c
             counter_keys=counter_keys,
             interval=redis_ttl / 2,
             request_task=asyncio.current_task(),
+            valid_token=valid_token,
         )
     )
     _lease_renewals.add(task)
@@ -159,18 +168,77 @@ async def _renew_reservation_lease(
     counter_keys: frozenset[str],
     interval: float,
     request_task: asyncio.Task[object] | None,
+    valid_token: UserAPIKeyAuth | None = None,
 ) -> None:
-    """Stops on finalization or once the request task that took the reservation is gone, so a
-    disconnect path that skipped reconciliation falls back to the plain counter TTL."""
+    """Renew the reservation TTL while the request task is alive, re-checking
+    counters mid-session.
+
+    Stops on finalization, mid-session cancellation, or once the request task
+    that took the reservation is gone, so a disconnect path that skipped
+    reconciliation falls back to the plain counter TTL. The ``request_timeout``
+    bound only guards a missing task reference: a task holding the reservation
+    is a live request, and realtime / stream sessions outlast request_timeout,
+    so their reservations must as well (R2-22)."""
     from litellm.proxy.proxy_server import refresh_spend_counter_ttl
 
     deadline: Final = time.monotonic() + litellm.request_timeout
-    while time.monotonic() < deadline:
+    while True:
         await asyncio.sleep(interval)
-        if budget_reservation.get("finalized") is True or (request_task is not None and request_task.done()):
+        if (
+            budget_reservation.get("finalized") is True
+            or budget_reservation.get("cancelled") is True
+            or (request_task is not None and request_task.done())
+        ):
+            return
+        if request_task is None and time.monotonic() >= deadline:
             return
         for counter_key in counter_keys:
             await refresh_spend_counter_ttl(counter_key=counter_key)
+        await _enforce_reservation_mid_session(
+            budget_reservation=budget_reservation,
+            valid_token=valid_token,
+            request_task=request_task,
+        )
+
+
+async def _enforce_reservation_mid_session(
+    budget_reservation: Mapping[str, object],
+    valid_token: UserAPIKeyAuth | None,
+    request_task: asyncio.Task[object] | None,
+) -> None:
+    """Re-read applied counters while a long session runs; the first counter
+    over budget cancels the request so the session cannot burn past its cap
+    (R2-22). A metering glitch defers to the next tick."""
+    from litellm.proxy.proxy_server import read_spend_counter_store_value
+
+    entries: Final = budget_reservation.get("entries") or []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        counter_key = entry.get("counter_key")
+        max_budget = entry.get("max_budget")
+        if counter_key is None or max_budget is None:
+            continue
+        if _key_reservation_should_release_for_throttle(str(counter_key), valid_token):
+            continue
+        try:
+            current_spend, _authoritative = await read_spend_counter_store_value(counter_key=str(counter_key))
+        except Exception:  # noqa: BLE001
+            verbose_proxy_logger.debug(
+                "mid-session budget check could not read counter %s; next tick retried",
+                counter_key,
+            )
+            continue
+        if current_spend is not None and float(current_spend) > float(max_budget) + 1e-12:
+            verbose_proxy_logger.warning(
+                "mid-session budget enforcement: %s spend=%s > max=%s — cutting off the in-flight request (R2-22)",
+                counter_key,
+                current_spend,
+                max_budget,
+            )
+            if request_task is not None and not request_task.done():
+                request_task.cancel()
+            return
 
 
 def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: UserAPIKeyAuth | None) -> bool:
@@ -350,6 +418,7 @@ async def reserve_budget_for_request(
     _start_reservation_lease_renewal(
         budget_reservation=budget_reservation,
         counter_keys=frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation)),
+        valid_token=valid_token,
     )
     return budget_reservation
 
@@ -1193,21 +1262,21 @@ async def _reseed_reserved_entry(item: _EntryAdjustment, actual_cost: float) -> 
     reconcile: the optimistic delta no longer applies, so reseed from the DB floor and add the settled cost, since
     increment_spend_counters skips reserved keys. The reconcile runs before this request's spend is enqueued to the
     DB, so the reseeded floor excludes it."""
-    from litellm.proxy.proxy_server import increment_spend_counter_cache, reseed_spend_counter_from_db
+    from litellm.proxy.proxy_server import increment_spend_counter_store, reseed_spend_counter_from_db
 
     reseeded: Final = await reseed_spend_counter_from_db(counter_key=item.counter_key)
     if reseeded and actual_cost > 0:
-        await increment_spend_counter_cache(counter_key=item.counter_key, increment=actual_cost)
+        await increment_spend_counter_store(counter_key=item.counter_key, increment=actual_cost)
 
 
 async def _counter_can_apply_adjustment(
     counter_key: str,
     adjustment: float,
 ) -> bool:
-    from litellm.proxy.proxy_server import read_spend_counter_cache_value
+    from litellm.proxy.proxy_server import read_spend_counter_store_value
 
     try:
-        current_value, _ = await read_spend_counter_cache_value(counter_key=counter_key)
+        current_value, _ = await read_spend_counter_store_value(counter_key=counter_key)
     except (TypeError, ValueError):
         return False
     if current_value is None:
@@ -1266,6 +1335,7 @@ def _counter_to_reservation_entry(
         "counter_key": counter.counter_key,
         "entity_type": counter.entity_type,
         "entity_id": counter.entity_id,
+        "max_budget": counter.max_budget,
         "reserved_cost": reserved_cost,
         "applied_adjustment": 0.0,
     }
