@@ -20,7 +20,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.base import HiddenParams
-from litellm.types.responses.main import ResponseToolSearchCall, build_web_search_call
+from litellm.types.responses.main import OutputToolSearchCall, build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
@@ -1929,6 +1929,88 @@ class TestToolTransformation:
         assert [tool["function"]["name"] for tool in not_deferred] == ["finance__get_stock_price", "get_weather"]
         assert all("defer_loading" not in tool for tool in not_deferred)
 
+    @pytest.mark.parametrize("global_drop_params", [False, True])
+    def test_malformed_tool_flags_answer_400_unless_drop_params_drops_them(
+        self, monkeypatch: pytest.MonkeyPatch, global_drop_params: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+        transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
+        tools: Final = [
+            {"type": "tool_search", "execution": "server"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": "false"},
+            {
+                "type": "namespace",
+                "name": "finance",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_stock_price",
+                        "parameters": {"type": "object"},
+                        "defer_loading": 1,
+                        "allowed_callers": "direct",
+                    },
+                    {
+                        "type": "function",
+                        "name": "get_fx_rate",
+                        "parameters": {"type": "object"},
+                        "defer_loading": True,
+                    },
+                ],
+            },
+            {"type": "custom", "name": "apply_patch", "defer_loading": "yes"},
+        ]
+
+        if not global_drop_params:
+            with pytest.raises(litellm.BadRequestError):
+                transform(
+                    model="anthropic/claude-sonnet-5-5",
+                    input="What is the weather in Paris right now?",
+                    responses_api_request={"tools": tools},
+                    custom_llm_provider="anthropic",
+                )
+        result: Final = transform(
+            model="anthropic/claude-sonnet-5-5",
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+            drop_params=None if global_drop_params else True,
+        )
+
+        function_tools: Final = [tool for tool in result["tools"] if tool["type"] == "function"]
+        assert {tool["function"]["name"]: tool.get("defer_loading", False) for tool in function_tools} == {
+            "get_weather": False,
+            "finance__get_stock_price": False,
+            "finance__get_fx_rate": True,
+            "apply_patch": False,
+        }
+        assert all("allowed_callers" not in tool for tool in function_tools)
+
+    def test_custom_tools_stay_deferred_when_tool_search_goes_out(self) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input="Patch the README",
+            responses_api_request={
+                "tools": [
+                    {"type": "tool_search", "execution": "server"},
+                    {"type": "custom", "name": "apply_patch", "defer_loading": True},
+                    {
+                        "type": "namespace",
+                        "name": "editor",
+                        "tools": [{"type": "custom", "name": "insert", "defer_loading": True}],
+                    },
+                    {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+                ]
+            },
+            custom_llm_provider="anthropic",
+        )
+
+        function_tools: Final = [tool for tool in result["tools"] if tool["type"] == "function"]
+        assert {tool["function"]["name"]: tool.get("defer_loading", False) for tool in function_tools} == {
+            "apply_patch": True,
+            "insert": True,
+            "get_weather": False,
+        }
+
     def test_anthropic_tool_search_call_becomes_tool_search_call_item(self) -> None:
         response: Final = _chat_response_with_tool_search_call('{"pattern": "weather|forecast"}')
         with_tool_search: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
@@ -1944,7 +2026,7 @@ class TestToolTransformation:
 
         assert [item.type for item in with_tool_search] == ["tool_search_call", "function_call"]
         search_call: Final = with_tool_search[0]
-        assert isinstance(search_call, ResponseToolSearchCall)
+        assert isinstance(search_call, OutputToolSearchCall)
         assert search_call.id == "tsc_srvtoolu_01Search"
         assert search_call.call_id == "srvtoolu_01Search"
         assert search_call.arguments == {"pattern": "weather|forecast"}
@@ -1969,7 +2051,7 @@ class TestToolTransformation:
         )
 
         search_call: Final = items[0]
-        assert isinstance(search_call, ResponseToolSearchCall)
+        assert isinstance(search_call, OutputToolSearchCall)
         assert search_call.status == "incomplete"
         assert search_call.arguments == {}
 
@@ -2130,9 +2212,7 @@ class TestToolTransformation:
         tools = [custom_tool]
 
         with pytest.raises(litellm.BadRequestError, match="allowed_callers must be a list of strings"):
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
 
     def test_transform_web_search_tools_to_web_search_options(self):
         """Test that web_search tools are converted to web_search_options"""

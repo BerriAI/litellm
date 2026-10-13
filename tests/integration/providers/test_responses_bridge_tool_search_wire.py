@@ -35,6 +35,7 @@ _BEDROCK_REGEX_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
 )
 _REGEX_TOOL_TYPES: Final = frozenset({_REGEX_TOOL_TYPE, _REGEX_TOOL_NAME})
 _TOOL_SEARCH_BETA_PREFIXES: Final = ("advanced-tool-use", "tool-search-tool")
+_TOOL_SEARCH_CALL_KEYS: Final = frozenset({"id", "type", "call_id", "arguments", "execution", "status"})
 _SEARCH_ARGUMENTS: Final = '{"pattern": "weather|stock"}'
 _TRUNCATED_ARGUMENTS: Final = '{"pattern": '
 _ALL_DEFERRED_ERROR: Final = "At least one tool must have defer_loading=false"
@@ -585,6 +586,24 @@ def test_bedrock_invoke_and_vertex_claude_keep_the_tool_search_tool(
         request, body = _only_request(wire)
         _assert_claude_wire(provider, stream, request, body, _DEFERRED_NAMES)
         _assert_spend_rows(model, (str(answer.payload["id"]),))
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock_invoke"])
+def test_a_non_streaming_tool_search_call_item_carries_only_its_own_keys(gateway: Gateway, provider: Provider) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, provider, wire.url, gateway.upstream_url)
+        tools: Final = (_tool_search(), _function_tool(), _namespace_tool())
+        response: Final = _raw(
+            gateway, "/v1/responses", {**_responses_body(model, marker, tools, False), **_CACHE_BUST}
+        )
+        assert response.status_code == 200, response.text
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        _assert_search_call_output(payload, marker)
+        (search,) = [item for item in _tool_items(payload) if item["type"] == "tool_search_call"]
+        assert frozenset(search) == _TOOL_SEARCH_CALL_KEYS, search
+        request, body = _only_request(wire)
+        _assert_claude_wire(provider, False, request, body, _DEFERRED_NAMES)
 
 
 def test_search_arguments_that_never_parse_stream_an_incomplete_tool_search_call(gateway: Gateway) -> None:

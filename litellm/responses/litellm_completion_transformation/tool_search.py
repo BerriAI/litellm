@@ -6,22 +6,25 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from litellm.litellm_core_utils.prompt_templates.factory import is_anthropic_tool_search_use
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES, AnthropicToolSearchToolRegex
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.responses.main import ResponseToolSearchCall
-from litellm.types.utils import LlmProviders
+from litellm.types.responses.main import OutputToolSearchCall
+from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders, Message
 
 from .custom_tools import openai_shaped_tool_call_item_id
 
 __all__ = [
     "ANTHROPIC_TOOL_SEARCH_TOOL_NAME",
     "ANTHROPIC_TOOL_SEARCH_TOOL_TYPE",
+    "CompletionRoute",
     "ToolSearchCallStatus",
     "anthropic_tool_search_chat_tool",
     "build_tool_search_call",
     "has_server_tool_search",
+    "holds_tool_search_use",
     "is_anthropic_tool_search_chat_tool",
     "is_anthropic_tool_search_use",
     "is_server_tool_search_tool",
     "provider_builds_anthropic_request",
+    "without_tool_search_uses",
 ]
 
 ANTHROPIC_TOOL_SEARCH_TOOL_TYPE: Final = "tool_search_tool_regex_20251119"
@@ -72,6 +75,35 @@ def provider_builds_anthropic_request(model: str, custom_llm_provider: str | Non
     return isinstance(chat_config, AnthropicConfig)
 
 
+class CompletionRoute(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    custom_llm_provider: str | None = None
+
+
+def _is_tool_search_call(tool_call: object) -> bool:
+    return isinstance(tool_call, ChatCompletionMessageToolCall) and is_anthropic_tool_search_use(
+        tool_call.id or "", tool_call.function.name or ""
+    )
+
+
+def holds_tool_search_use(message: object) -> bool:
+    return isinstance(message, Message) and any(
+        _is_tool_search_call(tool_call) for tool_call in message.tool_calls or ()
+    )
+
+
+def without_tool_search_uses(message: Message) -> Message | None:
+    tool_calls: Final = message.tool_calls or []
+    kept: Final = tuple(tool_call for tool_call in tool_calls if not _is_tool_search_call(tool_call))
+    if len(kept) == len(tool_calls):
+        return message
+    if not kept and not message.content:
+        return None
+    return message.model_copy(update={"tool_calls": list(kept) or None})
+
+
 def _parsed_arguments(arguments_json: str) -> Mapping[str, object] | None:
     try:
         return _ARGUMENTS_ADAPTER.validate_json(arguments_json or "{}")
@@ -79,9 +111,9 @@ def _parsed_arguments(arguments_json: str) -> Mapping[str, object] | None:
         return None
 
 
-def build_tool_search_call(tool_id: str, arguments_json: str, status: ToolSearchCallStatus) -> ResponseToolSearchCall:
+def build_tool_search_call(tool_id: str, arguments_json: str, status: ToolSearchCallStatus) -> OutputToolSearchCall:
     arguments: Final = _parsed_arguments(arguments_json)
-    return ResponseToolSearchCall(
+    return OutputToolSearchCall(
         id=openai_shaped_tool_call_item_id("tool_search_call", tool_id),
         call_id=tool_id,
         arguments={} if arguments is None else arguments,

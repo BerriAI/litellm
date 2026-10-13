@@ -91,7 +91,7 @@ from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
-    ResponseToolSearchCall,
+    OutputToolSearchCall,
 )
 
 from .base import CachedTokensDetails
@@ -1445,7 +1445,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionToolCall
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
-            | ResponseToolSearchCall
+            | OutputToolSearchCall
         ]
     )
     parallel_tool_calls: bool | None = None

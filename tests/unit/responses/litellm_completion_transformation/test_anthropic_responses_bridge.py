@@ -17,7 +17,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import Message, ModelResponse
 
 
 def test_response_api_handler_merges_metadata_and_service_tier_without_error():
@@ -302,6 +302,89 @@ async def test_previous_response_id_without_instructions_carries_the_latest_ones
         ("user", [("text", "What about Osaka?")]),
     ]
     assert [block.text for block in anthropic.request.system] == [expected_system]
+
+
+_SEARCH_CALL: Final = {
+    "id": "srvtoolu_search",
+    "type": "function",
+    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+}
+_WEATHER_CALL: Final = {
+    "id": "toolu_weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+}
+
+
+def _search_turn(tool_calls: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    return {
+        "request_id": "chatcmpl-search-turn",
+        "call_type": "aresponses",
+        "session_id": "session-search",
+        "proxy_server_request": {"model": _MODEL, "input": "What is the weather in Tokyo?"},
+        "response": {
+            "id": "chatcmpl-search-turn",
+            "object": "chat.completion",
+            "created": 0,
+            "model": _MODEL,
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {"role": "assistant", "content": None, "tool_calls": list(tool_calls)},
+                }
+            ],
+        },
+    }
+
+
+async def _follow_up_messages(
+    tool_calls: Sequence[Mapping[str, object]], model: str, custom_llm_provider: str
+) -> Sequence[object]:
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_search_turn(tool_calls)])):
+        request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="chatcmpl-search-turn",
+            litellm_completion_request={
+                "model": model,
+                "custom_llm_provider": custom_llm_provider,
+                "messages": [{"role": "user", "content": "And in Osaka?"}],
+            },
+            instructions=None,
+        )
+    return request["messages"]
+
+
+def _replayed_tool_call_ids(messages: Sequence[object]) -> list[str]:
+    assistant_turns: Final = [message for message in messages if isinstance(message, Message)]
+    return [tool_call.id for turn in assistant_turns for tool_call in turn.tool_calls or ()]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_tool_call_ids"),
+    [
+        ("mistral/mistral-small-latest", "mistral", ["toolu_weather"]),
+        ("gemini/gemini-2.5-flash", "gemini", ["toolu_weather"]),
+        (_MODEL, "anthropic", ["srvtoolu_search", "toolu_weather"]),
+    ],
+)
+async def test_previous_response_id_keeps_a_stored_claude_search_call_only_on_an_anthropic_route(
+    model: str, custom_llm_provider: str, expected_tool_call_ids: list[str]
+) -> None:
+    """
+    A follow-up that routes a Claude turn's history elsewhere must not replay Anthropic's server-side
+    search call as a client tool call, which Mistral answers 400 "Unexpected tool call id"
+    """
+    messages: Final = await _follow_up_messages([_SEARCH_CALL, _WEATHER_CALL], model, custom_llm_provider)
+
+    assert _replayed_tool_call_ids(messages) == expected_tool_call_ids
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_drops_a_claude_turn_that_held_only_a_search_call_off_anthropic() -> None:
+    messages: Final = await _follow_up_messages([_SEARCH_CALL], "mistral/mistral-small-latest", "mistral")
+
+    assert [message["role"] for message in messages] == ["user", "user"]
 
 
 def _anthropic_sse(*events: Mapping[str, object]) -> bytes:

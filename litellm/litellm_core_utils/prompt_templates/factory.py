@@ -1828,9 +1828,8 @@ def _tool_result_ids(answers: Iterable[AllMessageValues]) -> Iterator[str]:
 
 
 def answered_tool_call_ids(messages: Sequence[AllMessageValues], assistant_index: int) -> frozenset[str]:
-    following: Final = itertools.dropwhile(
-        lambda message: message["role"] == "assistant", itertools.islice(messages, assistant_index, None)
-    )
+    from_assistant: Final = (messages[index] for index in range(assistant_index, len(messages)))
+    following: Final = itertools.dropwhile(lambda message: message["role"] == "assistant", from_assistant)
     answers: Final = itertools.takewhile(lambda message: message["role"] in ("tool", "function"), following)
     return frozenset(_tool_result_ids(answers))
 

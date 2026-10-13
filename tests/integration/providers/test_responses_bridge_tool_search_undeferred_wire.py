@@ -1,10 +1,11 @@
 import asyncio
+import itertools
 import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote
 
 import httpx
@@ -23,6 +24,8 @@ _GEMINI: Final = "gemini-2.5-flash"
 _MISTRAL: Final = "mistral-large-latest"
 _REGEX_TOOL_TYPE: Final = "tool_search_tool_regex_20251119"
 _REGEX_TOOL_NAME: Final = "tool_search_tool_regex"
+_SEARCH_TOOL_TYPES: Final = frozenset({_REGEX_TOOL_TYPE, "tool_search_tool_bm25_20251119"})
+_AZURE_MESSAGES_PATH: Final = "/anthropic/v1/messages"
 _ALL_DEFERRED_ERROR: Final = "At least one tool must have defer_loading=false"
 _DEFERRED_NAMES: Final = ("get_weather", "finance__get_stock_price")
 _CACHE_BUST: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache": {"no-cache": True}})
@@ -44,8 +47,9 @@ _EMAIL_PARAMETERS: Final[dict[str, JsonValue]] = {
     "required": ["to"],
 }
 
-Route = Literal["gemini", "bedrock_converse", "mistral", "unlisted_claude", "anthropic"]
+Route = Literal["gemini", "bedrock_converse", "mistral", "unlisted_claude", "anthropic", "azure_ai"]
 Search = Literal["absent", "dropped"]
+NativeSearch: TypeAlias = Literal["regex", "bm25"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +72,10 @@ def _prompt(marker: str) -> str:
 
 def _tool_search(**fields: JsonValue) -> dict[str, JsonValue]:
     return {"type": "tool_search", **fields}
+
+
+def _native_search_tool(kind: NativeSearch) -> Mapping[str, JsonValue]:
+    return MappingProxyType({"type": f"tool_search_tool_{kind}_20251119", "name": f"tool_search_tool_{kind}"})
 
 
 def _function_tool(defer_loading: JsonValue = True) -> dict[str, JsonValue]:
@@ -249,9 +257,9 @@ def _claude(request: Request) -> Reply:
     marker: Final = rv.newest_marker(request.body.decode()) or "health"
     body: Final = _JSON_OBJECT.validate_json(request.body)
     tools: Final = _request_tools(body)
-    regex_tools: Final = [tool for tool in tools if tool.get("type") == _REGEX_TOOL_TYPE]
-    function_tools: Final = [tool for tool in tools if tool.get("type") != _REGEX_TOOL_TYPE]
-    if not regex_tools and function_tools and all(tool.get("defer_loading") is True for tool in function_tools):
+    search_tools: Final = [tool for tool in tools if tool.get("type") in _SEARCH_TOOL_TYPES]
+    function_tools: Final = [tool for tool in tools if tool.get("type") not in _SEARCH_TOOL_TYPES]
+    if not search_tools and function_tools and all(tool.get("defer_loading") is True for tool in function_tools):
         return _anthropic_error(400, f"tools: {_ALL_DEFERRED_ERROR} marker-{marker}")
     if body.get("stream") is True:
         return Reply(content_type="text/event-stream", chunks=sse_chunks(_claude_events(marker)))
@@ -266,7 +274,7 @@ def _vendor(route: Route) -> Callable[[Request], Reply]:
             return _converse
         case "mistral":
             return _mistral
-        case "unlisted_claude" | "anthropic":
+        case "unlisted_claude" | "anthropic" | "azure_ai":
             return _claude
 
 
@@ -290,6 +298,10 @@ def _deployment(scenario: Scenario, route: Route, wire_url: str) -> str:
             )
         case "anthropic":
             return scenario.model(model=f"anthropic/{_CLAUDE}", api_base=wire_url, api_key=cc.ANTHROPIC_API_KEY)
+        case "azure_ai":
+            return scenario.model(
+                model=f"azure_ai/{_CLAUDE}", api_base=f"{wire_url}{_AZURE_MESSAGES_PATH}", api_key="synthetic-azure-key"
+            )
 
 
 def _responses_body(
@@ -343,6 +355,9 @@ def _assert_target(route: Route, stream: bool, request: Request, body: Mapping[s
         case "unlisted_claude" | "anthropic":
             assert request.target == "/v1/messages", request.target
             assert body.get("stream", False) is stream, body
+        case "azure_ai":
+            assert request.target == _AZURE_MESSAGES_PATH, request.target
+            assert body.get("stream", False) is stream, body
 
 
 def _wire_tool_names(route: Route, body: Mapping[str, JsonValue]) -> list[str]:
@@ -360,7 +375,7 @@ def _wire_tool_names(route: Route, body: Mapping[str, JsonValue]) -> list[str]:
                 str(_JSON_OBJECT.validate_python(tool["function"])["name"])
                 for tool in _ITEMS.validate_python(body["tools"])
             ]
-        case "unlisted_claude" | "anthropic":
+        case "unlisted_claude" | "anthropic" | "azure_ai":
             return [str(tool["name"]) for tool in _ITEMS.validate_python(body["tools"])]
 
 
@@ -432,6 +447,48 @@ def test_the_supported_anthropic_route_keeps_each_tools_own_defer_loading_with_t
             ("send_email", None),
         ], sent
         assert "defer_loading" not in json.dumps(sent[3]), sent
+
+
+def _native_cells() -> tuple[ParameterSet, ...]:
+    routes: Final[tuple[tuple[Route, NativeSearch], ...]] = (
+        ("anthropic", "regex"),
+        ("anthropic", "bm25"),
+        ("azure_ai", "regex"),
+    )
+    return tuple(
+        pytest.param(route, kind, stream, id=f"{route}-{kind}-{'stream' if stream else 'sync'}")
+        for (route, kind), stream in itertools.product(routes, (False, True))
+    )
+
+
+@pytest.mark.parametrize(("route", "kind", "stream"), _native_cells())
+def test_a_native_anthropic_search_tool_reaches_the_wire_untouched_and_keeps_every_deferral(
+    gateway: Gateway, route: Route, kind: NativeSearch, stream: bool
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_claude) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, route, wire.url)
+        tools: Final = (_native_search_tool(kind), _function_tool(), _namespace_tool())
+        response: Final = _raw(gateway, _responses_body(model, marker, tools, stream))
+        _assert_served(response, marker, stream)
+        request, body = _only_request(wire)
+        _assert_target(route, stream, request, body)
+        sent: Final = _ITEMS.validate_python(body["tools"])
+        assert sent[0] == dict(_native_search_tool(kind)), sent
+        assert [(tool["name"], tool.get("defer_loading")) for tool in sent[1:]] == [
+            (name, True) for name in _DEFERRED_NAMES
+        ], sent
+
+
+def test_bedrock_converse_skips_a_native_search_tool_and_serves_the_deferred_tools(gateway: Gateway) -> None:
+    call: Final = _Call("bedrock_converse", False, uuid.uuid4().hex)
+    with wire_server(_converse) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "bedrock_converse", wire.url)
+        tools: Final = (_native_search_tool("regex"), _function_tool(), _namespace_tool())
+        response: Final = _raw(gateway, _responses_body(model, call.marker, tools, False))
+        _assert_served(response, call.marker, False)
+        request, body = _only_request(wire)
+        _assert_undeferred_wire(call, request, body)
 
 
 @pytest.mark.parametrize("route", ["gemini", "mistral"])
