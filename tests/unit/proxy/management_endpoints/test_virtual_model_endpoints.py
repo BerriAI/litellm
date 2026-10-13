@@ -13,6 +13,7 @@ from prisma.models import (
 )
 from pydantic import ValidationError
 
+import litellm
 from litellm._uuid import uuid4
 from litellm.constants import VIRTUAL_MODEL_PREFIX
 from litellm.proxy._types import (
@@ -211,11 +212,23 @@ class TestVirtualModelCreate:
 
     @pytest.mark.asyncio
     async def test_internal_user_creates_own_virtual_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm import Router
+        from litellm.models.user import LiteLLM_UserTable
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.virtual_model_endpoints import create_virtual_model
 
         model_id: Final = str(uuid4())
         vm_id: Final = str(uuid4())
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "model-1",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "key1"},
+                    "model_info": {"id": model_id},
+                },
+            ],
+        )
 
         prisma: Final = MockPrismaClient()
         prisma.db.litellm_virtualmodeltable.create = AsyncMock(
@@ -238,11 +251,25 @@ class TestVirtualModelCreate:
             )
         )
         prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[_make_deployment(model_id, "model-1")])
+        prisma.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=LiteLLM_UserTable(user_id="internal-user", models=[], teams=[])
+        )
+
+        mock_cache: Final = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
+
+        internal_user_with_model_access: Final = UserAPIKeyAuth(
+            user_id="internal-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["model-1"],
+        )
 
         monkeypatch.setattr(proxy_server, "prisma_client", prisma)
         monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
         monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
-        monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", mock_cache)
 
         with patch(
             "litellm.proxy.management_endpoints.virtual_model_endpoints.clear_cache",
@@ -254,7 +281,7 @@ class TestVirtualModelCreate:
                     virtual_model_name="test-vm",
                     members=(VirtualModelMemberRequest(model_id=model_id, priority=1),),
                 ),
-                user_api_key_dict=_make_internal_user(),
+                user_api_key_dict=internal_user_with_model_access,
             )
 
         assert result.virtual_model_id == vm_id
@@ -857,25 +884,131 @@ class TestVirtualModelList:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
 
+        vm_id: Final = str(uuid4())
+        model_id: Final = str(uuid4())
+
         prisma: Final = MockPrismaClient()
-        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(return_value=[])
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(
+            return_value=[
+                LiteLLM_VirtualModelTable(
+                    virtual_model_id=vm_id,
+                    virtual_model_name="my-vm",
+                    description=None,
+                    routing_strategy="ordered",
+                    members=[
+                        LiteLLM_VirtualModelMemberTable(
+                            virtual_model_id=vm_id,
+                            model_id=model_id,
+                            priority=1,
+                        ),
+                    ],
+                    created_at=datetime.now(),
+                    created_by="internal-user",
+                    updated_at=datetime.now(),
+                    updated_by="internal-user",
+                    num_retries=None,
+                    timeout=None,
+                    stream_timeout=None,
+                    allowed_fails=None,
+                    cooldown_time=None,
+                    team_id=None,
+                ),
+            ]
+        )
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(model_id, "model-1")]
+        )
         prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
         monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
         result = await list_virtual_models(user_api_key_dict=_make_internal_user())
 
-        assert result == ()
-        where = prisma.db.litellm_virtualmodeltable.find_many.call_args[1]["where"]
-        assert where == {"OR": [{"created_by": "internal-user"}]}
+        assert len(result) == 1
+        assert result[0].virtual_model_id == vm_id
+        assert result[0].virtual_model_name == "my-vm"
+        assert len(result[0].members) == 1
+        assert result[0].members[0].model_id == model_id
+        assert result[0].members[0].model_name == "model-1"
 
     @pytest.mark.asyncio
     async def test_internal_user_list_includes_member_teams(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
 
+        vm_id_creator: Final = str(uuid4())
+        vm_id_team: Final = str(uuid4())
+        model_id_creator: Final = str(uuid4())
+        model_id_team: Final = str(uuid4())
+
         prisma: Final = MockPrismaClient()
-        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(return_value=[])
+
+        call_count = [0]
+
+        def _fake_find_many(**kwargs) -> list[LiteLLM_VirtualModelTable]:
+            call_count[0] += 1
+            where = kwargs.get("where", {})
+            if "created_by" in where:
+                return [
+                    LiteLLM_VirtualModelTable(
+                        virtual_model_id=vm_id_creator,
+                        virtual_model_name="creator-vm",
+                        description=None,
+                        routing_strategy="ordered",
+                        members=[
+                            LiteLLM_VirtualModelMemberTable(
+                                virtual_model_id=vm_id_creator,
+                                model_id=model_id_creator,
+                                priority=1,
+                            ),
+                        ],
+                        created_at=datetime.now(),
+                        created_by="internal-user",
+                        updated_at=datetime.now(),
+                        updated_by="internal-user",
+                        num_retries=None,
+                        timeout=None,
+                        stream_timeout=None,
+                        allowed_fails=None,
+                        cooldown_time=None,
+                        team_id=None,
+                    )
+                ]
+            elif "team_id" in where:
+                return [
+                    LiteLLM_VirtualModelTable(
+                        virtual_model_id=vm_id_team,
+                        virtual_model_name="team-vm",
+                        description=None,
+                        routing_strategy="ordered",
+                        members=[
+                            LiteLLM_VirtualModelMemberTable(
+                                virtual_model_id=vm_id_team,
+                                model_id=model_id_team,
+                                priority=1,
+                            ),
+                        ],
+                        created_at=datetime.now(),
+                        created_by="other-user",
+                        updated_at=datetime.now(),
+                        updated_by="other-user",
+                        num_retries=None,
+                        timeout=None,
+                        stream_timeout=None,
+                        allowed_fails=None,
+                        cooldown_time=None,
+                        team_id="team-a",
+                    )
+                ]
+            return []
+
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(side_effect=_fake_find_many)
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[
+                _make_deployment(model_id_creator, "model-creator"),
+                _make_deployment(model_id_team, "model-team"),
+            ]
+        )
         user_row: Final = MagicMock(teams=["team-a", "team-b"])
         prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
 
@@ -883,30 +1016,79 @@ class TestVirtualModelList:
 
         result = await list_virtual_models(user_api_key_dict=_make_internal_user())
 
-        assert result == ()
-        where = prisma.db.litellm_virtualmodeltable.find_many.call_args[1]["where"]
-        assert where == {"OR": [{"created_by": "internal-user"}, {"team_id": {"in": ["team-a", "team-b"]}}]}
+        assert len(result) == 2
+        result_ids = frozenset(r.virtual_model_id for r in result)
+        assert vm_id_creator in result_ids
+        assert vm_id_team in result_ids
+
+        creator_vm = next(r for r in result if r.virtual_model_id == vm_id_creator)
+        assert len(creator_vm.members) == 1
+        assert creator_vm.members[0].model_id == model_id_creator
+        assert creator_vm.members[0].model_name == "model-creator"
+
+        team_vm = next(r for r in result if r.virtual_model_id == vm_id_team)
+        assert len(team_vm.members) == 1
+        assert team_vm.members[0].model_id == model_id_team
+        assert team_vm.members[0].model_name == "model-team"
 
     @pytest.mark.asyncio
     async def test_internal_user_list_combines_search_with_visibility(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
 
+        vm_id: Final = str(uuid4())
+        model_id: Final = str(uuid4())
+
         prisma: Final = MockPrismaClient()
-        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(return_value=[])
+
+        def _fake_find_many(**kwargs) -> list[LiteLLM_VirtualModelTable]:
+            where = kwargs.get("where", {})
+            if "AND" in where:
+                assert "created_by" in where["AND"][0]
+                assert "virtual_model_name" in where["AND"][1]
+                return [
+                    LiteLLM_VirtualModelTable(
+                        virtual_model_id=vm_id,
+                        virtual_model_name="needle-vm",
+                        description=None,
+                        routing_strategy="ordered",
+                        members=[
+                            LiteLLM_VirtualModelMemberTable(
+                                virtual_model_id=vm_id,
+                                model_id=model_id,
+                                priority=1,
+                            ),
+                        ],
+                        created_at=datetime.now(),
+                        created_by="internal-user",
+                        updated_at=datetime.now(),
+                        updated_by="internal-user",
+                        num_retries=None,
+                        timeout=None,
+                        stream_timeout=None,
+                        allowed_fails=None,
+                        cooldown_time=None,
+                        team_id=None,
+                    )
+                ]
+            return []
+
+        prisma.db.litellm_virtualmodeltable.find_many = AsyncMock(side_effect=_fake_find_many)
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(model_id, "needle-model")]
+        )
         prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
         monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
-        await list_virtual_models(user_api_key_dict=_make_internal_user(), search="needle")
+        result = await list_virtual_models(user_api_key_dict=_make_internal_user(), search="needle")
 
-        where = prisma.db.litellm_virtualmodeltable.find_many.call_args[1]["where"]
-        assert where == {
-            "AND": [
-                {"OR": [{"created_by": "internal-user"}]},
-                {"virtual_model_name": {"contains": "needle", "mode": "insensitive"}},
-            ]
-        }
+        assert len(result) == 1
+        assert result[0].virtual_model_id == vm_id
+        assert result[0].virtual_model_name == "needle-vm"
+        assert len(result[0].members) == 1
+        assert result[0].members[0].model_id == model_id
+        assert result[0].members[0].model_name == "needle-model"
 
 
 class TestVirtualModelGet:
@@ -1429,8 +1611,8 @@ class TestVirtualModelPatch:
         mock_tx.litellm_virtualmodelmembertable.delete_many.assert_called_once()
         delete_many_call = mock_tx.litellm_virtualmodelmembertable.delete_many.call_args
         where_clause = delete_many_call[1]["where"]
-        assert where_clause["virtual_model_id"] == vm_id
-        assert model_id_2 in where_clause["model_id"]["in"]
+        assert where_clause["AND"][0]["virtual_model_id"] == vm_id
+        assert model_id_2 in where_clause["AND"][1]["model_id"]["in"]
 
         assert mock_publish.call_count == 2
         published_tables = [call[0][0] for call in mock_publish.call_args_list]
@@ -3373,22 +3555,48 @@ class TestVirtualModelOwnershipAuthz:
 
     @pytest.mark.asyncio
     async def test_team_member_creates_team_virtual_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm import Router
+        from litellm.models.user import LiteLLM_UserTable
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.virtual_model_endpoints import create_virtual_model
 
         model_id: Final = str(uuid4())
         vm_id: Final = str(uuid4())
 
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "model-1",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "key1"},
+                    "model_info": {"id": model_id},
+                },
+            ],
+        )
+
         prisma: Final = MockPrismaClient()
         prisma.db.litellm_virtualmodeltable.create = AsyncMock(
             return_value=_make_vm(virtual_model_id=vm_id, created_by="internal-user", team_id="team-a")
         )
         prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[_make_deployment(model_id, "model-1")])
+        prisma.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=LiteLLM_UserTable(user_id="internal-user", models=[], teams=["team-a"])
+        )
+
+        mock_cache: Final = MagicMock()
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
+
+        internal_user_with_model_access: Final = UserAPIKeyAuth(
+            user_id="internal-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["model-1"],
+        )
 
         monkeypatch.setattr(proxy_server, "prisma_client", prisma)
         monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
         monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
-        monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", mock_cache)
 
         with (
             patch(
@@ -3408,7 +3616,7 @@ class TestVirtualModelOwnershipAuthz:
                     team_id="team-a",
                     members=(VirtualModelMemberRequest(model_id=model_id, priority=1),),
                 ),
-                user_api_key_dict=_make_internal_user(),
+                user_api_key_dict=internal_user_with_model_access,
             )
 
         assert result.virtual_model_id == vm_id
@@ -3468,6 +3676,304 @@ class TestVirtualModelOwnershipAuthz:
 
         assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
         prisma.db.litellm_virtualmodeltable.create.assert_not_called()
+
+
+class TestVirtualModelMemberAuthorization:
+    def _router_with_models(self, *model_names: str) -> litellm.Router:
+        from litellm import Router
+
+        return Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {"model": "gpt-4o", "api_key": f"key-{name}"},
+                    "model_info": {"id": str(uuid4())},
+                }
+                for name in model_names
+            ]
+        )
+
+    def _mock_cache(self) -> MagicMock:
+        cache: Final = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=None)
+        cache.async_set_cache = AsyncMock()
+        return cache
+
+    @pytest.mark.asyncio
+    async def test_key_with_virtual_model_wildcard_denies_restricted_deployment_create(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.models.user import LiteLLM_UserTable
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import create_virtual_model
+
+        restricted_model_id: Final = str(uuid4())
+
+        router: Final = self._router_with_models("restricted-model")
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(restricted_model_id, "restricted-model")]
+        )
+        prisma.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=LiteLLM_UserTable(user_id="user-with-vm-wildcard", models=[], teams=[])
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", self._mock_cache())
+
+        user_key: Final = UserAPIKeyAuth(
+            user_id="user-with-vm-wildcard",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["virtual_model/*"],
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await create_virtual_model(
+                request_body=VirtualModelCreateRequest(
+                    virtual_model_name="test-vm",
+                    members=(VirtualModelMemberRequest(model_id=restricted_model_id, priority=1),),
+                ),
+                user_api_key_dict=user_key,
+            )
+
+        assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+        prisma.db.litellm_virtualmodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_key_with_virtual_model_wildcard_denies_restricted_deployment_patch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.models.user import LiteLLM_UserTable
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import patch_virtual_model
+
+        vm_id: Final = str(uuid4())
+        restricted_model_id: Final = str(uuid4())
+
+        router: Final = self._router_with_models("restricted-model")
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_virtualmodeltable.find_unique = AsyncMock(
+            return_value=_make_vm(virtual_model_id=vm_id, created_by="user-with-vm-wildcard")
+        )
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(restricted_model_id, "restricted-model")]
+        )
+        prisma.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=LiteLLM_UserTable(user_id="user-with-vm-wildcard", models=[], teams=[])
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", self._mock_cache())
+
+        user_key: Final = UserAPIKeyAuth(
+            user_id="user-with-vm-wildcard",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["virtual_model/*"],
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await patch_virtual_model(
+                virtual_model_id=vm_id,
+                request_body=VirtualModelPatchRequest(
+                    add_members=(VirtualModelMemberRequest(model_id=restricted_model_id, priority=1),),
+                ),
+                user_api_key_dict=user_key,
+            )
+
+        assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+
+    @pytest.mark.asyncio
+    async def test_key_with_allowed_model_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.models.user import LiteLLM_UserTable
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import create_virtual_model
+
+        allowed_model_id: Final = str(uuid4())
+        vm_id: Final = str(uuid4())
+
+        router: Final = self._router_with_models("allowed-model")
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_virtualmodeltable.create = AsyncMock(
+            return_value=_make_vm(virtual_model_id=vm_id, created_by="user-with-allowed-key")
+        )
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(allowed_model_id, "allowed-model")]
+        )
+        prisma.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=LiteLLM_UserTable(user_id="user-with-allowed-key", models=[], teams=[])
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", self._mock_cache())
+
+        user_key: Final = UserAPIKeyAuth(
+            user_id="user-with-allowed-key",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["allowed-model"],
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.virtual_model_endpoints.clear_cache",
+            new_callable=AsyncMock,
+            return_value=MagicMock(still_desired=None, live_after=None),
+        ):
+            result = await create_virtual_model(
+                request_body=VirtualModelCreateRequest(
+                    virtual_model_name="test-vm",
+                    members=(VirtualModelMemberRequest(model_id=allowed_model_id, priority=1),),
+                ),
+                user_api_key_dict=user_key,
+            )
+
+        assert result.virtual_model_id == vm_id
+
+    @pytest.mark.asyncio
+    async def test_user_models_with_empty_key_models_denies_restricted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.models.user import LiteLLM_UserTable
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import create_virtual_model
+
+        restricted_model_id: Final = str(uuid4())
+
+        router: Final = self._router_with_models("restricted-model")
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(restricted_model_id, "restricted-model")]
+        )
+        prisma.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=LiteLLM_UserTable(user_id="user-with-allowed-model", models=["allowed-model"], teams=[])
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", self._mock_cache())
+
+        user_key: Final = UserAPIKeyAuth(
+            user_id="user-with-allowed-model",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=[],
+            team_id=None,
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await create_virtual_model(
+                request_body=VirtualModelCreateRequest(
+                    virtual_model_name="test-vm",
+                    members=(VirtualModelMemberRequest(model_id=restricted_model_id, priority=1),),
+                ),
+                user_api_key_dict=user_key,
+            )
+
+        assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+        prisma.db.litellm_virtualmodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_team_bound_key_with_unrestricted_key_denies_restricted_via_team_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.models.team import LiteLLM_TeamTable
+        from litellm.models.user import LiteLLM_UserTable
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import create_virtual_model
+
+        restricted_model_id: Final = str(uuid4())
+
+        router: Final = self._router_with_models("restricted-model")
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(restricted_model_id, "restricted-model")]
+        )
+        prisma.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=LiteLLM_UserTable(user_id="team-user", models=[], teams=["team-a"])
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", self._mock_cache())
+
+        team_user_key: Final = UserAPIKeyAuth(
+            user_id="team-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=[],
+            team_id="team-a",
+            team_models=["allowed-model"],
+        )
+
+        with patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new_callable=AsyncMock,
+            return_value=LiteLLM_TeamTable(
+                team_id="team-a",
+                models=["allowed-model"],
+                members_with_roles=[],
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await create_virtual_model(
+                    request_body=VirtualModelCreateRequest(
+                        virtual_model_name="test-vm",
+                        members=(VirtualModelMemberRequest(model_id=restricted_model_id, priority=1),),
+                    ),
+                    user_api_key_dict=team_user_key,
+                )
+
+        assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+        prisma.db.litellm_virtualmodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_router_fails_closed_on_create(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.models.user import LiteLLM_UserTable
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.virtual_model_endpoints import create_virtual_model
+
+        model_id: Final = str(uuid4())
+
+        prisma: Final = MockPrismaClient()
+        prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[_make_deployment(model_id, "some-model")]
+        )
+        prisma.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=LiteLLM_UserTable(user_id="user-no-router", models=[], teams=[])
+        )
+
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+        monkeypatch.setattr(proxy_server, "proxy_config", MagicMock())
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", self._mock_cache())
+
+        user_key: Final = UserAPIKeyAuth(
+            user_id="user-no-router",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=[],
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await create_virtual_model(
+                request_body=VirtualModelCreateRequest(
+                    virtual_model_name="test-vm",
+                    members=(VirtualModelMemberRequest(model_id=model_id, priority=1),),
+                ),
+                user_api_key_dict=user_key,
+            )
+
+        assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+        assert "router" in exc_info.value.message.lower()
 
 
 class TestModelNamePrefixReservation:

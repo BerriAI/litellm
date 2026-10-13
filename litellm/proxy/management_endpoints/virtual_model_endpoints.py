@@ -13,8 +13,9 @@ from typing import (
 )
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
@@ -33,7 +34,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.chunked_in import delete_many_in, find_many_in
 from litellm.repositories.table_repositories import VirtualModelRepository
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.types.proxy.management_endpoints.virtual_model_endpoints import (
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     )
 
     from litellm.models.team import LiteLLM_TeamTableCachedObj
+    from litellm.models.user import LiteLLM_UserTable
 
 router: Final = APIRouter()
 
@@ -226,16 +228,69 @@ async def _visible_team_ids(
         else None
     )
     user_teams: Final = (
-        tuple(user_row.teams) if user_row is not None and user_row.teams is not None else ()  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # user_row is Any from Prisma
+        tuple(user_row.teams) if user_row is not None and user_row.teams is not None else ()  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType,reportAny]  # user_row is Any from Prisma
     )
     key_team: Final = (user_api_key_dict.team_id,) if user_api_key_dict.team_id is not None else ()
     return frozenset(key_team + user_teams)
 
 
+async def _authorize_member_deployments(
+    deployments: tuple[models.LiteLLM_ProxyModelTable, ...],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: litellm.Router | None,
+    prisma_client: PrismaClient,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+
+    if llm_router is None:
+        raise ProxyException(
+            message="Cannot authorize member deployments without a router. Non-admin users require model access validation.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param=None,
+        )
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, can_user_call_model
+    from litellm.proxy.auth.auth_checks import get_user_object as auth_get_user_object, key_model_aliases_for_auth_check
+
+    user_object_for_teamless: Final[LiteLLM_UserTable | None] = (
+        await auth_get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=proxy_server.user_api_key_cache,
+            user_id_upsert=False,
+        )
+        if user_api_key_dict.team_id is None and user_api_key_dict.user_id is not None
+        else None
+    )
+
+    for deployment in deployments:
+        model_name = deployment.model_name
+        if not model_name:
+            continue
+
+        await can_key_call_resolved_model(
+            model=model_name,
+            llm_model_list=None,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+
+        if user_object_for_teamless is not None:
+            await can_user_call_model(
+                model=model_name,
+                llm_router=llm_router,
+                user_object=user_object_for_teamless,
+                key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
+            )
+
+
 async def _validate_members(
     prisma_client: PrismaClient,
     members: tuple[VirtualModelMemberRequest, ...],
-) -> tuple[BaseModel, ...]:
+) -> tuple[models.LiteLLM_ProxyModelTable, ...]:
     model_ids: Final = tuple(m.model_id for m in members)
 
     if len(model_ids) != len(frozenset(model_ids)):
@@ -288,7 +343,7 @@ async def _validate_members(
                 param="members",
             )
 
-    return tuple(deployments)
+    return deployments
 
 
 async def _reconcile_after_write() -> ReconcileOutcome:
@@ -384,11 +439,12 @@ async def _patch_virtual_model_in_transaction(
             )
 
     if request_body.remove_members:
-        await tx.litellm_virtualmodelmembertable.delete_many(
-            where={
-                "virtual_model_id": virtual_model_id,
-                "model_id": {"in": list(request_body.remove_members)},
-            }
+        await delete_many_in(
+            tx.litellm_virtualmodelmembertable,
+            "model_id",
+            request_body.remove_members,
+            where={"virtual_model_id": virtual_model_id},
+            atomicity="caller_transaction",
         )
 
     try:
@@ -510,6 +566,14 @@ async def create_virtual_model(
 
     deployments: Final = await _validate_members(prisma_client, request_body.members)
 
+    llm_router: Final = proxy_server.llm_router
+    await _authorize_member_deployments(
+        deployments=deployments,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+    )
+
     user_id: Final = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
 
     live_before_reload: Final = proxy_server.live_model_ids_snapshot() if proxy_server.llm_router else frozenset()  # pyright: ignore[reportUnknownVariableType]  # live_model_ids_snapshot returns frozenset[str] | Unknown
@@ -576,11 +640,11 @@ async def create_virtual_model(
         live_after=reconcile_outcome.live_after,
     )
 
-    deployments_by_id: Final = MappingProxyType({d.model_id: d.model_name for d in deployments})  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType,reportUnknownMemberType,reportAttributeAccessIssue]  # deployments is tuple[BaseModel, ...] from Prisma cast; model_id/model_name access on BaseModel
+    deployments_by_id: Final = MappingProxyType({d.model_id: d.model_name for d in deployments})
     member_responses: Final = tuple(
         VirtualModelMemberResponse(
             model_id=member.model_id,
-            model_name=deployments_by_id.get(member.model_id),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # deployments_by_id is MappingProxyType from Prisma cast
+            model_name=deployments_by_id.get(member.model_id),
             priority=member.priority,
         )
         for member in request_body.members
@@ -646,26 +710,53 @@ async def list_virtual_models(
     if not is_admin_family and user_api_key_dict.user_id is None and not visible_teams:
         return ()
 
-    visibility_or: Final = (
-        *(() if user_api_key_dict.user_id is None else ({"created_by": user_api_key_dict.user_id},)),
-        *(({"team_id": {"in": sorted(visible_teams)}},) if visible_teams else ()),
-    )
+    async def _fetch_rows() -> tuple[models.LiteLLM_VirtualModelTable, ...]:
+        if is_admin_family:
+            admin_rows_raw: Final = await VirtualModelRepository(prisma_client).table.find_many(
+                include={"members": {"order_by": {"priority": "asc"}}},
+                where=search_condition,
+            )
+            return _validate_virtual_models(admin_rows_raw)
 
-    where: Final = (
-        search_condition
-        if is_admin_family
-        else (
-            {"AND": [{"OR": list(visibility_or)}, search_condition]}
-            if search_condition
-            else {"OR": list(visibility_or)}
+        by_creator_where: Final = (
+            (
+                {"AND": [{"created_by": user_api_key_dict.user_id}, search_condition]}
+                if search_condition
+                else {"created_by": user_api_key_dict.user_id}
+            )
+            if user_api_key_dict.user_id is not None
+            else None
         )
-    )
 
-    rows_raw: Final = await VirtualModelRepository(prisma_client).table.find_many(
-        include={"members": {"order_by": {"priority": "asc"}}},
-        where=where,
-    )
-    rows: Final = _validate_virtual_models(rows_raw)
+        by_creator_rows: Final = (
+            _validate_virtual_models(
+                await VirtualModelRepository(prisma_client).table.find_many(
+                    include={"members": {"order_by": {"priority": "asc"}}},
+                    where=by_creator_where,
+                )
+            )
+            if by_creator_where is not None
+            else ()
+        )
+
+        by_team_rows: Final = (
+            _validate_virtual_models(
+                await find_many_in(
+                    VirtualModelRepository(prisma_client).table,
+                    "team_id",
+                    visible_teams,
+                    where=search_condition,
+                    include={"members": {"order_by": {"priority": "asc"}}},
+                )
+            )
+            if visible_teams
+            else ()
+        )
+
+        seen_ids: Final = frozenset(row.virtual_model_id for row in by_creator_rows)
+        return by_creator_rows + tuple(row for row in by_team_rows if row.virtual_model_id not in seen_ids)
+
+    rows: Final = await _fetch_rows()
 
     all_member_ids: Final = frozenset(
         member.model_id
@@ -794,7 +885,14 @@ async def patch_virtual_model(
                 )
 
     if request_body.add_members:
-        await _validate_members(prisma_client, request_body.add_members)
+        add_deployments: Final = await _validate_members(prisma_client, request_body.add_members)
+        llm_router: Final = proxy_server.llm_router
+        await _authorize_member_deployments(
+            deployments=add_deployments,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+        )
 
     user_id: Final = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
     update_data: Final = {

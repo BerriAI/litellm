@@ -37,12 +37,16 @@ class FakeTable:
 
     rows: list[dict[str, object]]
     filters: list[Mapping[str, object]] = field(default_factory=list)
+    includes: list[Mapping[str, object] | None] = field(default_factory=list)
 
     def _select(self, where: Mapping[str, object]) -> list[dict[str, object]]:
         self.filters.append(where)
         return [row for row in self.rows if _matches(row, where)]
 
-    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[dict[str, object]]:
+    async def find_many(
+        self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> Sequence[dict[str, object]]:
+        self.includes.append(include)
         return self._select(where)
 
     async def count(self, *, where: Mapping[str, object]) -> int:
@@ -267,3 +271,34 @@ async def test_writing_the_chunked_field_is_refused_in_any_form(data: Mapping[st
 async def test_writing_another_field_that_names_the_chunked_one_is_allowed() -> None:
     table = _table(1)
     assert await update_many_in(table, "id", ["id-0"], data={"team": {"set": "id"}}, atomicity="per_chunk_ok") == 1
+
+
+async def test_include_absent_preserves_old_call_behavior() -> None:
+    table = _table(5_001)
+    rows = await find_many_in(table, "id", _ids(5_001))
+    assert len(rows) == 5_001
+    assert table.includes == [None, None]
+    assert table.filters == [
+        {"id": {"in": _ids(5_000)}},
+        {"id": {"in": _ids(5_001)[5_000:]}},
+    ]
+
+
+async def test_include_forwarded_to_every_chunk() -> None:
+    table = _table(12_345)
+    include: Final = {"team": True}
+    rows = await find_many_in(table, "id", _ids(12_345), include=include)
+    assert len(rows) == 12_345
+    assert table.includes == [include, include, include]
+    assert table.in_list_sizes() == _expected_chunks(12_345)
+
+
+async def test_include_with_where_forwards_both_through_chunks() -> None:
+    table = _table(12_345)
+    where: Final = {"team": "even"}
+    include: Final = {"team": True}
+    rows = await find_many_in(table, "id", _ids(12_345), where=where, include=include)
+    assert [row["id"] for row in rows] == [f"id-{n}" for n in range(0, 12_345, 2)]
+    assert table.includes == [include, include, include]
+    assert all(where_sent["AND"][0] == where for where_sent in table.filters)
+    assert table.in_list_sizes() == _expected_chunks(12_345)

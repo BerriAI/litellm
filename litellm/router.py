@@ -13864,8 +13864,13 @@ class Router:
             request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
         )
 
-        # Type narrow: at this point healthy_deployments is always a list
-        _healthy_list: Final = healthy_deployments if isinstance(healthy_deployments, list) else [healthy_deployments]
+        _healthy_list: Final = (
+            [healthy_deployments]
+            if isinstance(healthy_deployments, Mapping)
+            else list(healthy_deployments)
+            if isinstance(healthy_deployments, tuple)
+            else healthy_deployments
+        )
 
         is_virtual: Final = model in self._virtual_model_names
         if is_virtual:
