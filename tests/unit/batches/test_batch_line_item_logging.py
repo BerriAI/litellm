@@ -162,9 +162,9 @@ def recorder():
     litellm._async_failure_callback = saved_failure  # test-quality-ok: teardown restoring the value set above
 
 
-def _parent_logging(custom_llm_provider: str = "openai") -> Logging:
+def _parent_logging(custom_llm_provider: str = "openai", model: str = "gpt-4o") -> Logging:
     logging_obj = Logging(
-        model="gpt-4o",
+        model=model,
         messages=[{"role": "user", "content": "<retrieve_batch>"}],
         stream=False,
         call_type="aretrieve_batch",
@@ -704,6 +704,32 @@ BEDROCK_OUTPUT_JSONL = b"\n".join(
     ]
 )
 
+BEDROCK_TITAN_INPUT_JSONL = b"\n".join(
+    [
+        json.dumps({"recordId": "titan-ok", "modelInput": {"inputText": "embed me"}}).encode(),
+        json.dumps({"recordId": "titan-bad", "modelInput": {"inputText": "embed me too", "dimensions": 7}}).encode(),
+    ]
+)
+
+BEDROCK_TITAN_OUTPUT_JSONL = b"\n".join(
+    [
+        json.dumps(
+            {
+                "recordId": "titan-ok",
+                "modelInput": {"inputText": "embed me"},
+                "modelOutput": {"embedding": [0.1, 0.2], "inputTextTokenCount": 3},
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "recordId": "titan-bad",
+                "modelInput": {"inputText": "embed me too", "dimensions": 7},
+                "error": {"errorCode": 400, "errorMessage": "Malformed input request"},
+            }
+        ).encode(),
+    ]
+)
+
 MISTRAL_INPUT_JSONL = json.dumps(
     {
         "custom_id": "mis",
@@ -741,6 +767,8 @@ def _edge_file_content(file_id: str, **_kwargs):
             "output-anth": ANTHROPIC_OUTPUT_JSONL,
             "input-bed": BEDROCK_INPUT_JSONL,
             "output-bed": BEDROCK_OUTPUT_JSONL,
+            "input-titan": BEDROCK_TITAN_INPUT_JSONL,
+            "output-titan": BEDROCK_TITAN_OUTPUT_JSONL,
             "input-mist": MISTRAL_INPUT_JSONL,
             "output-mist": MISTRAL_OUTPUT_JSONL,
         }[file_id]
@@ -1009,7 +1037,37 @@ async def test_line_items_bedrock_shapes(recorder):
     assert [_hidden(by_id[line])["batch_line_status_code"] for line in ("br-anth", "br-titan", "br-conv")] == [200] * 3
     (failure,) = recorder.failure_events
     assert (_hidden(failure)["batch_custom_id"], _hidden(failure)["batch_line_status_code"]) == ("br-err", 400)
+    assert failure["call_type"] == "acompletion"
     assert "bad request" in _payload(failure)["error_str"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_embedding_batch_lines_carry_the_embedding_call_type_and_input(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    with (
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_edge_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(
+            _parent_logging(custom_llm_provider="bedrock", model="bedrock/amazon.titan-embed-text-v2:0"),
+            _provider_batch("batch_titan", "input-titan", "output-titan"),
+        )
+
+    (success,) = (e for e in recorder.success_events if _hidden(e).get("batch_custom_id") == "titan-ok")
+    (failure,) = recorder.failure_events
+    assert [(_hidden(e)["batch_custom_id"], e["call_type"], _payload(e)["call_type"]) for e in (success, failure)] == [
+        ("titan-ok", "aembedding", "aembedding"),
+        ("titan-bad", "aembedding", "aembedding"),
+    ]
+    assert _hidden(failure)["batch_line_status_code"] == 400
+    assert [[m["content"] for m in _payload(e)["messages"]] for e in (success, failure)] == [
+        ["embed me"],
+        ["embed me too"],
+    ]
 
 
 @pytest.mark.asyncio

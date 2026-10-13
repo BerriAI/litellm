@@ -220,18 +220,32 @@ def _call_type_for_request(request_line: Mapping[str, object] | None) -> str:
     return _CALL_TYPE_BY_BATCH_URL.get(url if isinstance(url, str) else "", "acompletion")
 
 
-def _call_type_for_line(request_line: Mapping[str, object] | None, result: "_BatchLineResult | None") -> str:
+def _is_bedrock_embedding_batch_model(model: str) -> bool:
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    return BedrockFilesConfig._is_titan_v2_embed_model(model)  # pyright: ignore[reportPrivateUsage]  # the check that chose the embedding record shape when the batch input was written
+
+
+def _call_type_for_line(
+    request_line: Mapping[str, object] | None,
+    result: "_BatchLineResult | None",
+    custom_llm_provider: BatchProvider,
+    model: str,
+) -> str:
     if isinstance(result, EmbeddingResponse):
         return "aembedding"
     if isinstance(result, ResponsesAPIResponse):
         return "aresponses"
     if isinstance(result, ModelResponse):
         return "acompletion"
+    # Bedrock input records carry no url, so a failed line takes its type from the deployment model
+    if custom_llm_provider == "bedrock" and _is_bedrock_embedding_batch_model(model):
+        return "aembedding"
     return _call_type_for_request(request_line)
 
 
 def _line_messages(request_body: Mapping[str, object]) -> object:
-    return request_body.get("messages") or request_body.get("input") or ()
+    return request_body.get("messages") or request_body.get("input") or request_body.get("inputText") or ()
 
 
 def _line_model(
@@ -384,7 +398,7 @@ async def _emit_line_event(
     if successful and result is None:
         return False
 
-    call_type: Final = _call_type_for_line(request_line, result)
+    call_type: Final = _call_type_for_line(request_line, result, custom_llm_provider, model)
     child: Final = _new_child_logging(
         parent=parent,
         model=model,

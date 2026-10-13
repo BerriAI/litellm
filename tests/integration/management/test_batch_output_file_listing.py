@@ -8,7 +8,7 @@ import socketserver
 import ssl
 import threading
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +35,7 @@ OUTPUT_BYTES: Final = 4096
 ERROR_BYTES: Final = 512
 BEDROCK_MODEL: Final = "bedrock/anthropic.claude-3-haiku-20240307-v1:0"
 BEDROCK_MODEL_ID: Final = "anthropic.claude-3-haiku-20240307-v1:0"
+BEDROCK_TITAN_MODEL_ID: Final = "amazon.titan-embed-text-v2:0"
 BEDROCK_REGION: Final = "us-east-1"
 BEDROCK_AUTHORITY: Final = f"bedrock.{BEDROCK_REGION}.amazonaws.com:443"
 BEDROCK_BUCKET: Final = "integration-batch-listing-bucket"
@@ -485,6 +486,7 @@ class _BedrockControlPlane:
     job_locations: SimpleQueue[tuple[str, str, str]]
     job_id: str
     job_arn: str
+    model_id: str = BEDROCK_MODEL_ID
 
     def __call__(self, request: Request) -> Reply:
         if request.method == "POST" and request.target == "/model-invocation-job":
@@ -504,7 +506,7 @@ class _BedrockControlPlane:
                     {
                         "jobArn": self.job_arn,
                         "jobName": retrieved_job_name,
-                        "modelId": BEDROCK_MODEL_ID,
+                        "modelId": self.model_id,
                         "status": "Completed",
                         "submitTime": 1700000000,
                         "lastModifiedTime": 1700000001,
@@ -703,6 +705,36 @@ def _bedrock_line_output(marker: str) -> bytes:
     return (json.dumps(succeeded) + "\n" + json.dumps(failed) + "\n").encode()
 
 
+def _bedrock_titan_line_output(marker: str) -> bytes:
+    succeeded: Final = {
+        "recordId": "req-1",
+        "modelInput": {"inputText": f"{marker} ping"},
+        "modelOutput": {"embedding": [0.1, 0.2], "inputTextTokenCount": 3},
+    }
+    failed: Final = {
+        "recordId": "req-2",
+        "modelInput": {"inputText": f"{marker} bad"},
+        "error": {"errorCode": 400, "errorMessage": "Malformed input request"},
+    }
+    return (json.dumps(succeeded) + "\n" + json.dumps(failed) + "\n").encode()
+
+
+@dataclass(frozen=True, slots=True)
+class _BedrockLineBatch:
+    model_id: str
+    endpoint: str
+    output: Callable[[str], bytes]
+
+    def body(self, content: str) -> dict[str, JsonValue]:
+        if self.endpoint == "/v1/embeddings":
+            return {"input": content}
+        return {"messages": [{"role": "user", "content": content}], "max_tokens": 8}
+
+
+_BEDROCK_CHAT_BATCH: Final = _BedrockLineBatch(BEDROCK_MODEL_ID, "/v1/chat/completions", _bedrock_line_output)
+_BEDROCK_TITAN_BATCH: Final = _BedrockLineBatch(BEDROCK_TITAN_MODEL_ID, "/v1/embeddings", _bedrock_titan_line_output)
+
+
 def _line_items_config(destination: Path) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"].update({"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1})
@@ -711,11 +743,9 @@ def _line_items_config(destination: Path) -> Path:
     return destination
 
 
-def test_a_bedrock_batch_the_poller_logs_emits_its_lines_from_the_deployment_bucket(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    """The cost poller reads a managed Bedrock batch's files with the deployment's S3 bucket, so the
-    line events it starts must read the input file from that same bucket"""
+def _line_events_of_a_polled_bedrock_batch(
+    gateway: Gateway, tmp_path: Path, batch: _BedrockLineBatch
+) -> tuple[dict[str, JsonValue], ...]:
     job_id: Final = f"integration-batch-lines-{uuid.uuid4().hex}"
     marker: Final = f"bedrock-poller-lines-{uuid.uuid4().hex[:12]}"
     received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier events
@@ -727,9 +757,10 @@ def test_a_bedrock_batch_the_poller_logs_emits_its_lines_from_the_deployment_buc
     with (
         scratch_database() as database_url,
         wire_server(lambda _request: Reply()) as sink,
-        wire_server(_StoringS3Peer({}, _bedrock_line_output(marker))) as s3,
+        wire_server(_StoringS3Peer({}, batch.output(marker))) as s3,
         wire_server(
-            _BedrockControlPlane(SimpleQueue(), job_id, BEDROCK_JOB_ARN_PREFIX + job_id), tls=_tls_context(tmp_path)
+            _BedrockControlPlane(SimpleQueue(), job_id, BEDROCK_JOB_ARN_PREFIX + job_id, batch.model_id),
+            tls=_tls_context(tmp_path),
         ) as bedrock,
         _bedrock_tunnel(bedrock) as tunnel,
         owned_proxy(
@@ -746,7 +777,7 @@ def test_a_bedrock_batch_the_poller_logs_emits_its_lines_from_the_deployment_buc
         candidate.scenario() as scenario,
     ):
         model: Final = scenario.model(
-            model=BEDROCK_MODEL,
+            model=f"bedrock/{batch.model_id}",
             api_key=None,
             api_base=None,
             aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
@@ -762,12 +793,8 @@ def test_a_bedrock_batch_the_poller_logs_emits_its_lines_from_the_deployment_buc
                 {
                     "custom_id": custom_id,
                     "method": "POST",
-                    "url": "/v1/chat/completions",
-                    "body": {
-                        "model": model,
-                        "messages": [{"role": "user", "content": f"{marker} {text}"}],
-                        "max_tokens": 8,
-                    },
+                    "url": batch.endpoint,
+                    "body": {"model": model, **batch.body(f"{marker} {text}")},
                 }
             )
             + "\n"
@@ -785,7 +812,7 @@ def test_a_bedrock_batch_the_poller_logs_emits_its_lines_from_the_deployment_buc
             "/v1/batches",
             {
                 "input_file_id": string_value(JSON_OBJECT.validate_json(uploaded.content)["id"]),
-                "endpoint": "/v1/chat/completions",
+                "endpoint": batch.endpoint,
                 "completion_window": "24h",
             },
             key=owner_key,
@@ -803,7 +830,7 @@ def test_a_bedrock_batch_the_poller_logs_emits_its_lines_from_the_deployment_buc
             )
 
         eventually(lambda: read_rows(_ANY_BATCH_PROCESSED_SQL, (), database_url=database_url), bool, seconds=60)
-        delivered: Final = eventually(
+        return eventually(
             line_events,
             lambda values: (
                 {object_value(event["hidden_params"])["batch_custom_id"] for event in values} == {"req-1", "req-2"}
@@ -811,11 +838,36 @@ def test_a_bedrock_batch_the_poller_logs_emits_its_lines_from_the_deployment_buc
             seconds=30,
         )
 
-        assert sorted(
-            (
-                string_value(object_value(event["hidden_params"])["batch_custom_id"]),
-                event["status"],
-                object_value(event["hidden_params"])["batch_line_status_code"],
-            )
-            for event in delivered
-        ) == [("req-1", "success", 200), ("req-2", "failure", 400)], delivered
+
+def _line_outcomes(events: tuple[dict[str, JsonValue], ...]) -> list[tuple[str, JsonValue, JsonValue, JsonValue]]:
+    return sorted(
+        (
+            string_value(object_value(event["hidden_params"])["batch_custom_id"]),
+            event["status"],
+            object_value(event["hidden_params"])["batch_line_status_code"],
+            event["call_type"],
+        )
+        for event in events
+    )
+
+
+def test_a_bedrock_batch_the_poller_logs_emits_its_lines_from_the_deployment_bucket(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """The cost poller reads a managed Bedrock batch's files with the deployment's S3 bucket, so the
+    line events it starts must read the input file from that same bucket"""
+    delivered: Final = _line_events_of_a_polled_bedrock_batch(gateway, tmp_path, _BEDROCK_CHAT_BATCH)
+
+    assert _line_outcomes(delivered) == [
+        ("req-1", "success", 200, "acompletion"),
+        ("req-2", "failure", 400, "acompletion"),
+    ], delivered
+
+
+def test_a_failed_line_of_a_bedrock_embedding_batch_is_logged_as_an_embedding(gateway: Gateway, tmp_path: Path) -> None:
+    delivered: Final = _line_events_of_a_polled_bedrock_batch(gateway, tmp_path, _BEDROCK_TITAN_BATCH)
+
+    assert _line_outcomes(delivered) == [
+        ("req-1", "success", 200, "aembedding"),
+        ("req-2", "failure", 400, "aembedding"),
+    ], delivered
