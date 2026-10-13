@@ -50,9 +50,10 @@ describe("Memory page access by role", () => {
     },
   );
 
-  it("hides the deprecation banner along with the page body for a denied role", () => {
-    renderAs("Internal User");
+  it("shows an admin the memory page without a deprecation banner", async () => {
+    renderAs("Admin");
 
-    expect(screen.queryByText(/draft deprecation list/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(requestedUrls().some((url) => url.includes("/v1/memory"))).toBe(true));
+    expect(screen.queryByText(/deprecat/i)).not.toBeInTheDocument();
   });
 });

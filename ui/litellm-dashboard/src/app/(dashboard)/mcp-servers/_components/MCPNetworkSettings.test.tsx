@@ -62,6 +62,13 @@ describe("MCPNetworkSettings", () => {
     expect(screen.getByText("192.168.0.0/16")).toBeInTheDocument();
   });
 
+  it("shows the settings without a deprecation banner", async () => {
+    renderSettings();
+
+    expect(await screen.findByText("Private IP Ranges")).toBeInTheDocument();
+    expect(screen.queryByText(/deprecat/i)).not.toBeInTheDocument();
+  });
+
   it("ignores unrelated config fields", async () => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([
       { field_name: "some_other_setting", field_value: ["should-not-show"] },
