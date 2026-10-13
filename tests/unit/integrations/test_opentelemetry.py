@@ -391,9 +391,9 @@ def test_v1_malformed_routing_metadata_preserves_inference_attributes(decision: 
 
 
 def test_safe_set_attribute_skips_ended_and_non_recording_spans() -> None:
-    otel: Final = OpenTelemetry.__new__(OpenTelemetry)
     provider: Final = TracerProvider()
     tracer: Final = provider.get_tracer(__name__)
+    otel: Final = OpenTelemetry(tracer_provider=provider)
 
     with tracer.start_as_current_span("recording") as recording_span:
         otel.safe_set_attribute(recording_span, "litellm.test", "recorded")
@@ -401,7 +401,9 @@ def test_safe_set_attribute_skips_ended_and_non_recording_spans() -> None:
 
     ended_attributes: Final = dict(recording_span.attributes)
     assert not recording_span.is_recording()
-    non_recording_span: Final = trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT)
+    with tracer.start_as_current_span("non-recording") as non_recording_span:
+        pass
+    assert not non_recording_span.is_recording()
 
     otel.safe_set_attribute(recording_span, "litellm.test", "skipped")
     otel.safe_set_attribute(non_recording_span, "litellm.test", "skipped")
