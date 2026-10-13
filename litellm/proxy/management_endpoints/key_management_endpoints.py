@@ -1433,9 +1433,15 @@ async def _common_key_generation_helper(
             "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - %s", e
         )
 
-    team_key_duration: Final = TypeAdapter(str | None).validate_python(
-        team_table.metadata.get("team_member_key_duration")
-        if team_table is not None and team_table.metadata is not None and data.user_id is not None
+    team_fields: Final[Mapping[str, object]] = (
+        team_table.model_dump(include={"metadata"}) if team_table is not None else MappingProxyType({})
+    )
+    team_metadata: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_python(
+        team_fields.get("metadata")
+    )
+    team_key_duration: Final = TypeAdapter[str | None](str | None).validate_python(
+        team_metadata.get("team_member_key_duration")
+        if team_metadata is not None and data.user_id is not None
         else None
     )
     team_expiration_error: Final = _key_expiration_error(data, max_duration=team_key_duration, now=generation_time)
