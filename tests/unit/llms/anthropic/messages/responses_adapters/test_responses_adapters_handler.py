@@ -1084,3 +1084,22 @@ async def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
     ]
     message_delta: Final = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
+
+
+@pytest.mark.parametrize("tool_choice", [{}, {"name": "get_weather"}, {"type": "web_search"}])
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_messages_rejects_invalid_tool_choice_before_provider_call(
+    tool_choice: dict[str, str], stream: bool
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.anthropic_messages(
+            model="openai/gpt-6.1-sol",
+            max_tokens=8,
+            messages=[{"role": "user", "content": "Hello"}],
+            tool_choice=tool_choice,
+            stream=stream,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "tool_choice" in exc_info.value.message
