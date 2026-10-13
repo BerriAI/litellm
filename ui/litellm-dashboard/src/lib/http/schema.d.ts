@@ -17528,12 +17528,13 @@ export interface paths {
         };
         /**
          * Get Telemetry Settings
-         * @description Which telemetry groups are on, whether env vars control them, where reports go and a last or sample report
+         * @description Which telemetry groups are on, whether env vars control them, where reports go and a last or sample report.
+         *     Nothing is recorded until a destination is chosen by ``LITELLM_TELEMETRY_DESTINATION`` or a saved setting
          */
         get: operations["get_telemetry_settings_telemetry_settings_get"];
         /**
          * Update Telemetry Settings
-         * @description Store the telemetry groups for every worker, applied from the next report window
+         * @description Store the telemetry groups and destination for every worker, applied from the next report window
          */
         put: operations["update_telemetry_settings_telemetry_settings_put"];
         post?: never;
@@ -46191,6 +46192,11 @@ export interface components {
             user_id: string;
         };
         /**
+         * TelemetryDestination
+         * @enum {string}
+         */
+        TelemetryDestination: "local_table" | "http";
+        /**
          * TelemetryGroup
          * @description A telemetry group describes a group of metrics that can be toggled on/off separately. One
          *     group may have dependencies on another.
@@ -46215,11 +46221,11 @@ export interface components {
         };
         /** TelemetrySettingsResponse */
         TelemetrySettingsResponse: {
-            /**
-             * Destination
-             * @enum {string}
-             */
-            destination: "https" | "local_table" | "none";
+            /** Available Destinations */
+            available_destinations: components["schemas"]["TelemetryDestination"][];
+            destination: components["schemas"]["TelemetryDestination"] | null;
+            /** Destination Set By Environment */
+            destination_set_by_environment: boolean;
             /** Editable */
             editable: boolean;
             /** Environment Variables */
@@ -46238,6 +46244,7 @@ export interface components {
             retention_days: number;
             /** Set By Environment */
             set_by_environment: boolean;
+            stored_destination: components["schemas"]["TelemetryDestination"] | null;
             /** Stored Groups */
             stored_groups: components["schemas"]["TelemetryGroup"][] | null;
             /** Vetoed */
@@ -46245,6 +46252,7 @@ export interface components {
         };
         /** TelemetrySettingsUpdate */
         TelemetrySettingsUpdate: {
+            destination?: components["schemas"]["TelemetryDestination"] | null;
             /** Groups */
             groups: string[];
         };
