@@ -9078,7 +9078,9 @@ class ProviderConfigManager:
 
                 return AzureAnthropicMessagesConfig()
         elif litellm.LlmProviders.DATABRICKS == provider:
-            if "claude" in model_lower:
+            from litellm.llms.databricks.common_utils import DatabricksBase
+
+            if DatabricksBase.serves_native_anthropic_messages(model):
                 from litellm.llms.databricks.messages.transformation import (
                     DatabricksAnthropicMessagesConfig,
                 )

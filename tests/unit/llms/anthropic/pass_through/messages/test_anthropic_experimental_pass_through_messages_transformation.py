@@ -132,11 +132,23 @@ def _classifier_configs() -> tuple[AnthropicMessagesConfig, ...]:
     return (AnthropicMessagesConfig(), AzureAnthropicMessagesConfig(), DatabricksAnthropicMessagesConfig())
 
 
+class _BetaMapRejectsTheClassifierConfig(AnthropicMessagesConfig):
+    @property
+    def custom_llm_provider(self) -> str | None:
+        return "bedrock_converse"
+
+
 def _no_classifier_configs() -> tuple[AnthropicMessagesConfig, ...]:
-    from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
     from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 
-    return (DeepSeekAnthropicMessagesConfig(), OpenAILikeAnthropicMessagesConfig(), MinimaxMessagesConfig())
+    return (OpenAILikeAnthropicMessagesConfig(), _BetaMapRejectsTheClassifierConfig())
+
+
+def _configs_the_beta_map_does_not_list() -> tuple[AnthropicMessagesConfig, ...]:
+    from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
+    from litellm.llms.github_copilot.messages.transformation import GithubCopilotAnthropicMessagesConfig
+
+    return (DeepSeekAnthropicMessagesConfig(), GithubCopilotAnthropicMessagesConfig(), MinimaxMessagesConfig())
 
 
 def _safeguards_request(config: AnthropicMessagesConfig) -> dict:
@@ -168,6 +180,17 @@ def test_routes_whose_platform_runs_the_classifier_keep_safeguards_and_the_beta(
     """Claude Code's auto mode sends `safeguards` with dangerous-tool-use-2026-09-03 and reads
     `safeguard_results` back. Anthropic, Azure AI Foundry, and Databricks serving endpoints
     honour the pair (probed live 2026-10-12), so both halves must reach them unchanged."""
+    assert _safeguards_request(config)["safeguards"] == AUTO_MODE_SAFEGUARDS
+    assert _beta_header(config, DANGEROUS_TOOL_USE_BETA)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
+    assert _derived_beta_header(config)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
+
+
+@pytest.mark.parametrize("config", _configs_the_beta_map_does_not_list(), ids=type)
+def test_routes_the_beta_map_does_not_list_forward_safeguards_and_the_beta_as_sent(
+    config: AnthropicMessagesConfig, local_beta_headers_config: None
+) -> None:
+    """A platform the beta header map has no column for was never judged, so the request
+    reaches it the way the caller sent it, as it did before the pair could be dropped."""
     assert _safeguards_request(config)["safeguards"] == AUTO_MODE_SAFEGUARDS
     assert _beta_header(config, DANGEROUS_TOOL_USE_BETA)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
     assert _derived_beta_header(config)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA

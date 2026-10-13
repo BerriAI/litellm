@@ -3,16 +3,21 @@ from typing import Final
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.llms.databricks.common_utils import DATABRICKS_ANTHROPIC_MESSAGES_PATH, DatabricksBase
+from litellm.llms.databricks.common_utils import (
+    DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH,
+    DATABRICKS_ANTHROPIC_MESSAGES_PATH,
+    DatabricksBase,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 
 class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig):
     """
-    Forwards /v1/messages for Claude serving endpoints to the workspace's native
-    ``/serving-endpoints/anthropic/v1/messages`` route, so Anthropic-only request
-    fields and response fields (``safeguards`` and ``safeguard_results``) survive
-    instead of being bridged through chat completions.
+    Forwards /v1/messages for Claude models to the workspace's native Anthropic
+    route (``/serving-endpoints/anthropic/v1/messages`` for a serving endpoint,
+    ``/ai-gateway/anthropic/v1/messages`` for a Unity Catalog model service), so
+    Anthropic-only request fields and response fields (``safeguards`` and
+    ``safeguard_results``) survive instead of being bridged through chat completions.
     """
 
     @property
@@ -30,8 +35,8 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         api_base: str | None = None,
     ) -> tuple[dict[str, str], str | None]:  # mutable-ok: mirrors the base signature
         messages_api_base, auth_headers = self.databricks_validate_environment(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
-            api_key=api_key,
-            api_base=api_base,
+            api_key=self.resolve_api_key(api_key),
+            api_base=self.resolve_api_base(api_base),
             endpoint_type="anthropic_messages",
             custom_endpoint=False,
             headers=headers,
@@ -60,6 +65,9 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         resolved_api_base: Final = self._get_api_base(api_base).rstrip("/")
         if resolved_api_base.endswith(DATABRICKS_ANTHROPIC_MESSAGES_PATH):
             return resolved_api_base
+        if self.uses_ai_gateway(model):
+            gateway_root: Final = f"{self.workspace_root(resolved_api_base)}{DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH}"
+            return f"{gateway_root}/v1/messages"
         return f"{resolved_api_base}{DATABRICKS_ANTHROPIC_MESSAGES_PATH}"
 
     def transform_anthropic_messages_request(

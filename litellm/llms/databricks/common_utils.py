@@ -17,7 +17,9 @@ from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlsplit, urlunsplit
 
+import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 
 
 class DatabricksException(BaseLLMException):
@@ -25,6 +27,13 @@ class DatabricksException(BaseLLMException):
 
 
 DATABRICKS_ANTHROPIC_MESSAGES_PATH: Final = "/anthropic/v1/messages"
+DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH: Final = "/ai-gateway/anthropic"
+DATABRICKS_WORKSPACE_ROUTE_PREFIXES: Final = (
+    "/serving-endpoints",
+    "/ai-gateway/mlflow/v1",
+    DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH,
+)
+DATABRICKS_NATIVE_MESSAGES_MODEL_PREFIXES: Final = ("databricks-claude-", "system.ai.claude-")
 DATABRICKS_ENDPOINT_PATHS: Final = MappingProxyType(
     {
         "chat_completions": "/chat/completions",
@@ -144,6 +153,30 @@ class DatabricksBase:
                 redacted[key] = value
 
         return redacted
+
+    @staticmethod
+    def resolve_api_key(api_key: str | None) -> str | None:
+        return api_key or litellm.api_key or litellm.databricks_key or get_secret_str("DATABRICKS_API_KEY")
+
+    @staticmethod
+    def resolve_api_base(api_base: str | None) -> str | None:
+        return api_base or litellm.api_base or os.getenv("DATABRICKS_API_BASE")
+
+    @staticmethod
+    def serves_native_anthropic_messages(model: str) -> bool:
+        return model.removeprefix("databricks/").lower().startswith(DATABRICKS_NATIVE_MESSAGES_MODEL_PREFIXES)
+
+    @staticmethod
+    def uses_ai_gateway(model: str) -> bool:
+        return model.removeprefix("databricks/").count(".") >= 2
+
+    @staticmethod
+    def workspace_root(api_base: str) -> str:
+        normalized: Final = api_base.rstrip("/")
+        route_prefix: Final = next(
+            (prefix for prefix in DATABRICKS_WORKSPACE_ROUTE_PREFIXES if normalized.endswith(prefix)), ""
+        )
+        return normalized.removesuffix(route_prefix)
 
     @staticmethod
     def configured_user_agent(litellm_params: Mapping[str, object]) -> str | None:

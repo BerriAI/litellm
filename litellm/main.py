@@ -227,6 +227,7 @@ from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
+from .llms.databricks.common_utils import DatabricksBase
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha
 from .llms.gdc.chat.transformation import GDCGeminiConfig
@@ -3263,8 +3264,8 @@ def _complete_oobabooga(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
-    api_base = ctx.api_base
-    api_key = ctx.api_key
+    api_base: Final = DatabricksBase.resolve_api_base(ctx.api_base)
+    api_key: Final = DatabricksBase.resolve_api_key(ctx.api_key)
     client: Final = _dispatch_client_http(ctx)
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -3275,20 +3276,6 @@ def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchR
     optional_params: Final = ctx.optional_params
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
-
-    api_base = (
-        api_base  # for databricks we check in get_llm_provider and pass in the api base from there
-        or litellm.api_base
-        or os.getenv("DATABRICKS_API_BASE")
-    )
-
-    # set API KEY
-    api_key = (
-        api_key
-        or litellm.api_key  # for databricks we check in get_llm_provider and pass in the api key from there
-        or litellm.databricks_key
-        or get_secret("DATABRICKS_API_KEY")
-    )
 
     headers = headers or litellm.headers
 
@@ -6570,7 +6557,7 @@ def embedding(
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
 
             # set API KEY
-            api_key = api_key or litellm.api_key or litellm.databricks_key or get_secret("DATABRICKS_API_KEY")
+            api_key = DatabricksBase.resolve_api_key(api_key)
 
             ## EMBEDDING CALL
             response = databricks_embedding.embedding(

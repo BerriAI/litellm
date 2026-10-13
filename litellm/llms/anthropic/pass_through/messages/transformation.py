@@ -4,7 +4,7 @@ from typing import Any, ClassVar, Final
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_headers_manager import is_beta_header_supported
+from litellm.anthropic_beta_headers_manager import get_unsupported_headers
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -112,12 +112,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def supports_safeguards(self) -> bool:
         """
         The ``safeguards`` body field and the dangerous-tool-use beta travel together: a
-        platform that takes the beta runs the classifier, any other platform gets neither
-        so the turn stays a 200 without a verdict instead of a 400 on an unknown field.
+        platform whose beta header map column marks the beta unsupported gets neither, so the
+        turn stays a 200 without a verdict instead of a 400 on an unknown field. A platform the
+        map does not list gets both exactly as the caller sent them.
         """
-        provider: Final = self._resolved_provider
-        return provider == "anthropic" or is_beta_header_supported(
-            ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value, provider
+        return ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value not in get_unsupported_headers(
+            self._resolved_provider
         )
 
     def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:

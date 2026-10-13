@@ -14,13 +14,19 @@ from litellm.utils import ProviderConfigManager
 DATABRICKS_API_BASE: Final = "https://my.workspace.cloud.databricks.com/serving-endpoints"
 DATABRICKS_API_KEY: Final = "dapimykey"
 CLAUDE_MODEL: Final = "databricks-claude-sonnet-4-6"
+UNITY_CATALOG_CLAUDE_MODEL: Final = "system.ai.claude-sonnet-4-6"
+WORKSPACE_URL: Final = "https://my.workspace.cloud.databricks.com"
 MESSAGES_URL: Final = f"{DATABRICKS_API_BASE}/anthropic/v1/messages"
+AI_GATEWAY_MESSAGES_URL: Final = f"{WORKSPACE_URL}/ai-gateway/anthropic/v1/messages"
 DANGEROUS_TOOL_USE_BETA: Final = "dangerous-tool-use-2026-09-03"
 AUTO_MODE_SAFEGUARDS: Final = [
     {"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}
 ]
 SAFEGUARD_RESULTS: Final = [
-    {"type": "dangerous_tool_use", "tool_use_id": "toolu_bdrk_01", "status": "evaluated", "verdict": "not_flagged"}
+    {
+        "type": "dangerous_tool_use",
+        "status": {"type": "available", "tool_uses": {"toolu_bdrk_01": {"type": "evaluated", "outcome": "not_flagged"}}},
+    }
 ]
 BASH_TOOL: Final = {
     "name": "Bash",
@@ -39,9 +45,18 @@ def test_claude_serving_endpoints_dispatch_to_the_native_messages_config() -> No
     assert config.custom_llm_provider == "databricks"
 
 
-def test_non_claude_serving_endpoints_keep_the_chat_completions_bridge() -> None:
+def test_unity_catalog_claude_names_dispatch_to_the_native_messages_config() -> None:
     config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
-        model="databricks-gpt-oss-120b", provider=litellm.LlmProviders.DATABRICKS
+        model=UNITY_CATALOG_CLAUDE_MODEL, provider=litellm.LlmProviders.DATABRICKS
+    )
+
+    assert isinstance(config, DatabricksAnthropicMessagesConfig)
+
+
+@pytest.mark.parametrize("model", ["databricks-gpt-oss-120b", "my-claude-finetune", "main.default.claude-proxy"])
+def test_names_outside_the_foundation_claude_models_keep_the_chat_completions_bridge(model: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model=model, provider=litellm.LlmProviders.DATABRICKS
     )
 
     assert config is None
@@ -77,6 +92,30 @@ def test_validate_environment_signs_with_the_pat_and_keeps_the_workspace_base() 
     assert headers["User-Agent"].startswith("litellm/")
 
 
+def test_validate_environment_reads_the_workspace_credentials_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    config: Final = DatabricksAnthropicMessagesConfig()
+
+    headers, api_base = config.validate_anthropic_messages_environment(
+        headers={},
+        model=CLAUDE_MODEL,
+        messages=USER_TURN,
+        optional_params={},
+        litellm_params={},
+    )
+    url: Final = config.get_complete_url(
+        api_base=api_base, api_key=None, model=CLAUDE_MODEL, optional_params={}, litellm_params={}
+    )
+
+    assert headers["Authorization"] == f"Bearer {DATABRICKS_API_KEY}"
+    assert url == MESSAGES_URL
+
+
 @pytest.mark.parametrize(
     "api_base",
     [DATABRICKS_API_BASE, f"{DATABRICKS_API_BASE}/", MESSAGES_URL],
@@ -98,6 +137,60 @@ def test_validation_then_url_building_appends_the_messages_route_once(api_base: 
     )
 
     assert url == MESSAGES_URL
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        DATABRICKS_API_BASE,
+        WORKSPACE_URL,
+        f"{WORKSPACE_URL}/",
+        f"{WORKSPACE_URL}/ai-gateway/mlflow/v1",
+        f"{WORKSPACE_URL}/ai-gateway/anthropic",
+        AI_GATEWAY_MESSAGES_URL,
+    ],
+)
+def test_unity_catalog_claude_names_route_to_the_ai_gateway_messages_route(api_base: str) -> None:
+    config: Final = DatabricksAnthropicMessagesConfig()
+    _, validated_api_base = config.validate_anthropic_messages_environment(
+        headers={},
+        model=UNITY_CATALOG_CLAUDE_MODEL,
+        messages=USER_TURN,
+        optional_params={},
+        litellm_params={},
+        api_key=DATABRICKS_API_KEY,
+        api_base=api_base,
+    )
+
+    url: Final = config.get_complete_url(
+        api_base=validated_api_base,
+        api_key=DATABRICKS_API_KEY,
+        model=UNITY_CATALOG_CLAUDE_MODEL,
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert url == AI_GATEWAY_MESSAGES_URL
+
+
+@pytest.mark.parametrize(
+    ("model", "chat_url", "messages_url"),
+    [
+        (CLAUDE_MODEL, f"{DATABRICKS_API_BASE}/chat/completions", MESSAGES_URL),
+        (UNITY_CATALOG_CLAUDE_MODEL, f"{WORKSPACE_URL}/ai-gateway/mlflow/v1/chat/completions", AI_GATEWAY_MESSAGES_URL),
+    ],
+)
+def test_messages_and_chat_routes_agree_on_which_names_use_the_ai_gateway(
+    model: str, chat_url: str, messages_url: str
+) -> None:
+    chat: Final = DatabricksConfig().get_complete_url(
+        api_base=DATABRICKS_API_BASE, api_key=DATABRICKS_API_KEY, model=model, optional_params={}, litellm_params={}
+    )
+    messages: Final = DatabricksAnthropicMessagesConfig().get_complete_url(
+        api_base=DATABRICKS_API_BASE, api_key=DATABRICKS_API_KEY, model=model, optional_params={}, litellm_params={}
+    )
+
+    assert (chat, messages) == (chat_url, messages_url)
 
 
 def test_partner_user_agent_matches_the_chat_route(monkeypatch: pytest.MonkeyPatch) -> None:
