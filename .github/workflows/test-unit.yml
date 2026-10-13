@@ -457,6 +457,7 @@ jobs:
           - shard: proxy-auth
             test-path: |-
               tests/unit/proxy/auth
+              tests/unit/proxy/control_plane
               --ignore=tests/unit/proxy/auth/test_auth_checks.py
               --ignore=tests/unit/proxy/auth/test_user_api_key_auth.py
               --ignore=tests/unit/proxy/auth/test_default_end_user_budget_simple.py
