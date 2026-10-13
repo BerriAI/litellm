@@ -43,6 +43,7 @@ class CostMapEntry(BaseModel):
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     supports_function_calling: bool | None = None
+    supports_none_reasoning_effort: bool | None = None
     input_cost_per_token: float | None = None
     input_cost_per_token_decisions: float | None = None
     input_cost_per_query: float | None = None
@@ -273,7 +274,6 @@ class CostTrackingTestCase(BaseModel):
     request: dict[str, JsonValue]
     response: StoredResponse
     expected: Expected
-    known_bug: str | None = None
     fallback_from: StoredResponse | None = None
     disconnect_after_frames: int | None = Field(default=None, ge=1)
     upstream_body: dict[str, JsonValue] | None = None
