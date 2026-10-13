@@ -265,6 +265,7 @@ class CostTrackingTestCase(BaseModel):
 
     name: str
     covers: str
+    known_bug: str | None = None
     model: str
     endpoint: (
         Literal[

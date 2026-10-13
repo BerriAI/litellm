@@ -15,6 +15,78 @@ from integration.cost_calculation.cost_tracking_case import (
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 from integration.cost_calculation.cases.misc import XAI_GROK_4_7_INPUT_TEXT
 
+XAI_GROK_4_7_STREAM: Final = CostTrackingTestCase(
+    name="xai-grok-4.7-stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="xai/grok-4.7",
+    known_bug="streamed xai responses bill the right total but the spend row splits it as input_cost 0 and output_cost = total: _stamp_streaming_usage_cost writes the stream total onto usage.cost and litellm/llms/xai/cost_calculator.py::cost_per_token reads usage.cost as an xAI reported price",
+    endpoint="/v1/chat/completions",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "cost tracking fixture"}],
+        "max_tokens": 412,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "id": "$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791861751,
+                "model": "grok-4.7",
+                "choices": [{"index": 0, "delta": {"content": "Hello", "role": "assistant"}}],
+                "system_fingerprint": "fp_c60958d81f66f847",
+                "service_tier": "default",
+            },
+            {
+                "id": "$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791861751,
+                "model": "grok-4.7",
+                "choices": [{"index": 0, "delta": {"content": "."}}],
+                "system_fingerprint": "fp_c60958d81f66f847",
+                "service_tier": "default",
+            },
+            {
+                "id": "$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791861751,
+                "model": "grok-4.7",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "system_fingerprint": "fp_c60958d81f66f847",
+                "service_tier": "default",
+            },
+            {
+                "id": "$REQUEST_ID",
+                "object": "chat.completion.chunk",
+                "created": 1791861751,
+                "model": "grok-4.7",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1840,
+                    "completion_tokens": 412,
+                    "total_tokens": 2252,
+                    "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+                    "completion_tokens_details": {
+                        "accepted_prediction_tokens": 0,
+                        "audio_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "rejected_prediction_tokens": 0,
+                    },
+                },
+                "system_fingerprint": "fp_c60958d81f66f847",
+                "service_tier": "default",
+            },
+            done=True,
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.006152, input_cost=0.00368, output_cost=0.002472, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
 XAI_GROK_4_7_TOOL_CALL: Final = CostTrackingTestCase(
     name="xai-grok-4.7-tool_call",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -219,6 +291,7 @@ XAI_GROK_4_7_TIERED_AT_200K_BOUNDARY: Final = with_usage(
 )
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    XAI_GROK_4_7_STREAM,
     XAI_GROK_4_7_TOOL_CALL,
     XAI_GROK_4_7_REASONING,
     XAI_GROK_4_7_CACHE_READ,
