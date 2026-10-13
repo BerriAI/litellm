@@ -404,6 +404,9 @@ def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_pat
         ("updated", "normal"),
         ("tools", "revoked"),
         ("tools", "identity"),
+        ("tools", "team"),
+        ("tools", "org"),
+        ("tools", "end-user"),
         ("tools", "idle"),
         ("tools", "hidden"),
         ("tools", "upstream-ended"),
@@ -470,6 +473,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         "    return UserAPIKeyAuth.model_validate_json(Path(__file__).with_suffix('.json').read_text())\n"
     )
     identity: Final = {
+        "api_key": "sk-subscriptions-test",
         "user_id": "alice",
         "user_role": "internal_user",
         "object_permission": {
@@ -555,10 +559,18 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                             assert listener_credentials == [None, None], (
                                 "Unscoped caller credential reached multiple upstreams"
                             )
-                        if access in ("revoked", "identity", "idle"):
+                        if access in ("revoked", "identity", "team", "org", "end-user", "idle"):
                             changed_identity = (
-                                {**identity, "user_id": "bob"}
-                                if access == "identity"
+                                {
+                                    **identity,
+                                    {
+                                        "identity": "user_id",
+                                        "team": "team_id",
+                                        "org": "org_id",
+                                        "end-user": "end_user_id",
+                                    }[access]: "bob",
+                                }
+                                if access in ("identity", "team", "org", "end-user")
                                 else {
                                     **identity,
                                     "object_permission": {
@@ -578,7 +590,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                                 direct.adopt(DiscoverResult.model_validate(await direct.send_discover("2026-07-28")))
                                 changed = await direct.call_tool("change_tools", {})
                                 assert not changed.is_error
-                        if access in ("revoked", "identity", "idle", "upstream-ended"):
+                        if access in ("revoked", "identity", "team", "org", "end-user", "idle", "upstream-ended"):
                             with pytest.raises((SubscriptionLost, StopAsyncIteration)):
                                 await asyncio.wait_for(anext(subscription), 5)
                             assert await asyncio.to_thread(disconnected.wait, 3)

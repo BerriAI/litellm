@@ -1012,12 +1012,20 @@ if MCP_AVAILABLE:
             owner: Final = _owner_fingerprint_for(
                 initial.user_api_key_auth, dict(initial.oauth2_headers or {}), initial.client_ip
             )
+            caller: Final = initial.user_api_key_auth
+            identity: Final = (
+                (caller.user_id, caller.team_id, caller.org_id, caller.end_user_id) if caller is not None else None
+            )
 
             async def authorize() -> OperationContext:
                 auth, token, servers, server_headers, oauth_headers, headers = await extract_mcp_auth_context(
                     request.scope, request.url.path
                 )
-                if _owner_fingerprint_for(auth, oauth_headers, initial.client_ip) != owner:
+                current_identity: Final = (auth.user_id, auth.team_id, auth.org_id, auth.end_user_id)
+                if (
+                    current_identity != identity
+                    or _owner_fingerprint_for(auth, oauth_headers, initial.client_ip) != owner
+                ):
                     raise HTTPException(status_code=403, detail="Subscription caller changed")
                 return operations.prepare_context(
                     auth,
