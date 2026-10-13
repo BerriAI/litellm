@@ -562,6 +562,7 @@ async def spend_user_fn(
 )
 async def view_spend_tags(
     log_team_lookup: LogTeamLookupDependency,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: str | None = fastapi.Query(
         default=None,
         description="Time from which to start viewing key spend",
@@ -570,7 +571,6 @@ async def view_spend_tags(
         default=None,
         description="Time till which to view key spend",
     ),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     LiteLLM Enterprise - View Spend Per Request Tag
