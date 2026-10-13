@@ -75,14 +75,14 @@ TOOL_PARAMS: Final = tuple(
         id=p.id,
         marks=(
             meta(
-            Subject(
-                domain=Domain.LLM_TRANSLATION,
-                route=Route.REALTIME,
-                providers=(Provider(p.id),),
-                models=(p.litellm_params.model,),
-                capabilities=(Capability.FUNCTION_CALLING,),
-                mode=Mode.WEBSOCKET,
-            )
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.REALTIME,
+                    providers=(Provider(p.id),),
+                    models=(p.litellm_params.model,),
+                    capabilities=(Capability.FUNCTION_CALLING,),
+                    mode=Mode.WEBSOCKET,
+                )
             ),
             *((BEDROCK_TOOL_COVERS,) if p.id == "bedrock" else ()),
         ),

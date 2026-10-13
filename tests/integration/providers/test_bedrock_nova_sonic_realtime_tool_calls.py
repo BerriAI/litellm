@@ -7,6 +7,9 @@ serve those triples from ``_support/bedrock_realtime_peer.py`` (the transport th
 dials: ``AWSCRTHTTPClient`` -> TLS ALPN h2 -> invoke-with-bidirectional-stream) and assert both
 sides: the OpenAI realtime events the websocket client receives, and the toolSpec / toolResult
 documents the proxy forwarded to the peer.
+
+The file boots its own proxy instead of the shared gateway so it can pass ``SSL_CERT_FILE``
+pointing at the peer's self-signed cert, which is the only way the CRT h2 client trusts it.
 """
 
 from __future__ import annotations
@@ -15,7 +18,8 @@ import asyncio
 import json
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from contextlib import asynccontextmanager
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
@@ -138,10 +142,14 @@ def _tool_result(call_id: str) -> str:
     )
 
 
+Event = dict[str, JsonValue]
+EventPredicate = Callable[[Event, tuple[Event, ...]], bool]
+
+
 async def _events_until(
-    socket: ClientConnection, predicate, *, timeout: float = 60
-) -> tuple[dict[str, JsonValue], ...]:
-    collected: Final[list[dict[str, JsonValue]]] = []
+    socket: ClientConnection, predicate: EventPredicate, *, timeout: float = 60
+) -> tuple[Event, ...]:
+    collected: Final[list[Event]] = []
     deadline: Final = time.monotonic() + timeout
     while True:
         try:
@@ -154,33 +162,35 @@ async def _events_until(
             return tuple(collected)
 
 
-def _is_done(events: tuple[dict[str, JsonValue], ...]) -> bool:
+def _is_done(events: tuple[Event, ...]) -> bool:
     return any(event.get("type") == "response.done" for event in events)
 
 
-def _function_calls(events: tuple[dict[str, JsonValue], ...]) -> tuple[dict[str, JsonValue], ...]:
+def _function_calls(events: tuple[Event, ...]) -> tuple[Event, ...]:
     return tuple(event for event in events if event.get("type") == "response.function_call_arguments.done")
 
 
-def _response_dones(events: tuple[dict[str, JsonValue], ...]) -> tuple[dict[str, JsonValue], ...]:
+def _response_dones(events: tuple[Event, ...]) -> tuple[Event, ...]:
     return tuple(event for event in events if event.get("type") == "response.done")
 
 
-def _done_ids(events: tuple[dict[str, JsonValue], ...]) -> tuple[str, ...]:
+def _done_ids(events: tuple[Event, ...]) -> tuple[str, ...]:
     return tuple(string_value(object_value(event["response"])["id"]) for event in _response_dones(events))
 
 
-def _tail_types(events: tuple[dict[str, JsonValue], ...]) -> tuple[str, ...]:
+def _tail_types(events: tuple[Event, ...]) -> tuple[str, ...]:
     """Event types from the first response.created onward."""
     start: Final = next(index for index, event in enumerate(events) if event.get("type") == "response.created")
     return tuple(string_value(event["type"]) for event in events[start:])
 
 
-def _connect(gateway: Gateway, model: str, key: str):
+@asynccontextmanager
+async def _realtime(gateway: Gateway, model: str, key: str) -> AsyncIterator[ClientConnection]:
     proxy: Final = str(gateway.client.base_url).rstrip("/").replace("http://", "ws://")
-    return websockets.connect(
+    async with websockets.connect(
         f"{proxy}/v1/realtime?model={model}", additional_headers={"Authorization": f"Bearer {key}"}
-    )
+    ) as socket:
+        yield socket
 
 
 async def _open_session(socket: ClientConnection, tool: Mapping[str, JsonValue]) -> None:
@@ -191,16 +201,10 @@ async def _open_session(socket: ClientConnection, tool: Mapping[str, JsonValue])
     await socket.send(_RESPONSE_CREATE)
 
 
-async def _one_call_session(proxy_url: str, model: str, key: str, tool) -> tuple[dict[str, JsonValue], ...]:
-    async with websockets.connect(
-        f"{proxy_url}/v1/realtime?model={model}", additional_headers={"Authorization": f"Bearer {key}"}
-    ) as socket:
+async def _one_call_session(gateway: Gateway, model: str, key: str, tool: Mapping[str, JsonValue]) -> tuple[Event, ...]:
+    async with _realtime(gateway, model, key) as socket:
         await _open_session(socket, tool)
         return await _events_until(socket, lambda _event, events: _is_done(events))
-
-
-def _ws_url(gateway: Gateway) -> str:
-    return str(gateway.client.base_url).rstrip("/").replace("http://", "ws://")
 
 
 def test_nested_tool_call_before_assistant_block(candidate: Gateway, cert: tuple[Path, Path]) -> None:
@@ -210,7 +214,7 @@ def test_nested_tool_call_before_assistant_block(candidate: Gateway, cert: tuple
     with bedrock_realtime_peer((turn,), cert) as peer, candidate.scenario() as scenario:
         model: Final = _deployment(candidate, scenario, peer)
         key: Final = scenario.key()
-        events: Final = asyncio.run(_one_call_session(_ws_url(candidate), model, key, NESTED_TOOL))
+        events: Final = asyncio.run(_one_call_session(candidate, model, key, NESTED_TOOL))
         assert _tail_types(events) == (
             "response.created",
             "response.output_item.added",
@@ -241,7 +245,7 @@ def test_flat_tool_shape(candidate: Gateway, cert: tuple[Path, Path]) -> None:
     with bedrock_realtime_peer((turn,), cert) as peer, candidate.scenario() as scenario:
         model: Final = _deployment(candidate, scenario, peer)
         key: Final = scenario.key()
-        events: Final = asyncio.run(_one_call_session(_ws_url(candidate), model, key, FLAT_TOOL))
+        events: Final = asyncio.run(_one_call_session(candidate, model, key, FLAT_TOOL))
         (call,) = _function_calls(events)
         assert string_value(call["call_id"]) == "tooluse_B"
         assert string_value(call["name"]) == "get_weather"
@@ -251,10 +255,8 @@ def test_flat_tool_shape(candidate: Gateway, cert: tuple[Path, Path]) -> None:
         assert json.loads(string_value(object_value(specs[0]["inputSchema"])["json"])) == WEATHER_PARAMETERS
 
 
-async def _tool_result_round_trip(proxy_url: str, model: str, key: str) -> tuple[dict[str, JsonValue], ...]:
-    async with websockets.connect(
-        f"{proxy_url}/v1/realtime?model={model}", additional_headers={"Authorization": f"Bearer {key}"}
-    ) as socket:
+async def _tool_result_round_trip(gateway: Gateway, model: str, key: str) -> tuple[Event, ...]:
+    async with _realtime(gateway, model, key) as socket:
         await _open_session(socket, NESTED_TOOL)
         first: Final = await _events_until(socket, lambda _event, events: _is_done(events))
         (call,) = _function_calls(first)
@@ -272,7 +274,7 @@ def test_tool_result_round_trip(candidate: Gateway, cert: tuple[Path, Path]) -> 
     with bedrock_realtime_peer(turns, cert) as peer, candidate.scenario() as scenario:
         model: Final = _deployment(candidate, scenario, peer)
         key: Final = scenario.key()
-        events: Final = asyncio.run(_tool_result_round_trip(_ws_url(candidate), model, key))
+        events: Final = asyncio.run(_tool_result_round_trip(candidate, model, key))
         dones: Final = _response_dones(events)
         assert len(dones) == 2, events
         first_id, second_id = _done_ids(events)
@@ -295,10 +297,8 @@ def test_tool_result_round_trip(candidate: Gateway, cert: tuple[Path, Path]) -> 
         assert any(row["call_type"] == "_arealtime" for row in rows), rows
 
 
-async def _two_call_session(proxy_url: str, model: str, key: str) -> tuple[dict[str, JsonValue], ...]:
-    async with websockets.connect(
-        f"{proxy_url}/v1/realtime?model={model}", additional_headers={"Authorization": f"Bearer {key}"}
-    ) as socket:
+async def _two_call_session(gateway: Gateway, model: str, key: str) -> tuple[Event, ...]:
+    async with _realtime(gateway, model, key) as socket:
         await _open_session(socket, NESTED_TOOL)
         events: Final[tuple[dict[str, JsonValue], ...]] = await _events_until(
             socket, lambda _event, collected: len(_response_dones(collected)) == 2
@@ -323,7 +323,7 @@ def test_two_tool_calls_one_turn(candidate: Gateway, cert: tuple[Path, Path]) ->
     with bedrock_realtime_peer(turns, cert) as peer, candidate.scenario() as scenario:
         model: Final = _deployment(candidate, scenario, peer)
         key: Final = scenario.key()
-        events: Final = asyncio.run(_two_call_session(_ws_url(candidate), model, key))
+        events: Final = asyncio.run(_two_call_session(candidate, model, key))
         calls: Final = _function_calls(events)
         assert len(calls) == 2, events
         assert tuple(string_value(call["call_id"]) for call in calls) == ("tooluse_A", "tooluse_B")
@@ -345,33 +345,16 @@ def test_two_tool_calls_one_turn(candidate: Gateway, cert: tuple[Path, Path]) ->
         assert "72" in text
 
 
-async def _collect_all(
-    socket: ClientConnection, count_dones: int, timeout: float = 60
-) -> tuple[dict[str, JsonValue], ...]:
-    return await _events_until(
-        socket, lambda _event, events: len(_response_dones(events)) >= count_dones, timeout=timeout
-    )
-
-
 def test_tool_call_inside_active_assistant_response(candidate: Gateway, cert: tuple[Path, Path]) -> None:
     start, output, _end = assistant_text("It is 72 and sunny")
     turn: Final = Turn(
         "user_input",
         (start, output) + tool_use("tooluse_C", "get_weather", '{"location":"New York"}') + (_end,),
     )
-
-    async def run() -> tuple[dict[str, JsonValue], ...]:
-        async with websockets.connect(
-            f"{_ws_url(candidate)}/v1/realtime?model={model_name}",
-            additional_headers={"Authorization": f"Bearer {key_value}"},
-        ) as socket:
-            await _open_session(socket, NESTED_TOOL)
-            return await _collect_all(socket, 1)
-
     with bedrock_realtime_peer((turn,), cert) as peer, candidate.scenario() as scenario:
-        model_name: Final = _deployment(candidate, scenario, peer)
-        key_value: Final = scenario.key()
-        events: Final = asyncio.run(run())
+        model: Final = _deployment(candidate, scenario, peer)
+        key: Final = scenario.key()
+        events: Final = asyncio.run(_one_call_session(candidate, model, key, NESTED_TOOL))
         created: Final = tuple(event for event in events if event.get("type") == "response.created")
         assert len(created) == 1, events
         response_id: Final = string_value(object_value(created[0]["response"])["id"])
@@ -391,7 +374,7 @@ def test_malformed_tool_content(candidate: Gateway, cert: tuple[Path, Path], con
     with bedrock_realtime_peer((turn,), cert) as peer, candidate.scenario() as scenario:
         model: Final = _deployment(candidate, scenario, peer)
         key: Final = scenario.key()
-        events: Final = asyncio.run(_one_call_session(_ws_url(candidate), model, key, NESTED_TOOL))
+        events: Final = asyncio.run(_one_call_session(candidate, model, key, NESTED_TOOL))
         (call,) = _function_calls(events)
         assert string_value(call["arguments"]) == (content if content is not None else "{}"), events
         healthy_turn: Final = Turn(
@@ -400,6 +383,6 @@ def test_malformed_tool_content(candidate: Gateway, cert: tuple[Path, Path], con
         with bedrock_realtime_peer((healthy_turn,), cert) as second_peer:
             healthy_model: Final = _deployment(candidate, scenario, second_peer)
             healthy_key: Final = scenario.key()
-            second: Final = asyncio.run(_one_call_session(_ws_url(candidate), healthy_model, healthy_key, NESTED_TOOL))
+            second: Final = asyncio.run(_one_call_session(candidate, healthy_model, healthy_key, NESTED_TOOL))
             (healthy_call,) = _function_calls(second)
             assert string_value(healthy_call["arguments"]) == '{"location":"Boston"}'

@@ -385,8 +385,6 @@ class _H2Session:
                 if event.stream_id not in self._ended:
                     for outbound in self._state.script.ready_events(self._state.inbound, decoded):
                         self._h2.send_data(event.stream_id, _outbound_chunk(outbound))
-                    if self._state.script.exhausted:
-                        self._end_stream(event.stream_id)
         elif isinstance(event, (h2.events.StreamEnded, h2.events.StreamReset)):
             self._close_stream(event.stream_id)
         elif isinstance(event, h2.events.ConnectionTerminated):
