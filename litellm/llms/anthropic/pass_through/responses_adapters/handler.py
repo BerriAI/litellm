@@ -4,10 +4,15 @@ Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 Used when the target model is an OpenAI or Azure model.
 """
 
-from collections.abc import AsyncIterator, Coroutine, Mapping
+from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
 from typing import Final, TypeAlias
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
     AllAnthropicToolsValues,
@@ -26,6 +31,7 @@ from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
+_BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 
@@ -42,6 +48,24 @@ def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: objec
     provider_model: Final = local_model_name(model, provider)
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(provider, provider_model)
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
+
+
+def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    return AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+        model,
+        provider if isinstance(provider, str) else None,
+        forwarded_kwargs.get("api_base") or forwarded_kwargs.get("base_url"),
+        forwarded_kwargs.get("prompt_cache_options"),
+    )
+
+
+def _blocks_with_prompt_cache_breakpoints(content: object) -> Sequence[Mapping[str, object]]:
+    """The content's blocks with each ``cache_control`` mark rewritten, empty when it is not a list of blocks."""
+    try:
+        return [cache_control_as_prompt_cache_breakpoint(block) for block in _BLOCK_LIST.validate_python(content)]
+    except ValidationError:
+        return ()
 
 
 def _build_responses_kwargs(
@@ -67,10 +91,28 @@ def _build_responses_kwargs(
     """
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
+    forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    reads_prompt_cache_breakpoint: Final = _reads_prompt_cache_breakpoint(model, forwarded_kwargs)
+    request_messages: Final[AnthropicRequestMessages] = (
+        [
+            {
+                **message,
+                "content": list(_blocks_with_prompt_cache_breakpoints(message.get("content")))
+                or message.get("content"),
+            }
+            for message in messages
+        ]
+        if reads_prompt_cache_breakpoint
+        else messages
+    )
+    request_system: Final = (
+        (list(_blocks_with_prompt_cache_breakpoints(system)) or system) if reads_prompt_cache_breakpoint else system
+    )
+
     # Build a typed AnthropicMessagesRequest for the adapter
     request_data: Final[AnthropicMessagesRequest] = {
         "model": model,
-        "messages": messages,
+        "messages": request_messages,
         "max_tokens": max_tokens,
     }
     if context_management:
@@ -79,8 +121,8 @@ def _build_responses_kwargs(
         request_data["output_config"] = output_config
     if metadata:
         request_data["metadata"] = metadata
-    if system:
-        request_data["system"] = system
+    if request_system:
+        request_data["system"] = request_system
     if temperature is not None:
         request_data["temperature"] = temperature
     if thinking:
@@ -95,7 +137,6 @@ def _build_responses_kwargs(
         request_data["output_format"] = output_format
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
-    forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
     responses_kwargs: Final = _ADAPTER.translate_request(
         anthropic_request,
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
@@ -126,7 +167,7 @@ def _build_responses_kwargs(
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = frozenset(("anthropic_messages",))
+    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages"}
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (

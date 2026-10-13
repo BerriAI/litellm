@@ -25,6 +25,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
 from litellm.types.proxy.guardrails.guardrail_hooks.compresr import (
     CompresrGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
+    DecisionModelCheck,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
@@ -72,6 +75,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.typesafe import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.wingback import (
+    WingbackGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
     XecGuardConfigModel,
@@ -153,6 +159,8 @@ class SupportedGuardrailIntegrations(Enum):
     AGENT_365 = "agent_365"
     LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
+    WINGBACK = "wingback"
+    DECISION_MODEL = "decision_model"
 
 
 class Role(Enum):
@@ -993,7 +1001,7 @@ def runtime_stream_scope(
     return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType(coerced)
 
 
-LoggingOnlyScope = Literal["input", "output", "both"]
+LoggingOnlyScope = Literal["input", "output"]
 
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
@@ -1137,9 +1145,11 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     skip_unscannable_attachments: bool | None = Field(
         default=False,
         description=(
-            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
-            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
-            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+            "Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the "
+            "guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are "
+            "references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still "
+            "governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, "
+            "and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them."
         ),
     )
     sanitize_error_detail: bool | None = Field(
@@ -1160,8 +1170,21 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
             "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
-            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. "
+            "Also implemented by guardrail='decision_model'."
         ),
+    )
+
+    max_input_chars: int | None = Field(
+        default=None,
+        gt=0,
+        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+    )
+
+    max_concurrent_decision_calls: int | None = Field(
+        default=None,
+        gt=0,
+        description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
     )
 
     extra_headers: list[str] | None = Field(
@@ -1254,8 +1277,18 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     logging_only_scope: LoggingOnlyScope | None = Field(
         default=None,
         description=(
-            "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' "
-            "(default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking."
+            "which direction a logging_only scan observes: 'input' (request) or 'output' (response); "
+            "unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the "
+            "same guardrail keep blocking."
+        ),
+    )
+
+    logging_only_continue_on_input_failure: bool | None = Field(
+        default=None,
+        description=(
+            "when True, a flagged or raising logging_only request scan is logged and the response is "
+            "still scanned, so both verdicts land. Only applies to mode logging_only and is ignored "
+            "when logging_only_scope is 'input' or 'output'."
         ),
     )
 
@@ -1323,8 +1356,20 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     ThirdlawGuardrailConfigModel,
     SingulrGuardrailConfigModel,
     Agent365GuardrailConfigModel,
+    WingbackGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
+    decision_model: str | None = Field(
+        default=None,
+        description="For guardrail='decision_model': the Decisions-API model that scores each check",
+    )
+    checks: BedrockChecksConfigModel | tuple[DecisionModelCheck, ...] | None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # widened to also accept decision-model checks
+        default=None,
+        description=(
+            "Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate "
+            "checks a decision_model guardrail scores for guardrail='decision_model'"
+        ),
+    )
     mode: str | list[str] | Mode = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
@@ -1348,6 +1393,14 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
         ):
             raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
+
+    @model_validator(mode="after")
+    def validate_checks_list_for_guardrail(self) -> "LitellmParams":
+        if isinstance(self.checks, tuple) and self.guardrail != SupportedGuardrailIntegrations.DECISION_MODEL.value:
+            raise ValueError(
+                f"checks as a list is only supported by guardrail='decision_model', got guardrail={self.guardrail!r}"
+            )
         return self
 
     def __init__(self, **kwargs) -> None:
@@ -1420,6 +1473,7 @@ class GuardrailUIAddGuardrailSettings(LiteLLMBaseModel):
     providers_without_directional_logging_only_scope: tuple[str, ...]
     pii_entity_categories: list[PiiEntityCategoryMap]
     content_filter_settings: dict[str, object] | None = None
+    decision_model_providers: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class PresidioPerRequestConfig(LiteLLMBaseModel):

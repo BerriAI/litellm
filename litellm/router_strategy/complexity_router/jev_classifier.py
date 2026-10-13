@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
 from uuid import uuid4
 
 import httpx
@@ -10,6 +10,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.internal_call_metadata import (
     effective_turn_off_message_logging,
     forwarded_internal_call_metadata,
@@ -18,16 +19,21 @@ from litellm.litellm_core_utils.internal_call_metadata import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG, is_ai_decide_model
 from litellm.llms.laya.common_utils import laya_response_model
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthrough_logging_handler import (
-    TypeSafePassthroughLoggingHandler,
-)
+from litellm.llms.pass_through.typesafe_logging_handler import TypeSafePassthroughLoggingHandler
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
+from litellm.types.decisions import DecisionsResponse
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
+ClassifierProvider: TypeAlias = Literal["typesafe", "laya", "bespoke", "databricks"]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
+_WITHOUT_MODEL: Final = MappingProxyType({"model": True})
 
 
 class JevChoiceQuestion(LiteLLMBaseModel):
@@ -67,6 +73,8 @@ class JevSystemOneResponse(LiteLLMBaseModel):
 
     model: str | None = None
     answers: Mapping[str, JevChoiceAnswer]
+    classifier_cost: float | None = None
+    classifier_provider: str | None = None
     usage: JevUsage | None = None
 
 
@@ -79,18 +87,88 @@ class JevClassifierClient(Protocol):
     ) -> JevSystemOneResponse: ...
 
 
+class _DecisionsRouter(Protocol):
+    async def adecisions(
+        self,
+        *,
+        model: str,
+        state: str,
+        questions: Mapping[str, object],
+        timeout: float,
+        num_retries: int,
+        disable_fallbacks: bool,
+        metadata: Mapping[str, object],
+        proxy_server_request: Mapping[str, object],
+        turn_off_message_logging: bool | None,
+        litellm_session_id: str = "",
+        litellm_trace_id: str = "",
+    ) -> object: ...
+
+
+_PARENT_METADATA: Final = TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None)
+
+
+class RouterJevClassifierClient:
+    def __init__(self, router: "Router", deployment_name: str) -> None:
+        self._router: _DecisionsRouter = router
+        self._deployment_name = deployment_name
+
+    async def evaluate(
+        self,
+        request: JevSystemOneRequest,
+        timeout_s: float,
+        request_kwargs: Mapping[str, object] | None = None,
+    ) -> JevSystemOneResponse:
+        parent: Final = request_kwargs or MappingProxyType({})
+        metadata: Final = {
+            **forwarded_internal_call_metadata(
+                _PARENT_METADATA.validate_python(parent.get("litellm_metadata") or parent.get("metadata")),
+                AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+            ),
+            INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+        }
+        payload: Final = {
+            "state": request.state,
+            "questions": {key: value.model_dump() for key, value in request.questions.items()},
+        }
+        response: Final = DecisionsResponse.model_validate(
+            await self._router.adecisions(
+                model=self._deployment_name,
+                state=request.state,
+                questions={key: value.model_dump() for key, value in request.questions.items()},
+                timeout=timeout_s,
+                num_retries=0,
+                disable_fallbacks=True,
+                metadata=metadata,
+                proxy_server_request={
+                    "originating_request_masked": masked_originating_request(request_kwargs),
+                    "body": {"model": self._deployment_name, **payload},
+                },
+                turn_off_message_logging=effective_turn_off_message_logging(request_kwargs),
+                **parent_session_kwargs(request_kwargs),
+            )
+        )
+        return JevSystemOneResponse.model_validate(
+            {
+                **response.model_dump(),
+                "classifier_cost": response.hidden_params.get("response_cost"),
+                "classifier_provider": response.hidden_params.get("custom_llm_provider"),
+            }
+        )
+
+
 class HttpJevClassifierClient:
     def __init__(
         self,
         api_key: str | None,
         api_base: str,
         http_client: AsyncHTTPHandler,
-        provider: Literal["typesafe", "laya", "bespoke"] = "typesafe",
+        provider: ClassifierProvider = "typesafe",
     ) -> None:
         self._api_key = api_key
         self._api_base = api_base.rstrip("/")
         self._http_client = http_client
-        self._provider = provider
+        self._provider: ClassifierProvider = provider
 
     async def evaluate(
         self,
@@ -103,33 +181,46 @@ class HttpJevClassifierClient:
             MappingProxyType({"Authorization": f"Bearer {self._api_key}"}) if self._api_key else MappingProxyType({})
         )
         response: Final = await self._http_client.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler has a dynamic post signature
-            f"{self._api_base}/v1/systemone",
-            json=request.model_dump(mode="json"),
+            self._request_url(request.model),
+            json=request.model_dump(mode="json", exclude=self._excluded_fields(request.model)),
             headers=MappingProxyType({**authorization, "Content-Type": "application/json"}),  # pyright: ignore[reportArgumentType]  # HTTP headers are not mutated by AsyncHTTPHandler
             timeout=timeout_s,
         )
         response.raise_for_status()
         body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
-        normalized_body: Final = (
-            MappingProxyType({**body, "model": laya_response_model(body, request.model)})
-            if self._provider == "laya"
-            else body
-        )
+        normalized_body: Final = self._normalized_body(body, request.model)
         try:
-            self._log_response(request, response, request_kwargs, start_time)
+            self._log_response(request, response, normalized_body, request_kwargs, start_time)
         except Exception as exc:  # noqa: BLE001  # logging integrations must not discard a provider verdict
             verbose_router_logger.warning("JEV response logging failed (%s)", type(exc).__name__)
         return TypeAdapter(JevSystemOneResponse).validate_python(normalized_body)
+
+    def _excluded_fields(self, model: str) -> Mapping[str, bool] | None:
+        return _WITHOUT_MODEL if self._provider == "databricks" and is_ai_decide_model(model) else None
+
+    def _request_url(self, model: str) -> str:
+        if self._provider == "databricks":
+            return DATABRICKS_DECISIONS_CONFIG.get_complete_url(self._api_base, model)
+        return f"{self._api_base}/v1/systemone"
+
+    def _normalized_body(self, body: Mapping[str, object], requested_model: str) -> Mapping[str, object]:
+        match self._provider:
+            case "laya":
+                return MappingProxyType({**body, "model": laya_response_model(body, requested_model)})
+            case "databricks":
+                return DATABRICKS_DECISIONS_CONFIG.classifier_response(body, requested_model)
+            case "typesafe" | "bespoke":
+                return body
 
     def _log_response(
         self,
         request: JevSystemOneRequest,
         response: httpx.Response,
+        body: Mapping[str, object],
         request_kwargs: Mapping[str, object] | None,
         start_time: datetime,
     ) -> None:
         try:
-            body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
             _ = TypeAdapter(JevUsage | None).validate_python(body.get("usage"))
         except ValidationError:
             return
@@ -202,7 +293,7 @@ class JevVerdict(NamedTuple):
     confidence: float
     model: str
     cost: float | None
-    provider: Literal["typesafe", "laya", "bespoke"] = "typesafe"
+    provider: str = "typesafe"
 
 
 class _RegistryPricing(LiteLLMBaseModel):
@@ -226,7 +317,7 @@ def build_jev_request(
 
 
 def jev_classifier_cost(
-    response: JevSystemOneResponse, configured_model: str, provider: Literal["typesafe", "laya", "bespoke"] = "typesafe"
+    response: JevSystemOneResponse, configured_model: str, provider: ClassifierProvider = "typesafe"
 ) -> float | None:
     usage: Final = response.usage
     if usage is None:

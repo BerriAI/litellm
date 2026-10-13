@@ -1,9 +1,11 @@
+import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import BaseModel
 
 import litellm
@@ -14,6 +16,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import ModelResponse
 
 
@@ -299,3 +302,66 @@ async def test_previous_response_id_without_instructions_carries_the_latest_ones
         ("user", [("text", "What about Osaka?")]),
     ]
     assert [block.text for block in anthropic.request.system] == [expected_system]
+
+
+def _anthropic_sse(*events: Mapping[str, object]) -> bytes:
+    return b"".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events
+    )
+
+
+def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_responses_stream",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-4-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Argentina "}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "won."}},
+                {"type": "content_block_stop", "index": 0},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    stream: Final = litellm.responses(
+        model="anthropic/claude-sonnet-4-5",
+        input="Who won the World Cup in 2022?",
+        max_output_tokens=100,
+        stream=True,
+        api_key="mock_api_key",
+    )
+    events: Final = tuple(stream)
+    event_types: Final = tuple(
+        event.type for index, event in enumerate(events) if index == 0 or event.type != events[index - 1].type
+    )
+    deltas: Final = "".join(event.delta for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA)
+    completed: Final = events[-1]
+
+    assert event_types == (
+        ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+        ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+    )
+    assert deltas == "Argentina won."
+    assert completed.response.status == "completed"
+    assert completed.response.output[0].content[0].text == "Argentina won."
