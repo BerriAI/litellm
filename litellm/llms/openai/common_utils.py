@@ -53,10 +53,10 @@ _OPENAI_API_HOST: Final[str] = "api.openai.com"
 
 
 class _ModelDumpable(Protocol):
-    def model_dump(self) -> dict[str, object]: ...
+    def model_dump(self) -> dict[str, object]: ...  # mutable-ok: pydantic model_dump returns a dict
 
 
-def model_dump_provider_response(response: _ModelDumpable) -> dict[str, object]:
+def model_dump_provider_response(response: _ModelDumpable) -> dict[str, object]:  # mutable-ok: callers need a dict
     if isinstance(response, BaseModel):
         return response.model_dump(exclude_unset=True)
     return response.model_dump()

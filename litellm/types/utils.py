@@ -2216,7 +2216,7 @@ class ModelResponseStream(ModelResponseBase):
             return self.dict()
 
 
-def _normalize_model_response_usage(usage: dict[str, object] | BaseModel) -> Usage:
+def _normalize_model_response_usage(usage: Mapping[str, object] | BaseModel) -> Usage:
     if isinstance(usage, dict):
         return Usage(**usage)
     dump: Final = usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()

@@ -9344,24 +9344,24 @@ def model_dump_with_preserved_fields(
         if field_name not in result and field_name in getattr(obj, "model_fields_set", ()):
             result[field_name] = getattr(obj, field_name)
 
-    choices: Final = cast(
+    choices: Final = cast(  # cast-ok: model_dump serializes choices as a list of dicts
         Sequence[dict[str, object]] | None,
         result.get("choices"),
     )
     if not choices:
         return result
 
-    obj_choices: Final = cast(
+    obj_choices: Final = cast(  # cast-ok: obj is duck-typed, choices is a list on ModelResponse
         Sequence[object],
         getattr(obj, "choices", ()),
     )
     for choice_obj, choice_dict in zip(obj_choices, choices):
         for sub_object, field_name in _PRESERVED_NONE_FIELDS:
-            sub_dict = cast(dict[str, object] | None, choice_dict.get(sub_object))
+            sub_dict = cast(dict[str, object] | None, choice_dict.get(sub_object))  # cast-ok: message and delta dump as dicts
             if sub_dict is None:
                 continue
             if field_name not in sub_dict:
-                sub_obj = cast(object | None, getattr(choice_obj, sub_object, None))
+                sub_obj = cast(object | None, getattr(choice_obj, sub_object, None))  # cast-ok: getattr on a duck-typed choice
                 if sub_obj is not None and hasattr(sub_obj, field_name):
                     sub_dict[field_name] = getattr(sub_obj, field_name)
 
