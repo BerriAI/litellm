@@ -9,6 +9,8 @@ preset_cache_key, the call to _set_preset_cache_key_in_kwargs() would fail with:
     TypeError: got multiple values for keyword argument 'preset_cache_key'
 """
 
+import asyncio
+
 import pytest
 
 
@@ -117,6 +119,33 @@ class TestPresetCacheKeyFix:
         from litellm.caching.caching import Cache
 
         assert Cache().prepare_explicit_cache_key("caller-selected") == "caller-selected"
+
+    def test_missing_auth_skips_sync_and_async_cache_reads_and_writes(self):
+        """An unresolved authenticated identity must bypass both cache paths."""
+        from litellm.caching.caching import Cache
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = Cache()
+        metadata = {"user_api_key_auth": UserAPIKeyAuth(user_id="user-a")}
+
+        cache.add_cache("sync-value", cache_key="caller-selected", metadata=metadata)
+        assert cache.get_cache(cache_key="caller-selected", metadata=metadata) is None
+
+        asyncio.run(cache.async_add_cache("async-value", cache_key="caller-selected", metadata=metadata))
+        assert asyncio.run(cache.async_get_cache(cache_key="caller-selected", metadata=metadata)) is None
+
+    def test_authenticated_explicit_cache_key_is_scoped_before_backend_access(self):
+        """Explicit keys must carry the trusted caller namespace before storage."""
+        from litellm.caching.caching import Cache
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = Cache()
+        metadata = {"user_api_key_auth": UserAPIKeyAuth(token="validated-token-a")}
+        scoped_key = cache.prepare_explicit_cache_key("caller-selected", metadata=metadata)
+
+        assert scoped_key is not None
+        assert scoped_key.startswith("caller:")
+        assert scoped_key.endswith(":caller-selected")
 
 
 if __name__ == "__main__":
