@@ -3713,12 +3713,13 @@ if __name__ == "__main__":
 
 
 @pytest.mark.asyncio
-async def test_websocket_turn_usage_counts_toward_project_itpm_and_otpm(rate_limiter):
+async def test_websocket_turn_usage_is_not_counted_twice_toward_project_itpm_and_otpm(rate_limiter):
     """
-    A native Responses WebSocket connection reserves project ITPM/OTPM at pre-call and
-    its turns log under their own call ids. Every turn's real usage must reach the
-    project counters, success and failure alike, and the disconnect must hand back
-    only the connection's estimate, never the turns' usage.
+    A native Responses WebSocket connection reserves project ITPM/OTPM at pre-call, and
+    each response.create frame is charged its own estimate before it is forwarded. The
+    turns that frame starts log under their own call ids, success and failure alike, and
+    must not count toward the project counters a second time. The disconnect hands back
+    only the connection's estimate.
     """
     handler, cache = rate_limiter
     api_key = hash_token("sk-ws-project-turns")
@@ -3765,7 +3766,17 @@ async def test_websocket_turn_usage_counts_toward_project_itpm_and_otpm(rate_lim
             },
         }
 
-    assert await counters() == (stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
+    async def charge_frame() -> None:
+        await handler.enforce_project_io_token_quota_for_frame(
+            user_api_key_dict=user_api_key_dict,
+            requested_model="bedrock_mantle/claude-opus",
+            estimated_input_tokens=9,
+            estimated_output_tokens=40,
+        )
+
+    await charge_frame()
+    reserved_and_one_frame = (stash.itpm_reserved_tokens + 9, stash.otpm_reserved_tokens + 40)
+    assert await counters() == reserved_and_one_frame
 
     await handler.async_log_success_event(
         kwargs={**turn_kwargs("turn-1"), "call_type": CallTypes.aresponses_websocket.value},
@@ -3779,17 +3790,18 @@ async def test_websocket_turn_usage_counts_toward_project_itpm_and_otpm(rate_lim
         start_time=datetime.now(),
         end_time=datetime.now(),
     )
-    assert await counters() == (stash.itpm_reserved_tokens + 30, stash.otpm_reserved_tokens + 7)
+    assert await counters() == reserved_and_one_frame
 
+    await charge_frame()
     await handler.async_log_failure_event(
         kwargs=turn_kwargs("turn-2", Usage(prompt_tokens=10, completion_tokens=3, total_tokens=13)),
         response_obj=None,
         start_time=datetime.now(),
         end_time=datetime.now(),
     )
-    assert await counters() == (stash.itpm_reserved_tokens + 40, stash.otpm_reserved_tokens + 10)
+    assert await counters() == (stash.itpm_reserved_tokens + 18, stash.otpm_reserved_tokens + 80)
 
     await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict=user_api_key_dict)
 
-    assert await counters() == (40, 10)
+    assert await counters() == (18, 80)
     assert stash.reservation_released is True

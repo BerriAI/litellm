@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -170,7 +170,7 @@ class _ProxyDBLogger(CustomLogger):
     ) -> None:
         budget_reservation: Final = _claim_budget_reservation(
             budget_reservation=user_api_key_dict.budget_reservation,
-            litellm_call_id=_RequestCallId.model_validate(request_data).litellm_call_id,
+            litellm_call_id=_request_call_id(_CALLBACK_DATA.validate_python(request_data)),
         )
         try:
             await _release_budget_reservation(budget_reservation=budget_reservation)
@@ -353,7 +353,7 @@ class _ProxyDBLogger(CustomLogger):
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation: Final = _claim_budget_reservation(
                 budget_reservation=_get_budget_reservation_from_metadata(metadata=metadata),
-                litellm_call_id=_RequestCallId.model_validate(kwargs).litellm_call_id,
+                litellm_call_id=_logged_call_id(_CALLBACK_DATA.validate_python(kwargs)),
             )
             if (
                 isinstance(completion_response, LiteLLMBatch)
@@ -706,10 +706,18 @@ def _get_budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dic
     return budget_reservation_from_metadata(metadata)
 
 
-class _RequestCallId(BaseModel):
-    model_config = ConfigDict(frozen=True)
+_CALLBACK_DATA: Final = TypeAdapter(Mapping[str, object])
 
-    litellm_call_id: str | None = None
+
+def _request_call_id(request_data: Mapping[str, object]) -> str | None:
+    from litellm.proxy.common_request_processing import request_litellm_call_id
+
+    return request_litellm_call_id(request_data)
+
+
+def _logged_call_id(kwargs: Mapping[str, object]) -> str | None:
+    call_id: Final = kwargs.get("litellm_call_id")
+    return call_id if isinstance(call_id, str) else None
 
 
 def _claim_budget_reservation(

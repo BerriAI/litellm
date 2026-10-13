@@ -4445,8 +4445,8 @@ async def test_post_call_failure_hook_releases_the_slot_the_proxy_call_id_owns_v
     logging_obj = await _admit_pass_through_with_client_call_id(handler, local_cache, user_api_key_dict)
 
     await handler.async_post_call_failure_hook(
-        request_data={"litellm_call_id": "proxy-call", "litellm_logging_obj": logging_obj},
-        original_exception=Exception("upstream unreachable"),
+        request_data={"litellm_call_id": "client-chosen-id", "litellm_logging_obj": logging_obj},
+        original_exception=Exception("rejected by a pre-call hook"),
         user_api_key_dict=user_api_key_dict,
     )
 

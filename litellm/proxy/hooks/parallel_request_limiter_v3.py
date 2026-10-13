@@ -742,11 +742,15 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
     return stash
 
 
-def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
+def _request_owner_call_id(data: Mapping[str, object]) -> str | None:
     from litellm.proxy.common_request_processing import request_litellm_call_id
 
+    return request_litellm_call_id(data)
+
+
+def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
     stash: Final = get_or_create_request_stash()
-    owner_call_id: Final = request_litellm_call_id(_REQUEST_RATE_LIMIT_DATA.validate_python(data))
+    owner_call_id: Final = _request_owner_call_id(_REQUEST_RATE_LIMIT_DATA.validate_python(data))
     if owner_call_id is not None:
         stash.owner_litellm_call_id = owner_call_id
     return stash
@@ -4739,7 +4743,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return ()
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
         if stash is None:
-            return self._build_websocket_turn_io_ops(kwargs, response_obj)
+            return ()
 
         itpm_reserved: Final = stash.itpm_reserved_tokens
         otpm_reserved: Final = stash.otpm_reserved_tokens
@@ -4804,59 +4808,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         return tuple((*itpm_ops, *otpm_ops))
 
-    def _websocket_turn_usage(self, kwargs: Mapping[str, object], response_obj: object) -> tuple[int, int, bool]:
-        response_usage: Final = self._resolve_io_token_reconcile_usage(response_obj)
-        if response_usage[2]:
-            return response_usage
-        return self._resolve_io_token_reconcile_usage(_unmodeled_response_usage(kwargs, response_obj))
-
-    def _build_websocket_turn_io_ops(
-        self,
-        kwargs: Mapping[str, object],
-        response_obj: object,
-    ) -> Sequence[RedisPipelineIncrementOperation]:
-        """
-        A native Responses WebSocket turn logs under its own call id, so no
-        stash is its own. The connection's stash, inherited through the
-        context, names the project ITPM/OTPM scopes the turn's usage counts
-        toward; the connection's reservation itself is refunded at disconnect.
-        """
-        connection: Final = get_request_stash()
-        if connection is None or not connection.websocket_connection:
-            return []
-        billable_input, completion_tokens, usage_resolved = self._websocket_turn_usage(kwargs, response_obj)
-        if not usage_resolved:
-            return []
-        return self._build_reservation_aware_tpm_ops(
-            targets=tuple(connection.itpm_reserved_scopes),
-            reserved_scopes=frozenset(),
-            actual_tokens=billable_input,
-            reserved_tokens=0,
-        ) + self._build_reservation_aware_tpm_ops(
-            targets=tuple(connection.otpm_reserved_scopes),
-            reserved_scopes=frozenset(),
-            actual_tokens=completion_tokens,
-            reserved_tokens=0,
-        )
-
     async def _charge_websocket_turn_usage(
         self,
         kwargs: Mapping[str, object],
         response_obj: object,
         parent_otel_span: Span | None,
     ) -> None:
-        """A failed turn still consumed the usage its failure event reports; count it the way a success does."""
+        """
+        A failed turn still consumed the usage its failure event reports; count it toward TPM the way a
+        success does. Project ITPM/OTPM already charged the turn's ``response.create`` frame estimate.
+        """
         connection: Final = get_request_stash()
         if connection is None or not connection.websocket_connection:
             return
-        pipeline_operations: Final = [
-            *self._build_success_event_pipeline_operations(
-                kwargs=dict(kwargs),
-                response_obj=response_obj,
-                rate_limit_type=self.get_rate_limit_type(),
-            ),
-            *self._build_websocket_turn_io_ops(kwargs, response_obj),
-        ]
+        pipeline_operations: Final = self._build_success_event_pipeline_operations(
+            kwargs=dict(kwargs),
+            response_obj=response_obj,
+            rate_limit_type=self.get_rate_limit_type(),
+        )
         if pipeline_operations:
             await self.async_increment_tokens_with_ttl_preservation(
                 pipeline_operations=pipeline_operations,
@@ -5493,7 +5462,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         try:
             failed_request: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(request_data)
-            stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(failed_request))
+            stash: Final = get_request_stash_for_call(_request_owner_call_id(failed_request))
             if stash is None:
                 return
             await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)

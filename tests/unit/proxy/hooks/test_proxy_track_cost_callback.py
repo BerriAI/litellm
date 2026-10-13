@@ -3092,3 +3092,34 @@ async def test_async_post_call_failure_hook_releases_a_shared_reservation_for_th
         is user_api_key_dict.budget_reservation
     )
     assert user_api_key_dict.budget_reservation["settling_call_id"] == "turn-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_call_id", [12345, ["a", "b"], {"x": 1}])
+async def test_async_post_call_failure_hook_writes_the_failure_row_for_a_non_string_body_call_id(client_call_id):
+    """A rejected request's body is the client's, so its litellm_call_id can be any JSON value. The failure
+    row must still be written and the reservation released."""
+    logger = ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key", budget_reservation={"reserved_cost": 0.5, "entries": []}
+    )
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_release_budget_reservation,
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+    ):
+        await logger.async_post_call_failure_hook(
+            request_data={"model": "gpt-5.4-mini", "litellm_call_id": client_call_id},
+            original_exception=Exception("Authentication Error"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    released = mock_release_budget_reservation.await_args.kwargs["budget_reservation"]
+    assert released is user_api_key_dict.budget_reservation
+    assert mock_update_database.call_args.kwargs["kwargs"]["litellm_params"]["metadata"]["status"] == "failure"
