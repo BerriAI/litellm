@@ -2845,3 +2845,57 @@ class TestConverseTextsRebuiltFromRows:
 
         assert guard.received[-1]["texts"] == ["Look up booking 42.", "booking 42", "paid with 4111 1111 1111 1111"]
         assert result["data"] == expected
+
+
+def _card_rows_masked(inputs: GenericGuardrailAPIInputs) -> list:
+    return json.loads(json.dumps(inputs["structured_messages"]).replace("4111 1111 1111 1111", "****"))
+
+
+def _system_and_user_card_data() -> dict:
+    return {
+        "endpoint": "model/anthropic.claude-sonnet/converse",
+        "custom_llm_provider": "bedrock",
+        "data": {
+            "system": [{"text": "Card 4111 1111 1111 1111 on file."}],
+            "messages": [{"role": "user", "content": [{"text": "My card is 4111 1111 1111 1111."}]}],
+        },
+    }
+
+
+class TestConverseTextsNextToRewrittenRows:
+    @pytest.mark.asyncio
+    async def test_shorter_texts_give_way_to_the_rewritten_rows(self):
+        guard = _ScriptedGuardrail(
+            lambda inputs: {"texts": ["Card [CARD] on file."], "structured_messages": _card_rows_masked(inputs)}
+        )
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(_system_and_user_card_data(), guard)
+
+        assert result["data"]["system"] == [{"text": "Card **** on file."}]
+        assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "My card is ****."}]}]
+
+    @pytest.mark.asyncio
+    async def test_texts_that_empty_a_row_give_way_to_the_rewritten_rows(self):
+        guard = _ScriptedGuardrail(
+            lambda inputs: {"texts": ["", "My card is ****."], "structured_messages": _card_rows_masked(inputs)}
+        )
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(_system_and_user_card_data(), guard)
+
+        assert result["data"]["system"] == [{"text": "Card **** on file."}]
+        assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "My card is ****."}]}]
+
+    @pytest.mark.asyncio
+    async def test_texts_mask_wins_on_a_row_the_vendor_also_changed_after_a_skipped_system_prompt(self):
+        guard = _ScriptedGuardrail(
+            lambda inputs: {"texts": _masked_texts(inputs), "structured_messages": _card_rows_masked(inputs)},
+            skip_system=True,
+        )
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(_system_and_user_card_data(), guard)
+
+        assert guard.received[-1]["texts"] == ["My card is 4111 1111 1111 1111."]
+        assert result["data"]["system"] == [{"text": "Card 4111 1111 1111 1111 on file."}]
+        assert result["data"]["messages"] == [
+            {"role": "user", "content": [{"text": "My card is [CARD] 1111 1111 1111."}]}
+        ]
