@@ -7445,6 +7445,43 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             {"meta": {"source": "change-request"}},
             id="inner_object_without_schema_keys",
         ),
+        pytest.param(_RISK_SCHEMA, {"parameter": {"value": _RISK_OBJECT}}, _RISK_OBJECT, id="two_single_key_wrappers"),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"invoke": {"parameter": {"value": _RISK_OBJECT}}},
+            _RISK_OBJECT,
+            id="three_single_key_wrappers",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"function_calls": {"invoke": {"parameter": {"value": _RISK_OBJECT}}}},
+            {"function_calls": {"invoke": {"parameter": {"value": _RISK_OBJECT}}}},
+            id="four_single_key_wrappers_stay",
+        ),
+        pytest.param(
+            _NAMED_BOOK_SCHEMA,
+            {"input": {"parameters": _NAMED_BOOK}},
+            {"input": {"parameters": _NAMED_BOOK}},
+            id="second_wrapper_named_like_a_schema_property_stays",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter": {"value": _RISK_OBJECT, "type": "object"}},
+            {"parameter": {"value": _RISK_OBJECT, "type": "object"}},
+            id="second_level_with_two_keys_stays",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter": {"value": {"tier": 3}}},
+            {"parameter": {"value": {"tier": 3}}},
+            id="doubly_wrapped_object_missing_required_key",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter": {"value": [_RISK_OBJECT]}},
+            {"parameter": {"value": [_RISK_OBJECT]}},
+            id="doubly_wrapped_list_stays",
+        ),
         pytest.param(
             {"type": "object", "properties": {}, "additionalProperties": True},
             {"input": _RISK_OBJECT},

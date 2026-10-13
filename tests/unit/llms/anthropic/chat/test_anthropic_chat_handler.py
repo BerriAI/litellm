@@ -2909,6 +2909,31 @@ def test_streamed_json_mode_foreign_name_envelope_is_unwrapped_like_the_non_stre
     assert unwrap_response_format_envelope(json.loads(envelope), schema, RESPONSE_FORMAT_TOOL_NAME) == _STREAMED_PERSON
 
 
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        pytest.param({"parameter": {"value": _STREAMED_RISK_OBJECT}}, _STREAMED_RISK_OBJECT, id="two_wrappers"),
+        pytest.param(
+            {"function_calls": {"invoke": {"parameter": {"value": _STREAMED_RISK_OBJECT}}}},
+            {"function_calls": {"invoke": {"parameter": {"value": _STREAMED_RISK_OBJECT}}}},
+            id="four_wrappers_stay",
+        ),
+    ],
+)
+def test_streamed_json_mode_nested_wrappers_end_like_the_non_streamed_answer(
+    answer: dict[str, object], expected: dict[str, object]
+):
+    envelope: Final = json.dumps(answer)
+    schema: Final = response_format_schema(_STREAMED_RISK_SCHEMA)
+    assert schema is not None
+
+    contents: Final = _streamed_json_mode_contents((envelope[:9], envelope[9:40], envelope[40:]))
+
+    assert json.loads("".join(contents)) == expected
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+    assert unwrap_response_format_envelope(json.loads(envelope), schema, RESPONSE_FORMAT_TOOL_NAME) == expected
+
+
 @respx.mock
 def test_anthropic_streaming_function_call_arguments_are_assembled(
     monkeypatch: pytest.MonkeyPatch,

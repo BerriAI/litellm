@@ -225,6 +225,20 @@ def _tool_call_envelope_payload(
     return other_values[0]
 
 
+_MAX_WRAPPER_DEPTH: Final = 3
+
+
+def _schema_object_under_single_key_wrappers(
+    value: Mapping[str, JsonValue], schema: ResponseFormatSchema, wrappers_left: int
+) -> Mapping[str, JsonValue] | None:
+    if not schema.property_names.isdisjoint(value):
+        return value if _is_schema_object(value, schema) else None
+    if wrappers_left == 0 or len(value) != 1:
+        return None
+    nested: Final = as_json_object(next(iter(value.values())))
+    return None if nested is None else _schema_object_under_single_key_wrappers(nested, schema, wrappers_left - 1)
+
+
 def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
     payload_object: Final = as_json_object(payload)
     if payload_object is None:
@@ -240,7 +254,10 @@ def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchem
     candidates: Final = tuple(
         nested for nested in nested_objects if nested is not None and _is_schema_object(nested, schema)
     )
-    return candidates[0] if len(candidates) == 1 else payload
+    if len(candidates) == 1:
+        return candidates[0]
+    wrapped_object: Final = _schema_object_under_single_key_wrappers(payload_object, schema, _MAX_WRAPPER_DEPTH)
+    return payload if wrapped_object is None else wrapped_object
 
 
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:
