@@ -3343,13 +3343,13 @@
     },
     "azure/ada": {
         "deprecation_date": "2028-02-09",
-        "input_cost_per_token": 1e-07,
+        "input_cost_per_token": 1.1e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 8191,
         "max_tokens": 8191,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/codex-mini": {
         "cache_read_input_token_cost": 3.75e-07,
@@ -5235,12 +5235,13 @@
         "supports_tool_choice": true
     },
     "azure/gpt-3.5-turbo-instruct-0914": {
-        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token": 1.65e-06,
         "litellm_provider": "azure_text",
         "max_input_tokens": 4097,
         "max_tokens": 4097,
         "mode": "completion",
-        "output_cost_per_token": 2e-06
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/gpt-35-turbo": {
         "input_cost_per_token": 5e-07,
@@ -5279,20 +5280,22 @@
         "supports_tool_choice": true
     },
     "azure/gpt-35-turbo-instruct": {
-        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token": 1.65e-06,
         "litellm_provider": "azure_text",
         "max_input_tokens": 4097,
         "max_tokens": 4097,
         "mode": "completion",
-        "output_cost_per_token": 2e-06
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/gpt-35-turbo-instruct-0914": {
-        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token": 1.65e-06,
         "litellm_provider": "azure_text",
         "max_input_tokens": 4097,
         "max_tokens": 4097,
         "mode": "completion",
-        "output_cost_per_token": 2e-06
+        "output_cost_per_token": 2.2e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/gpt-4": {
         "deprecation_date": "2025-06-06",
@@ -5369,38 +5372,41 @@
         "supports_tool_choice": true
     },
     "azure/gpt-4-turbo": {
-        "input_cost_per_token": 1e-05,
+        "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3e-05,
+        "output_cost_per_token": 3.3e-05,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true
     },
     "azure/gpt-4-turbo-2024-04-09": {
-        "input_cost_per_token": 1e-05,
+        "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3e-05,
+        "output_cost_per_token": 3.3e-05,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
     "azure/gpt-4-turbo-vision-preview": {
-        "input_cost_per_token": 1e-05,
+        "input_cost_per_token": 1.1e-05,
         "litellm_provider": "azure",
         "max_input_tokens": 128000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
-        "output_cost_per_token": 3e-05,
+        "output_cost_per_token": 3.3e-05,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/",
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -11064,33 +11070,33 @@
     },
     "azure/text-embedding-3-large": {
         "deprecation_date": "2028-02-09",
-        "input_cost_per_token": 1.3e-07,
+        "input_cost_per_token": 1.43e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/text-embedding-3-small": {
         "deprecation_date": "2028-02-09",
-        "input_cost_per_token": 2e-08,
+        "input_cost_per_token": 2.2e-08,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/text-embedding-ada-002": {
         "deprecation_date": "2028-02-09",
-        "input_cost_per_token": 1e-07,
+        "input_cost_per_token": 1.1e-07,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/speech/azure-tts": {
         "input_cost_per_character": 1.5e-05,
@@ -11123,9 +11129,10 @@
     },
     "azure/tts-1-hd": {
         "deprecation_date": "2026-12-15",
-        "input_cost_per_character": 3e-05,
+        "input_cost_per_character": 3.3e-05,
         "litellm_provider": "azure",
-        "mode": "audio_speech"
+        "mode": "audio_speech",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/azure-openai/"
     },
     "azure/us/gpt-4.1-2025-04-14": {
         "deprecation_date": "2027-04-14",
