@@ -46,7 +46,8 @@ ROOT: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).re
 RATES: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
 ONE_CALL_COST: Final = 0.06
 INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
-REDIS_SETTINGS: Final = frozenset({"cache", "cache_params", "enable_redis_auth_cache"})
+REDIS_AUTH_CACHE_SETTING: Final = frozenset({"enable_redis_auth_cache"})
+REDIS_SETTINGS: Final = frozenset({"cache", "cache_params", *REDIS_AUTH_CACHE_SETTING})
 SEEDED_COUNTERS: Final = 1200
 SETTLE_SECONDS: Final = 20
 BROADCAST_SECONDS: Final = 10
@@ -146,28 +147,57 @@ class Isolated:
     log: Path
 
 
+def _pod_environment(database_url: str, redis: OwnedRedis) -> Mapping[str, str]:
+    return {
+        "DATABASE_URL": database_url,
+        "REDIS_HOST": redis.host,
+        "REDIS_PORT": str(redis.port),
+        "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "2",
+    }
+
+
 @contextmanager
-def _isolated(gateway: Gateway, directory: Path, *, workers: int = 1) -> Iterator[Isolated]:
+def _isolated(
+    gateway: Gateway,
+    directory: Path,
+    *,
+    workers: int = 1,
+    settings: tuple[tuple[str, str], ...] = (),
+    config: Path | None = None,
+) -> Iterator[Isolated]:
     with scratch_database() as database_url, owned_redis(directory) as redis:
-        overrides: Final[Mapping[str, str]] = {
-            "DATABASE_URL": database_url,
-            "REDIS_HOST": redis.host,
-            "REDIS_PORT": str(redis.port),
-            "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "2",
-        }
+        overrides: Final[Mapping[str, str]] = {**_pod_environment(database_url, redis), **dict(settings)}
         with (
             owned_proxy_process(
-                gateway, directory, overrides, workers=workers, remove_environment=("DATABASE_URL_READ_REPLICA",)
+                gateway,
+                directory,
+                overrides,
+                workers=workers,
+                config=config,
+                remove_environment=("DATABASE_URL_READ_REPLICA",),
             ) as owned,
             Redis(host=redis.host, port=redis.port) as cache,
         ):
             yield Isolated(owned.gateway, cache, redis, database_url, owned.log)
 
 
-def _config_without_redis(directory: Path) -> Path:
+@contextmanager
+def _second_pod(gateway: Gateway, directory: Path, isolated: Isolated, config: Path) -> Iterator[Gateway]:
+    with owned_proxy_process(
+        gateway,
+        directory,
+        _pod_environment(isolated.database_url, isolated.redis),
+        config=config,
+        database_setup=(),
+        remove_environment=("DATABASE_URL_READ_REPLICA",),
+    ) as owned:
+        yield owned.gateway
+
+
+def _config_without(directory: Path, dropped: frozenset[str]) -> Path:
     shared: Final = object_value(yaml.safe_load((ROOT / "tests/integration/proxy_config.yaml").read_text()))
     litellm_settings: Final = {
-        name: value for name, value in object_value(shared["litellm_settings"]).items() if name not in REDIS_SETTINGS
+        name: value for name, value in object_value(shared["litellm_settings"]).items() if name not in dropped
     }
     path: Final = directory / f"proxy_config_{uuid.uuid4().hex}.yaml"
     path.write_text(yaml.safe_dump({**shared, "litellm_settings": litellm_settings}, sort_keys=False))
@@ -182,7 +212,7 @@ def _isolated_without_redis(gateway: Gateway, directory: Path) -> Iterator[tuple
             gateway,
             directory,
             {"DATABASE_URL": database_url},
-            config=_config_without_redis(directory),
+            config=_config_without(directory, REDIS_SETTINGS),
             remove_environment=("REDIS_HOST", "REDIS_PORT", "DATABASE_URL_READ_REPLICA"),
         ) as owned,
     ):
@@ -416,7 +446,8 @@ def test_a_global_spend_reset_zeroes_every_key_counter_past_one_scan_page_and_br
 ) -> None:
     with _isolated(gateway, tmp_path) as isolated:
         stem: Final = f"spend:key:audit-{uuid.uuid4().hex}"
-        counters: Final = tuple(f"{stem}-{index}" for index in range(SEEDED_COUNTERS))
+        team_named_like_a_window: Final = f"spend:team:audit-{uuid.uuid4().hex}:window:prod"
+        counters: Final = (*(f"{stem}-{index}" for index in range(SEEDED_COUNTERS)), team_named_like_a_window)
         windows: Final = tuple(f"{stem}-w{index}:window:1d" for index in range(3))
         with isolated.cache.pipeline() as pipeline:
             for name in (*counters, *windows):
@@ -440,28 +471,53 @@ def test_a_global_spend_reset_zeroes_every_key_counter_past_one_scan_page_and_br
 
 
 @pytest.mark.timeout(CELL_TIMEOUT)
-def test_a_worker_that_cached_the_pre_reset_floor_admits_the_next_request_after_a_global_reset(
+def test_a_global_spend_reset_with_a_redis_batch_size_of_one_resets_and_fences_every_counter(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with (
-        _isolated(gateway, tmp_path, workers=2) as isolated,
+        _isolated(gateway, tmp_path, settings=(("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", "1"),)) as isolated,
         isolated.gateway.scenario() as scenario,
-        httpx.Client(base_url=str(isolated.gateway.client.base_url), timeout=60) as pinned,
+    ):
+        model: Final = scenario.model(**RATES)
+        key: Final = scenario.key(models=[model], max_budget=ONE_CALL_COST)
+        counter: Final = _exhaust(isolated.gateway, isolated.cache, isolated.database_url, model, key)
+        seeded: Final = tuple(f"spend:key:audit-{uuid.uuid4().hex}" for _ in range(2))
+        with isolated.cache.pipeline() as pipeline:
+            for name in seeded:
+                pipeline.set(name, "1.0", ex=3600)
+            pipeline.execute()
+        counters: Final = (counter, *seeded)
+        _global_reset(isolated.gateway)
+        assert isolated.cache.exists(*(_fence(name) for name in counters)) == len(counters)
+        assert _values(isolated.cache, counters) == (0.0, 0.0, 0.0)
+        assert all(outlives(ttl) for ttl in _ttls(isolated.cache, counters)), _ttls(isolated.cache, counters)
+        _assert_served(_chat(isolated.gateway.client, model, key))
+        assert outlives(_settled(isolated.cache, counter, ONE_CALL_COST))
+        _assert_denied(_chat(isolated.gateway.client, model, key))
+
+
+@pytest.mark.timeout(CELL_TIMEOUT)
+def test_a_pod_that_cached_the_pre_reset_floor_admits_the_next_request_after_a_reset_on_another_pod(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with (
+        _isolated(gateway, tmp_path, config=_config_without(tmp_path, REDIS_AUTH_CACHE_SETTING)) as isolated,
+        _second_pod(gateway, tmp_path, isolated, _config_without(tmp_path, REDIS_AUTH_CACHE_SETTING)) as other_pod,
+        isolated.gateway.scenario() as scenario,
     ):
         model: Final = scenario.model(**RATES)
         key: Final = scenario.key(models=[model], max_budget=ONE_CALL_COST)
         counter: Final = _exhaust(isolated.gateway, isolated.cache, isolated.database_url, model, key)
         with _broadcasts(isolated.cache) as broadcasts:
             assert isolated.cache.set(counter, "0.0", ex=3600)
-            _assert_denied(_chat(pinned, model, key))
-            assert outlives(_settled(isolated.cache, counter, ONE_CALL_COST))
+            _assert_denied(_chat(other_pod.client, model, key))
+            _settled(isolated.cache, counter, ONE_CALL_COST)
             _global_reset(isolated.gateway)
             broadcasts.wait_for(_zeroed_with_its_floor(counter), RACE_WINDOW_SECONDS)
-            assert pinned.get("/health/liveliness").status_code == 200
-            assert pinned.get("/health/liveliness").status_code == 200
-            _assert_served(_chat(pinned, model, key))
+            assert other_pod.client.get("/health/liveliness").status_code == 200
+            _assert_served(_chat(other_pod.client, model, key))
             assert outlives(_settled(isolated.cache, counter, ONE_CALL_COST))
-            _assert_denied(_chat(pinned, model, key))
+            _assert_denied(_chat(other_pod.client, model, key))
             assert broadcasts.wait_for(_zeroed(counter), BROADCAST_SECONDS), broadcasts.received()
 
 

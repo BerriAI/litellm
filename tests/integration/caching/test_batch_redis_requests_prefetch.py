@@ -7,6 +7,7 @@ import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
@@ -70,7 +71,7 @@ def test_the_prefetched_response_cache_entry_is_served_from_memory_on_the_next_r
             model: Final = scenario.model()
             key: Final = scenario.key(models=[model])
             body: Final = {"model": model, "messages": [{"role": "user", "content": f"prefetch {uuid.uuid4().hex}"}]}
-            namespace: Final = f"litellm:{key}:acompletion"
+            namespace: Final = f"litellm:{sha256(key.encode()).hexdigest()}:acompletion"
             first: Final = owned.gateway.request("POST", "/v1/chat/completions", body, key=key)
             assert first.status_code == 200, first.text
             entries: Final = eventually(lambda: cache.keys(f"{namespace}:*"), lambda keys: len(keys) == 1, seconds=10)
