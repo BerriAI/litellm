@@ -30,6 +30,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     SseResponse,
 )
+from integration.cost_calculation.bridge_parity.case import BridgeParityTestCase
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 
 _PROVIDER_MODULES: Final = (
@@ -50,7 +51,12 @@ PARITY_CASES: Final[tuple[StreamParityTestCase, ...]] = tuple(
 )
 BATCH_CASES: Final[tuple[BatchCostCase, ...]] = batch_realtime.BATCH_CASES
 REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = batch_realtime.REALTIME_CASES
-_PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed))
+BRIDGE_PARITY_CASES: Final[tuple[BridgeParityTestCase, ...]] = tuple(
+    pair for module in _PROVIDER_MODULES for pair in module.BRIDGE_PARITY
+)
+_PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed)) | frozenset(
+    leg.name for pair in BRIDGE_PARITY_CASES for leg in (pair.native, pair.bridged)
+)
 STANDALONE_CASES: Final[tuple[CostTrackingTestCase, ...]] = tuple(
     case for case in CASES if case.name not in _PARITY_LEGS
 )

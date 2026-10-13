@@ -21,6 +21,7 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from pydantic import JsonValue
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+from integration.cost_calculation.bridge_parity.case import BridgeParityTestCase
 
 
 # gpt-5.3-codex
@@ -8587,6 +8588,18 @@ GPT_6_SOL_RESPONSES_NATIVE_JSON: Final = CostTrackingTestCase(
     ),
 )
 
+GPT_6_SOL_MESSAGES_BRIDGED_JSON: Final = GPT_6_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6-sol-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+
 GPT_6_LUNA_INPUT_TEXT: Final = CostTrackingTestCase(
     name="gpt-6-luna-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -9804,6 +9817,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_1_SOL_SERVICE_TIER_FLEX,
     GPT_6_1_SOL_SERVICE_TIER_PRIORITY,
     GPT_6_1_SOL_RESPONSES_NATIVE_JSON,
+    GPT_6_SOL_MESSAGES_BRIDGED_JSON,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -9832,4 +9846,8 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GPT_6_LUNA_INPUT_TEXT, streamed=GPT_6_LUNA_STREAM),
     StreamParityTestCase(plain=GPT_6_ASTRA_INPUT_TEXT, streamed=GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_SOL_INPUT_TEXT, streamed=GPT_6_1_SOL_STREAM),
+)
+
+BRIDGE_PARITY: Final[tuple[BridgeParityTestCase, ...]] = (
+    BridgeParityTestCase(native=GPT_6_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_SOL_MESSAGES_BRIDGED_JSON),
 )

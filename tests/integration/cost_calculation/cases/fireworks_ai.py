@@ -13,6 +13,7 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+from integration.cost_calculation.bridge_parity.case import BridgeParityTestCase
 
 
 # fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash
@@ -3036,3 +3037,5 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         streamed=FIREWORKS_AI_ACCOUNTS_FIREWORKS_MODELS_QWEN3P8_MAX_STREAM_TOOL_CALL,
     ),
 )
+
+BRIDGE_PARITY: Final[tuple[BridgeParityTestCase, ...]] = ()

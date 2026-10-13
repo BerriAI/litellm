@@ -16,6 +16,7 @@ from integration.cost_calculation.cost_tracking_case import (
     WavUpload,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+from integration.cost_calculation.bridge_parity.case import BridgeParityTestCase
 
 
 # azure/gpt-5.4-mini
@@ -4597,3 +4598,5 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=AZURE_GPT_6_ASTRA_INPUT_TEXT, streamed=AZURE_GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=AZURE_GPT_6_1_SOL_INPUT_TEXT, streamed=AZURE_GPT_6_1_SOL_STREAM),
 )
+
+BRIDGE_PARITY: Final[tuple[BridgeParityTestCase, ...]] = ()

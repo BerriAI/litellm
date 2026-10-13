@@ -13,6 +13,7 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+from integration.cost_calculation.bridge_parity.case import BridgeParityTestCase
 
 
 # gemini/gemini-3.1-pro
@@ -3550,3 +3551,5 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     ),
     StreamParityTestCase(plain=GEMINI_GEMINI_3_8_FLASH_TOOL_CALL, streamed=GEMINI_GEMINI_3_8_FLASH_STREAM_TOOL_CALL),
 )
+
+BRIDGE_PARITY: Final[tuple[BridgeParityTestCase, ...]] = ()

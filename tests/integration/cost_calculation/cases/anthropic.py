@@ -13,6 +13,7 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+from integration.cost_calculation.bridge_parity.case import BridgeParityTestCase
 
 
 # claude-haiku-4-5
@@ -5953,3 +5954,5 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=CLAUDE_FABLE_5_1_STREAM),
     StreamParityTestCase(plain=CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=CLAUDE_OPUS_5_5_STREAM),
 )
+
+BRIDGE_PARITY: Final[tuple[BridgeParityTestCase, ...]] = ()
