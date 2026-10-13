@@ -12,7 +12,7 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.rust_bridge import bindings, configuration, runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.lifecycle import Complete, Open, Yield
+from litellm.rust_bridge.lifecycle import Complete, StreamChunk
 from litellm.rust_bridge.streams import Stream, SyncStream
 
 
@@ -276,10 +276,10 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(
 
 class ScriptedStreamExecution:
     def __init__(self, chunks: tuple[bytes, ...]) -> None:
-        self._steps: Final = iter((*(Yield(chunk) for chunk in chunks), Complete(None)))
+        self._steps: Final = iter((*(StreamChunk(chunk) for chunk in chunks), Complete(None)))
         self.closed = False
 
-    def send(self, value: object) -> Yield | Complete:
+    def send(self, value: object) -> StreamChunk | Complete:
         return next(self._steps)
 
     def throw(self, error: BaseException) -> Complete:

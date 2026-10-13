@@ -32,12 +32,12 @@ impl PythonCaller {
 
     /// Hands the caller a stream head and waits for demand or closure.
     pub(crate) async fn open_stream(&self, head: Py<PyAny>) -> ControlFlow<()> {
-        self.stream_boundary(Suspension::Open(head)).await
+        self.stream_boundary(Suspension::StreamOpen(head)).await
     }
 
     /// Delivers a chunk and waits for the caller to request another or close.
     pub(crate) async fn yield_chunk(&self, chunk: Py<PyAny>) -> ControlFlow<()> {
-        self.stream_boundary(Suspension::Yield(chunk)).await
+        self.stream_boundary(Suspension::StreamChunk(chunk)).await
     }
 
     /// Maps stream demand to continuation and any error to detachment.

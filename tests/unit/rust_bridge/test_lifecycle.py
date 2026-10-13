@@ -6,7 +6,17 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge.lifecycle import Await, Complete, Execution, Open, Step, drive
+from litellm.rust_bridge.lifecycle import (
+    Await,
+    Complete,
+    Execution,
+    Step,
+    Stream,
+    StreamChunk,
+    StreamOpen,
+    SyncStream,
+    drive,
+)
 
 
 class ScriptedExecution:
@@ -50,7 +60,7 @@ def test_drive_resumes_each_await_with_its_result_or_error_and_returns_the_compl
 def test_stream_handoff_preserves_head_identity_and_closes_on_construction_failure(factory_fails: bool) -> None:
     head: Final = object()
     stream: Final = object()
-    execution: Final = ScriptedExecution([Open(head)])
+    execution: Final = ScriptedExecution([StreamOpen(head)])
     failure: Final = ValueError("stream construction failed")
 
     def construct(owner: Execution, received: object) -> object:
@@ -69,3 +79,30 @@ def test_stream_handoff_preserves_head_identity_and_closes_on_construction_failu
         assert asyncio.run(drive(execution, construct)) is stream
         assert not execution.closed
         execution.close()
+
+
+def test_drive_rejects_a_chunk_before_the_stream_opens_and_closes_the_execution() -> None:
+    execution: Final = ScriptedExecution([StreamChunk("chunk")])
+
+    with pytest.raises(RuntimeError, match="chunk before opening a stream"):
+        asyncio.run(drive(execution))
+
+    assert execution.closed
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+def test_stream_read_rejects_a_second_open_and_closes_the_execution(asynchronous: bool) -> None:
+    execution: Final = ScriptedExecution([StreamChunk("first"), StreamOpen("head")])
+
+    async def read() -> tuple[object, ...]:
+        stream: Final = Stream(execution)
+        return (await anext(stream), await anext(stream))
+
+    def read_sync() -> tuple[object, ...]:
+        stream: Final = SyncStream(execution)
+        return (next(stream), next(stream))
+
+    with pytest.raises(RuntimeError, match="opened a stream twice"):
+        asyncio.run(read()) if asynchronous else read_sync()
+
+    assert execution.closed
