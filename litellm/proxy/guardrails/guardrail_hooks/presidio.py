@@ -12,7 +12,7 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -188,10 +188,10 @@ class _AnthropicSSEUnmasker:
     become a token is held back until the next delta or the block's end.
     """
 
-    def __init__(self, pii_tokens: dict[str, str]):
-        self.pii_tokens = pii_tokens
+    def __init__(self, pii_tokens: dict[str, str]) -> None:  # mutable-ok: the request's token map, read-only here
+        self.pii_tokens: Final = pii_tokens
         self.buf = b""
-        self.held: dict[Any, str] = {}
+        self.held: Final[dict[object, str]] = {}  # mutable-ok: per-block text held until the next delta
 
     def feed(self, chunk: bytes) -> bytes:
         self.buf = (self.buf + chunk).replace(b"\r\n", b"\n")
@@ -199,7 +199,7 @@ class _AnthropicSSEUnmasker:
         return b"".join(self._event(e) for e in events)
 
     def flush(self) -> bytes:
-        out = b"".join(self._delta_event(i, self._unmask(t)) for i, t in self.held.items())
+        out: Final = b"".join(self._delta_event(i, self._unmask(t)) for i, t in self.held.items())
         self.held.clear()
         tail, self.buf = self.buf, b""
         return out + (self._event(tail).rstrip(b"\n") if tail.strip() else tail)
@@ -208,43 +208,54 @@ class _AnthropicSSEUnmasker:
         return _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, self.pii_tokens)
 
     @staticmethod
-    def _delta_event(index: Any, text: str) -> bytes:
-        event = {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}}
+    def _delta_event(index: object, text: str) -> bytes:
+        event: Final = {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}}
         return f"event: content_block_delta\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
+    @staticmethod
+    def _parse(line: str) -> dict | None:  # mutable-ok: the event is rewritten in place and re-serialized
+        if not line.startswith("data: "):
+            return None
+        try:
+            event: Final = json.loads(line[6:])
+        except json.JSONDecodeError:
+            return None
+        return event if isinstance(event, dict) else None
+
+    @staticmethod
+    def _is_text_delta(event: Mapping[str, object]) -> bool:
+        delta: Final = event.get("delta")
+        return (
+            event.get("type") == "content_block_delta"
+            and isinstance(delta, dict)
+            and delta.get("type") == "text_delta"
+            and isinstance(delta.get("text"), str)
+        )
+
+    def _release(self, index: object, delta_text: str) -> str:
+        """Unmasked text safe to emit now; a trailing token prefix is held for the next delta."""
+        text: Final = self.held.pop(index, "") + delta_text
+        start: Final = text.rfind("<")
+        if start != -1 and any(t.startswith(text[start:]) for t in self.pii_tokens):
+            self.held[index] = text[start:]
+            return self._unmask(text[:start])
+        return self._unmask(text)
 
     def _event(self, raw: bytes) -> bytes:
         try:
-            lines = raw.decode("utf-8").split("\n")
+            lines: Final = raw.decode("utf-8").split("\n")
         except UnicodeDecodeError:
             return raw + b"\n\n"
-        prefix = b""
-        for i, line in enumerate(lines):
-            if not line.startswith("data: "):
+        prefixes: Final = []
+        for i, event in enumerate(map(self._parse, lines)):
+            if event is None:
                 continue
-            try:
-                event = json.loads(line[6:])
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            index = event.get("index")
-            delta = event.get("delta")
-            if (
-                event.get("type") == "content_block_delta"
-                and isinstance(delta, dict)
-                and delta.get("type") == "text_delta"
-                and isinstance(delta.get("text"), str)
-            ):
-                text = self.held.pop(index, "") + delta["text"]
-                start = text.rfind("<")
-                if start != -1 and any(t.startswith(text[start:]) for t in self.pii_tokens):
-                    self.held[index] = text[start:]
-                    text = text[:start]
-                delta["text"] = self._unmask(text)
+            if self._is_text_delta(event):
+                event["delta"]["text"] = self._release(event.get("index"), event["delta"]["text"])
                 lines[i] = "data: " + json.dumps(event, ensure_ascii=False)
-            elif event.get("type") == "content_block_stop" and index in self.held:
-                prefix += self._delta_event(index, self._unmask(self.held.pop(index)))
-        return prefix + "\n".join(lines).encode() + b"\n\n"
+            elif event.get("type") == "content_block_stop" and event.get("index") in self.held:
+                prefixes.append(self._delta_event(event.get("index"), self._unmask(self.held.pop(event.get("index")))))
+        return b"".join(prefixes) + "\n".join(lines).encode() + b"\n\n"
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -1620,6 +1631,26 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif hasattr(content_block, "text") and isinstance(content_block.text, str):
                     content_block.text = self._unmask_pii_text(content_block.text, pii_tokens)
 
+    @staticmethod
+    async def _unmask_sse_bytes(
+        response: AsyncIterable[object],
+        pii_tokens: dict[str, str],  # mutable-ok: the request's token map, read-only here
+    ) -> AsyncGenerator[object, None]:
+        """Unmask raw Anthropic SSE bytes across chunk boundaries; other chunks pass through."""
+        unmasker: Final = _AnthropicSSEUnmasker(pii_tokens)
+        try:
+            async for chunk in response:
+                if not isinstance(chunk, bytes):
+                    yield chunk
+                elif unmasked := unmasker.feed(chunk):
+                    yield unmasked
+        except Exception:
+            if held := unmasker.flush():
+                yield held
+            raise
+        if tail := unmasker.flush():
+            yield tail
+
     async def _stream_pii_unmasking(
         self,
         response: AsyncIterable[object],
@@ -1637,20 +1668,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         remaining_chunks: list[ModelResponseStream] = []
         saw_non_chat_chunk = False
-        sse_unmasker: Final = _AnthropicSSEUnmasker(pii_tokens) if pii_tokens else None
+        source: Final = self._unmask_sse_bytes(response, pii_tokens) if pii_tokens else response
         try:
-            async for chunk in response:
+            async for chunk in source:
                 if isinstance(chunk, ModelResponseStream):
                     if saw_non_chat_chunk:
                         yield chunk
                     else:
                         remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    if sse_unmasker:
-                        if unmasked := sse_unmasker.feed(chunk):
-                            yield unmasked
-                    else:
-                        yield chunk
+                    yield chunk
                     continue
                 else:
                     # /v1/responses events: unmask response.completed text in-place.
@@ -1665,9 +1692,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
                     saw_non_chat_chunk = True
                     yield chunk
-
-            if sse_unmasker and (tail := sse_unmasker.flush()):
-                yield tail
 
             if saw_non_chat_chunk:
                 return
@@ -1697,8 +1721,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         except Exception as e:
             verbose_proxy_logger.error("Error in PII streaming processing: %s", e)
-            if sse_unmasker and (tail := sse_unmasker.flush()):
-                yield tail
             for chunk in remaining_chunks:
                 yield chunk
 
