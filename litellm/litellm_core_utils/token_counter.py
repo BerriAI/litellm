@@ -1113,7 +1113,7 @@ def _format_type(props, indent):
         return "string"
     elif type == "array":
         if "items" not in props:
-            return f"{_format_type({}, indent)}[]"
+            return "any[]"
         return f"{_format_type(props['items'], indent)}[]"
     elif type == "object":
         return f"{{\n{_format_object_parameters(props, indent + 2)}\n}}"
