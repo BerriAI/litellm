@@ -2887,6 +2887,44 @@ def test_streamed_json_mode_answer_that_cannot_be_an_envelope_streams_as_it_arri
     assert contents[2:5] == (encoded[:12], encoded[12:24], encoded[24:])
 
 
+@pytest.mark.parametrize(
+    "schema, values",
+    [
+        pytest.param(
+            {"type": "object", "additionalProperties": True}, {"alpha": 1, "beta": 2}, id="schema_without_properties"
+        ),
+        pytest.param(
+            {"type": "object", "properties": {"summary": {"type": "string"}}, "additionalProperties": {"type": "object"}},
+            {"user_1": {"summary": "likes tea"}},
+            id="undeclared_key_the_schema_allows",
+        ),
+        pytest.param(_STREAMED_RISK_SCHEMA, [3, 5, 8], id="values_holding_a_list"),
+    ],
+)
+def test_streamed_json_mode_values_wrapper_is_unwrapped_like_the_non_stream_answer(
+    schema: dict[str, object], values: object
+):
+    wrapped = {"values": values}
+    encoded = json.dumps(wrapped)
+
+    contents = _streamed_json_mode_contents((encoded[:6], encoded[6:14], encoded[14:]), schema)
+
+    assert json.loads("".join(contents)) == values
+    assert json.loads("".join(contents)) == unwrap_response_format_envelope(
+        wrapped, response_format_schema(schema), RESPONSE_FORMAT_TOOL_NAME
+    )
+
+
+def test_streamed_json_mode_declared_values_key_streams_as_it_arrives():
+    schema = {"type": "object", "properties": {"values": {"type": "array"}}, "required": ["values"]}
+    answer = json.dumps({"values": [3, 5, 8]})
+
+    contents = _streamed_json_mode_contents((answer[:6], answer[6:14], answer[14:]), schema)
+
+    assert "".join(contents) == answer
+    assert contents[3:5] == (answer[:14], answer[14:])
+
+
 def test_streamed_json_mode_string_label_answer_streams_once_the_next_key_is_declared():
     answer = json.dumps({"note": "read-only window", **_STREAMED_RISK_OBJECT})
 

@@ -118,6 +118,8 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
             return "hold"
         if first_value is None and _NAME_VALUE_PREFIX.match(buffered_json):
             return "undecided"
+    if first_key.group(1) == "values" and "values" not in schema.property_names:
+        return "hold"
     if first_key.group(1) in schema.property_names or not schema.property_names or schema.accepts_a_lone_undeclared_key:
         return "pass_through"
     return _first_value_verdict(buffered_json[first_key.end() :], schema)
