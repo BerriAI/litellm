@@ -143,7 +143,9 @@ describe("GuardrailsPanel", () => {
     expect(modal.getByText("Delete Guardrail")).toBeInTheDocument();
     expect(modal.getByText("test-guardrail-1")).toBeInTheDocument();
     expect(modal.getByText("Test Provider")).toBeInTheDocument();
-    expect(modal.getByText(/keys, teams, or policies that reference/i)).toBeInTheDocument();
+    expect(
+      modal.getByText(/pipeline steps that use it will block every request with a 400 error/i),
+    ).toBeInTheDocument();
 
     const confirmButton = modal.getByRole("button", { name: "Delete" });
     expect(confirmButton).toBeDisabled();

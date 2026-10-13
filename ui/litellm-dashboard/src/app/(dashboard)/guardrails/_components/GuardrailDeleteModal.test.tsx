@@ -37,7 +37,10 @@ describe("GuardrailDeleteModal", () => {
   it("warns about name references and only enables Delete once the exact name is typed", () => {
     renderModal();
 
-    expect(screen.getByText(/keys, teams, or policies that reference/i)).toBeInTheDocument();
+    const warning = screen.getByText(/silently stop running it/);
+    expect(warning).toHaveTextContent("Keys, teams, and policies that list this guardrail");
+    expect(warning).toHaveTextContent("Policy pipeline steps that use it will block every request with a 400 error");
+    expect(warning).toHaveTextContent("unless the step's on_error is next or allow");
     const confirmButton = screen.getByRole("button", { name: "Delete" });
     expect(confirmButton).toBeDisabled();
     fireEvent.change(screen.getByPlaceholderText(GUARDRAIL.guardrail_name), { target: { value: "word" } });

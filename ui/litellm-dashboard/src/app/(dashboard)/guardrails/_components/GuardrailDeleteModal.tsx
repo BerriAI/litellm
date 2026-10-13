@@ -5,7 +5,7 @@ import { toast } from "@/lib/toast";
 import { formatGuardrailMode, getGuardrailLogoAndName } from "./guardrail_info_helpers";
 
 const DANGLING_REFERENCE_WARNING =
-  "Keys, teams, or policies that reference this guardrail by name will silently stop running it after deletion. Their requests will not return an error.";
+  "Keys, teams, and policies that list this guardrail will silently stop running it. Policy pipeline steps that use it will block every request with a 400 error, unless the step's on_error is next or allow (or its on_fail, when on_error is not set).";
 
 export interface DeletableGuardrail {
   guardrail_id: string;

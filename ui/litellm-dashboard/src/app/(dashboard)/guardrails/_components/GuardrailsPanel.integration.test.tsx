@@ -87,7 +87,9 @@ describe("GuardrailsPanel delete from the guardrail detail Settings card", () =>
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
     const modal = within(await screen.findByRole("dialog"));
-    expect(modal.getByText(/keys, teams, or policies that reference/i)).toBeInTheDocument();
+    expect(
+      modal.getByText(/pipeline steps that use it will block every request with a 400 error/i),
+    ).toBeInTheDocument();
     const confirmButton = modal.getByRole("button", { name: "Delete" });
     expect(confirmButton).toBeDisabled();
 
