@@ -658,6 +658,7 @@ class RequestRateLimiterStash:
     reserved_tokens: int = 0
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    reserved_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]] = field(default_factory=frozenset)
     itpm_reserved_tokens: int = 0
     itpm_reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
     itpm_reserved_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]] = field(
@@ -671,6 +672,7 @@ class RequestRateLimiterStash:
     batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
     batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
+    websocket_connection: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
 
 
@@ -4043,6 +4045,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
         stash: Final = claim_request_stash_for_data(data)
+        stash.websocket_connection = call_type == CallTypes.aresponses_websocket.value
 
         #########################################################
         # Check if the call type has a specific rate limiter
@@ -4225,6 +4228,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                         and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
                     )
+                    stash.reserved_window_identities = frozenset(tpm_response.get("reservation_windows", frozenset()))
                     tpm_reservation_scopes = tuple(  # rebind-ok: record successful reservation scopes
                         stash.reserved_scopes
                     )
@@ -4719,7 +4723,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return ()
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
         if stash is None:
-            return ()
+            return self._build_websocket_turn_io_ops(kwargs, response_obj)
 
         itpm_reserved: Final = stash.itpm_reserved_tokens
         otpm_reserved: Final = stash.otpm_reserved_tokens
@@ -4784,9 +4788,68 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         return tuple((*itpm_ops, *otpm_ops))
 
+    def _websocket_turn_usage(self, kwargs: Mapping[str, object], response_obj: object) -> tuple[int, int, bool]:
+        response_usage: Final = self._resolve_io_token_reconcile_usage(response_obj)
+        if response_usage[2]:
+            return response_usage
+        return self._resolve_io_token_reconcile_usage(kwargs.get("combined_usage_object"))
+
+    def _build_websocket_turn_io_ops(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+    ) -> Sequence[RedisPipelineIncrementOperation]:
+        """
+        A native Responses WebSocket turn logs under its own call id, so no
+        stash is its own. The connection's stash, inherited through the
+        context, names the project ITPM/OTPM scopes the turn's usage counts
+        toward; the connection's reservation itself is refunded at disconnect.
+        """
+        connection: Final = get_request_stash()
+        if connection is None or not connection.websocket_connection:
+            return []
+        billable_input, completion_tokens, usage_resolved = self._websocket_turn_usage(kwargs, response_obj)
+        if not usage_resolved:
+            return []
+        return self._build_reservation_aware_tpm_ops(
+            targets=tuple(connection.itpm_reserved_scopes),
+            reserved_scopes=frozenset(),
+            actual_tokens=billable_input,
+            reserved_tokens=0,
+        ) + self._build_reservation_aware_tpm_ops(
+            targets=tuple(connection.otpm_reserved_scopes),
+            reserved_scopes=frozenset(),
+            actual_tokens=completion_tokens,
+            reserved_tokens=0,
+        )
+
+    async def _charge_websocket_turn_usage(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        parent_otel_span: Span | None,
+    ) -> None:
+        """A failed turn still consumed the usage its failure event reports; count it the way a success does."""
+        connection: Final = get_request_stash()
+        if connection is None or not connection.websocket_connection:
+            return
+        pipeline_operations: Final = [
+            *self._build_success_event_pipeline_operations(
+                kwargs=dict(kwargs),
+                response_obj=response_obj,
+                rate_limit_type=self.get_rate_limit_type(),
+            ),
+            *self._build_websocket_turn_io_ops(kwargs, response_obj),
+        ]
+        if pipeline_operations:
+            await self.async_increment_tokens_with_ttl_preservation(
+                pipeline_operations=pipeline_operations,
+                parent_otel_span=parent_otel_span,
+            )
+
     def _collect_tpm_scope_targets(
         self,
-        standard_logging_metadata: dict[str, Any],
+        standard_logging_metadata: Mapping[str, Any],
         kwargs: object,
         model_group: str | None,
         tpm_limited_tags: Set[str] = frozenset(),
@@ -5172,7 +5235,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
     @with_service_target("rate_limits")
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         """
         On failure: decrement max_parallel_requests and refund the upfront
         TPM reservation only against the scopes the reservation actually
@@ -5186,12 +5251,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         try:
-            litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs)
+            failure_kwargs: Final = dict(_REQUEST_RATE_LIMIT_DATA.validate_python(kwargs))
+            litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(failure_kwargs)
 
             pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
 
-            stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
+            stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(failure_kwargs))
             await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span, in_logging_callback=True)
+            if stash is None:
+                await self._charge_websocket_turn_usage(failure_kwargs, response_obj, litellm_parent_otel_span)
 
             # Skip the reservation refund if async_post_call_failure_hook
             # already released it (proxy-level rejection that also bubbles up
@@ -5202,7 +5270,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if stash is None or stash.reservation_released
                 else (stash.reserved_tokens, stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
             )
-            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(kwargs)
+            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(failure_kwargs)
 
             if stash is not None and reserved_tokens > 0:
                 verbose_proxy_logger.debug(
@@ -5297,19 +5365,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         TTL prunes it. The stashed acquisition's presence (not the key
         object's current max_parallel_requests configuration, which can
         change mid-request) decides whether there is anything to release.
-        A TPM, ITPM or OTPM reservation no callback settled is refunded the
-        same way, so a native Responses WebSocket connection, whose turns log
-        under their own call ids, hands back the estimate it reserved.
+        A native Responses WebSocket connection logs its turns under their own
+        call ids, so no callback of its own ever settles the TPM, ITPM or OTPM
+        reservation it made at pre-call; its disconnect refunds that estimate.
+        Every other request keeps its reservation for the success or failure
+        event that settles it, even when the client went away mid-stream.
         """
         stash: Final = get_request_stash()
         await self._release_stashed_parallel_slot(stash, None)
-        await self._refund_unsettled_reservation(stash)
+        if stash is not None and stash.websocket_connection:
+            await self._refund_unsettled_reservation(stash)
 
-    async def _refund_unsettled_reservation(self, stash: RequestRateLimiterStash | None) -> None:
-        if stash is None or stash.reservation_released:
+    async def _refund_unsettled_reservation(self, stash: RequestRateLimiterStash) -> None:
+        if stash.reservation_released:
             return
         stash.reservation_released = True
-        await self._refund_reserved_tokens(scopes=tuple(stash.reserved_scopes), amount=stash.reserved_tokens)
+        await self._refund_reserved_tokens(
+            scopes=tuple(stash.reserved_scopes),
+            amount=stash.reserved_tokens,
+            reservation_windows=stash.reserved_window_identities,
+        )
         await self._refund_reserved_tokens(
             scopes=tuple(stash.itpm_reserved_scopes),
             amount=stash.itpm_reserved_tokens,

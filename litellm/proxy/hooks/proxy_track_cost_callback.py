@@ -4,6 +4,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
+from pydantic import BaseModel, ConfigDict
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
@@ -166,14 +168,18 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
     ) -> None:
+        budget_reservation: Final = _claim_budget_reservation(
+            budget_reservation=user_api_key_dict.budget_reservation,
+            litellm_call_id=_RequestCallId.model_validate(request_data).litellm_call_id,
+        )
         try:
-            await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
+            await _release_budget_reservation(budget_reservation=budget_reservation)
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
             try:
-                await _invalidate_budget_reservation_counters(budget_reservation=user_api_key_dict.budget_reservation)
-                if user_api_key_dict.budget_reservation is not None:
-                    user_api_key_dict.budget_reservation["finalized"] = True
+                await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+                if budget_reservation is not None:
+                    budget_reservation["finalized"] = True
             except Exception:
                 verbose_proxy_logger.exception(
                     "Failed to invalidate budget reservation counters after failure release failed"
@@ -343,7 +349,10 @@ class _ProxyDBLogger(CustomLogger):
                     resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
-            budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
+            budget_reservation: Final = _claim_budget_reservation(
+                budget_reservation=_get_budget_reservation_from_metadata(metadata=metadata),
+                litellm_call_id=_RequestCallId.model_validate(kwargs).litellm_call_id,
+            )
             if (
                 isinstance(completion_response, LiteLLMBatch)
                 and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
@@ -615,7 +624,7 @@ class _ProxyDBLogger(CustomLogger):
 ProxyDBLogger: Final = _ProxyDBLogger
 
 
-def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
+def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: Mapping[str, object]) -> None:
     patch = {k: v for k, v in metadata.items() if (k.startswith("user_api_key") or k == "tags") and v is not None}
     if not patch:
         return
@@ -691,13 +700,27 @@ def _metadata_keys(metadata: object) -> tuple[str, ...]:
     return tuple(sorted(str(key) for key in metadata))
 
 
-def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:
+def _get_budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str, object] | None:
     return budget_reservation_from_metadata(metadata)
+
+
+class _RequestCallId(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    litellm_call_id: str | None = None
+
+
+def _claim_budget_reservation(
+    budget_reservation: dict[str, object] | None, litellm_call_id: str | None
+) -> dict[str, object] | None:
+    from litellm.proxy.spend_tracking.budget_reservation import claim_budget_reservation
+
+    return claim_budget_reservation(budget_reservation=budget_reservation, litellm_call_id=litellm_call_id)
 
 
 def _get_request_tags_for_cost_tracking(
     sl_object: StandardLoggingPayload | None,
-    metadata: dict,
+    metadata: Mapping[str, object],
 ) -> list[str] | None:
     if sl_object is not None:
         request_tags: Final = sl_object.get("request_tags", None)

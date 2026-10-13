@@ -40,6 +40,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_model_access_group_budget_counters,
+    claim_budget_reservation,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
@@ -3720,3 +3721,63 @@ async def test_unreserved_model_access_group_is_charged_alongside_a_reserved_one
     assert counter_cache.in_memory_cache.get_cache(
         key=model_access_group_spend_counter_key("starter")
     ) == pytest.approx(4.2)
+
+
+@pytest.mark.asyncio
+async def test_should_charge_both_turns_when_two_calls_settle_one_reservation_at_once(
+    spend_counter_state,
+):
+    """A Responses WebSocket connection's turns share its reservation under their own call ids. Only the
+    first claim keeps it; the other turn adds its cost on top instead of settling the same estimate again,
+    which would leave the key counter short by the estimate."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-shared-turns",
+        spend=0.0,
+        max_budget=1.0,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/responses",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    first_turn = claim_budget_reservation(budget_reservation=reservation, litellm_call_id="turn-1")
+    second_turn = claim_budget_reservation(budget_reservation=reservation, litellm_call_id="turn-2")
+    assert first_turn is reservation
+    assert second_turn is None
+    assert claim_budget_reservation(budget_reservation=reservation, litellm_call_id="turn-1") is reservation
+
+    await asyncio.gather(
+        increment_spend_counters(
+            token="key-budget-shared-turns",
+            team_id="team-without-budget",
+            user_id=None,
+            response_cost=0.2,
+            budget_reservation=first_turn,
+        ),
+        increment_spend_counters(
+            token="key-budget-shared-turns",
+            team_id="team-without-budget",
+            user_id=None,
+            response_cost=0.3,
+            budget_reservation=second_turn,
+        ),
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-shared-turns") == pytest.approx(0.5)
+    assert counter_cache.in_memory_cache.get_cache(key="spend:team:team-without-budget") == pytest.approx(0.5)

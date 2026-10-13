@@ -1871,17 +1871,30 @@ def _logged_user_messages(client_frame: object) -> tuple[dict[str, object], ...]
     frame: Final = _json_object_or_none(client_frame)
     if frame is None or frame.get("type") != "response.create":
         return ()
-    input_items: Final = frame.get("input", [])
+    nested_response: Final = frame.get("response")
+    input_items: Final = frame.get(
+        "input", nested_response.get("input", []) if _is_json_object(nested_response) else []
+    )
     if isinstance(input_items, str):
         return ({"role": "user", "content": input_items},)
     texts: Final = chain.from_iterable(_user_texts_in_input_item(item) for item in _json_array_or_empty(input_items))
     return tuple({"role": "user", "content": text} for text in texts)
 
 
+def _ws_event_response_id(event: object) -> str | None:
+    response: Final = event.get("response") if _is_json_object(event) else None
+    response_id: Final = response.get("id") if _is_json_object(response) else None
+    return response_id if isinstance(response_id, str) else None
+
+
 @dataclass(frozen=True, slots=True)
 class _ResponsesWsTurn:
     logging_obj: LiteLLMLoggingObj
     events: tuple[_MutableJsonObject, ...] = ()
+
+    @property
+    def response_id(self) -> str | None:
+        return next(filter(None, map(_ws_event_response_id, self.events)), None)
 
     def with_event(self, event: _MutableJsonObject) -> _ResponsesWsTurn:
         return _ResponsesWsTurn(logging_obj=self.logging_obj, events=(*self.events, event))
@@ -2010,12 +2023,33 @@ class ResponsesWebSocketStreaming:
             return
         if not self._open_turns:
             self._start_turn(None)
-        turn: Final = self._open_turns[0].with_event(event_obj)
+        index: Final = self._turn_index_for_event(event_obj)
+        turn: Final = self._open_turns[index].with_event(event_obj)
+        other_turns: Final = (*self._open_turns[:index], *self._open_turns[index + 1 :])
         if event_obj.get("type") in _RESPONSES_WS_TERMINAL_EVENT_TYPES:
-            self._open_turns = self._open_turns[1:]
+            self._open_turns = other_turns
             self._log_turn(turn)
             return
-        self._open_turns = (turn, *self._open_turns[1:])
+        self._open_turns = (*self._open_turns[:index], turn, *self._open_turns[index + 1 :])
+
+    def _turn_index_for_event(self, event_obj: Mapping[str, object]) -> int:
+        """
+        An event naming a response id belongs to the turn whose ``response.created``
+        carried it. The backend answers accepted turns strictly in order, so an
+        id-less event goes to the oldest turn still waiting for its ``response.created``,
+        except an id-less ``error``: that is the backend rejecting the newest pending
+        ``response.create`` at parse time while an earlier turn is still streaming.
+        """
+        response_id: Final = _ws_event_response_id(event_obj)
+        turn_ids: Final = tuple(turn.response_id for turn in self._open_turns)
+        if response_id is not None and response_id in turn_ids:
+            return turn_ids.index(response_id)
+        pending: Final = tuple(index for index, turn_id in enumerate(turn_ids) if turn_id is None)
+        if not pending:
+            return 0
+        if response_id is None and event_obj.get("type") == "error":
+            return pending[-1]
+        return pending[0]
 
     def _log_open_turns(self) -> None:
         open_turns: Final = self._open_turns

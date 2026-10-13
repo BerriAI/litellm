@@ -3340,6 +3340,69 @@ class TestNativeWebSocketPerTurnLogging:
             turn.dispatch_failure_handlers.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_a_turn_whose_input_is_nested_under_response_logs_its_user_message(self):
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        recorder = _TurnLoggingRecorder()
+        nested_frame = json.dumps(
+            {"type": "response.create", "response": {"model": "gpt-5.4-mini", "input": "nested"}}
+        )
+        client = _ScriptedClient([nested_frame], recorder.logged_turns)
+        backend = _ScriptedBackend([_completed_turn("resp_1", 10, 1)])
+        handler = _make_streaming(
+            websocket=client, backend_ws=backend, logging_obj=recorder.connection, request_data={}
+        )
+
+        await handler.bidirectional_forward()
+
+        assert [turn.model_call_details["messages"] for turn in recorder.turns] == [
+            [{"role": "user", "content": "nested"}]
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_overlapped_turn_rejected_at_parse_time_fails_alone_and_the_streaming_turn_keeps_its_usage(
+        self,
+    ):
+        """OpenAI rejects an unparseable response.create with an id-less error while the earlier turn is
+        still streaming. That error is the second turn's failure, and the first turn's completed event with
+        its usage stays on the first turn."""
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        recorder = _TurnLoggingRecorder()
+        handler = _make_streaming(
+            websocket=MagicMock(),
+            backend_ws=MagicMock(),
+            logging_obj=recorder.connection,
+            request_data={},
+            authorized_model="gpt-5.4-mini",
+            custom_llm_provider="openai",
+        )
+        created, _delta, completed = _completed_turn("resp_1", 300, 23)
+        rejection = {
+            "type": "error",
+            "status": None,
+            "error": {"type": "invalid_request_error", "code": None, "message": "Invalid 'max_output_tokens'"},
+        }
+
+        handler._record_client_frame(_response_create("first"))
+        handler._record_client_frame(_response_create("second"))
+        for event in (created, rejection, completed):
+            handler._record_backend_event(json.dumps(event))
+        assert await _until(lambda: recorder.logged_turns() == 2)
+
+        first, second = recorder.turns
+        first.dispatch_failure_handlers.assert_not_awaited()
+        first.dispatch_success_handlers.assert_awaited_once()
+        assert [event["type"] for event in first.dispatch_success_handlers.await_args[0][0]] == [
+            "response.created",
+            "response.completed",
+        ]
+        second.dispatch_success_handlers.assert_not_awaited()
+        second.dispatch_failure_handlers.assert_awaited_once()
+        assert "max_output_tokens" in str(second.dispatch_failure_handlers.await_args[0][0])
+        assert second.record_partial_usage_for_failure.call_args[0][0].total_tokens == 0
+
+    @pytest.mark.asyncio
     async def test_a_failed_turn_is_booked_alone_and_leaves_the_other_turns_successful(self):
         from unittest.mock import AsyncMock
 

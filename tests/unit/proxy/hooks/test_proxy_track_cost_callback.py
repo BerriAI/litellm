@@ -2972,3 +2972,94 @@ async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-qual
 
     assert update_database.await_count == 1, "the spend enqueue itself must still run"
     assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
+
+
+def _shared_reservation_turn_kwargs(call_id: str, reservation: dict) -> dict:
+    return {
+        "model": "gpt-5.4-mini",
+        "litellm_call_id": call_id,
+        "litellm_params": {
+            "metadata": {"user_api_key": "test-key-hash", "user_api_key_budget_reservation": reservation}
+        },
+        "stream": False,
+        "standard_logging_object": {"response_cost": 0.25, "request_tags": None},
+    }
+
+
+async def _reservation_handed_to_the_counters(kwargs) -> dict | None:
+    """The reservation the callback hands the spend counters for one logged call."""
+    logger = ProxyDBLogger()
+    with (
+        patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: the arguments to this call are the boundary under test
+            "litellm.proxy.hooks.proxy_track_cost_callback._update_database_and_spend_counters",
+            new=AsyncMock(),
+        ) as mock_update,
+        patch(  # test-quality-ok: llm_router is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.llm_router", new=_FakeDeploymentLookup({})
+        ),
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    return mock_update.await_args.kwargs["budget_reservation"]
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_hands_a_shared_reservation_to_the_first_turn_only():
+    """Every turn of a Responses WebSocket connection carries the connection's one reservation under its
+    own call id. The first turn settles it; a later turn reconciling the same estimate again would
+    under-count the key, so it must charge its cost without the reservation."""
+    reservation = {"reserved_cost": 0.5, "entries": []}
+
+    first_turn = await _reservation_handed_to_the_counters(_shared_reservation_turn_kwargs("turn-1", reservation))
+    second_turn = await _reservation_handed_to_the_counters(_shared_reservation_turn_kwargs("turn-2", reservation))
+
+    assert first_turn is reservation
+    assert second_turn is None
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_releases_a_shared_reservation_for_the_first_turn_only():
+    logger = ProxyDBLogger()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        request_route="/custom/route",
+        budget_reservation=budget_reservation,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_release_budget_reservation,
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ),
+    ):
+        for call_id in ("turn-1", "turn-2"):
+            await logger.async_post_call_failure_hook(
+                request_data={"litellm_call_id": call_id},
+                original_exception=Exception("Test exception"),
+                user_api_key_dict=user_api_key_dict,
+            )
+
+    assert mock_release_budget_reservation.await_count == 1
+    assert (
+        mock_release_budget_reservation.await_args.kwargs["budget_reservation"]
+        is user_api_key_dict.budget_reservation
+    )
+    assert user_api_key_dict.budget_reservation["settling_call_id"] == "turn-1"
