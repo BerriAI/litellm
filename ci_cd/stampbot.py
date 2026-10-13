@@ -196,8 +196,18 @@ class Verdict(BaseModel):
         "additive", "scoped_behavior_change", "default_behavior_change", "public_api_change", "price_change"
     ]
     blast_radius: Literal["one_provider_or_page", "shared_helper", "request_hot_path", "boot_path"]
-    reasons: tuple[str, ...] = Field(min_length=1, max_length=5)
-    look_at: tuple[str, ...] = Field(max_length=5)
+    reasons: str = Field(min_length=1)
+    look_at: str = ""
+
+    def reason_lines(self) -> tuple[str, ...]:
+        return _lines(self.reasons)
+
+    def look_at_lines(self) -> tuple[str, ...]:
+        return _lines(self.look_at)
+
+
+def _lines(text: str) -> tuple[str, ...]:
+    return tuple(line.strip(" -*") for line in text.splitlines() if line.strip(" -*"))
 
 
 class ChatMessage(BaseModel):
@@ -629,9 +639,10 @@ def _render_judgement(judgement: Judgement | None) -> str:
     if not isinstance(judgement.verdict, Verdict):
         return f"Judge ({judgement.model}): {judgement.verdict}. Treated as high."
     verdict: Final = judgement.verdict
-    reasons: Final = "\n".join(f"- {reason}" for reason in verdict.reasons)
+    reasons: Final = "\n".join(f"- {reason}" for reason in verdict.reason_lines())
+    look_at_lines: Final = verdict.look_at_lines()
     look_at: Final = (
-        ("\n\nLook at first:\n" + "\n".join(f"- `{item}`" for item in verdict.look_at)) if verdict.look_at else ""
+        ("\n\nLook at first:\n" + "\n".join(f"- `{item}`" for item in look_at_lines)) if look_at_lines else ""
     )
     return (
         f"Judge ({judgement.model}): {verdict.tier}, {verdict.change_kind.replace('_', ' ')}, "

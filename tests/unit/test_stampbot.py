@@ -209,7 +209,7 @@ def test_low_by_rule_is_docs_and_tests_only() -> None:
 
 def _judgement(tier: str) -> object:
     verdict = bot.Verdict(
-        tier=tier, change_kind="additive", blast_radius="one_provider_or_page", reasons=("r",), look_at=()
+        tier=tier, change_kind="additive", blast_radius="one_provider_or_page", reasons="r", look_at=""
     )
     return bot.Judgement("judge-model", verdict)
 
@@ -239,8 +239,8 @@ def test_parse_verdict() -> None:
                 "tier": "low",
                 "change_kind": "additive",
                 "blast_radius": "one_provider_or_page",
-                "reasons": ["adds one param mapping"],
-                "look_at": [],
+                "reasons": "adds one param mapping",
+                "look_at": "",
             }
         )
     )
@@ -266,6 +266,24 @@ def test_comment_carries_the_marker_tier_sha_and_findings() -> None:
     comment = bot.render_comment(evaluation, bot.decide(evaluation, True, True), "rules.yml")
     assert comment.startswith(bot.MARKER)
     assert "risk high" in comment and "aaaaaaa" in comment and "always-human" in comment
+
+
+def test_verdict_lines_split_on_newlines_and_strip_bullets() -> None:
+    verdict = bot.Verdict(
+        tier="medium",
+        change_kind="scoped_behavior_change",
+        blast_radius="shared_helper",
+        reasons="- first\n- second\n\n",
+        look_at="litellm/a.py\nlitellm/b.py",
+    )
+    assert verdict.reason_lines() == ("first", "second")
+    assert verdict.look_at_lines() == ("litellm/a.py", "litellm/b.py")
+    rendered = bot.render_comment(
+        bot.Evaluation(_pr(), (), bot.Judgement("m", verdict)),
+        bot.decide(bot.Evaluation(_pr(), (), bot.Judgement("m", verdict)), True, True),
+        "r",
+    )
+    assert "Look at first:" in rendered and "`litellm/a.py`" in rendered and "- second" in rendered
 
 
 def test_judge_schema_matches_the_verdict_model() -> None:

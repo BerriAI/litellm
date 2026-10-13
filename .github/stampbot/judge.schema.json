@@ -13,15 +13,13 @@
       "enum": ["one_provider_or_page", "shared_helper", "request_hot_path", "boot_path"]
     },
     "reasons": {
-      "type": "array",
-      "items": { "type": "string" },
-      "minItems": 1,
-      "maxItems": 5
+      "type": "string",
+      "minLength": 1,
+      "description": "One to five short sentences of evidence for the tier, one per line."
     },
     "look_at": {
-      "type": "array",
-      "items": { "type": "string" },
-      "maxItems": 5
+      "type": "string",
+      "description": "Up to five file paths or symbols a human should read first, one per line. Empty for low."
     }
   }
 }
