@@ -92,6 +92,10 @@ def _loaded_tool() -> dict[str, JsonValue]:
     return {"type": "function", "name": "send_email", "description": "Send an email", "parameters": _EMAIL_PARAMETERS}
 
 
+def _custom_tool() -> dict[str, JsonValue]:
+    return {"type": "custom", "name": "run_sql", "description": "Run a SQL query", "defer_loading": True}
+
+
 def _namespace_tool() -> dict[str, JsonValue]:
     return {
         "type": "namespace",
@@ -480,6 +484,32 @@ def test_a_native_anthropic_search_tool_reaches_the_wire_untouched_and_keeps_eve
         ], sent
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+@pytest.mark.parametrize("route", ["anthropic", "mistral"])
+def test_a_deferred_custom_tool_keeps_its_deferral_only_while_a_search_tool_goes_out(
+    gateway: Gateway, route: Route, stream: bool
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_vendor(route)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, route, wire.url)
+        tools: Final = (_tool_search(), _custom_tool(), _loaded_tool())
+        response: Final = _raw(gateway, _responses_body(model, marker, tools, stream))
+        _assert_served(response, marker, stream)
+        request, body = _only_request(wire)
+        _assert_target(route, stream, request, body)
+        if route == "mistral":
+            assert _wire_tool_names(route, body) == ["run_sql", "send_email"], body
+            assert "defer_loading" not in request.body.decode(), body
+            assert "tool_search" not in request.body.decode(), body
+            return
+        sent: Final = _ITEMS.validate_python(body["tools"])
+        assert sent[0] == {"type": _REGEX_TOOL_TYPE, "name": _REGEX_TOOL_NAME}, sent
+        assert [(tool["name"], tool.get("defer_loading")) for tool in sent[1:]] == [
+            ("run_sql", True),
+            ("send_email", None),
+        ], sent
+
+
 def test_bedrock_converse_skips_a_native_search_tool_and_serves_the_deferred_tools(gateway: Gateway) -> None:
     call: Final = _Call("bedrock_converse", False, uuid.uuid4().hex)
     with wire_server(_converse) as wire, gateway.scenario() as scenario:
@@ -510,6 +540,108 @@ def test_a_non_boolean_defer_loading_is_refused_with_400_on_a_route_without_tool
         _assert_served(served, follow_up.marker, False)
         request, body = _only_request(wire)
         _assert_undeferred_wire(follow_up, request, body)
+
+
+def _text_parts(marker: str) -> tuple[str, ...]:
+    return ("part one ", "part two ", f"marker-{marker}")
+
+
+def _split_claude_events(marker: str) -> tuple[Event, ...]:
+    opened: Final = {**_claude_message(marker), "content": [], "stop_reason": None}
+    deltas: Final[tuple[Event, ...]] = tuple(
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": part}}
+        for part in _text_parts(marker)
+    )
+    return (
+        {"type": "message_start", "message": opened},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        *deltas,
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 7},
+        },
+        {"type": "message_stop"},
+    )
+
+
+def _split_chat_chunks(marker: str) -> tuple[bytes, ...]:
+    head: Final[Mapping[str, JsonValue]] = {
+        "id": f"cmpl-{marker}",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": _MISTRAL,
+    }
+    parts: Final = tuple(
+        rv.chat_sse(
+            {
+                **head,
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": part}, "finish_reason": None}],
+            }
+        )
+        for part in _text_parts(marker)
+    )
+    return (
+        *parts,
+        rv.chat_sse(
+            {
+                **head,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            }
+        ),
+        b"data: [DONE]\n\n",
+    )
+
+
+def _split_vendor(route: Route) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.method != "POST":
+            return Reply()
+        marker: Final = rv.newest_marker(request.body.decode()) or "health"
+        if route == "mistral":
+            return Reply(content_type="text/event-stream", chunks=_split_chat_chunks(marker))
+        return Reply(content_type="text/event-stream", chunks=sse_chunks(_split_claude_events(marker)))
+
+    return respond
+
+
+def _frames(text: str) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(_JSON_OBJECT.validate_json(line[6:]) for line in text.splitlines() if line.startswith("data: {"))
+
+
+def _message_texts(items: Sequence[Mapping[str, JsonValue]]) -> tuple[str, ...]:
+    return tuple(
+        "".join(str(part["text"]) for part in _ITEMS.validate_python(item["content"]))
+        for item in items
+        if item["type"] == "message"
+    )
+
+
+@pytest.mark.parametrize("route", ["anthropic", "mistral"])
+def test_a_streamed_answer_closes_its_message_item_with_every_streamed_delta(gateway: Gateway, route: Route) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_split_vendor(route)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, route, wire.url)
+        tools: Final = (_tool_search(), _function_tool(), _loaded_tool())
+        response: Final = _raw(gateway, _responses_body(model, marker, tools, True))
+        assert response.status_code == 200, response.text
+        frames: Final = _frames(response.text)
+        expected: Final = "".join(_text_parts(marker))
+        deltas: Final = [str(frame["delta"]) for frame in frames if frame.get("type") == "response.output_text.delta"]
+        assert "".join(deltas) == expected, frames
+        done: Final = [
+            _JSON_OBJECT.validate_python(frame["item"])
+            for frame in frames
+            if frame.get("type") == "response.output_item.done"
+        ]
+        assert _message_texts(done) == (expected,), done
+        (completed,) = [frame for frame in frames if frame.get("type") == "response.completed"]
+        output: Final = _ITEMS.validate_python(_JSON_OBJECT.validate_python(completed["response"])["output"])
+        assert _message_texts(output) == (expected,), output
+        request, body = _only_request(wire)
+        _assert_target(route, True, request, body)
 
 
 async def _send(client: httpx.AsyncClient, key: str, model: str, call: _Call) -> _Served:

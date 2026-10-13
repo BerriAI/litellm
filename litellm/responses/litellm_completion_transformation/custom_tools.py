@@ -196,18 +196,30 @@ def _is_well_formed_tool_flag(key: str, value: object) -> bool:
     return True
 
 
-_NAMESPACE_MEMBERS_ADAPTER: Final = TypeAdapter[list[dict[str, object]]](list[dict[str, object]])
+_NAMESPACE_MEMBERS_ADAPTER: Final = TypeAdapter[list[object]](list[object])
+_TOOL_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
+
+
+def _with_well_formed_flags(tool: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in tool.items() if _is_well_formed_tool_flag(key, value)}
+
+
+def _member_with_well_formed_flags(member: object) -> object:
+    try:
+        return _with_well_formed_flags(_TOOL_ADAPTER.validate_python(member))
+    except ValidationError:
+        return member
 
 
 def without_malformed_tool_flags(tool: Mapping[str, object]) -> Mapping[str, object]:
-    kept: Final = {key: value for key, value in tool.items() if _is_well_formed_tool_flag(key, value)}
+    kept: Final = _with_well_formed_flags(tool)
     if tool.get("type") != "namespace":
         return kept
     try:
         members: Final = _NAMESPACE_MEMBERS_ADAPTER.validate_python(tool.get("tools"))
     except ValidationError:
         return kept
-    return {**kept, "tools": [without_malformed_tool_flags(member) for member in members]}
+    return {**kept, "tools": [_member_with_well_formed_flags(member) for member in members]}
 
 
 def function_chat_tool(

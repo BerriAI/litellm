@@ -1426,6 +1426,17 @@ One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 """
 
 
+_NULL_DROPPED_OUTPUT_ITEM_KEYS: Final = frozenset(
+    (
+        ("reasoning", "status"),
+        ("reasoning", "content"),
+        ("reasoning", "encrypted_content"),
+        ("tool_search_call", "created_by"),
+        ("tool_search_output", "created_by"),
+    )
+)
+
+
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
     created_at: int
@@ -1515,8 +1526,12 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             return serialized
         return [
             (
-                {k: v for k, v in item.items() if v is not None or k not in ("status", "content", "encrypted_content")}
-                if isinstance(item, dict) and item.get("type") == "reasoning"
+                {
+                    k: v
+                    for k, v in item.items()
+                    if v is not None or (item.get("type"), k) not in _NULL_DROPPED_OUTPUT_ITEM_KEYS
+                }
+                if isinstance(item, dict)
                 else item
             )
             for item in serialized

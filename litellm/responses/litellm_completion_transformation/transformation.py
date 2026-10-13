@@ -120,6 +120,7 @@ from .custom_tools import (
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
     CompletionRoute,
+    answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
     has_server_tool_search,
@@ -128,6 +129,8 @@ from .tool_search import (
     is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    tool_search_call_ids,
+    without_tool_search_calls,
     without_tool_search_uses,
 )
 
@@ -258,8 +261,24 @@ SessionMessage: TypeAlias = (
 )
 
 
-def _without_stored_tool_search_uses(message: SessionMessage) -> SessionMessage | None:
-    return without_tool_search_uses(message) if isinstance(message, Message) else message
+def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) -> SessionMessage | None:
+    kept_calls: Final = without_tool_search_calls(message)
+    if not kept_calls and not message.get("content"):
+        return None
+    without_calls: Final = {key: value for key, value in message.items() if key != "tool_calls"}
+    return cast(  # cast-ok: the replayed assistant message minus its search calls keeps every other field as stored
+        SessionMessage, {**without_calls, "tool_calls": list(kept_calls)} if kept_calls else without_calls
+    )
+
+
+def _without_stored_tool_search_uses(message: SessionMessage, search_call_ids: frozenset[str]) -> SessionMessage | None:
+    if isinstance(message, Message):
+        return without_tool_search_uses(message)
+    if answers_tool_search(message, search_call_ids):
+        return None
+    if isinstance(message, Mapping) and holds_tool_search_use(message):
+        return _replayed_assistant_without_tool_search_uses(message)
+    return message
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -410,6 +429,8 @@ class LiteLLMCompletionResponsesConfig:
 
         if not has_server_tool_search(tools):
             return tools
+        if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()):
+            return [tool for tool in tools or () if not is_server_tool_search_tool(tool)]
         route_runs_tool_search: Final = supports_tool_search(
             model=model, custom_llm_provider=custom_llm_provider
         ) and provider_builds_anthropic_request(model, custom_llm_provider)
@@ -658,7 +679,12 @@ class LiteLLMCompletionResponsesConfig:
     ) -> tuple[SessionMessage, ...]:
         if provider_builds_anthropic_request(route.model, route.custom_llm_provider):
             return tuple(messages)
-        return tuple(kept for message in messages if (kept := _without_stored_tool_search_uses(message)) is not None)
+        search_call_ids: Final = tool_search_call_ids(messages)
+        return tuple(
+            kept
+            for message in messages
+            if (kept := _without_stored_tool_search_uses(message, search_call_ids)) is not None
+        )
 
     @staticmethod
     async def async_responses_api_session_handler(
@@ -2130,8 +2156,9 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tool["cache_control"] = tool.get("cache_control")
             if validated_defer_loading(tool.get("defer_loading")):
                 chat_completion_tool["defer_loading"] = True
-            if tool.get("allowed_callers"):
-                chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")
+            function_allowed_callers: Final = validated_allowed_callers(tool.get("allowed_callers"))
+            if function_allowed_callers:
+                chat_completion_tool["allowed_callers"] = function_allowed_callers
             if tool.get("input_examples"):
                 chat_completion_tool["input_examples"] = tool.get("input_examples")
             if tool.get("eager_input_streaming") is not None:

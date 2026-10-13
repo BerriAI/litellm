@@ -2617,6 +2617,7 @@ def anthropic_messages_pt(
         unique_tool_ids: set[str] = set()
 
         assistant_content: list[AnthropicMessagesAssistantMessageValues] = []
+        answered_tool_ids = answered_tool_call_ids(messages, msg_i)
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]
@@ -2670,7 +2671,7 @@ def anthropic_messages_pt(
                     assistant_tool_calls,
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
-                    answered_tool_ids=answered_tool_call_ids(messages, msg_i),
+                    answered_tool_ids=answered_tool_ids,
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -2854,7 +2855,7 @@ def anthropic_messages_pt(
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                     tool_results=_tool_results,
-                    answered_tool_ids=answered_tool_call_ids(messages, msg_i),
+                    answered_tool_ids=answered_tool_ids,
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates

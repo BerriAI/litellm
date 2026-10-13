@@ -3198,6 +3198,25 @@ class TestOpenAIResponsesHandlerNamespaceTools:
         assert result["tools"] == expected_tools
 
     @pytest.mark.asyncio
+    async def test_scanning_tools_with_malformed_flags_leaves_them_for_the_route_to_judge(self):
+        data: Final = _codex_request("hi")
+        data["tools"][0]["defer_loading"] = "false"
+        data["tools"][1]["tools"][0]["allowed_callers"] = "direct"
+        data["tools"][2]["defer_loading"] = 1
+        expected_tools: Final = copy.deepcopy(data["tools"])
+        guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["tools"] == expected_tools
+        assert [tool["function"]["name"] for tool in guardrail.seen_inputs[0]["tools"]] == [
+            "get_weather",
+            "mcp__confluence__confluence_get_page",
+            "mcp__confluence__confluence_search",
+            "apply_patch",
+        ]
+
+    @pytest.mark.asyncio
     async def test_appending_guardrail_keeps_namespace_and_adds_tool(self):
         data = _codex_request("hi")
         expected_tools = copy.deepcopy(data["tools"])

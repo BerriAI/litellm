@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Final, Literal
 
@@ -1853,6 +1854,27 @@ class TestToolTransformation:
         assert chat_tools[0] == {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
         assert [tool["defer_loading"] for tool in chat_tools[1:]] == [True, True]
 
+    @pytest.mark.parametrize(
+        "native_search_tool",
+        [
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+        ],
+    )
+    def test_server_tool_search_beside_a_native_search_tool_sends_only_the_native_one(
+        self, native_search_tool: Mapping[str, str]
+    ) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": [native_search_tool, *_deferred_tools_with_server_tool_search()]},
+            custom_llm_provider="anthropic",
+        )
+
+        chat_tools: Final = result["tools"]
+        assert [tool for tool in chat_tools if tool["type"] != "function"] == [native_search_tool]
+        assert [tool["defer_loading"] for tool in chat_tools if tool["type"] == "function"] == [True, True]
+
     def test_native_search_tool_passes_through_routes_without_tool_search(self) -> None:
         model: Final = "azure_ai/claude-sonnet-5-5"
         assert litellm.supports_tool_search(model, "azure_ai") is False
@@ -1937,11 +1959,18 @@ class TestToolTransformation:
         transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
         tools: Final = [
             {"type": "tool_search", "execution": "server"},
-            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": "false"},
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object"},
+                "defer_loading": "false",
+                "allowed_callers": "direct",
+            },
             {
                 "type": "namespace",
                 "name": "finance",
                 "tools": [
+                    "not a tool",
                     {
                         "type": "function",
                         "name": "get_stock_price",
@@ -1984,6 +2013,15 @@ class TestToolTransformation:
             "apply_patch": False,
         }
         assert all("allowed_callers" not in tool for tool in function_tools)
+
+    def test_top_level_function_allowed_callers_must_be_a_list_of_strings(self) -> None:
+        transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools
+        weather_tool: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
+
+        with pytest.raises(litellm.BadRequestError, match="allowed_callers must be a list of strings"):
+            transform(tools=[{**weather_tool, "allowed_callers": "direct"}])
+        converted, _ = transform(tools=[{**weather_tool, "allowed_callers": ["direct"]}])
+        assert converted[0]["allowed_callers"] == ["direct"]
 
     def test_custom_tools_stay_deferred_when_tool_search_goes_out(self) -> None:
         result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(

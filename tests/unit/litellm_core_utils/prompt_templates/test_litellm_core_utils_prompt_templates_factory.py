@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Final, List
 from unittest.mock import MagicMock, patch
 
@@ -7176,3 +7177,24 @@ def test_anthropic_messages_pt_keeps_a_replayed_tool_search_call_the_caller_answ
         "srvtoolu_01Search",
         "toolu_01Weather",
     ]
+
+
+def _merged_assistant_run_cost(run_length: int) -> float:
+    messages: Final = [
+        {"role": "user", "content": "Plan the trip"},
+        *({"role": "assistant", "content": "Working on it", "tool_calls": []} for _ in range(run_length)),
+        {"role": "user", "content": "Go on"},
+    ]
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+        return time.perf_counter() - started
+
+    return min(once() for _ in range(3))
+
+
+def test_anthropic_messages_pt_merges_a_long_assistant_run_in_linear_time():
+    growth: Final = _merged_assistant_run_cost(4000) / _merged_assistant_run_cost(1000)
+
+    assert growth < 8.0, f"cost grew {growth:.1f}x for 4x the assistant run"

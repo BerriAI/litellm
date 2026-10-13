@@ -63,6 +63,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.responses.litellm_completion_transformation.custom_tools import without_malformed_tool_flags
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -567,8 +568,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         original_tools: Final[tuple[Mapping[str, object], ...]] = (
             tuple(raw_tools) if isinstance(raw_tools, list) else ()
         )
+        scanned_tools: Final = tuple(without_malformed_tool_flags(tool) for tool in original_tools)
         flattened_tool_groups: Final = tuple(
-            form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
+            form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools)
         )
         extracted: Final = self._extract_guardrail_inputs(
             data, input_data, flattened_tool_groups, skip_system=skip_system

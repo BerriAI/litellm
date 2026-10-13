@@ -1,26 +1,29 @@
 import asyncio
+import itertools
 import json
 import os
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import EllipsisType, MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote
 
 import anthropic
 import httpx
 import openai
 import pytest
+from _pytest.mark.structures import ParameterSet
 from anthropic.types.beta import BetaToolUnionParam
 from integration._support import claude_code as cc
 from integration._support import responses_vendor as rv
 from integration._support.anthropic_thinking import BEDROCK_MODEL, EVENT_STREAM, MODEL, Event, aws_chunks, sse_chunks
-from integration._support.client import Gateway, Scenario, eventually
+from integration._support.client import Gateway, Scenario, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers.test_bedrock_auth_wire import RESPONSE as CONVERSE_RESPONSE
+from openai.types.responses import ResponseToolSearchCall
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 
@@ -65,8 +68,26 @@ _GEMINI_REPLY: Final[dict[str, JsonValue]] = {
     "modelVersion": _GEMINI,
 }
 
+_ORDER_PARAMETERS: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"order_id": {"type": "string"}},
+    "required": ["order_id"],
+}
+_MALFORMED_FLAGS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"defer_loading": "true", "allowed_callers": "direct"}
+)
+_WELL_FORMED_FLAGS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"defer_loading": True, "allowed_callers": ["direct"]}
+)
+_FLAG_REFUSALS: Final[Mapping[str, str]] = MappingProxyType(
+    {"defer_loading": "defer_loading must be a boolean", "allowed_callers": "allowed_callers must be a list of strings"}
+)
+
 _Client = Literal["sdk", "async_sdk", "raw"]
 Provider = Literal["anthropic", "bedrock_invoke", "vertex_ai"]
+FlaggedKind: TypeAlias = Literal["function", "custom", "namespace_member"]
+ToolFlag: TypeAlias = Literal["defer_loading", "allowed_callers"]
+DropSource: TypeAlias = Literal["off", "request", "deployment", "null", "request_string"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -606,6 +627,35 @@ def test_a_non_streaming_tool_search_call_item_carries_only_its_own_keys(gateway
         _assert_claude_wire(provider, False, request, body, _DEFERRED_NAMES)
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock_invoke"])
+def test_a_streamed_tool_search_call_item_carries_only_its_own_keys(gateway: Gateway, provider: Provider) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, provider, wire.url, gateway.upstream_url)
+        tools: Final = (_tool_search(), _function_tool(), _namespace_tool())
+        answer: Final = _raw_answer(gateway, _responses_body(model, marker, tools, True))
+        _assert_search_call_output(answer.payload, marker)
+        _assert_search_call_events(answer.events, marker, "completed")
+        streamed: Final = [_item_of(event) for event in _item_events(answer.events, "tool_search_call")]
+        (completed,) = [item for item in _tool_items(answer.payload) if item["type"] == "tool_search_call"]
+        assert [frozenset(item) for item in (*streamed, completed)] == [_TOOL_SEARCH_CALL_KEYS] * 3, streamed
+        request, body = _only_request(wire)
+        _assert_claude_wire(provider, True, request, body, _DEFERRED_NAMES)
+
+
+def _schema_properties(schemas: Mapping[str, JsonValue], name: str) -> frozenset[str]:
+    return frozenset(object_value(object_value(schemas[name])["properties"]))
+
+
+def test_the_openapi_schema_keeps_the_sdk_tool_search_call_beside_the_proxy_output_item(gateway: Gateway) -> None:
+    schemas: Final = object_value(object_value(gateway.get("/openapi.json")["components"])["schemas"])
+    proxy_item: Final = _schema_properties(schemas, "OutputToolSearchCall")
+    sdk_item: Final = _schema_properties(schemas, "ResponseToolSearchCall")
+    assert proxy_item == _TOOL_SEARCH_CALL_KEYS, schemas.get("OutputToolSearchCall")
+    assert sdk_item == frozenset(ResponseToolSearchCall.model_fields), schemas.get("ResponseToolSearchCall")
+    assert [name for name in schemas if name.endswith("ToolSearchCall") and "__" in name] == [], sorted(schemas)
+
+
 def test_search_arguments_that_never_parse_stream_an_incomplete_tool_search_call(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_Vendor(search_arguments=_TRUNCATED_ARGUMENTS).respond) as wire, gateway.scenario() as scenario:
@@ -698,6 +748,24 @@ def test_a_cache_hit_still_carries_the_tool_search_call(gateway: Gateway) -> Non
         rows: Final = _spend_rows(model, 2)
         assert len(rows) == 2 and all(str(row["status"]) == "success" for row in rows), rows
         assert sorted(str(row["cache_hit"]) == "True" for row in rows) == [False, True], rows
+
+
+def test_a_cache_hit_tool_search_call_item_carries_only_its_own_keys(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "anthropic", wire.url, gateway.upstream_url)
+        body: Final = _responses_body(model, marker, (_tool_search(), _function_tool()), False)
+        first: Final = _raw(gateway, "/v1/responses", body)
+        assert first.status_code == 200, first.text
+        assert len(wire.drain()) == 1
+        _await_cached(f"srvtoolu_{marker}")
+        hit: Final = _raw(gateway, "/v1/responses", body)
+        assert hit.status_code == 200, hit.text
+        assert wire.drain() == (), hit.text
+        payload: Final = _JSON_OBJECT.validate_json(hit.content)
+        _assert_search_call_output(payload, marker)
+        (search,) = [item for item in _tool_items(payload) if item["type"] == "tool_search_call"]
+        assert frozenset(search) == _TOOL_SEARCH_CALL_KEYS, search
 
 
 def test_model_info_reports_tool_search_support_for_the_claude_deployment(gateway: Gateway) -> None:
@@ -962,6 +1030,114 @@ def test_a_malformed_allowed_callers_on_a_namespace_member_is_refused_with_400(
         refused: Final = _raw(gateway, "/v1/responses", {**_responses_body(model, marker, tools, False), **_CACHE_BUST})
         assert refused.status_code == 400 and "allowed_callers must be a list of strings" in refused.text, refused.text
         assert wire.drain() == (), refused.text
+
+
+def _tool_flags(flag: ToolFlag) -> Mapping[str, JsonValue]:
+    return {key: _MALFORMED_FLAGS[key] if key == flag else value for key, value in _WELL_FORMED_FLAGS.items()}
+
+
+def _flagged_tool(kind: FlaggedKind, flag: ToolFlag) -> dict[str, JsonValue]:
+    match kind:
+        case "function":
+            return {
+                "type": "function",
+                "name": "lookup_order",
+                "description": "Look up an order",
+                "parameters": _ORDER_PARAMETERS,
+                **_tool_flags(flag),
+            }
+        case "custom":
+            return {"type": "custom", "name": "run_sql", "description": "Run a SQL query", **_tool_flags(flag)}
+        case "namespace_member":
+            return _namespace_tool(**_tool_flags(flag))
+
+
+def _flagged_wire_name(kind: FlaggedKind) -> str:
+    match kind:
+        case "function":
+            return "lookup_order"
+        case "custom":
+            return "run_sql"
+        case "namespace_member":
+            return "finance__get_stock_price"
+
+
+def _request_drop_params(source: DropSource) -> Mapping[str, JsonValue]:
+    match source:
+        case "off" | "deployment":
+            return {}
+        case "request":
+            return {"drop_params": True}
+        case "null":
+            return {"drop_params": None}
+        case "request_string":
+            return {"drop_params": "true"}
+
+
+def _drop_params_deployment(scenario: Scenario, source: DropSource, wire_url: str) -> str:
+    if source == "deployment":
+        return scenario.model(
+            model=f"anthropic/{_CLAUDE}", api_base=wire_url, api_key=cc.ANTHROPIC_API_KEY, drop_params=True
+        )
+    return scenario.model(model=f"anthropic/{_CLAUDE}", api_base=wire_url, api_key=cc.ANTHROPIC_API_KEY)
+
+
+def _drop_params_cells() -> tuple[ParameterSet, ...]:
+    kinds: Final[tuple[FlaggedKind, ...]] = ("function", "custom", "namespace_member")
+    flags: Final[tuple[ToolFlag, ...]] = ("defer_loading", "allowed_callers")
+    sources: Final[tuple[DropSource, ...]] = ("off", "request", "deployment")
+    grid: Final = tuple(
+        pytest.param(kind, flag, source, id=f"{kind}-{flag}-{source}")
+        for kind, flag, source in itertools.product(kinds, flags, sources)
+    )
+    edges: Final = tuple(
+        pytest.param("function", "defer_loading", source, id=f"function-defer_loading-{source}")
+        for source in ("null", "request_string")
+    )
+    return (*grid, *edges)
+
+
+def _assert_flag_dropped_on_wire(body: Mapping[str, JsonValue], kind: FlaggedKind, flag: ToolFlag) -> None:
+    tools: Final = _ITEMS.validate_python(body["tools"])
+    assert tools[0] == dict(_REGEX_TOOL), tools
+    (flagged,) = [tool for tool in tools if tool.get("name") == _flagged_wire_name(kind)]
+    assert flag not in flagged, flagged
+    kept: Final = "allowed_callers" if flag == "defer_loading" else "defer_loading"
+    assert flagged[kept] == _WELL_FORMED_FLAGS[kept], flagged
+    (weather,) = [tool for tool in tools if tool.get("name") == "get_weather"]
+    assert weather.get("defer_loading") is True, weather
+
+
+@pytest.mark.parametrize(("kind", "flag", "source"), _drop_params_cells())
+def test_drop_params_drops_a_malformed_tool_flag_and_without_it_the_request_is_refused_with_400(
+    gateway: Gateway, kind: FlaggedKind, flag: ToolFlag, source: DropSource
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_Vendor().respond) as wire, gateway.scenario() as scenario:
+        model: Final = _drop_params_deployment(scenario, source, wire.url)
+        tools: Final = (_tool_search(), _function_tool(), _flagged_tool(kind, flag))
+        response: Final = _raw(
+            gateway,
+            "/v1/responses",
+            {**_responses_body(model, marker, tools, False), **_CACHE_BUST, **_request_drop_params(source)},
+        )
+        if source in ("off", "null"):
+            assert response.status_code == 400, response.text
+            assert "litellm.BadRequestError" in response.text, response.text
+            assert _FLAG_REFUSALS[flag] in response.text, response.text
+            assert wire.drain() == (), response.text
+            follow_up: Final = uuid.uuid4().hex
+            served: Final = _raw_answer(
+                gateway, _responses_body(model, follow_up, (_tool_search(), _function_tool()), False)
+            )
+            _assert_search_call_output(served.payload, follow_up)
+            assert len(wire.drain()) == 1
+            return
+        assert response.status_code == 200, response.text
+        _assert_search_call_output(_JSON_OBJECT.validate_json(response.content), marker)
+        request, body = _only_request(wire)
+        assert request.target == "/v1/messages", request.target
+        _assert_flag_dropped_on_wire(body, kind, flag)
 
 
 def test_duplicate_tool_search_tools_reach_claude_and_its_refusal_reaches_the_caller(gateway: Gateway) -> None:

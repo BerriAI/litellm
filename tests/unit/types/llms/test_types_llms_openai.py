@@ -668,3 +668,21 @@ def test_openai_video_object_hidden_params_public_accessor_preserves_identity() 
     video.hidden_params = replacement
     assert video._hidden_params is replacement
     assert video.hidden_params["public_key"] == "visible"
+
+
+@pytest.mark.parametrize("extra_keys", ({}, {"created_by": "server"}), ids=("bridge-item", "openai-item"))
+def test_rebuilding_a_dumped_responses_answer_keeps_the_tool_search_call_keys(extra_keys: dict[str, str]) -> None:
+    search_call: Final = {
+        "id": "tsc_1",
+        "arguments": {"query": "weather"},
+        "call_id": None,
+        "execution": "server",
+        "status": "completed",
+        "type": "tool_search_call",
+        **extra_keys,
+    }
+    answer: Final = ResponsesAPIResponse(id="resp_1", created_at=1, output=[search_call])
+
+    rebuilt: Final = ResponsesAPIResponse(**answer.model_dump())
+
+    assert rebuilt.model_dump()["output"] == [search_call]
