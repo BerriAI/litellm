@@ -4,7 +4,7 @@ import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 import { UserReference } from "@/components/shared/EntityReference";
-import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import { useUserDisplayNamesWithCredentials } from "@/app/(dashboard)/hooks/users/useUsers";
 import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
 import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
@@ -404,11 +404,13 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     () => filterBySearchTerm(agentHubData ?? [], agentSearchTerm, (agent) => [agent.name, agent.description]),
     [agentHubData, agentSearchTerm],
   );
-  const { data: displayNames } = useUserDisplayNames(
+  const { data: displayNames } = useUserDisplayNamesWithCredentials(
     useMemo(
       () => (mcpHubData ?? []).flatMap((server) => [server.created_by ?? "", server.updated_by ?? ""]),
       [mcpHubData],
     ),
+    publicPage ? null : accessToken,
+    userRole,
   );
   const resolveUserName = useCallback((userId: string) => displayNames?.[userId], [displayNames]);
 

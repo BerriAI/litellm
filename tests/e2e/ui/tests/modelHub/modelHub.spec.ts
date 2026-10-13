@@ -80,6 +80,18 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
     await expect(page.getByRole("tab", { name: "Model Hub" })).toBeVisible({ timeout: 10_000 });
   });
 
+  test("anonymous visitor without a key stays on the public AI Hub", async ({ page }) => {
+    const uiConfigResponse = page.waitForResponse(/\.well-known\/litellm-ui-config/);
+    await page.goto("/ui/model_hub_table");
+    await uiConfigResponse;
+
+    await dismissFeedbackPopup(page);
+    await page.waitForLoadState("networkidle");
+
+    await expect(page.getByRole("tab", { name: "Model Hub" })).toBeVisible({ timeout: 10_000 });
+    await expect(page).toHaveURL(/\/ui\/model_hub_table/);
+  });
+
   test("Agent Hub and MCP Hub tabs render their public entries", async ({ page, request }) => {
     const suffix = `${Date.now()}`;
     const agentName = `e2e-public-agent-${suffix}`;

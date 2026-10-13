@@ -60,6 +60,14 @@ const userDisplayNameKeys = createQueryKeys("userDisplayNames");
 
 export const useUserDisplayNames = (userIds: readonly string[]) => {
   const { accessToken, userRole } = useAuthorized();
+  return useUserDisplayNamesWithCredentials(userIds, accessToken, userRole);
+};
+
+export const useUserDisplayNamesWithCredentials = (
+  userIds: readonly string[],
+  accessToken: string | null,
+  userRole: string | null,
+) => {
   const distinctIds = Array.from(new Set(userIds.filter((id) => id !== ""))).sort();
   return useQuery<Record<string, string>>({
     queryKey: userDisplayNameKeys.list({ filters: { ids: JSON.stringify(distinctIds) } }),
