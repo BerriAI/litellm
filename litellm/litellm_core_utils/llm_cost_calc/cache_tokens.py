@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final
 
 
 def extract_cache_read_tokens(usage_object: Mapping[str, object] | None) -> int:
@@ -39,7 +39,7 @@ def extract_cache_creation_tokens(usage_object: Mapping[str, object] | None) -> 
     details: Final = usage_object.get("prompt_tokens_details")
     if not isinstance(details, Mapping):
         return 0
-    typed_details: Final = cast(Mapping[str, object], details)
+    typed_details: Final[Mapping[str, object]] = details
     written: Final = next(
         (
             value
