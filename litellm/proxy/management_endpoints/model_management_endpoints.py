@@ -245,7 +245,7 @@ class _TransactionFactory(Protocol):
 
 
 class _ModelTransactionClient(LiteLLMBaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True, hide_input_in_errors=True)
 
     tx: _TransactionFactory
 
@@ -467,8 +467,12 @@ def _effective_complexity_router_config(
     ).effective
 
 
+def _dump_without_none(model: BaseModel) -> Mapping[str, object]:
+    return model.model_dump(exclude_none=True)
+
+
 def _decrypted_litellm_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object]:
-    dumped: Final[Mapping[str, object]] = litellm_params.model_dump(exclude_none=True)
+    dumped: Final = _dump_without_none(litellm_params)
     return MappingProxyType(
         {
             name: (
@@ -1037,7 +1041,7 @@ def update_db_model(
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
-    stored_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
+    stored_model_info: Final = _dump_without_none(db_model.model_info)
     echoed_pricing: Final = echoed_cost_map_pricing_fields(stored_model_info)
     merged_model_info: Final[dict[str, object]] = {
         k: v for k, v in stored_model_info.items() if k not in echoed_pricing
@@ -1856,8 +1860,8 @@ async def delete_team_models(
     Returns the model_ids that were deleted.
     """
     deleted_model_ids: Final[list[str]] = []
-    async with prisma_client.db.tx() as tx_ctx:
-        tx: Final[_TxModelTables] = tx_ctx
+    transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
+    async with transaction_client.tx() as tx:
         for team_id in team_ids:
             rows = await _get_team_deployments(team_id, prisma_client, table=tx.litellm_proxymodeltable)
             model_ids = [row.model_id for row in rows]
@@ -2190,7 +2194,7 @@ class ModelManagementAuthChecks:
             raise ProxyException(
                 message=(
                     f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"workload identity federation ({wif_fields[0]!r})."
+                    f"workload identity federation or OAuth token exchange ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,
                 code=status.HTTP_403_FORBIDDEN,

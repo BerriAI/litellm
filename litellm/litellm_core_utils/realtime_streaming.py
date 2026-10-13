@@ -782,7 +782,7 @@ class RealTimeStreaming:
             isinstance(cb, CustomGuardrail)
             and any(
                 cb.should_run_guardrail(
-                    data=self.request_data,
+                    data={**self.request_data, "stream": True},
                     event_type=et,
                 )
                 for et in event_hooks
@@ -847,7 +847,7 @@ class RealTimeStreaming:
         if event_hooks is None:
             event_hooks = [GuardrailEventHooks.realtime_input_transcription]
         _realtime_event_types: Final = event_hooks
-        _check_data: Final = {**self.request_data, "transcript": transcript}
+        _check_data: Final = {**self.request_data, "transcript": transcript, "stream": True}
         _already_run: Final[set] = set()
 
         for callback in litellm.callbacks:
@@ -1031,7 +1031,7 @@ class RealTimeStreaming:
                     cast(str, transcript),
                     item_id=cast(str | None, event.get("item_id")),
                 )
-                if not blocked and not self._is_transcription_session:
+                if not blocked and self._should_disable_vad_auto_response():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING
@@ -1078,7 +1078,7 @@ class RealTimeStreaming:
                 transcript,
                 item_id=event_obj.get("item_id"),
             )
-            if not blocked and not self._is_transcription_session:
+            if not blocked and self._should_disable_vad_auto_response():
                 await self._send_to_backend(json.dumps({"type": "response.create"}))
             return True
         return False

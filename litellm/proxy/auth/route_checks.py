@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     CommonProxyErrors,
     KeyManagementRoutes,
     LiteLLM_UserTable,
@@ -69,6 +70,16 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
 
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", "llm_api_routes"))
+
+# Method-scoped because the generic credential CRUD handlers share these paths:
+# the route check cannot admit PATCH/DELETE on a name like "user_connections"
+# or "*/user_connection*" without also opening the admin CRUD handlers.
+_INTERNAL_USER_CREDENTIAL_CONNECTION_ROUTES: Final = (
+    ("GET", "/credentials/user_connections"),
+    ("POST", "/credentials/{credential_name:path}/user_connection/start"),
+    ("POST", "/credentials/{credential_name:path}/user_connection/poll"),
+    ("DELETE", "/credentials/{credential_name:path}/user_connection"),
+)
 
 
 class RouteChecks:
@@ -322,6 +333,8 @@ class RouteChecks:
             and "get_spend_routes" in getattr(valid_token, "permissions", [])
         ):
             pass
+        elif route == "/lens" or route.startswith("/lens/"):
+            pass  # Lens authorizes the delegated role, including its POST-based read endpoints.
         elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
             RouteChecks._check_proxy_admin_viewer_access(
                 route=route,
@@ -331,7 +344,10 @@ class RouteChecks:
             )
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
-            and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
+            and (
+                RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
+                or RouteChecks.is_internal_user_credential_connection_route(route=route, request=request)
+            )
             or user_is_org_admin(request_data=request_data, user_object=user_obj)
             and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value)
             or _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
@@ -486,6 +502,13 @@ class RouteChecks:
         Check if route is an info route
         """
         return route in LiteLLMRoutes.info_routes.value
+
+    @staticmethod
+    def is_dashboard_session_info_route(route: str, team_id: str | None) -> bool:
+        """
+        Check if an Admin UI session key is calling an info route the dashboard polls in the background
+        """
+        return team_id == UI_TEAM_ID and RouteChecks.is_info_route(route)
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:
@@ -663,7 +686,9 @@ class RouteChecks:
             return None
 
         try:
-            method: Final = request.method
+            method: Final = cast(  # cast-ok: request.method is str at runtime; tests hand a MagicMock
+                object, request.method
+            )
         except (AttributeError, KeyError):
             return None
         if not isinstance(method, str):
@@ -672,6 +697,16 @@ class RouteChecks:
         return method.upper()
 
     _get_request_method = get_request_method
+
+    @staticmethod
+    def is_internal_user_credential_connection_route(route: str, request: Request | None) -> bool:
+        method: Final = RouteChecks.get_request_method(request)
+        if method is None:
+            return False
+        return any(
+            method == expected_method and RouteChecks.check_route_access(route=route, allowed_routes=(pattern,))
+            for expected_method, pattern in _INTERNAL_USER_CREDENTIAL_CONNECTION_ROUTES
+        )
 
     @staticmethod
     def is_auth_enforced_pass_through_route(route: str, method: str | None = None) -> bool:

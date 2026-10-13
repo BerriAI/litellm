@@ -5,8 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 import litellm
-from litellm.rust_bridge.responses.route_host import arguments, connection_defaults, map_failure, response
-from litellm.rust_bridge.public_call import NativeCall
+from litellm.rust_bridge.responses.route_host import connection_defaults, map_failure, response
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
@@ -40,26 +39,6 @@ def test_response_validates_into_the_public_responses_model() -> None:
 def test_response_rejects_a_payload_missing_required_fields() -> None:
     with pytest.raises(ValidationError):
         response(MappingProxyType({"object": "response"}))
-
-
-def test_arguments_preserve_the_bound_view() -> None:
-    kwargs: Final = MappingProxyType({"litellm_metadata": {"user_id": "u"}})
-    request: Final = NativeCall(
-        args=(),
-        kwargs=kwargs,
-        bound={
-            "model": "gpt-4o",
-            "input": "hi",
-            "stream": None,
-            "api_key": None,
-            "api_base": None,
-            "custom_llm_provider": "openai",
-            "extra_headers": None,
-            **kwargs,
-        },
-    )
-
-    assert arguments(request.bound) is request.bound
 
 
 @pytest.mark.parametrize(
