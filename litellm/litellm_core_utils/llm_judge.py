@@ -151,14 +151,41 @@ def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | No
 
     It is the caller's team only when the router's route to `model` for that team reaches a
     deployment a caller without a team cannot reach, which means the team has its own
-    deployment behind the name. Names every caller shares keep resolving, and billing,
-    exactly as they do without a team.
+    deployment behind the name. Names every caller shares keep resolving exactly as they do
+    without a team.
     """
     team_id: Final = auth.team_id if auth is not None else None
     if team_id is None or router is None:
         return None
     team_route: Final = router.get_candidate_model_ids_for_route(model, team_id)
     return None if team_route <= router.get_candidate_model_ids_for_route(model) else team_id
+
+
+def _field(value: object, key: str) -> object:
+    mapping: Final = _object_mapping(value)
+    return mapping.get(key) if mapping is not None else None
+
+
+async def team_routed_model(router: Router, model: str, team_id: str | None) -> str:
+    """`model`, or the id of the deployment the router picks for `team_id` on `model`.
+
+    The guardrail call then reaches the team's deployment without carrying the team, so,
+    like every other guardrail call, it is charged to no team and no key. A wildcard pick
+    keeps `model`, since its id alone would send the pattern to the provider.
+    """
+    if team_id is None:
+        return model
+    picked: Final = _object_mapping(
+        await router.async_get_available_deployment(  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # untyped router return
+            model=model, request_kwargs={"litellm_metadata": {"user_api_key_team_id": team_id}}
+        )
+    )
+    deployment_id: Final = _field(_field(picked, "model_info"), "id")
+    template: Final = router.get_deployment(model_id=deployment_id) if isinstance(deployment_id, str) else None
+    concrete: Final = template is not None and template.litellm_params.model == _field(
+        _field(picked, "litellm_params"), "model"
+    )
+    return deployment_id if isinstance(deployment_id, str) and concrete else model
 
 
 async def judge_acompletion(
@@ -178,9 +205,9 @@ async def judge_acompletion(
     The arm is chosen by `judge_target` under the caller's own team, the same call
     start-time validation makes, so a judge a team can reach cannot be validated as a
     deployment and then dispatched as a public name the SDK has never heard of."""
-    if judge_target(router, judge_model, team_id).via == "router":
-        return await router.acompletion(  # pyright: ignore[reportOptionalMemberAccess]  # a router target implies router is not None
-            model=judge_model,
+    if router is not None and judge_target(router, judge_model, team_id).via == "router":
+        return await router.acompletion(
+            model=await team_routed_model(router, judge_model, team_id),
             messages=messages,
             num_retries=0,
             fallbacks=[],

@@ -19,7 +19,13 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped upstream
 )
-from litellm.litellm_core_utils.llm_judge import attached_auth, caller_team_for, default_router_provider, judge_target
+from litellm.litellm_core_utils.llm_judge import (
+    attached_auth,
+    caller_team_for,
+    default_router_provider,
+    judge_target,
+    team_routed_model,
+)
 from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall, ChatCompletionToolCallChunk
@@ -33,14 +39,6 @@ if TYPE_CHECKING:
     from litellm import Router
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-
-
-class _TeamScope(TypedDict, total=False):
-    litellm_metadata: ReadOnly[Mapping[str, str]]
-
-
-def _team_scope(team_id: str | None) -> _TeamScope:
-    return {} if team_id is None else {"litellm_metadata": {"user_api_key_team_id": team_id}}
 
 
 class _CheckVerdict(TypedDict):
@@ -160,13 +158,12 @@ class DecisionModelGuardrail(CustomGuardrail):
         team_id: Final = caller_team_for(router, self.decision_model, auth)
         if judge_target(router, self.decision_model, team_id).via == "router" and router is not None:
             return await router.adecisions(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportUnknownArgumentType]  # factory_function-generated member
-                model=self.decision_model,
+                model=await team_routed_model(router, self.decision_model, team_id),
                 input=text,
                 questions=questions,
                 num_retries=0,
                 fallbacks=[],
                 timeout=self.timeout,
-                **_team_scope(team_id),
             )
         return await litellm.adecisions(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportUnknownArgumentType]  # SDK dispatch returns a broad union
             model=self.decision_model,

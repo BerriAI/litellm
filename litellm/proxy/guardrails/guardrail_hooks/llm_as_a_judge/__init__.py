@@ -255,9 +255,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             team_id=team_id,
             response_format={"type": "json_object"},
             temperature=0,
-            metadata=dict(_JUDGE_CALL_METADATA)
-            if team_id is None
-            else {**_JUDGE_CALL_METADATA, "user_api_key_team_id": team_id},
+            metadata=dict(_JUDGE_CALL_METADATA),
         )
         raw: Final = response.choices[0].message.content or "{}"
         return _parse_judge_verdict(raw)

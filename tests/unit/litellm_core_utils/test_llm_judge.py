@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.llm_judge import (
     judge_acompletion,
     judge_target,
     parse_json_verdict,
+    team_routed_model,
 )
 
 
@@ -258,3 +259,36 @@ def test_caller_team_for_follows_an_alias_that_wins_over_the_team_name() -> None
         model_list=[dict(_TEAM_JUDGE), dict(_SHARED_JUDGE)], model_group_alias={"team-judge": "shared-judge"}
     )
     assert caller_team_for(router, "team-judge", UserAPIKeyAuth(team_id="owner")) is None
+
+
+def _team_deployment(deployment_id: str, model: str, public_name: str) -> dict[str, object]:
+    return {
+        "model_name": f"{deployment_id}-name",
+        "litellm_params": {"model": model, "api_key": "fake"},
+        "model_info": {"id": deployment_id, "team_id": "owner", "team_public_model_name": public_name},
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "team_id", "expected"),
+    [
+        ("team-judge", "owner", {"owner-a", "owner-b"}),
+        ("team-judge", None, {"team-judge"}),
+        ("shared-judge", None, {"shared-judge"}),
+        ("team-wc/gpt-4o-mini", "owner", {"team-wc/gpt-4o-mini"}),
+    ],
+    ids=["team-deployments", "no-team", "shared-model", "team-wildcard"],
+)
+@pytest.mark.asyncio
+async def test_team_routed_model_pins_the_team_deployment_the_router_picks(
+    model: str, team_id: str | None, expected: set[str]
+) -> None:
+    router = litellm.Router(
+        model_list=[
+            _team_deployment("owner-a", "openai/gpt-4o-mini", "team-judge"),
+            _team_deployment("owner-b", "openai/gpt-4o-mini", "team-judge"),
+            _team_deployment("owner-wildcard", "openai/*", "team-wc/*"),
+            dict(_SHARED_JUDGE),
+        ]
+    )
+    assert await team_routed_model(router, model, team_id) in expected

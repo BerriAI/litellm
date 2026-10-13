@@ -1,5 +1,6 @@
 """Unit tests for the LLM-as-a-Judge guardrail hook."""
 
+import asyncio
 import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +12,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     LLMAsAJudgeGuardrail,
     _build_judge_prompt,
@@ -597,6 +599,33 @@ async def test_apply_guardrail_judge_error_fails_open(mock_completion):
 # ---------------------------------------------------------------------------
 
 
+_FAILING_JUDGE_REPLY: Final = {
+    "id": "chatcmpl-judge",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o-mini",
+    "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": '{"overall_score": 0}'}, "finish_reason": "stop"}
+    ],
+}
+
+
+def _owner_judge_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "private-judge",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": "https://judge.example/v1",
+                    "api_key": "synthetic-test-key",
+                },
+                "model_info": {"team_id": "owner", "team_public_model_name": "team-judge"},
+            }
+        ]
+    )
+
+
 @pytest.mark.parametrize(
     ("request_data", "blocks", "expected_calls"),
     [
@@ -613,38 +642,11 @@ async def test_team_judge_runs_only_for_the_authenticated_owner(
     request_data: dict[str, object], blocks: bool, expected_calls: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "private-judge",
-                "litellm_params": {
-                    "model": "openai/gpt-4o-mini",
-                    "api_base": "https://judge.example/v1",
-                    "api_key": "synthetic-test-key",
-                },
-                "model_info": {"team_id": "owner", "team_public_model_name": "team-judge"},
-            }
-        ]
-    )
+    router: Final = _owner_judge_router()
     guardrail: Final = _make_guardrail(judge_model="team-judge", router_provider=lambda: router)
     with respx.mock:
         upstream: Final = respx.post("https://judge.example/v1/chat/completions").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "id": "chatcmpl-judge",
-                    "object": "chat.completion",
-                    "created": 1,
-                    "model": "gpt-4o-mini",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": '{"overall_score": 0}'},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                },
-            )
+            return_value=httpx.Response(200, json=_FAILING_JUDGE_REPLY)
         )
         if blocks:
             with pytest.raises(HTTPException) as blocked:
@@ -655,6 +657,42 @@ async def test_team_judge_runs_only_for_the_authenticated_owner(
                 "texts": ["unsafe"]
             }
         assert upstream.call_count == expected_calls
+
+
+class _LoggedJudgeTeams(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.teams: list[object] = []  # mutable-ok: success callback sink
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        litellm_params: Final = kwargs.get("litellm_params")
+        metadata: Final = litellm_params.get("metadata") if isinstance(litellm_params, dict) else None
+        self.teams.append(metadata.get("user_api_key_team_id") if isinstance(metadata, dict) else None)
+
+
+@pytest.mark.asyncio
+async def test_team_judge_call_reaches_the_team_deployment_without_charging_the_team(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    logged: Final = _LoggedJudgeTeams()
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+    router: Final = _owner_judge_router()
+    guardrail: Final = _make_guardrail(judge_model="team-judge", router_provider=lambda: router)
+    request_data: Final[dict[str, object]] = {"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}
+    with respx.mock:
+        upstream: Final = respx.post("https://judge.example/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_FAILING_JUDGE_REPLY)
+        )
+        with pytest.raises(HTTPException) as blocked:
+            await guardrail.apply_guardrail({"texts": ["unsafe"]}, request_data, "request")
+    for _ in range(100):
+        if logged.teams:
+            break
+        await asyncio.sleep(0.05)
+    assert (blocked.value.status_code, upstream.call_count, logged.teams) == (422, 1, [None])
 
 
 def _judge_response_mock() -> MagicMock:

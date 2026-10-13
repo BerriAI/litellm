@@ -472,8 +472,13 @@ def _spend_teams_by_model_group(model_group: str) -> list[dict[str, JsonValue]]:
     return read_rows('SELECT team_id FROM "LiteLLM_SpendLogs" WHERE model_group = %s', (model_group,))
 
 
+def _spend_requests_by_team(team: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,))
+
+
+@pytest.mark.parametrize("guard_owner", ["proxy-wide", "caller-team"])
 @pytest.mark.parametrize("kind", ["decision_model", "llm_as_a_judge"])
-def test_proxy_wide_guardrail_model_spend_is_not_charged_to_the_team_caller(gateway: Gateway, kind: str) -> None:
+def test_guardrail_model_spend_is_not_charged_to_the_team_caller(gateway: Gateway, kind: str, guard_owner: str) -> None:
     with gateway.scenario() as scenario:
         is_decision: Final = kind == "decision_model"
         chat_handle: Final = register_scenario(f"{kind}-chat-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW))
@@ -485,12 +490,18 @@ def test_proxy_wide_guardrail_model_spend_is_not_charged_to_the_team_caller(gate
         chat: Final = scenario.model(api_base=f"{chat_handle.api_base()}/v1", api_key=chat_handle.scenario_id)
         team: Final = scenario.team(models=[chat])
         key: Final = scenario.key(team_id=team)
+        guard_info: Final[dict[str, JsonValue]] = {"team_id": team} if guard_owner == "caller-team" else {}
         guard_model: Final = (
             scenario.model(
-                model="typesafe/jev-latest", api_base=guard_handle.api_base(), api_key=guard_handle.scenario_id
+                model="typesafe/jev-latest",
+                api_base=guard_handle.api_base(),
+                api_key=guard_handle.scenario_id,
+                model_info=guard_info,
             )
             if is_decision
-            else scenario.model(api_base=f"{guard_handle.api_base()}/v1", api_key=guard_handle.scenario_id)
+            else scenario.model(
+                api_base=f"{guard_handle.api_base()}/v1", api_key=guard_handle.scenario_id, model_info=guard_info
+            )
         )
         guardrail: Final = f"{kind}-shared-guard-{uuid.uuid4().hex}"
         identity: Final = (
@@ -519,3 +530,4 @@ def test_proxy_wide_guardrail_model_spend_is_not_charged_to_the_team_caller(gate
         response_id: Final = string_value(JSON_OBJECT.validate_python(guarded.json())["id"])
         assert eventually(lambda: _spend_teams_by_request(response_id), bool, seconds=70) == [{"team_id": team}]
         held(lambda: _spend_teams_by_model_group(guard_model), lambda rows: rows == [], holding=3)
+        assert _spend_requests_by_team(team) == [{"request_id": response_id}]

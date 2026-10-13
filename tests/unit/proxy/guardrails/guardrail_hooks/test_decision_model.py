@@ -117,20 +117,20 @@ _PROXY_WIDE_TEAM_DECISION: Final = {
 @pytest.mark.parametrize(
     ("decision_model", "extra_deployments", "expected_host", "expected_logged"),
     [
-        ("team-decision", (), "team.example", ("team-decision", "owner")),
+        ("team-decision", (), "team.example", ("team-deployment", None)),
         (
             "team-decision",
             ({"model_name": "*", "litellm_params": {"model": "*"}},),
             "team.example",
-            ("team-decision", "owner"),
+            ("team-deployment", None),
         ),
-        ("team-decision", (_PROXY_WIDE_TEAM_DECISION,), "team.example", ("team-decision", "owner")),
+        ("team-decision", (_PROXY_WIDE_TEAM_DECISION,), "team.example", ("team-deployment", None)),
         ("shared-decision", (), "shared.example", ("shared-decision", None)),
     ],
     ids=["team-model", "catch-all-wildcard", "team-name-shadows-proxy-wide-name", "proxy-wide-model"],
 )
 @pytest.mark.asyncio
-async def test_decision_call_goes_to_the_owner_team_deployment_and_keeps_its_model_group(
+async def test_decision_call_goes_to_the_owner_team_deployment_without_charging_the_team(
     decision_model: str,
     extra_deployments: tuple[dict[str, object], ...],
     expected_host: str,
@@ -149,7 +149,7 @@ async def test_decision_call_goes_to_the_owner_team_deployment_and_keeps_its_mod
                     "api_base": "https://team.example",
                     "api_key": "synthetic-test-key",
                 },
-                "model_info": {"team_id": "owner", "team_public_model_name": "team-decision"},
+                "model_info": {"id": "team-deployment", "team_id": "owner", "team_public_model_name": "team-decision"},
             },
             {
                 "model_name": "shared-decision",
