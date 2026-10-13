@@ -192,6 +192,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    async def async_log_attempt_failure_event(self, kwargs: Mapping[str, object], exception: Exception) -> None:
+        """Runs once per failed provider call, unlike ``async_log_failure_event`` which runs once per logging object"""
+
     async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
         """Called when an audit log is created. Override in subclasses to handle."""
 
