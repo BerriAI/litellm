@@ -70,6 +70,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendUpdateQueue,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
@@ -728,6 +729,20 @@ class DBSpendUpdateWriter:
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_usage_transaction error (non-blocking): %s", e)
 
+    async def _enqueue_model_usage_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: PrismaClient,
+    ) -> None:
+        try:
+            transaction: Final = build_model_usage_transaction(payload)
+            if transaction is None:
+                return
+            async with prisma_client._model_usage_transactions_lock:
+                prisma_client.model_usage_transactions.append(transaction)
+        except Exception as e:
+            verbose_proxy_logger.debug("_enqueue_model_usage_transaction error (non-blocking): %s", e)
+
     async def _enqueue_autorouter_turn_transaction(
         self,
         payload: SpendLogsPayload,
@@ -1144,15 +1159,7 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
-        try:
-            from litellm.proxy.db.model_usage_rollup import increment_daily_model_usage
-
-            await increment_daily_model_usage(prisma_client=prisma_client, payload=payload_copy)
-        except Exception:
-            verbose_proxy_logger.debug(
-                "_batch_database_updates: increment_daily_model_usage failed: %s",
-                traceback.format_exc(),
-            )
+        await self._enqueue_model_usage_transaction(payload=payload_copy, prisma_client=prisma_client)
 
     async def _update_key_db(
         self,
