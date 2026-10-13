@@ -6,6 +6,7 @@ surface and the server-span + shared-provider behavior it produces.
 
 
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -21,6 +22,7 @@ import httpx  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from opentelemetry.instrumentation.propagators import (  # noqa: E402
     ResponsePropagator,
+    TraceResponsePropagator,
     get_global_response_propagator,
     set_global_response_propagator,
 )
@@ -44,6 +46,7 @@ from litellm.integrations.otel.mount import (  # noqa: E402
     PASSTHROUGH_PREFIXES,
     _passthrough_span_name_hook,
     instrument_fastapi_app,
+    is_trace_response_propagator_enabled,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: E402
     HttpPassThroughEndpointHelpers,
@@ -249,6 +252,20 @@ def test_blank_route_on_the_server_span_is_omitted():
     assert request_root_http_route() is None
 
 
+def test_span_hook_does_not_break_requests_when_the_span_provider_fails():
+    class _FailingSpan:
+        def is_recording(self) -> bool:
+            raise RuntimeError("span provider unavailable")
+
+        def update_name(self, name: str) -> None:
+            raise AssertionError(name)
+
+        def set_attribute(self, key: str, value: str) -> None:
+            raise AssertionError((key, value))
+
+    assert _passthrough_span_name_hook(_FailingSpan(), {}) is None
+
+
 def test_known_passthrough_prefixes_present():
     """Guard the prefix set against accidental edits."""
     assert {"openai", "anthropic", "vertex_ai", "bedrock"} <= PASSTHROUGH_PREFIXES
@@ -260,6 +277,20 @@ def test_instrument_fastapi_app_noop_when_gate_off(monkeypatch):
     app = fastapi.FastAPI()
     instrument_fastapi_app(app)
     assert getattr(app, "_is_instrumented_by_opentelemetry", False) is False
+
+
+def test_trace_response_propagator_is_disabled_when_gate_is_off(monkeypatch):
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    set_global_response_propagator(TraceResponsePropagator())
+
+    assert is_trace_response_propagator_enabled() is False
+
+
+def test_trace_response_propagator_is_disabled_when_optional_dependency_is_missing(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+
+    with patch.dict("sys.modules", {"opentelemetry.instrumentation.propagators": None}):
+        assert is_trace_response_propagator_enabled() is False
 
 
 def test_instrument_fastapi_app_attaches_when_gate_on(monkeypatch):
