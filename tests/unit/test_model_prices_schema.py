@@ -619,10 +619,10 @@ TENCENT_TOKENHUB_GLM_ROWS: Final = MappingProxyType(
 )
 TENCENT_TOKENHUB_KIMI_ROWS: Final = MappingProxyType(
     {
-        "tencent/kimi-k3": (3e-06, 1.5e-05, 3e-07, 1000000, True, True),
-        "tencent/kimi-k2.8-preview": (1e-06, 4e-06, 2.5e-07, 1000000, True, True),
-        "tencent/kimi-k2.7-code-highspeed": (1.9e-06, 8e-06, 3.8e-07, 256000, True, True),
-        "tencent/kimi-k2.7-code": (9.5e-07, 4e-06, 1.9e-07, 256000, True, True),
+        "tencent/kimi-k3": (3e-06, 1.5e-05, 3e-07, 1000000, False, False),
+        "tencent/kimi-k2.8-preview": (1e-06, 4e-06, 2.5e-07, 1000000, False, False),
+        "tencent/kimi-k2.7-code-highspeed": (1.9e-06, 8e-06, 3.8e-07, 256000, False, False),
+        "tencent/kimi-k2.7-code": (9.5e-07, 4e-06, 1.9e-07, 256000, False, False),
     }
 )
 
@@ -659,7 +659,7 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
     """Tencent TokenHub applies the DeepSeek weekday peak windows and half-rate off-peak prices
-    to these models (tencentcloud.com/products/tokenhub, read 2026-10-13)."""
+    to these models (tencentcloud.com/zh/document/product/1300/78937, read 2026-10-13)."""
     rows: Mapping[str, object] = json.loads(path.read_text())
     drifted: Final = {
         name: deepseek_off_peak_drift(entry)
@@ -680,8 +680,8 @@ def test_tencent_tokenhub_deepseek_rows_bill_half_rate_outside_weekday_peak_hour
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
-    """TokenHub publishes these prices, limits, and multimodal capabilities
-    (tencentcloud.com/products/tokenhub, read 2026-10-13)."""
+    """TokenHub publishes these prices and capabilities in its official model catalog and rate card
+    (tencentcloud.com/zh/document/product/1300/78934 and /78937, read 2026-10-13)."""
     rows: Mapping[str, object] = json.loads(path.read_text())
     actual: Final = MappingProxyType(
         {
@@ -712,8 +712,8 @@ def test_tencent_tokenhub_glm_rows_match_published_metadata(path: Path):
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_tencent_tokenhub_kimi_rows_match_published_metadata(path: Path):
-    """TokenHub publishes these Kimi prices, limits, and capabilities
-    (tencentcloud.com/products/tokenhub, read 2026-10-13)."""
+    """TokenHub publishes these Kimi prices and capabilities in its official model catalog and rate card
+    (tencentcloud.com/zh/document/product/1300/78934 and /78937, read 2026-10-13)."""
     rows: Mapping[str, object] = json.loads(path.read_text())
     actual: Final = MappingProxyType(
         {
