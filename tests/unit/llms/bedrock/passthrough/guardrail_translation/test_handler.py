@@ -36,6 +36,7 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import LLMAsAJudgeG
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import OpenAIModerationGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs import PanwPrismaAirsHandler
 from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security import PromptSecurityGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.promptguard.promptguard import PromptGuardGuardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -2302,7 +2303,7 @@ class TestConverseRewriteRegressions:
         assert result["data"]["messages"][0]["content"] == [{"text": "card [CARD] on file."}, {"text": "[NAME]"}]
 
     @pytest.mark.asyncio
-    async def test_texts_that_do_not_line_up_with_the_request_are_ignored_next_to_structured_rows(self):
+    async def test_texts_that_do_not_line_up_with_the_request_fail_closed_next_to_structured_rows(self):
         data = {
             "endpoint": "model/test/converse",
             "data": {
@@ -2325,13 +2326,10 @@ class TestConverseRewriteRegressions:
                 ],
             }
         )
-        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
-        assert result["data"]["system"] == [{"text": "You are a support bot."}]
-        assert result["data"]["messages"] == [
-            {"role": "user", "content": [{"text": "My name is Ann."}]},
-            {"role": "assistant", "content": [{"text": "Hi Ann."}]},
-            {"role": "user", "content": [{"text": "card [CARD] ok"}]},
-        ]
+        unchanged = copy.deepcopy(data["data"])
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert data["data"] == unchanged
 
     @pytest.mark.asyncio
     async def test_structured_messages_that_are_not_rows_fall_back_to_texts(self):
@@ -2786,6 +2784,7 @@ _FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
         experimental_use_latest_role_message_only=True,
     ),
     lambda: AktoGuardrail(akto_base_url="http://127.0.0.1:9", akto_api_key="akto-test", guardrail_name="akto"),
+    lambda: PromptGuardGuardrail(guardrail_name="promptguard", api_key="pg-test", api_base="http://127.0.0.1:9"),
 )
 
 
@@ -2831,6 +2830,7 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
             "hiddenlayer-v2",
             "bedrock-latest-user",
             "akto",
+            "promptguard",
         ],
     )
     async def test_guardrail_gets_every_flat_text_and_its_mask_reaches_every_turn(self, make_guardrail, monkeypatch):
@@ -3035,7 +3035,7 @@ class TestConverseTextsRebuiltFromRows:
         assert data["data"] == unchanged
 
     @pytest.mark.asyncio
-    async def test_user_only_texts_rebuilt_from_the_rows_give_way_to_the_rewritten_rows(self):
+    async def test_user_only_texts_rebuilt_from_the_rows_fail_closed_even_when_the_rows_hold_every_mask(self):
         data = {
             "endpoint": "model/anthropic.claude-sonnet/converse",
             "custom_llm_provider": "bedrock",
@@ -3053,41 +3053,12 @@ class TestConverseTextsRebuiltFromRows:
             rows = _card_rows_masked(inputs)
             return {"texts": [_row_text(row) for row in rows if row["role"] == "user"], "structured_messages": rows}
 
-        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, _ScriptedGuardrail(user_texts))
-
-        assert result["data"]["system"] == [{"text": "You are a support bot."}]
-        assert result["data"]["messages"] == [
-            {"role": "user", "content": [{"text": "My name is Ann."}]},
-            {"role": "assistant", "content": [{"text": "Hi Ann."}]},
-            {"role": "user", "content": [{"text": "Card **** please."}]},
-        ]
-
-    @pytest.mark.asyncio
-    async def test_rebuilt_texts_that_mask_a_turn_the_rows_leave_fail_closed_even_when_another_turn_has_that_mask(
-        self,
-    ):
-        data = {
-            "endpoint": "model/anthropic.claude-sonnet/converse",
-            "custom_llm_provider": "bedrock",
-            "data": {
-                "system": [{"text": "You are a support bot."}],
-                "messages": [
-                    {"role": "user", "content": [{"text": "4111 1111 1111 1111"}]},
-                    {"role": "assistant", "content": [{"text": "Noted."}]},
-                    {"role": "user", "content": [{"text": "4111 1111 1111 1111"}]},
-                ],
-            },
-        }
-
-        def mask_first_user_row_only(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
-            rows = copy.deepcopy(inputs["structured_messages"])
-            rows[1]["content"] = [{"type": "text", "text": "****"}]
-            return {"texts": ["****", "****"], "structured_messages": rows}
+        unchanged = copy.deepcopy(data["data"])
 
         with pytest.raises(UnappliableRequestRewrite):
-            await BedrockPassthroughGuardrailHandler().process_input_messages(
-                data, _ScriptedGuardrail(mask_first_user_row_only)
-            )
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, _ScriptedGuardrail(user_texts))
+
+        assert data["data"] == unchanged
 
 
 class TestConverseTextMaskTheRowsLeaveOut:
@@ -3151,10 +3122,8 @@ def _system_and_user_card_data() -> dict:
 
 class TestConverseTextsNextToRewrittenRows:
     @pytest.mark.asyncio
-    async def test_shorter_texts_the_rows_hold_give_way_to_the_rewritten_rows(self):
-        guard = _ScriptedGuardrail(
-            lambda inputs: {"texts": ["Card **** on file."], "structured_messages": _card_rows_masked(inputs)}
-        )
+    async def test_an_empty_texts_list_gives_way_to_the_rewritten_rows(self):
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": [], "structured_messages": _card_rows_masked(inputs)})
 
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(_system_and_user_card_data(), guard)
 

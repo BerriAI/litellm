@@ -1,5 +1,5 @@
 import copy
-from collections import Counter, deque
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
@@ -62,6 +62,7 @@ _FLAT_TEXT_PROVIDERS: Final = frozenset(
         "prompt_security",
         "panw_prisma_airs",
         "hiddenlayer",
+        "promptguard",
     }
 )
 
@@ -344,9 +345,13 @@ def _edits_drop_a_text_change(
     """
     Whether the row and tool edits alone leave out a change the guardrail made in its returned texts. Texts of the
     length that was sent are read position by position, so a changed string whose field the edits leave at its
-    original value is dropped. Texts of another length cannot be placed, so each of them must already be in the
-    edited body, as many times as it is returned, the way texts rebuilt from the rows are.
+    original value is dropped. Texts of another length cannot be placed, so what they mask cannot be checked either,
+    while an empty list leaves every text as it was.
     """
+    if not guardrailed_texts:
+        return False
+    if len(guardrailed_texts) != len(texts):
+        return True
     rewritten: Final = copy.deepcopy(dict(body))
     _, holders = _extract_converse_texts(
         rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results, scope.request_fields_first
@@ -356,11 +361,9 @@ def _edits_drop_a_text_change(
         return True
     _write_back_structured_edits(writes)
     edited: Final = [container[key] for container, key in holders]
-    if len(guardrailed_texts) == len(texts):
-        return any(
-            returned != before and after == before for before, returned, after in zip(texts, guardrailed_texts, edited)
-        )
-    return bool(Counter(guardrailed_texts) - Counter(edited))
+    return any(
+        returned != before and after == before for before, returned, after in zip(texts, guardrailed_texts, edited)
+    )
 
 
 def _extract_converse_output_texts(

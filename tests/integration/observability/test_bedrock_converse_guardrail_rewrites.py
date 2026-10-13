@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
@@ -73,6 +73,7 @@ class _Vendor(str, Enum):
     ADDS_A_TOOL = "adds-a-tool"
     RETURNS_ROW_TEXTS = "returns-row-texts"
     MASKS_TEXTS_AND_ROW_CONTENT = "masks-texts-and-row-content"
+    REBUILDS_USER_TEXTS = "rebuilds-user-texts"
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +117,17 @@ def _compacted(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
 
 def _content_masked(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**row, "content": _masked(row.get("content"))}
+
+
+def _row_parts(row: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
+    content: Final = row.get("content")
+    return tuple(object_value(part).get("text") for part in content) if isinstance(content, list) else (content,)
+
+
+def _user_texts(rows: Sequence[Mapping[str, JsonValue]]) -> list[JsonValue]:
+    return [
+        part for row in rows if row.get("role") == "user" for part in _row_parts(row) if isinstance(part, str) and part
+    ]
 
 
 def _row_text(row: Mapping[str, JsonValue]) -> str:
@@ -190,6 +202,13 @@ def _generic_verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str
                 "action": "GUARDRAIL_INTERVENED",
                 "texts": texts,
                 "structured_messages": list(map(_content_masked, sent_rows)),
+            }
+        case _Vendor.REBUILDS_USER_TEXTS:
+            content_masked: Final = list(map(_content_masked, sent_rows))
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": _user_texts(content_masked),
+                "structured_messages": content_masked,
             }
 
 
@@ -885,6 +904,59 @@ def test_promptguard_keeps_nested_request_fields_in_place(rig: _Rig) -> None:
 
     assert sent["additionalModelRequestFields"] == {**fields, "system": f"billing card {_MASK}"}
     assert sent["messages"] == [_user({"text": "Say hi."})]
+
+
+def test_texts_rebuilt_from_user_rows_keep_a_masked_request_field_and_a_masked_turn_apart(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [_user({"text": f"Repeat exactly: card {_CARD} ok"})],
+        "additionalModelRequestFields": {"system": f"billing card {_CARD}"},
+    }
+
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.REBUILDS_USER_TEXTS), body))
+
+    assert sent["messages"] == [_user({"text": f"Repeat exactly: card {_MASK} ok"})]
+    assert sent["additionalModelRequestFields"] == {"system": f"billing card {_MASK}"}
+
+
+def test_texts_rebuilt_from_user_rows_keep_nested_request_fields_in_place(rig: _Rig) -> None:
+    fields: Final = {
+        "system": f"billing card {_CARD}",
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "anthropic_beta": ["interleaved-thinking-2025-05-14"],
+    }
+    body: Final = {"messages": [_user({"text": "Say hi."})], "additionalModelRequestFields": fields}
+
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.REBUILDS_USER_TEXTS), body))
+
+    assert sent["additionalModelRequestFields"] == {**fields, "system": f"billing card {_MASK}"}
+    assert sent["messages"] == [_user({"text": "Say hi."})]
+
+
+def test_texts_rebuilt_from_user_rows_on_a_tool_loop_are_refused_before_bedrock(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": f"Charge card {_CARD}."}),
+            _assistant(_tool_use(_CARD)),
+            _user(_tool_result({"text": "charged"})),
+        ]
+    }
+    assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.REBUILDS_USER_TEXTS), body))
+
+
+def test_promptguard_masks_a_card_in_a_tool_call_argument_as_on_main(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": f"Charge card {_CARD}."}),
+            _assistant(_tool_use(_CARD)),
+            _user(_tool_result({"text": "charged"})),
+        ]
+    }
+    sent: Final = _forwarded(rig, _converse(rig, "promptguard", body))
+    assert sent["messages"] == [
+        _user({"text": f"Charge card {_MASK}."}),
+        _assistant(_tool_use(_MASK)),
+        _user(_tool_result({"text": "charged"})),
+    ]
 
 
 def test_akto_mask_reaches_tool_call_arguments_and_json_tool_results(rig: _Rig) -> None:
