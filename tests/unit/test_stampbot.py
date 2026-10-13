@@ -140,13 +140,27 @@ def test_fork_draft_and_closed_are_high() -> None:
     assert _floor(_findings(_pr(state="closed"), CODE_WITH_TEST)) == bot.Tier.high
 
 
-def test_over_the_size_cap_is_high() -> None:
-    findings = _findings(_pr(additions=RULES.size.judge_max.lines, deletions=1), CODE_WITH_TEST)
-    assert _floor(findings) == bot.Tier.high
-    many_files = tuple(_file(f"litellm/llms/openai/f{i}.py") for i in range(RULES.size.judge_max.files)) + (
+def _sized(path: str, additions: int) -> object:
+    return bot.ChangedFile(filename=path, status="modified", additions=additions, deletions=0, patch=None)
+
+
+def test_over_the_source_size_cap_is_high() -> None:
+    big_source = (_sized("litellm/llms/openai/x.py", RULES.size.judge_max.lines + 1), _file("tests/unit/t.py"))
+    assert _floor(_findings(_pr(), big_source)) == bot.Tier.high
+    many_files = tuple(_file(f"litellm/llms/openai/f{i}.py") for i in range(RULES.size.judge_max.files + 1)) + (
         _file("tests/unit/t.py"),
     )
     assert _floor(_findings(_pr(), many_files)) == bot.Tier.high
+
+
+def test_test_and_doc_lines_do_not_count_toward_the_cap() -> None:
+    files = (
+        _sized("litellm/llms/openai/x.py", 50),
+        _sized("tests/unit/llms/openai/test_x.py", RULES.size.judge_max.lines * 3),
+        _sized("docs/my_website/docs/x.md", RULES.size.judge_max.lines * 3),
+    ) + tuple(_sized(f"tests/unit/t{i}.py", 5) for i in range(RULES.size.judge_max.files + 5))
+    assert _floor(_findings(_pr(), files)) == bot.Tier.low
+    assert bot.source_size(files, RULES) == (50, 1)
 
 
 def test_code_change_without_a_test_is_medium() -> None:
@@ -175,6 +189,12 @@ def test_changes_requested_then_approved_by_the_same_reviewer_clears() -> None:
 def test_weakened_tests_are_high() -> None:
     deleted = (_file("litellm/llms/openai/x.py"), _file("tests/unit/t.py", status="removed"))
     assert _floor(_findings(_pr(), deleted)) == bot.Tier.high
+    moved = (
+        _file("litellm/llms/openai/x.py"),
+        _file("tests/old/t.py", status="removed"),
+        _file("tests/unit/llms/openai/test_x.py", status="added"),
+    )
+    assert _floor(_findings(_pr(), moved)) == bot.Tier.low
     skipped = (
         _file("litellm/llms/openai/x.py"),
         _file(

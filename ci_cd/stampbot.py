@@ -278,8 +278,12 @@ def _patch_lines(patch: str | None, sign: str) -> tuple[str, ...]:
 
 def _weakened_tests(files: Sequence[ChangedFile], rules: Rules) -> tuple[Finding, ...]:
     test_files: Final = tuple(file for file in files if matches_any(file.filename, rules.test_paths))
-    deleted: Final = tuple(
-        Finding(Tier.high, f"deletes test file `{f.filename}`") for f in test_files if f.status == "removed"
+    removed_files: Final = tuple(f for f in test_files if f.status == "removed")
+    added_files: Final = tuple(f for f in test_files if f.status == "added")
+    deleted: Final = (
+        tuple(Finding(Tier.high, f"deletes test file `{f.filename}`") for f in removed_files)
+        if len(removed_files) > len(added_files)
+        else ()
     )
     added_markers: Final = tuple(
         Finding(Tier.high, f"adds `{marker.strip()}` in `{f.filename}`")
@@ -325,7 +329,7 @@ def compute_findings(
     rules: Rules,
 ) -> tuple[Finding, ...]:
     head_repo: Final = pr.head.repo.full_name if pr.head.repo is not None else None
-    lines: Final = pr.additions + pr.deletions
+    lines, source_files = source_size(files, rules)
     paths: Final = tuple(file.filename for file in files)
     always_human: Final = tuple(
         Finding(Tier.high, f"`{path}` is on the always-human list")
@@ -347,10 +351,10 @@ def compute_findings(
             (
                 Finding(
                     Tier.high,
-                    f"{lines} changed lines in {len(paths)} files is over the {rules.size.judge_max.lines} line / {rules.size.judge_max.files} file cap",
+                    f"{lines} source lines in {source_files} source files is over the {rules.size.judge_max.lines} line / {rules.size.judge_max.files} cap (tests and docs are not counted)",
                 ),
             )
-            if lines > rules.size.judge_max.lines or len(paths) > rules.size.judge_max.files
+            if lines > rules.size.judge_max.lines or source_files > rules.size.judge_max.files
             else ()
         )
         + ((Finding(Tier.high, f"{unresolved_threads} unresolved review thread(s)"),) if unresolved_threads else ())
@@ -369,6 +373,15 @@ def compute_findings(
     )
 
 
+def source_size(files: Sequence[ChangedFile], rules: Rules) -> tuple[int, int]:
+    source: Final = tuple(
+        f
+        for f in files
+        if not matches_any(f.filename, rules.test_paths) and not matches_any(f.filename, rules.low_by_rule)
+    )
+    return sum(f.additions + f.deletions for f in source), len(source)
+
+
 def low_by_rule(files: Sequence[ChangedFile], rules: Rules) -> bool:
     return bool(files) and all(matches_any(file.filename, rules.low_by_rule) for file in files)
 
@@ -378,15 +391,16 @@ def _clip(text: str, cap: int, what: str) -> str:
 
 
 def judge_user_message(pr: PullRequest, files: Sequence[ChangedFile], rules: Rules) -> str:
-    lines: Final = pr.additions + pr.deletions
-    small: Final = lines <= rules.size.low.lines and len(files) <= rules.size.low.files
+    lines, source_files = source_size(files, rules)
+    small: Final = lines <= rules.size.low.lines and source_files <= rules.size.low.files
     file_lines: Final = "\n".join(f"- {f.filename} ({f.status}, +{f.additions} -{f.deletions})" for f in files)
     patches: Final = "\n\n".join(f"--- {f.filename}\n{f.patch}" for f in files if f.patch is not None)
     return "\n".join(
         (
             f"Title: {pr.title}",
             f"Author: @{pr.user.login}",
-            f"Size: {lines} changed lines in {len(files)} files" + (" (small by rule)" if small else ""),
+            f"Size: {lines} source lines in {source_files} source files, {len(files)} files total"
+            + (" (small by rule)" if small else ""),
             "",
             "## Files",
             file_lines,

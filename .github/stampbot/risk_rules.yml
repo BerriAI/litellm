@@ -78,7 +78,8 @@ test_weakening:
     - "assert "
     - expect(
 
-# Diff size caps. Over judge_max is high by rule. Under low the judge is told the change is small.
+# Source size caps, counting only files outside test_paths and low_by_rule (tests and docs are free).
+# Over judge_max is high by rule. Under low the judge is told the change is small.
 size:
   low:
     lines: 100
