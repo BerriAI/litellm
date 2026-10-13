@@ -382,10 +382,10 @@ def test_an_operator_response_propagator_is_kept(monkeypatch):
     set_global_response_propagator(_OperatorPropagator())
     provider, _ = _exporting_provider()
 
-    response = TestClient(_traced_app(monkeypatch, provider)).get("/success")
+    response = TestClient(_traced_app(monkeypatch, provider)).get("/relayed")
 
     assert response.headers["x-operator-trace"] == "kept"
-    assert "traceresponse" not in response.headers
+    assert response.headers["traceresponse"] == "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 
 
 def test_browsers_can_read_traceresponse_through_cors(monkeypatch):

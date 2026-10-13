@@ -4676,18 +4676,32 @@ def test_get_response_headers_strips_server_and_date():
     assert lowered["anthropic-ratelimit-requests-remaining"] == "100"
 
 
-def test_get_response_headers_relays_upstream_traceresponse_only_without_otel_v2(monkeypatch):
-    upstream_headers = httpx.Headers({"traceresponse": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"})
-    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
-    is_otel_v2_enabled.cache_clear()
-    relayed_without_v2 = HttpPassThroughEndpointHelpers.get_response_headers(upstream_headers)
+def test_get_response_headers_replaces_upstream_traceresponse_only_when_gateway_injects_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("opentelemetry.instrumentation.propagators")
+    from opentelemetry.instrumentation.propagators import (
+        TraceResponsePropagator,
+        get_global_response_propagator,
+        set_global_response_propagator,
+    )
+
+    upstream_headers: Final = httpx.Headers(
+        {"traceresponse": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}
+    )
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     is_otel_v2_enabled.cache_clear()
-    relayed_with_v2 = HttpPassThroughEndpointHelpers.get_response_headers(upstream_headers)
-    is_otel_v2_enabled.cache_clear()
+    previous_propagator: Final = get_global_response_propagator()
+    try:
+        set_global_response_propagator(None)
+        relayed_without_gateway_header: Final = HttpPassThroughEndpointHelpers.get_response_headers(upstream_headers)
+        set_global_response_propagator(TraceResponsePropagator())
+        relayed_with_gateway_header: Final = HttpPassThroughEndpointHelpers.get_response_headers(upstream_headers)
+    finally:
+        set_global_response_propagator(previous_propagator)
 
-    assert relayed_without_v2["traceresponse"] == upstream_headers["traceresponse"]
-    assert "traceresponse" not in relayed_with_v2
+    assert relayed_without_gateway_header["traceresponse"] == upstream_headers["traceresponse"]
+    assert "traceresponse" not in relayed_with_gateway_header
 
 
 class TestStaleRouteCleanupOnReload:

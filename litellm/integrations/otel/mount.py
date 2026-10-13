@@ -20,6 +20,20 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+
+def is_trace_response_propagator_enabled() -> bool:
+    if not is_otel_v2_enabled():
+        return False
+    try:
+        from opentelemetry.instrumentation.propagators import (
+            TraceResponsePropagator,
+            get_global_response_propagator,
+        )
+    except ImportError:
+        return False
+    return isinstance(get_global_response_propagator(), TraceResponsePropagator)
+
+
 # Routes excluded from server-span tracing by default: high-frequency pollers and
 # static UI/docs assets, none of which are LLM traffic. Entries are substring-matched
 # against the request path (unanchored, so they survive a ``server_root_path`` prefix
