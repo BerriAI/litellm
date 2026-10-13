@@ -135,6 +135,18 @@ def _row_text(row: Mapping[str, JsonValue]) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _latest_user_text(payload: Mapping[str, JsonValue]) -> str:
+    rows: Final = tuple(object_value(row) for row in list_value(payload.get("messages") or []))
+    return next((_row_text(row) for row in reversed(rows) if row.get("role") == "user"), "")
+
+
+def _singulr_verdict(body: Mapping[str, JsonValue]) -> Reply:
+    # the Singulr demo backend judges only the latest user message for prompt injection, observed 2026-10-13
+    if _INJECTION in _latest_user_text(body):
+        return Reply(body=json.dumps({"should_block": True, "blocking_due_to": "Prompt injection detected"}).encode())
+    return Reply(body=json.dumps(dict(body)).encode())
+
+
 def _generic_verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     if _CARD_PATTERN.search(json.dumps(body)) is None:
         return {"action": "NONE"}
@@ -299,6 +311,8 @@ def _vendor(request: Request) -> Reply:
         return Reply(body=json.dumps({"messages": _masked(evaluated)} if isinstance(evaluated, list) else {}).encode())
     if request.target.startswith("/bedrock-guardrail/guardrail/"):
         return _bedrock_guardrail_verdict(body)
+    if request.target == "/singulr/api/v1/ai-gateway/litellm-v2":
+        return _singulr_verdict(body)
     if request.target == "/promptguard/api/v1/guard":
         messages: Final = body.get("messages")
         if _CARD_PATTERN.search(json.dumps(messages)) is None:
@@ -352,6 +366,16 @@ def _guardrails(vendor_url: str) -> tuple[dict[str, JsonValue], ...]:
         _guardrail(
             "promptguard",
             {"guardrail": "promptguard", "api_base": f"{vendor_url}/promptguard", "api_key": "synthetic-pg-key"},
+        ),
+        _guardrail(
+            "singulr",
+            {
+                "guardrail": "singulr",
+                "singulr_api_base": f"{vendor_url}/singulr",
+                "singulr_api_key": "synthetic-singulr-key",
+                "singulr_application_id": "synthetic-application",
+                "singulr_guardrail_id": "synthetic-guardrail",
+            },
         ),
         _guardrail(
             "moderation",
@@ -864,6 +888,17 @@ def test_injection_in_additional_model_request_fields_is_blocked_by_akto(rig: _R
     _refused(rig, _converse(rig, "akto", body))
     scanned: Final = tuple(json.loads(request.body) for request in rig.vendor.drain())
     assert any(_INJECTION in json.dumps(payload) for payload in scanned), scanned
+
+
+def test_singulr_scans_request_field_strings_as_the_latest_user_turn_as_on_main(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [_user({"text": "What is 2+2?"})],
+        "additionalModelRequestFields": {"system": _INJECTION},
+    }
+
+    _refused(rig, _converse(rig, "singulr", body))
+
+    assert [_latest_user_text(payload) for payload in _vendor_bodies(rig)] == [_INJECTION]
 
 
 def test_flat_text_guardrail_gets_request_field_strings_last_as_on_main(rig: _Rig) -> None:

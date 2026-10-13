@@ -291,8 +291,8 @@ def converse_rows(request: ConverseRequest, include_tool_calls: bool) -> tuple[C
     )
     return (
         *_system_rows(request.system),
-        *_request_field_rows(request.additional_model_request_fields),
         *chain.from_iterable(messages),
+        *_request_field_rows(request.additional_model_request_fields),
     )
 
 
