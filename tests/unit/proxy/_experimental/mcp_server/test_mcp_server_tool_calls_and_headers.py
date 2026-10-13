@@ -11755,3 +11755,48 @@ async def test_stateful_cancellation_does_not_wait_for_call_or_change_its_auth(p
                         await asyncio.gather(task, return_exceptions=True)
     finally:
         mcp_server._remove_stateful_session_tracking(session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["MASK", "BLOCK"])
+@pytest.mark.parametrize("message", [None, "", "halfway"])
+@pytest.mark.parametrize("selected", [False, True])
+async def test_progress_text_obeys_request_output_guardrails(monkeypatch, action, message, selected):
+    import litellm
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.operations import _guarded_progress_callback
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+
+    policy = ContentFilterGuardrail(
+        guardrail_name="progress-policy", event_hook=GuardrailEventHooks.post_mcp_call,
+        blocked_words=[BlockedWord(keyword="halfway", action=ContentFilterAction(action))],
+        keyword_redaction_tag="[masked]", default_on=False,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [policy])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    delivered = AsyncMock()
+    caller = UserAPIKeyAuth(user_id="progress-user")
+    callback = _guarded_progress_callback(
+        delivered, None, caller, {"metadata": {"guardrails": ["progress-policy"] if selected else []}}
+    )
+    assert callback is not None
+    await callback(0, None, message)
+    expected = ("[masked]" if action == "MASK" else None) if selected and message == "halfway" else message
+    delivered.assert_awaited_once_with(0, None, expected)
+
+
+@pytest.mark.asyncio
+async def test_progress_callback_preserves_absence_and_cancellation():
+    import asyncio
+
+    from litellm.proxy._experimental.mcp_server.operations import _guarded_progress_callback
+
+    assert _guarded_progress_callback(None, None, None, {}) is None
+    callback = _guarded_progress_callback(AsyncMock(side_effect=asyncio.CancelledError), None, None, {})
+    assert callback is not None
+    with pytest.raises(asyncio.CancelledError):
+        await callback(0, 0, None)

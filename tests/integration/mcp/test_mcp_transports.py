@@ -246,8 +246,11 @@ def test_legacy_gateway_calls_modern_upstream_without_initialize(
             assert b"mcp-session-id" not in row.get("headers", {})
 
 
+@pytest.mark.parametrize("guardrail_action", ["off", "MASK", "BLOCK"])
 @pytest.mark.parametrize("protocol", ["2025-11-25", "2026-07-28"])
-def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(tmp_path, protocol: str) -> None:
+def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(
+    tmp_path, protocol: str, guardrail_action: str
+) -> None:
     import asyncio
     import os
     from pathlib import Path
@@ -257,11 +260,12 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(tmp
     import httpx
     import httpx2
     import yaml
-    from mcp import ClientSession
+    from mcp import ClientSession, MCPError
     from mcp.client.streamable_http import streamable_http_client
     from mcp.server.mcpserver import Context, MCPServer
     from mcp.server.transport_security import TransportSecuritySettings
     from mcp.types import DiscoverResult
+    from sse_starlette.sse import AppStatus
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
@@ -278,6 +282,10 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(tmp
     async def progress(ctx: Context) -> str:
         await ctx.report_progress(1, 2, "halfway")
         return "done"
+
+    @upstream.tool()
+    async def final_text() -> str:
+        return "halfway"
 
     @upstream.tool()
     async def slow() -> str:
@@ -306,9 +314,27 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(tmp
                         await session.initialize()
                     listed = await session.list_tools()
                     assert {"peer-progress", "peer-slow"} <= {tool.name for tool in listed.tools}
+                    if guardrail_action != "off":
+                        try:
+                            checked = await session.call_tool("peer-final_text", {})
+                        except MCPError:
+                            assert guardrail_action == "BLOCK"
+                        else:
+                            if guardrail_action == "BLOCK":
+                                assert checked.is_error
+                            else:
+                                assert not checked.is_error
+                                assert "halfway" not in str(checked.content)
                     result = await session.call_tool("peer-progress", {}, progress_callback=receive_progress)
                     assert not result.is_error
-                    assert observed == [(1.0, 2.0, "halfway")]
+                    assert len(observed) == 1
+                    assert observed[0][:2] == (1.0, 2.0)
+                    if guardrail_action == "BLOCK":
+                        assert observed[0][2] is None
+                    elif guardrail_action == "MASK":
+                        assert observed[0][2] and "halfway" not in observed[0][2]
+                    else:
+                        assert observed[0][2] == "halfway"
                     call = asyncio.create_task(session.call_tool("peer-slow", {}))
                     try:
                         assert await asyncio.to_thread(started.wait, 5), "Upstream tool did not start"
@@ -329,6 +355,7 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(tmp
 
     @asynccontextmanager
     async def lifespan(_: Starlette):
+        AppStatus.should_exit = False
         async with app.router.lifespan_context(app):
             yield
         _drain_sse_streams()
@@ -342,6 +369,19 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(tmp
             yaml.safe_dump(
                 {
                     "model_list": [],
+                    "guardrails": []
+                    if guardrail_action == "off"
+                    else [
+                        {
+                            "guardrail_name": "progress-policy",
+                            "litellm_params": {
+                                "guardrail": "litellm_content_filter",
+                                "mode": "post_mcp_call",
+                                "default_on": True,
+                                "blocked_words": [{"keyword": "halfway", "action": guardrail_action}],
+                            },
+                        }
+                    ],
                     "mcp_servers": {
                         "peer": {"url": upstream_url + "/mcp", "transport": "http", "protocol_version": protocol}
                     },

@@ -2217,7 +2217,9 @@ async def _execute_mcp_tool(
             client_ip=client_ip,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
-            host_progress_callback=host_progress_callback,
+            host_progress_callback=_guarded_progress_callback(
+                host_progress_callback, litellm_logging_obj, user_api_key_auth, kwargs
+            ),
             wire_compat=wire_compat,
             input_responses=input_responses,
             request_state=request_state,
@@ -2310,6 +2312,33 @@ async def _execute_mcp_tool(
         user_api_key_auth=user_api_key_auth,
         request_data=kwargs,
     )
+
+
+def _guarded_progress_callback(
+    callback: ProgressCallback | None,
+    logging_obj: LiteLLMLoggingObj | None,
+    caller: UserAPIKeyAuth | None,
+    request_data: Mapping[str, object],
+) -> ProgressCallback | None:
+    if callback is None:
+        return None
+
+    async def forward(progress: float, total: float | None, message: str | None = None) -> None:
+        if message is None:
+            await callback(progress, total, None)
+            return
+        try:
+            checked: Final = await _run_post_mcp_call_guardrails(
+                CallToolResult(content=[TextContent(type="text", text=message)]), logging_obj, caller, request_data
+            )
+            filtered: Final = TextContent.model_validate(checked.content[0]).text
+        except Exception:  # noqa: BLE001  # any guardrail failure must withhold unverified progress text
+            verbose_logger.warning("Withheld MCP progress text because its output guardrail check failed")
+            await callback(progress, total, None)
+        else:
+            await callback(progress, total, filtered)
+
+    return forward
 
 
 async def _run_post_mcp_call_guardrails(
