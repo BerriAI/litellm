@@ -1001,18 +1001,20 @@ class TestUnmanagedResponseIdEscapeHatches:
         assert result[field] == _FABRICATED_UNMANAGED_ID
 
     @pytest.mark.asyncio
-    async def test_proxy_without_a_signing_key_forwards_the_id_untouched(self, mock_cache, monkeypatch):
+    @pytest.mark.parametrize("call_type", sorted(_ADDRESSED_ID_FIELD_BY_CALL_TYPE))
+    async def test_proxy_without_a_signing_key_forwards_the_id_untouched(self, mock_cache, monkeypatch, call_type):
         monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
-        data = {"response_id": _FABRICATED_UNMANAGED_ID}
+        field = _ADDRESSED_ID_FIELD_BY_CALL_TYPE[call_type]
+        data = {field: _FABRICATED_UNMANAGED_ID}
 
         result = await _hook(signing_key=None).async_pre_call_hook(
             user_api_key_dict=_auth(),
             cache=mock_cache,
             data=data,
-            call_type="aget_responses",
+            call_type=call_type,
         )
 
-        assert result["response_id"] == _FABRICATED_UNMANAGED_ID
+        assert result[field] == _FABRICATED_UNMANAGED_ID
 
     @pytest.mark.asyncio
     async def test_proxy_admin_may_address_an_unmanaged_id(self, mock_cache, salt_key_env):
