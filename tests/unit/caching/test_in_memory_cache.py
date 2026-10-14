@@ -1,8 +1,12 @@
 import asyncio
 import json
+import random
+import sys
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -242,6 +246,41 @@ def test_in_memory_cache_heap_stays_bounded_when_a_live_key_is_rewritten_with_a_
 
     assert in_memory_cache.get_cache("hot_key") == "value_999"
     assert len(in_memory_cache.expiration_heap) <= 2 * in_memory_cache.max_size_in_memory + 1
+
+
+@pytest.fixture
+def fine_grained_thread_switching() -> Iterator[None]:
+    previous_interval: Final = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    yield
+    sys.setswitchinterval(previous_interval)
+
+
+def _keys_until(deadline: float, rng: random.Random) -> Iterator[str]:
+    while time.monotonic() < deadline:
+        yield f"hot_{rng.randrange(5)}" if rng.random() < 0.7 else f"cold_{rng.randrange(40)}"
+
+
+def _rewrite_keys_until(cache: InMemoryCache, deadline: float, seed: int) -> None:
+    rng: Final = random.Random(seed)
+    for key in _keys_until(deadline, rng):
+        cache.delete_cache(key)
+        cache.set_cache(key, "pin", ttl=rng.choice((300, 3600)))
+
+
+@pytest.mark.usefixtures("fine_grained_thread_switching")
+def test_in_memory_cache_survives_threads_rewriting_keys_in_a_full_cache() -> None:
+    cache: Final = InMemoryCache(max_size_in_memory=5)
+    deadline: Final = time.monotonic() + 0.5
+    thread_count: Final = 8
+
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        futures: Final = tuple(
+            executor.submit(_rewrite_keys_until, cache, deadline, seed) for seed in range(thread_count)
+        )
+
+    assert [future.exception() for future in futures] == [None] * thread_count
+    assert len(cache.cache_dict) <= cache.max_size_in_memory
 
 
 def test_in_memory_cache_prunes_expired_heap_entries_below_capacity():
