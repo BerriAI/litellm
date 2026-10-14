@@ -693,6 +693,7 @@ class MCPRequestHandler:
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 admitted_credential=admitted_credential,
+                preserve_jwt_subject=bool(validated_user_api_key_auth.jwt_claims),
             )
 
             return (
@@ -732,6 +733,7 @@ class MCPRequestHandler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         *,
         admitted_credential: str | None,
+        preserve_jwt_subject: bool = False,
     ) -> tuple[dict[str, str] | None, dict[str, str], str | None, dict[str, dict[str, str]] | None]:
         """Remove gateway-shaped credentials and the caller's admitted credential from EVERY egress
         header context: top-level ``Authorization`` (oauth2 + raw), the deprecated ``x-mcp-auth``, and
@@ -745,6 +747,14 @@ class MCPRequestHandler:
 
         # 1. Top-level Authorization → oauth2_headers.
         authz: Final = oauth2_headers.get("Authorization") if oauth2_headers else None
+        preserve_subject: Final = bool(
+            preserve_jwt_subject
+            and not admitted
+            and authz
+            and not _normalize_caller_admission_credential(authz).startswith("sk-")
+            and not MCPRequestHandler._is_gateway_admission_credential(authz)
+            and MCPRequestHandler._is_caller_admission_key(authz, admitted_credential)
+        )
         if admitted or cred(authz):
             oauth2_headers = None
 
@@ -753,7 +763,9 @@ class MCPRequestHandler:
         raw_headers = {
             k: v
             for k, v in raw_headers.items()
-            if k.lower() == "x-litellm-api-key" or not ((admitted and k.lower() == "authorization") or cred(v))
+            if k.lower() == "x-litellm-api-key"
+            or (preserve_subject and k.lower() == "authorization")
+            or not ((admitted and k.lower() == "authorization") or cred(v))
         }
 
         # 3. Deprecated x-mcp-auth value.

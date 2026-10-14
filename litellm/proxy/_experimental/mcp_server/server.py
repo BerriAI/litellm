@@ -1836,7 +1836,15 @@ if MCP_AVAILABLE:
             # so the client discovers the IdP, SSOs, and retries with a subject token, which LiteLLM
             # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
             # header lost, so the discovery flow needs this pre-emptive challenge.
-            if server and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers:
+            if (
+                server
+                and server.auth_type == MCPAuth.oauth2_token_exchange
+                and not oauth2_headers
+                and operations.global_mcp_server_manager.extract_subject_token(
+                    oauth2_headers, raw_headers, user_api_key_auth
+                )
+                is None
+            ):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
                     raise_token_exchange_challenge,
                 )
