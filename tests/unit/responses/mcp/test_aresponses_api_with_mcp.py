@@ -1,6 +1,13 @@
+import json
+import logging
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+
+import httpx
 import pytest
+import respx
 from mcp.types import Tool as MCPTool
-from typing import List, Any, cast
+from typing import Final, List, Any, cast
 from unittest.mock import AsyncMock, patch
 
 
@@ -55,15 +62,15 @@ async def test_mcp_helper_methods():
     ]
 
     # Should return True for MCP tools with litellm_proxy
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(mcp_tools) == True
+    assert LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(mcp_tools) == True
 
     # Should return False for other tools
     assert (
-        LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(other_tools) == False
+        LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(other_tools) == False
     )
 
     # Should return False for None
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(None) == False
+    assert LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(None) == False
 
     # Test _parse_mcp_tools
     mixed_tools = mcp_tools + other_tools
@@ -78,19 +85,19 @@ async def test_mcp_helper_methods():
     mcp_tools_never = [{"require_approval": "never"}]
     mcp_tools_always = [{"require_approval": "always"}]
 
-    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_never) == True
+    assert LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_never) == True
     assert (
-        LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_always) == False
+        LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_always) == False
     )
 
     # A single approval-required reference must disable auto-execution for the
     # whole request; otherwise a "never" reference alongside an "always" one
     # would let the approval-gated tool run without approval.
     mcp_tools_mixed = [{"require_approval": "never"}, {"require_approval": "always"}]
-    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_mixed) == False
+    assert LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_mixed) == False
     mcp_tools_manual = [{"require_approval": "never"}, {"require_approval": "manual"}]
-    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_manual) == False
-    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools([]) == False
+    assert LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_manual) == False
+    assert LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools([]) == False
 
     print("✓ MCP helper methods test passed!")
 
@@ -165,7 +172,7 @@ async def test_mcp_output_elements_addition():
     ]
 
     # Test adding output elements
-    updated_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
+    updated_response = LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
         response=mock_response,
         mcp_tools_fetched=mock_mcp_tools,
         tool_results=mock_tool_results,
@@ -227,7 +234,7 @@ async def test_aresponses_api_with_mcp_mock_integration():
     )
 
     # Test 1: Verify MCP tools are detected correctly
-    should_use_mcp = LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+    should_use_mcp = LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(
         cast(Any, mcp_tools)
     )
     assert (
@@ -235,7 +242,7 @@ async def test_aresponses_api_with_mcp_mock_integration():
     ), "Should detect MCP tools with litellm_proxy server_url"
 
     # Test 2: Verify auto-execution detection works
-    should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+    should_auto_execute = LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(
         cast(Any, mcp_tools)
     )
     assert (
@@ -330,7 +337,7 @@ async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process
     with (
         patch.object(
             LiteLLM_Proxy_MCP_Handler,
-            "_process_mcp_tools_without_openai_transform",
+            "process_mcp_tools_without_openai_transform",
             mock_process,
         ),
         patch(
@@ -733,7 +740,7 @@ async def test_streaming_mcp_events_validation():
         ) as mock_get_tools,
         patch.object(
             LiteLLM_Proxy_MCP_Handler,
-            "_execute_tool_calls",
+            "execute_tool_calls",
             new_callable=AsyncMock,
         ) as mock_execute_tools,
         patch(
@@ -869,7 +876,7 @@ async def test_mcp_parameter_preparation_helpers():
     }
 
     # Test Case 1: Auto-execute scenario (should disable streaming)
-    initial_params_auto = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
+    initial_params_auto = LiteLLM_Proxy_MCP_Handler.prepare_initial_call_params(
         call_params=base_call_params, should_auto_execute=True
     )
 
@@ -885,7 +892,7 @@ async def test_mcp_parameter_preparation_helpers():
     print("✅ _prepare_initial_call_params (auto-execute) works correctly")
 
     # Test Case 2: No auto-execute scenario (should preserve streaming)
-    initial_params_no_auto = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
+    initial_params_no_auto = LiteLLM_Proxy_MCP_Handler.prepare_initial_call_params(
         call_params=base_call_params, should_auto_execute=False
     )
 
@@ -899,7 +906,7 @@ async def test_mcp_parameter_preparation_helpers():
     print("✅ _prepare_initial_call_params (no auto-execute) works correctly")
 
     # Test _prepare_follow_up_call_params
-    follow_up_params = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+    follow_up_params = LiteLLM_Proxy_MCP_Handler.prepare_follow_up_call_params(
         call_params=base_call_params, original_stream_setting=True
     )
 
@@ -1010,7 +1017,7 @@ async def test_mcp_tool_execution_events_creation():
     ]
 
     # Create tool execution events
-    execution_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
+    execution_events = LiteLLM_Proxy_MCP_Handler.create_tool_execution_events(
         tool_calls=mock_tool_calls, tool_results=mock_tool_results
     )
 
@@ -1036,7 +1043,7 @@ async def test_mcp_tool_execution_events_creation():
     print("Tool execution events have proper structure")
 
     # Test with empty inputs
-    empty_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
+    empty_events = LiteLLM_Proxy_MCP_Handler.create_tool_execution_events(
         tool_calls=[], tool_results=[]
     )
 
@@ -1275,3 +1282,207 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
             "tools_per_call": [len(tools) for tools in llm_call_tools],
             "duplicate_tools_found": False,
         }
+
+
+WEATHER_TOOL: Final = MCPTool(
+    name="get_weather",
+    description="Get weather for a city",
+    inputSchema={"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+)
+WEATHER_ARGUMENTS: Final = {"city": "San Francisco"}
+WEATHER_RESULT: Final = "Sunny, 72F"
+WEATHER_ANSWER: Final = "It is sunny in San Francisco"
+SSE_HEADERS: Final = {"content-type": "text/event-stream"}
+
+
+def _sse(events: Sequence[Mapping[str, object]]) -> bytes:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+
+def _openai_response(response_id: str, status: str, output: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1700000000,
+        "status": status,
+        "model": "gpt-4o-mini",
+        "output": list(output),
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
+    }
+
+
+def _openai_round(response_id: str, item: Mapping[str, object], done_item: Mapping[str, object]) -> bytes:
+    events: Final = (
+        {"type": "response.created", "response": _openai_response(response_id, "in_progress", ())},
+        {"type": "response.in_progress", "response": _openai_response(response_id, "in_progress", ())},
+        {"type": "response.output_item.added", "output_index": 0, "item": dict(item)},
+        {"type": "response.output_item.done", "output_index": 0, "item": dict(done_item)},
+        {"type": "response.completed", "response": _openai_response(response_id, "completed", (done_item,))},
+    )
+    return _sse(tuple({**event, "sequence_number": number} for number, event in enumerate(events)))
+
+
+def _openai_tool_round() -> bytes:
+    call: Final = {"type": "function_call", "id": "fc_1", "call_id": "call_weather", "name": "get_weather"}
+    return _openai_round(
+        "resp_tool_round",
+        {**call, "arguments": "", "status": "in_progress"},
+        {**call, "arguments": json.dumps(WEATHER_ARGUMENTS), "status": "completed"},
+    )
+
+
+def _openai_answer_round() -> bytes:
+    message: Final = {"type": "message", "id": "msg_1", "role": "assistant"}
+    return _openai_round(
+        "resp_answer_round",
+        {**message, "status": "in_progress", "content": []},
+        {**message, "status": "completed", "content": [{"type": "output_text", "text": WEATHER_ANSWER, "annotations": []}]},
+    )
+
+
+def _anthropic_round(message_id: str, block: Mapping[str, object], delta: Mapping[str, object], stop: str) -> bytes:
+    return _sse(
+        (
+            {
+                "type": "message_start",
+                "message": {
+                    "id": message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-haiku-4-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 5, "output_tokens": 1},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": dict(block)},
+            {"type": "content_block_delta", "index": 0, "delta": dict(delta)},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": stop}, "usage": {"output_tokens": 5}},
+            {"type": "message_stop"},
+        )
+    )
+
+
+def _anthropic_tool_round() -> bytes:
+    return _anthropic_round(
+        "msg_tool_round",
+        {"type": "tool_use", "id": "call_weather", "name": "get_weather", "input": {}},
+        {"type": "input_json_delta", "partial_json": json.dumps(WEATHER_ARGUMENTS)},
+        "tool_use",
+    )
+
+
+def _anthropic_answer_round() -> bytes:
+    return _anthropic_round(
+        "msg_answer_round",
+        {"type": "text", "text": ""},
+        {"type": "text_delta", "text": WEATHER_ANSWER},
+        "end_turn",
+    )
+
+
+SCRIPTED_PROVIDERS: Final = MappingProxyType(
+    {
+        "openai": ("openai/gpt-4o-mini", "https://api.openai.com/v1/responses", _openai_tool_round, _openai_answer_round),
+        "anthropic": (
+            "anthropic/claude-haiku-4-5",
+            "https://api.anthropic.com/v1/messages",
+            _anthropic_tool_round,
+            _anthropic_answer_round,
+        ),
+    }
+)
+
+
+def _event_type(event: object) -> str:
+    event_type: Final = getattr(event, "type", "")
+    return str(getattr(event_type, "value", event_type))
+
+
+def _first_index(events: Sequence[object], event_type: str) -> int:
+    return next(index for index, event in enumerate(events) if _event_type(event) == event_type)
+
+
+async def _scripted_mcp_stream(
+    model: str, upstream_url: str, rounds: Sequence[bytes]
+) -> tuple[tuple[object, ...], respx.Route, AsyncMock, AsyncMock]:
+    upstream: Final = respx.post(upstream_url).mock(
+        side_effect=[httpx.Response(200, content=body, headers=SSE_HEADERS) for body in rounds]
+    )
+    with (
+        patch.object(LiteLLM_Proxy_MCP_Handler, "_get_mcp_tools_from_manager", new_callable=AsyncMock) as fetch,
+        patch.object(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", new_callable=AsyncMock) as execute,
+    ):
+        fetch.return_value = ([WEATHER_TOOL], ["litellm_proxy"])
+        execute.return_value = [{"tool_call_id": "call_weather", "result": WEATHER_RESULT}]
+        response: Final = await litellm.aresponses(
+            model=model,
+            api_key="sk-scripted",
+            tools=[cast(Any, {"type": "mcp", "server_url": "litellm_proxy", "require_approval": "never"})],
+            tool_choice="required",
+            input=[{"role": "user", "type": "message", "content": "What's the weather in San Francisco?"}],
+            stream=True,
+        )
+        events: Final = tuple([event async for event in response])
+    return events, upstream, fetch, execute
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", tuple(SCRIPTED_PROVIDERS))
+@respx.mock
+async def test_streaming_responses_api_with_mcp_tools(
+    provider: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS[provider]
+
+    with caplog.at_level(logging.ERROR):
+        events, upstream, fetch, execute = await _scripted_mcp_stream(
+            model, upstream_url, (tool_round(), answer_round())
+        )
+
+    assert fetch.await_count == 1
+    executed: Final = execute.await_args.kwargs["tool_calls"]
+    assert [(call.name, json.loads(call.arguments)) for call in executed] == [("get_weather", WEATHER_ARGUMENTS)]
+    assert upstream.call_count == 2
+    first_body: Final = json.loads(upstream.calls[0].request.content)
+    follow_up: Final = json.dumps(json.loads(upstream.calls[1].request.content))
+    assert "get_weather" in json.dumps(first_body["tools"])
+    assert WEATHER_RESULT in follow_up and "call_weather" in follow_up
+    event_types: Final = [_event_type(event) for event in events]
+    assert event_types.index("response.mcp_list_tools.completed") < event_types.index("response.mcp_call.completed")
+    assert event_types[-1] == "response.completed"
+    assert WEATHER_ANSWER in json.dumps(events[-1].response.model_dump(mode="json"))
+    assert not [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_streaming_mcp_event_order_and_response_id_consistency(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    model, upstream_url, tool_round, answer_round = SCRIPTED_PROVIDERS["openai"]
+
+    with caplog.at_level(logging.ERROR):
+        events, _, _, _ = await _scripted_mcp_stream(model, upstream_url, (tool_round(), answer_round()))
+
+    created: Final = _first_index(events, "response.created")
+    in_progress: Final = _first_index(events, "response.in_progress")
+    output_item_added: Final = _first_index(events, "response.output_item.added")
+    mcp_list_in_progress: Final = _first_index(events, "response.mcp_list_tools.in_progress")
+    completed: Final = _first_index(events, "response.completed")
+    assert created < in_progress < output_item_added < mcp_list_in_progress < completed
+    lifecycle_ids: Final = [
+        event.response.id
+        for event in events
+        if _event_type(event) in ("response.created", "response.in_progress", "response.completed")
+    ]
+    assert len(lifecycle_ids) == 3
+    assert lifecycle_ids[0] == lifecycle_ids[1]
+    assert lifecycle_ids[2] != lifecycle_ids[0]
+    assert not [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]

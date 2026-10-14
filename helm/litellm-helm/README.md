@@ -225,3 +225,9 @@ At the time of writing, the Admin UI is unable to add models. This is because
 it would need to update the `config.yaml` file which is a exposed ConfigMap, and
 therefore, read-only. This is a limitation of this helm chart, not the Admin UI
 itself.
+
+## Connect Lens
+
+`lensWorker.mode` selects `disabled`, `bundled` or `external`. Bundled mode generates separate service and identity-signing credentials. External mode requires `lensWorker.gateway.secretName` and `lensWorker.serviceTokenSecret.name`; their keys default to `gateway-secret` and `service-token`. Provision distinct values matching the external Lens deployment
+
+Follow the [Lens Helm connection guide](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#connect-a-gateway) for complete values, verification, GitOps credential requirements and existing-data migration. Source-chart installation requires a built Lens image until the first signed Lens release is published

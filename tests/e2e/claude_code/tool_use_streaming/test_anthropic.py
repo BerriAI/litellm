@@ -29,6 +29,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -98,6 +99,16 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
 
 
 @pytest.mark.covers("llm.messages.anthropic.tool_use.stream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.ANTHROPIC,),
+        models=tuple(ANTHROPIC_MODELS),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=Mode.STREAM,
+    )
+)
 def test_tool_use_streaming_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     proxy preserves fine-grained tool streaming end-to-end."""
