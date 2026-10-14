@@ -84,11 +84,7 @@ class GoogleAIStudioTokenCounter:
         generate_content_request: Final = {
             "model": model if model.startswith("models/") else f"models/{model}",
             "contents": contents,
-            **(
-                {"systemInstruction": dict(system_instruction)}
-                if system_instruction is not None
-                else {}
-            ),
+            **({"systemInstruction": dict(system_instruction)} if system_instruction is not None else {}),
             **({"tools": [dict(tool) for tool in tools]} if tools else {}),
         }
         return {"generateContentRequest": generate_content_request}
