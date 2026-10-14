@@ -642,7 +642,7 @@ def _called_tools(upstream: McpPeer) -> list[tuple[object, object]]:
 def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_after_reject(
     gateway: Gateway, peer: Gateway
 ) -> None:
-    with mcp_peer() as upstream, gateway.scenario() as scenario:
+    with mcp_peer() as upstream, mcp_peer() as throwaway_upstream, gateway.scenario() as scenario:
         alias: Final = "submitted" + uuid.uuid4().hex[:8]
         user: Final = scenario.user()
         team: Final = scenario.team()
@@ -662,10 +662,33 @@ def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_a
             {"approval_status": "pending_review", "submitted_by": user, "review_notes": None}
         ]
         assert _submission(gateway, identity).approval_status == "pending_review"
+        throwaway_alias: Final = "reload" + uuid.uuid4().hex[:8]
+        throwaway_registered: Final = gateway.client.post(
+            "/v1/mcp/server/register",
+            headers={"x-litellm-api-key": member},
+            json={"server_name": throwaway_alias, "alias": throwaway_alias, **throwaway_upstream.registration()},
+        )
+        assert throwaway_registered.status_code == 201, throwaway_registered.text
+        throwaway_submission: Final = Submission.model_validate_json(throwaway_registered.content)
+        throwaway_identity: Final = throwaway_submission.server_id
+        scenario.cleanups.callback(forget_mcp, gateway, throwaway_identity)
+        assert (throwaway_submission.approval_status, throwaway_submission.submitted_by) == ("pending_review", user), (
+            throwaway_registered.text
+        )
         granted: Final = gateway.request(
-            "POST", "/team/update", {"team_id": team, "object_permission": {"mcp_servers": [identity]}}
+            "POST",
+            "/team/update",
+            {"team_id": team, "object_permission": {"mcp_servers": [identity, throwaway_identity]}},
         )
         assert granted.status_code == 200, granted.text
+        throwaway_approved: Final = gateway.request("PUT", f"/v1/mcp/server/{throwaway_identity}/approve")
+        assert throwaway_approved.status_code == 200, throwaway_approved.text
+        assert Submission.model_validate_json(throwaway_approved.content).approval_status == "active", (
+            throwaway_approved.text
+        )
+        assert _served(gateway, member, throwaway_identity), "the approving worker did not serve the throwaway"
+        assert eventually(partial(_served, peer, member, throwaway_identity), bool, seconds=70)
+        throwaway_upstream.drain()
         upstream.drain()
         not_found: Final = (
             404,

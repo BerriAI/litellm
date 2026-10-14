@@ -415,6 +415,9 @@ def test_include_disabled_tools_widens_the_listing_only_for_an_admin(gateway: Ga
         assert [tool["name"] for tool in admin_view] == ["add", "fail", "multiply"], admin_view
         member_view: Final = _tool_entries(_rest_listing(gateway, key, wide))
         assert [tool["name"] for tool in member_view] == ["add"], member_view
+        admin_default_view: Final = _tool_entries(_rest_listing(gateway, gateway.key, {"server_id": identity}))
+        assert [tool["name"] for tool in admin_default_view] == ["add"], admin_default_view
+        assert admin_default_view == member_view, admin_default_view
         assert member_view == _tool_entries(_rest_listing(gateway, key, {"server_id": identity}))
 
 

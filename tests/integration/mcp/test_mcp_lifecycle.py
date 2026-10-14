@@ -697,7 +697,7 @@ def test_rest_call_envelope_keeps_caller_metadata_forwarded_headers_and_structur
             ({"x-mcp-auth": "Bearer legacy-token"}, {"authorization": "Bearer legacy-token", "x-tenant": None}),
         )
         for index, (forwarded, expected) in enumerate(cases):
-            order = f"A-{index}"
+            order: Final = f"A-{index}"
             peer.drain()
             response = gateway.client.post(
                 "/mcp-rest/tools/call",
@@ -719,15 +719,17 @@ def test_rest_call_envelope_keeps_caller_metadata_forwarded_headers_and_structur
                     "resultType": "complete",
                 }
             ), response.text
-            calls = tool_calls(peer.drain())
+            calls: Final = tool_calls(peer.drain())
             assert len(calls) == 1, calls
-            body = _OBJECTS.validate_python(calls[0]["body"])
-            assert body["params"] == {
-                "name": "track",
-                "arguments": {"order": order},
-                "_meta": {"progressToken": body["id"]},
+            body: Final = _OBJECTS.validate_python(calls[0]["body"])
+            assert body == {
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "method": "tools/call",
+                "params": {"name": "track", "arguments": {"order": order}, "_meta": {"progressToken": body["id"]}},
             }, calls
-            headers = _STRINGS.validate_python(calls[0]["headers"])
+            assert isinstance(body["id"], int), body
+            headers: Final = _STRINGS.validate_python(calls[0]["headers"])
             assert {name: headers.get(name) for name in ("authorization", "x-tenant")} == expected, headers
             assert sum("token" in value for value in headers.values()) == 1, headers
         rows: Final = eventually(
