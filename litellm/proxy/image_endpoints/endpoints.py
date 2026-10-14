@@ -37,6 +37,7 @@ from litellm.types.images.main import (
     ImageVariationRequestParams,
 )
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.utils import ImageResponse
 
 router: Final = APIRouter()
 
@@ -44,6 +45,33 @@ IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(Image
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
 IMAGE_VARIATION_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageVariationRequestParams))
 IMAGE_VARIATION_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"image": None})
+
+# The variations route reads a multipart body via request.form(), which FastAPI
+# documents without an application/json request schema (OA001 in the OpenAPI docs
+# gate); the JSON-equivalent schema below documents the same fields for Swagger
+# UI and the generated types without touching runtime parsing.
+# ImageVariationRequestParams carries FileTypes (typing.IO[bytes]) which
+# pydantic cannot turn into a JSON schema, so the documented JSON body
+# schema is spelled out for the shape the multipart form accepts.
+_IMAGE_VARIATION_REQUEST_BODY: Final = {
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string", "title": "Model"},
+                    "n": {"type": "integer", "title": "N", "default": None},
+                    "size": {"type": "string", "title": "Size", "default": None},
+                    "response_format": {"type": "string", "title": "Response Format", "default": None},
+                    "user": {"type": "string", "title": "User", "default": None},
+                },
+            },
+            "example": {"model": "dall-e-2", "n": 2},
+        }
+    },
+}
+_IMAGE_VARIATION_OPENAPI_EXTRA: Final = MappingProxyType({"requestBody": _IMAGE_VARIATION_REQUEST_BODY})
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
@@ -361,16 +389,22 @@ async def image_edit_api(
 @router.post(
     "/v1/images/variations",
     dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": ImageResponse}},
+    openapi_extra=dict(_IMAGE_VARIATION_OPENAPI_EXTRA),
     tags=["images"],
 )
 @router.post(
     "/images/variations",
     dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": ImageResponse}},
+    openapi_extra=dict(_IMAGE_VARIATION_OPENAPI_EXTRA),
     tags=["images"],
 )
 @router.post(
     "/openai/deployments/{model:path}/images/variations",
     dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": ImageResponse}},
+    openapi_extra=dict(_IMAGE_VARIATION_OPENAPI_EXTRA),
     response_class=ORJSONResponse,
 )  # azure compatible endpoint
 async def image_variation_api(
