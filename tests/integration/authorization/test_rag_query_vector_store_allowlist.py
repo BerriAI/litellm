@@ -5,9 +5,11 @@ import os
 import time
 import uuid
 from collections.abc import Iterator, Mapping
+from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
 import httpx
 import jwt
@@ -15,10 +17,12 @@ import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
+from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from integration.authorization._guardrail_opt_out import upstream_observations
-from pydantic import JsonValue
+from openai.types.chat import ChatCompletion
+from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 
 CONFIG_STORE_ID: Final = "vs_integration_config_store"
@@ -27,6 +31,7 @@ REMOVE_OPENAI_API_BASE: Final = ("OPENAI_API_BASE",)
 JWT_KEY_ID: Final = "integration-vector-store-jwt-key"
 AUTH_CACHE_INVALIDATION_CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 JsonObject: TypeAlias = dict[str, JsonValue]
+JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _json_array(*values: JsonValue) -> JsonValue:
@@ -45,12 +50,14 @@ def _key_for_scope(scenario: Scenario, model: str, scope: Literal["key", "team"]
     return scenario.key(team_id=team, models=_json_array(model))
 
 
-def _rag_query_body(model: str, marker: str, store_id: str) -> JsonObject:
+def _rag_query_body(model: str, marker: str, store_id: str, *, stream: bool | None = None) -> JsonObject:
     body: Final[JsonObject] = {
         "model": model,
         "messages": _json_array({"role": "user", "content": marker}),
         "retrieval_config": {"vector_store_id": store_id, "custom_llm_provider": "openai", "top_k": 1},
     }
+    if stream is not None:
+        body["stream"] = stream
     return body
 
 
@@ -62,8 +69,9 @@ def _rag_query(
     *,
     store_id: str = CONFIG_STORE_ID,
     path: str = "/v1/rag/query",
+    stream: bool | None = None,
 ) -> httpx.Response:
-    return gateway.request("POST", path, _rag_query_body(model, marker, store_id), key=key)
+    return gateway.request("POST", path, _rag_query_body(model, marker, store_id, stream=stream), key=key)
 
 
 def _searches_for_marker(
@@ -434,6 +442,250 @@ def test_rag_query_alias_denies_store_when_team_allowlist_excludes(gateway: Gate
         assert response.status_code == 401, response.text
         assert response.json()["error"]["type"] == "team_vector_store_access_denied", response.text
         assert _searches_for_marker(gateway, marker) == ()
+
+
+def _content_delta(chunk: Mapping[str, JsonValue]) -> str:
+    choices: Final = chunk["choices"]
+    if not isinstance(choices, list) or not choices:
+        return ""
+    delta: Final = object_value(object_value(choices[0])["delta"])
+    return str(delta.get("content", ""))
+
+
+def _assert_rag_query_response(
+    gateway: Gateway,
+    path: str,
+    body: Mapping[str, JsonValue],
+    key: str,
+    stream: bool,
+    response_id: str,
+) -> None:
+    response: Final = gateway.request("POST", path, {**body, "stream": stream}, key=key)
+    assert response.status_code == 200, response.text
+    if not stream:
+        parsed: Final = ChatCompletion.model_validate_json(response.content)
+        assert parsed.id == response_id, response.text
+        assert parsed.choices[0].message.content == "RAG answer", response.text
+        assert parsed.usage is not None and (parsed.usage.prompt_tokens, parsed.usage.completion_tokens) == (10, 5), (
+            response.text
+        )
+        return
+
+    assert response.headers["content-type"].startswith("text/event-stream"), response.text
+    frames: Final = tuple(frame for frame in response.text.replace("\r\n", "\n").strip().split("\n\n") if frame)
+    assert all(frame.startswith("data: ") for frame in frames), response.text
+    assert frames[-1] == "data: [DONE]", response.text
+    chunks: Final = tuple(JSON_OBJECT.validate_json(frame[6:]) for frame in frames[:-1])
+    assert chunks, response.text
+    assert tuple(chunk["id"] for chunk in chunks) == (response_id,) * len(chunks), response.text
+    assert "".join(_content_delta(chunk) for chunk in chunks) == "RAG answer", response.text
+
+
+def test_rag_query_streaming_injects_search_context_and_records_spend(gateway: Gateway) -> None:
+    store_id: Final = f"vs_rag_contract_{uuid.uuid4().hex}"
+    search_key: Final = f"rag-search-{uuid.uuid4().hex}"
+    chat_key: Final = f"rag-chat-{uuid.uuid4().hex}"
+    questions: Final = tuple(f"what is in the note {uuid.uuid4().hex}" for _ in range(4))
+    context_texts: Final = tuple(f"retrieved context for {question}" for question in questions)
+    response_ids: Final = (
+        f"chatcmpl-rag-v1-nonstream-{uuid.uuid4().hex}",
+        f"chatcmpl-rag-v1-stream-{uuid.uuid4().hex}",
+        f"chatcmpl-rag-alias-nonstream-{uuid.uuid4().hex}",
+        f"chatcmpl-rag-alias-stream-{uuid.uuid4().hex}",
+    )
+    expected_messages_by_case: Final = tuple(
+        _json_array(
+            {"role": "system", "content": "Answer using the note."},
+            {"role": "user", "content": f"Context:\n\n{context_text}\n\n"},
+            {"role": "user", "content": question},
+        )
+        for question, context_text in zip(questions, context_texts)
+    )
+    search_body: Final[dict[str, JsonValue]] = {
+        "filters": None,
+        "max_num_results": 1,
+        "ranking_options": None,
+        "rewrite_query": None,
+    }
+    expected_search_calls: Final = iter(zip(questions, context_texts))
+    expected_chat_calls: Final = iter(
+        (
+            (False, response_ids[0], expected_messages_by_case[0]),
+            (True, response_ids[1], expected_messages_by_case[1]),
+            (False, response_ids[2], expected_messages_by_case[2]),
+            (True, response_ids[3], expected_messages_by_case[3]),
+        )
+    )
+
+    def respond(request: Request) -> Reply:
+        path: Final = urlsplit(request.target).path
+        if path == f"/v1/vector_stores/{store_id}/search":
+            assert request.method == "POST"
+            assert request.headers["authorization"] == f"Bearer {search_key}"
+            search_question, search_context = next(expected_search_calls)
+            assert JSON_OBJECT.validate_json(request.body) == {**search_body, "query": search_question}
+            return Reply(
+                body=json.dumps(
+                    {
+                        "object": "vector_store.search_results.page",
+                        "search_query": search_question,
+                        "data": [
+                            {
+                                "file_id": "file-rag-context",
+                                "filename": "context.txt",
+                                "score": 0.9,
+                                "attributes": {},
+                                "content": [{"type": "text", "text": search_context}],
+                            }
+                        ],
+                        "has_more": False,
+                        "next_page": None,
+                    }
+                ).encode()
+            )
+
+        assert path == "/v1/chat/completions", request.target
+        assert request.method == "POST"
+        assert request.headers["authorization"] == f"Bearer {chat_key}"
+        body: Final = JSON_OBJECT.validate_json(request.body)
+        expected_stream, response_id, expected_messages = next(expected_chat_calls)
+        assert body["messages"] == expected_messages, request.body.decode()
+        stream: Final = body.get("stream", False)
+        assert stream == expected_stream, request.body.decode()
+        model_name: Final = str(body["model"])
+        if stream:
+            chunks: Final = (
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": 1700000000,
+                    "model": model_name,
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "RAG "}, "finish_reason": None}],
+                },
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": 1700000000,
+                    "model": model_name,
+                    "choices": [{"index": 0, "delta": {"content": "answer"}, "finish_reason": None}],
+                },
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": 1700000000,
+                    "model": model_name,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+                {
+                    "id": response_id,
+                    "object": "chat.completion.chunk",
+                    "created": 1700000000,
+                    "model": model_name,
+                    "choices": [],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                },
+            )
+            frames: Final = tuple(f"data: {json.dumps(chunk)}\n\n".encode() for chunk in chunks) + (
+                b"data: [DONE]\n\n",
+            )
+            return Reply(chunks=frames, content_type="text/event-stream")
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": response_id,
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": model_name,
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "RAG answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    with gateway.scenario() as scenario, wire_server(respond) as wire:
+        model: Final = scenario.model(
+            model="openai/gpt-4o-mini",
+            api_base=f"{wire.url}/v1",
+            api_key=chat_key,
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        registered: Final = gateway.request(
+            "POST",
+            "/vector_store/new",
+            {
+                "vector_store_id": store_id,
+                "custom_llm_provider": "openai",
+                "litellm_params": {"api_base": f"{wire.url}/v1", "api_key": search_key},
+            },
+        )
+        assert registered.status_code == 200, registered.text
+        scenario.cleanups.callback(gateway.post, "/vector_store/delete", {"vector_store_id": store_id})
+        key: Final = _key_for_scope(scenario, model, "key", store_id)
+        body: Final[JsonObject] = {
+            "model": model,
+            "retrieval_config": {
+                "vector_store_id": store_id,
+                "custom_llm_provider": "openai",
+                "top_k": 1,
+            },
+        }
+        request_bodies: Final = tuple(
+            {
+                **body,
+                "messages": _json_array(
+                    {"role": "system", "content": "Answer using the note."},
+                    {"role": "user", "content": question},
+                ),
+            }
+            for question in questions
+        )
+        query_cases: Final[tuple[tuple[str, bool, str], ...]] = (
+            ("/v1/rag/query", False, response_ids[0]),
+            ("/v1/rag/query", True, response_ids[1]),
+            ("/rag/query", False, response_ids[2]),
+            ("/rag/query", True, response_ids[3]),
+        )
+        for (path, stream, response_id), request_body in zip(query_cases, request_bodies):
+            _assert_rag_query_response(gateway, path, request_body, key, stream, response_id)
+
+        observed: Final = wire.drain()
+        assert tuple((request.method, urlsplit(request.target).path) for request in observed) == (
+            ("POST", f"/v1/vector_stores/{store_id}/search"),
+            ("POST", "/v1/chat/completions"),
+            ("POST", f"/v1/vector_stores/{store_id}/search"),
+            ("POST", "/v1/chat/completions"),
+            ("POST", f"/v1/vector_stores/{store_id}/search"),
+            ("POST", "/v1/chat/completions"),
+            ("POST", f"/v1/vector_stores/{store_id}/search"),
+            ("POST", "/v1/chat/completions"),
+        ), observed
+        assert tuple(JSON_OBJECT.validate_json(request.body) for request in observed[::2]) == tuple(
+            {**search_body, "query": question} for question in questions
+        ), observed
+        chat_bodies: Final = tuple(JSON_OBJECT.validate_json(request.body) for request in observed[1::2])
+        assert tuple(body["messages"] for body in chat_bodies) == expected_messages_by_case, observed
+        assert tuple(body["model"] for body in chat_bodies) == ("gpt-4o-mini",) * 4, observed
+        assert tuple(body.get("stream", False) for body in chat_bodies) == (False, True, False, True), observed
+        assert all(request.headers["authorization"] == f"Bearer {search_key}" for request in observed[::2])
+        assert all(request.headers["authorization"] == f"Bearer {chat_key}" for request in observed[1::2])
+
+        key_hash: Final = sha256(key.encode()).hexdigest()
+        spend_rows: Final = eventually(
+            lambda: read_rows(
+                "SELECT request_id, api_key, spend, prompt_tokens, completion_tokens "
+                'FROM "LiteLLM_SpendLogs" WHERE request_id IN (%s, %s, %s, %s)',
+                response_ids,
+            ),
+            lambda rows: len(rows) == 4,
+            seconds=70,
+        )
+        assert {
+            (row["request_id"], row["api_key"], float(row["spend"]), row["prompt_tokens"], row["completion_tokens"])
+            for row in spend_rows
+        } == {(response_id, key_hash, 0.02, 10, 5) for response_id in response_ids}
 
 
 def test_explicit_false_flag_keeps_legacy_vector_store_outcomes(tmp_path: Path) -> None:
