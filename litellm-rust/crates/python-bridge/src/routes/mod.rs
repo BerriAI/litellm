@@ -11,10 +11,10 @@ pub(crate) mod traces;
 
 use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{Error as HostError, present};
 use litellm_host_python::{
     CallOptions, HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
 };
+use litellm_host_python::{Error as HostError, present};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
