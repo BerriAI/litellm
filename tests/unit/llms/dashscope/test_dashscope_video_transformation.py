@@ -559,7 +559,7 @@ BEIJING_HOST = "https://wan3-beijing.example"
 SINGAPORE_HOST = "https://wan3-singapore.example"
 
 
-def _two_region_router(singapore_model: str) -> Router:
+def _two_region_router(singapore_model: str, routing_groups: list[dict[str, object]] | None = None) -> Router:
     return Router(
         model_list=[
             {
@@ -570,7 +570,8 @@ def _two_region_router(singapore_model: str) -> Router:
                 "model_name": "wan3-beijing",
                 "litellm_params": {"model": "dashscope/wan3.0-video", "api_key": "cn-key", "api_base": BEIJING_HOST},
             },
-        ]
+        ],
+        routing_groups=routing_groups,
     )
 
 
@@ -600,6 +601,33 @@ def test_created_video_id_resolves_back_to_the_region_that_created_the_task(
     router.video_status(model=resolved, video_id=created.id)
 
     assert [call.request.headers["authorization"] for call in task_get.calls] == ["Bearer cn-key"]
+
+
+@respx.mock
+def test_a_video_created_through_a_routing_group_is_polled_in_the_region_that_created_it():
+    """The routing group spans both regions, so an id carrying the group's name load-balanced its polls, and
+    about half of them left for the other region's host and key with a task id that region never issued."""
+    router = _two_region_router(
+        "qwencloud/wan3.0-video",
+        routing_groups=[
+            {"group_name": "wan3", "models": ["wan3-singapore", "wan3-beijing"], "routing_strategy": "simple-shuffle"}
+        ],
+    )
+    for host in (BEIJING_HOST, SINGAPORE_HOST):
+        respx.post(f"{host}/api/v1/services/aigc/video-generation/video-synthesis").mock(
+            return_value=httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+        )
+        respx.get(f"{host}/api/v1/tasks/{TASK_ID}").mock(
+            return_value=httpx.Response(200, json=_succeeded_task_payload())
+        )
+
+    for _ in range(8):
+        created = router.video_generation(model="wan3", prompt="a cat on a roof")
+        model_id = decode_video_id_with_provider(created.id)["model_id"]
+        router.video_status(model=router.resolve_model_name_from_model_id(model_id), video_id=created.id)
+
+    hosts = [call.request.url.host for call in respx.calls]
+    assert hosts[1::2] == hosts[0::2]
 
 
 @pytest.mark.parametrize(
