@@ -824,6 +824,22 @@ class ProxyExtrasDBManager:
         return rest + root_cert + (("sslmode", "verify-full"),)
 
     @staticmethod
+    def _accepts_startup_options(url: str) -> bool:
+        try:
+            import psycopg
+        except ImportError:
+            return True
+        try:
+            with psycopg.connect(
+                ProxyExtrasDBManager._strip_prisma_query_params(url), connect_timeout=10, autocommit=True
+            ):
+                return True
+        except psycopg.OperationalError as exc:
+            return "unsupported startup parameter" not in str(exc)
+        except psycopg.Error:
+            return True
+
+    @staticmethod
     def _warn_if_db_ahead_of_head(migrations_dir: str) -> None:
         """
         Log a warning if _prisma_migrations contains applied migrations with
@@ -1053,7 +1069,7 @@ class ProxyExtrasDBManager:
                     schema,
                     Path(migrations_dir),
                     _get_prisma_command(),
-                    migration_environment(_get_prisma_env()),
+                    migration_environment(_get_prisma_env(), ProxyExtrasDBManager._accepts_startup_options),
                 )
 
         while not ProxyExtrasDBManager._run_database_v2(True, recover_completed, baseline_existing):
@@ -1117,7 +1133,7 @@ class ProxyExtrasDBManager:
         deploy_timeout = prisma_migrate_deploy_timeout()
         from litellm_proxy_extras.migration_lock import migration_environment, migration_lock_timeout
 
-        migration_env: Final = migration_environment(_get_prisma_env())
+        migration_env: Final = migration_environment(_get_prisma_env(), ProxyExtrasDBManager._accepts_startup_options)
 
         budget = _MigrateAttemptBudget(
             attempts_left=MAX_MIGRATE_DEPLOY_ATTEMPTS,
@@ -1196,7 +1212,7 @@ class ProxyExtrasDBManager:
             prisma_toolchain.run_prisma(
                 [_get_prisma_command(), "migrate", "resolve", "--rolled-back", migration_name],
                 timeout=prisma_command_timeout(),
-                env=migration_environment(_get_prisma_env()),
+                env=migration_environment(_get_prisma_env(), ProxyExtrasDBManager._accepts_startup_options),
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass

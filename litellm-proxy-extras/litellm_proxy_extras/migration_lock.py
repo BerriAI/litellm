@@ -1,7 +1,7 @@
 import random
 import re
 import time
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
@@ -44,14 +44,28 @@ def _with_ddl_lock_timeout(url: str) -> str:
     return urlunsplit(split._replace(query=urlencode(rewritten)))
 
 
-def migration_environment(environment: Mapping[str, str]) -> Mapping[str, str]:
+def migration_environment(
+    environment: Mapping[str, str],
+    accepts_startup_options: Callable[[str], bool],
+) -> Mapping[str, str]:
     database_url: Final = environment.get("DATABASE_URL")
     if not database_url:
         return environment
     migration_url: Final = _migration_url(database_url, environment.get("DIRECT_URL"))
+    pinned: Final = _with_ddl_lock_timeout(migration_url)
+    if pinned == migration_url or accepts_startup_options(pinned):
+        return {
+            **environment,
+            "DATABASE_URL": pinned,
+        }
+    logger.warning(
+        "The migration database connection rejected the lock_timeout startup option, which connection "
+        "poolers such as PgBouncer do, so migrations run without a DDL lock timeout. Set DIRECT_URL to "
+        "the database's unpooled host to keep it"
+    )
     return {
         **environment,
-        "DATABASE_URL": _with_ddl_lock_timeout(migration_url),
+        "DATABASE_URL": migration_url,
     }
 
 

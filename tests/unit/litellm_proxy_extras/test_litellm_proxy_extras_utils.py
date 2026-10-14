@@ -899,7 +899,7 @@ def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(monkeyp
     monkeypatch.delenv("LITELLM_MIGRATION_DDL_LOCK_TIMEOUT", raising=False)
     environment = {"DATABASE_URL": pooled, "PRISMA_OFFLINE_MODE": "true"}
     configured = {**environment, **({"DIRECT_URL": direct} if direct else {})}
-    migrated = migration_environment(configured)
+    migrated = migration_environment(configured, lambda url: True)
 
     assert migrated["DATABASE_URL"] == expected
     assert migrated["PRISMA_OFFLINE_MODE"] == "true"
@@ -990,7 +990,7 @@ def test_migration_environment_pins_a_ddl_lock_timeout(
     environment = {"DATABASE_URL": database_url, **({"DIRECT_URL": direct_url} if direct_url else {})}
     snapshot = dict(environment)
 
-    migrated = migration_environment(environment)
+    migrated = migration_environment(environment, lambda url: True)
 
     assert parse_qsl(urlsplit(migrated["DATABASE_URL"]).query) == expected_pairs
     assert environment == snapshot
@@ -1001,9 +1001,162 @@ def test_migration_environment_lock_timeout_encodes_the_options_value(monkeypatc
 
     monkeypatch.delenv("LITELLM_MIGRATION_DDL_LOCK_TIMEOUT", raising=False)
 
-    migrated = migration_environment({"DATABASE_URL": "postgresql://writer/db"})
+    migrated = migration_environment({"DATABASE_URL": "postgresql://writer/db"}, lambda url: True)
 
     assert migrated["DATABASE_URL"] == "postgresql://writer/db?options=-c+lock_timeout%3D10000"
+
+
+@pytest.mark.parametrize(
+    "database_url,expected",
+    (
+        ("postgresql://pool/db?schema=tenant", "postgresql://pool/db?schema=tenant"),
+        (
+            "postgresql://pool/db?options=-c%20search_path%3Dx",
+            "postgresql://pool/db?options=-c%20search_path%3Dx",
+        ),
+    ),
+    ids=("pooled-url-without-direct-url", "operator-options-preserved"),
+)
+def test_migration_environment_drops_the_lock_timeout_a_pooler_rejects(monkeypatch, caplog, database_url, expected):
+    from litellm_proxy_extras.migration_lock import migration_environment
+
+    monkeypatch.delenv("LITELLM_MIGRATION_DDL_LOCK_TIMEOUT", raising=False)
+    environment = {"DATABASE_URL": database_url}
+    snapshot = dict(environment)
+    probed = []
+
+    with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+        migrated = migration_environment(environment, lambda url: probed.append(url) or False)
+
+    assert len(probed) == 1
+    assert "lock_timeout%3D10000" in probed[0]
+    assert migrated["DATABASE_URL"] == expected
+    assert environment == snapshot
+    assert any("DIRECT_URL" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "database_url,direct_url,expected",
+    (
+        ("postgresql://pool/db?pgbouncer=true", None, "postgresql://pool/db?pgbouncer=true"),
+        (
+            "postgresql://pool/db",
+            "postgresql://writer/db?options=-c%20lock_timeout%3D2500",
+            "postgresql://writer/db?options=-c+lock_timeout%3D2500&schema=public",
+        ),
+    ),
+    ids=("pgbouncer-true", "operator-pinned-lock-timeout"),
+)
+def test_migration_environment_never_probes_an_unpinned_url(monkeypatch, database_url, direct_url, expected):
+    from litellm_proxy_extras.migration_lock import migration_environment
+
+    monkeypatch.delenv("LITELLM_MIGRATION_DDL_LOCK_TIMEOUT", raising=False)
+
+    def probe(url):
+        pytest.fail(f"accepts_startup_options ran on an unchanged URL: {url}")
+
+    environment = {"DATABASE_URL": database_url, **({"DIRECT_URL": direct_url} if direct_url else {})}
+
+    migrated = migration_environment(environment, probe)
+
+    assert migrated["DATABASE_URL"] == expected
+
+
+class _ProbeConnection:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+
+class TestAcceptsStartupOptions:
+    @pytest.mark.parametrize(
+        "message,expected",
+        (
+            ("unsupported startup parameter in options: lock_timeout", False),
+            ("unsupported startup parameter: options", False),
+            ("connection refused", True),
+        ),
+        ids=("neon-pooler", "pgbouncer", "unrelated-operational-error-keeps-the-pin"),
+    )
+    def test_operational_errors_are_classified_by_the_startup_parameter_rejection(self, monkeypatch, message, expected):
+        import psycopg
+
+        def connect(*args, **kwargs):
+            raise psycopg.OperationalError(message)
+
+        monkeypatch.setattr(psycopg, "connect", connect)
+
+        assert ProxyExtrasDBManager._accepts_startup_options("postgresql://u:p@h/db") is expected
+
+    def test_a_successful_probe_keeps_the_pinned_url(self, monkeypatch):
+        import psycopg
+
+        monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _ProbeConnection())
+
+        assert ProxyExtrasDBManager._accepts_startup_options("postgresql://u:p@h/db") is True
+
+    def test_the_probe_sends_the_libpq_url_prisma_will_send(self, monkeypatch):
+        import psycopg
+
+        seen = []
+
+        def connect(url, **kwargs):
+            seen.append(url)
+            return _ProbeConnection()
+
+        monkeypatch.setattr(psycopg, "connect", connect)
+
+        assert (
+            ProxyExtrasDBManager._accepts_startup_options(
+                "postgresql://u:p@h/db?schema=s&connection_limit=5&options=-c+lock_timeout%3D10000"
+            )
+            is True
+        )
+        assert seen == ["postgresql://u:p@h/db?options=-c%20lock_timeout%3D10000"]
+
+
+class TestRunDatabaseV2StartupOptionProbe:
+    def _deploy_envs(self, monkeypatch, tmp_path, connect):
+        import litellm_proxy_extras.utils as utils_module
+        import psycopg
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        monkeypatch.delenv("LITELLM_MIGRATION_DDL_LOCK_TIMEOUT", raising=False)
+        monkeypatch.setattr(psycopg, "connect", connect)
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            utils_module,
+            "_get_prisma_env",
+            lambda: {"DATABASE_URL": "postgresql://u:p@pooler.example.com/db"},
+        )
+        envs = []
+
+        def fake_run(cmd, **kwargs):
+            envs.append(kwargs.get("env"))
+            return _FakeCompleted()
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
+
+        assert ProxyExtrasDBManager._run_database_v2(use_migrate=True) is True
+        return envs
+
+    def test_a_pooler_rejection_runs_migrate_deploy_without_the_lock_timeout(self, monkeypatch, tmp_path):
+        import psycopg
+
+        def connect(*args, **kwargs):
+            raise psycopg.OperationalError("unsupported startup parameter in options: lock_timeout")
+
+        envs = self._deploy_envs(monkeypatch, tmp_path, connect)
+
+        assert envs[0]["DATABASE_URL"] == "postgresql://u:p@pooler.example.com/db"
+
+    def test_a_direct_connection_keeps_the_lock_timeout(self, monkeypatch, tmp_path):
+        envs = self._deploy_envs(monkeypatch, tmp_path, lambda *args, **kwargs: _ProbeConnection())
+
+        assert envs[0]["DATABASE_URL"] == ("postgresql://u:p@pooler.example.com/db?options=-c+lock_timeout%3D10000")
 
 
 class _MigrateDeployHarness:
