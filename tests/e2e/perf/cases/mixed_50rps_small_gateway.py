@@ -63,6 +63,8 @@ CASE: Final = PerformanceTestCase(
         Limit("unexpected_status_count", max=0),
         Limit("gateway_added_seconds", percentile=50, max=0.75),
         Limit("gateway_added_seconds", percentile=99, max=2.0),
+        Limit("time_to_first_token_seconds", percentile=50, max=2.0),
+        Limit("time_to_first_token_seconds", percentile=99, max=4.0),
         Limit("memory_growth_megabytes", max=300),
     ),
 )

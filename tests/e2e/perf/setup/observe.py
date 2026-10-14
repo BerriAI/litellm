@@ -139,6 +139,11 @@ class Observation:
         ]
         return non_stream + stream
 
+    def time_to_first_token_seconds(self) -> list[float]:
+        """Seconds from the client sending each first-attempt streamed request to its first token, mock delay
+        included, comparable across versions because the mocks replay the same captures on the same clock."""
+        return [record.first_token_s for record, _ in self._clean(stream=True) if record.first_token_s is not None]
+
     def bodies_off_capture(self) -> int:
         """Served requests whose text is not the captured reply the mock replayed for them (plus the post-call
         rewrite for requests in the intervene slice), a translation or streaming fault somewhere in the gateway."""
@@ -177,6 +182,7 @@ def observe(metric: Metric, percentile_rank: int | None, observation: Observatio
     """The observed value of one metric, at a percentile when the metric is per request."""
     per_request: dict[str, list[float]] = {
         "gateway_added_seconds": observation.gateway_added_seconds(),
+        "time_to_first_token_seconds": observation.time_to_first_token_seconds(),
     }
     if metric in per_request:
         return percentile(per_request[metric], 50 if percentile_rank is None else percentile_rank)
@@ -204,6 +210,8 @@ REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("unexpected_status_count", None),
     ("gateway_added_seconds", 50),
     ("gateway_added_seconds", 99),
+    ("time_to_first_token_seconds", 50),
+    ("time_to_first_token_seconds", 99),
     ("memory_growth_megabytes", None),
 )
 
