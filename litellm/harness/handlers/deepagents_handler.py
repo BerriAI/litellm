@@ -158,7 +158,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
         agent, deps = self._require_agent()
         snapshot = await agent.aget_state(self._run_config(ctx, None))
         messages = (snapshot.values or MappingProxyType({})).get("messages") or ()
-        converted: list[dict[str, Any]] = deps.convert_to_openai_messages(  # mutable-ok: LangChain returns a list
+        converted: list[dict[str, object]] = deps.convert_to_openai_messages(  # mutable-ok: LangChain returns a list
             messages
         )
         return converted

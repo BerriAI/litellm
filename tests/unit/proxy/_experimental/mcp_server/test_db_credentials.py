@@ -458,16 +458,24 @@ def test_client_private_key_encrypted_at_rest():
     private_key = (
         "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
     )
-    credentials = {"client_secret": "shh", "client_private_key": private_key}
+    resource_client_secret: Final = "resource-client-secret"
+    credentials = {
+        "client_secret": "shh",
+        "client_private_key": private_key,
+        "id_jag_resource_client_secret": resource_client_secret,
+    }
 
     encrypted = encrypt_credentials(dict(credentials), encryption_key=None)
     assert encrypted["client_private_key"] != private_key
     assert private_key not in encrypted["client_private_key"]
     assert encrypted["client_secret"] != "shh"
+    assert encrypted["id_jag_resource_client_secret"] != resource_client_secret
+    assert resource_client_secret not in encrypted["id_jag_resource_client_secret"]
 
     decrypted = decrypt_credentials(dict(encrypted))
     assert decrypted["client_private_key"] == private_key
     assert decrypted["client_secret"] == "shh"
+    assert decrypted["id_jag_resource_client_secret"] == resource_client_secret
 
 
 @pytest.fixture(params=["xsalsa20-poly1305", "aes-256-gcm"])
@@ -1856,3 +1864,15 @@ async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_repl
     assert parse_qs(upstream.calls[0].request.content.decode())["client_id"] == [identity]
     assert "client_secret" not in parse_qs(upstream.calls[0].request.content.decode())
     assert server.client_id is None and server.client_id_metadata_document_supported is capability
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_scope, expected", [(None, ["a"]), ("b", ["b"]), ("", [])])
+async def test_silent_refresh_preserves_omitted_scope_but_accepts_explicit_grant(monkeypatch, provider_scope, expected):
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    await _run_refresh(monkeypatch, _refresh_server(), {
+        "access_token": "new-access",
+        **({"scope": provider_scope} if provider_scope is not None else {}),
+    })
+    assert db_mod.store_user_oauth_credential.await_args.kwargs["scopes"] == expected

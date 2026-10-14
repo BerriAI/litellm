@@ -1,6 +1,8 @@
 import json
 from abc import ABC
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -8,6 +10,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
@@ -15,6 +18,8 @@ from litellm.types.decisions import (
     ChoiceQuestion,
     DecisionAnswer,
     DecisionQuestion,
+    DecisionsBase64Image,
+    DecisionsImage,
     DecisionsIRAnswer,
     DecisionsIRChoiceAnswer,
     DecisionsIRChoiceOption,
@@ -47,13 +52,13 @@ from litellm.types.decisions import (
     UnsupportedDecisionsRequest,
     systemone_choice_key,
 )
+from litellm.types.utils import is_decisions_model_mode
 
 _PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
 _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
-_TEXT_ONLY: Final = UnsupportedDecisionsRequest(
-    reason="input_image content parts are not supported because System One providers accept text input only"
-)
+_REMOTE_URL_PREFIXES: Final = ("http://", "https://")
+_DATA_URL_PREFIX: Final = "data:"
 
 
 def decisions_text(value: DecisionsJSON) -> str:
@@ -99,35 +104,151 @@ def _ir_question(name: str, question: DecisionQuestion) -> DecisionsIRQuestion:
 
 def systemone_request_to_ir(request: DecisionsRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
-        input=DecisionsIRState(state=request.state),
+        input=DecisionsIRState(state=request.state, images=tuple(request.images or ())),
+        audio=request.audio,
+        videos=request.videos,
         questions=tuple(_ir_question(name, question) for name, question in request.questions.items()),
     )
 
 
-def _has_image(message: OpenAIDecisionInputMessage) -> bool:
-    return not isinstance(message.content, str) and any(
-        isinstance(part, OpenAIDecisionInputImage) for part in message.content
+def _image_urls(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:
+    if isinstance(message.content, str):
+        return ()
+    return tuple(part.image_url for part in message.content if isinstance(part, OpenAIDecisionInputImage))
+
+
+def input_images(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[DecisionsImage, ...]:
+    match decision_input:
+        case DecisionsIRState():
+            return decision_input.images
+        case DecisionsIRMessages():
+            return tuple(chain.from_iterable(_image_urls(message) for message in decision_input.messages))
+        case _:
+            assert_never(decision_input)
+
+
+def image_param(decision_input: DecisionsIRState | DecisionsIRMessages) -> str | None:
+    if not input_images(decision_input):
+        return None
+    match decision_input:
+        case DecisionsIRState():
+            return "images"
+        case DecisionsIRMessages():
+            return "input_image"
+        case _:
+            assert_never(decision_input)
+
+
+def _kept_part(part: OpenAIDecisionInputText | OpenAIDecisionInputImage, keep: Callable[[str], bool]) -> bool:
+    return isinstance(part, OpenAIDecisionInputText) or keep(part.image_url)
+
+
+def _message_with_images_where(
+    message: OpenAIDecisionInputMessage, keep: Callable[[str], bool]
+) -> OpenAIDecisionInputMessage | None:
+    if isinstance(message.content, str):
+        return message
+    kept_parts: Final = tuple(part for part in message.content if _kept_part(part, keep))
+    return message.model_copy(update={"content": kept_parts}) if kept_parts else None
+
+
+def with_images_where(
+    decision_input: DecisionsIRState | DecisionsIRMessages, keep: Callable[[DecisionsImage], bool]
+) -> DecisionsIRState | DecisionsIRMessages:
+    match decision_input:
+        case DecisionsIRState():
+            return replace(decision_input, images=tuple(image for image in decision_input.images if keep(image)))
+        case DecisionsIRMessages():
+            return DecisionsIRMessages(
+                messages=tuple(
+                    kept
+                    for message in decision_input.messages
+                    if (kept := _message_with_images_where(message, keep)) is not None
+                )
+            )
+        case _:
+            assert_never(decision_input)
+
+
+def remote_image_urls(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            image
+            for image in input_images(decision_input)
+            if isinstance(image, str) and image.lower().startswith(_REMOTE_URL_PREFIXES)
+        )
     )
 
 
-def _message_text(message: OpenAIDecisionInputMessage) -> str:
+def _inlined_image(image: DecisionsImage, data_urls: Mapping[str, str]) -> DecisionsImage:
+    return data_urls.get(image, image) if isinstance(image, str) else image
+
+
+def _inlined_part(
+    part: OpenAIDecisionInputText | OpenAIDecisionInputImage, data_urls: Mapping[str, str]
+) -> OpenAIDecisionInputText | OpenAIDecisionInputImage:
+    if isinstance(part, OpenAIDecisionInputImage) and part.image_url in data_urls:
+        return part.model_copy(update={"image_url": data_urls[part.image_url]})
+    return part
+
+
+def _inlined_message(message: OpenAIDecisionInputMessage, data_urls: Mapping[str, str]) -> OpenAIDecisionInputMessage:
     if isinstance(message.content, str):
-        return message.content
-    return "\n\n".join(part.text for part in message.content if isinstance(part, OpenAIDecisionInputText))
+        return message
+    return message.model_copy(update={"content": tuple(_inlined_part(part, data_urls) for part in message.content)})
 
 
-def _systemone_state(
-    decision_input: DecisionsIRState | DecisionsIRMessages,
-) -> DecisionsJSON | UnsupportedDecisionsRequest:
+def with_inlined_images(
+    decision_input: DecisionsIRState | DecisionsIRMessages, data_urls: Mapping[str, str]
+) -> DecisionsIRState | DecisionsIRMessages:
+    match decision_input:
+        case DecisionsIRState():
+            return replace(
+                decision_input, images=tuple(_inlined_image(image, data_urls) for image in decision_input.images)
+            )
+        case DecisionsIRMessages():
+            return DecisionsIRMessages(
+                messages=tuple(_inlined_message(message, data_urls) for message in decision_input.messages)
+            )
+        case _:
+            assert_never(decision_input)
+
+
+def _message_texts(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:
+    if isinstance(message.content, str):
+        return (message.content,)
+    return tuple(part.text for part in message.content if isinstance(part, OpenAIDecisionInputText))
+
+
+def _systemone_state(decision_input: DecisionsIRState | DecisionsIRMessages) -> DecisionsJSON:
     match decision_input:
         case DecisionsIRState():
             return decision_input.state
         case DecisionsIRMessages():
-            if any(_has_image(message) for message in decision_input.messages):
-                return _TEXT_ONLY
-            return "\n\n".join(_message_text(message) for message in decision_input.messages)
+            return "\n\n".join(chain.from_iterable(_message_texts(message) for message in decision_input.messages))
         case _:
             assert_never(decision_input)
+
+
+def _media_type(content_type: str) -> str:
+    return content_type.split(";", 1)[0].strip().lower()
+
+
+def image_media_type(image: DecisionsImage) -> str | None:
+    if isinstance(image, DecisionsBase64Image):
+        return _media_type(image.content_type)
+    if not image.lower().startswith(_DATA_URL_PREFIX):
+        return None
+    return _media_type(image[len(_DATA_URL_PREFIX) :])
+
+
+def _systemone_image(image: DecisionsImage) -> str | Mapping[str, object]:
+    if isinstance(image, DecisionsBase64Image):
+        return {"content_type": image_media_type(image), "base64": image.base64}
+    media_type: Final = image_media_type(image)
+    if media_type is None:
+        return image
+    return f"{_DATA_URL_PREFIX}{media_type};base64,{image.partition(',')[2]}"
 
 
 def _optional(key: str, value: object) -> Mapping[str, object]:
@@ -166,16 +287,30 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
 
 
 def ir_to_systemone_request(
-    model: str, request: DecisionsIRRequest
+    model: str, request: DecisionsIRRequest, *, supports_audio: bool = False, supports_video: bool = False
 ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+    if request.audio and not supports_audio:
+        return UnsupportedDecisionsRequest(reason="audio input is not supported by this Decisions model")
+    if request.videos and not supports_video:
+        return UnsupportedDecisionsRequest(reason="video input is not supported by this Decisions model")
     state: Final = _systemone_state(request.input)
-    if isinstance(state, UnsupportedDecisionsRequest):
-        return state
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
+    images: Final = input_images(request.input)
     return {
         "model": model,
         "state": state,
+        **(
+            {"audio": [clip if isinstance(clip, str) else clip.model_dump() for clip in request.audio]}
+            if request.audio
+            else {}
+        ),
+        **(
+            {"videos": [clip if isinstance(clip, str) else clip.model_dump() for clip in request.videos]}
+            if request.videos
+            else {}
+        ),
         "questions": {key: _systemone_question(question) for key, question in keyed_questions},
+        **({"images": [_systemone_image(image) for image in images]} if images else {}),
     }
 
 
@@ -296,13 +431,34 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
+def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
+    try:
+        model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
+        return False
+    return is_decisions_model_mode(model_mode)
+
+
 class BaseDecisionsConfig(ABC):
     path: str = "/v1/systemone"
     api_key_env: tuple[str, ...] = ()
     api_base_env: tuple[str, ...] = ()
     api_key_required: bool = True
+    supports_safety_identifier: bool = False
+    supports_images: bool = False
+    max_images: int | None = None
+    max_image_bytes: int | None = None
+    max_total_image_bytes: int | None = None
+    image_media_types: frozenset[str] | None = None
+    inlines_remote_images: bool = False
+    health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
+        {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
+    )
 
     def get_default_api_base(self) -> str | None:
+        return None
+
+    def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
         return None
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
@@ -313,6 +469,9 @@ class BaseDecisionsConfig(ABC):
 
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or self._first_secret(self.api_key_env)
+
+    def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
     @staticmethod
     def _first_secret(names: tuple[str, ...]) -> str | None:
@@ -334,13 +493,42 @@ class BaseDecisionsConfig(ABC):
     def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"
 
+    def signs_with_aws(self, api_base: str) -> bool:
+        return False
+
+    def sign_request(
+        self,
+        headers: Mapping[str, str],
+        url: str,
+        api_base: str,
+        body: Mapping[str, object],
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> tuple[Mapping[str, str], bytes | None]:
+        return headers, None
+
+    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_video_input(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
     def transform_decisions_request(
         self,
         model: str,
         request: DecisionsIRRequest,
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_systemone_request(self.request_model(model), request)
+        return ir_to_systemone_request(
+            self.request_model(model),
+            request,
+            supports_audio=self.supports_audio_input(model, custom_llm_provider),
+            supports_video=self.supports_video_input(model, custom_llm_provider),
+        )
 
     def unwrap_response(self, payload: object) -> object:
         return payload

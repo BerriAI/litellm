@@ -18,11 +18,13 @@ export default function ClassifierPrimarySettings({
   onChange,
   modelOptions,
   showValidationErrors = false,
+  section = "all",
 }: {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   modelOptions: { value: string; label: string }[];
   showValidationErrors?: boolean;
+  section?: "all" | "judge" | "frequency";
 }) {
   const id = React.useId();
   const restriction = restrictedBy(value, "sessionAffinity");
@@ -35,34 +37,44 @@ export default function ClassifierPrimarySettings({
   const usesJudge = usesLlmClassifier(effectiveClassifierType(value));
   const missingJudge = showValidationErrors && usesJudge && !value.classifier_llm_config?.model;
   return (
-    <div className="mb-6 grid gap-4 sm:grid-cols-2">
-      <div className="space-y-2">
-        <Label htmlFor={`${id}-frequency`}>How often to classify</Label>
-        <Select
-          items={[
-            { value: "every_request", label: "Every request" },
-            { value: "user_turn", label: "Every new user message" },
-            { value: "session", label: "Once per session" },
-          ]}
-          value={frequency}
-          onValueChange={(frequency) => {
-            if (frequency) onChange(withClassificationFrequency(value, frequency as ClassificationFrequency));
-          }}
-        >
-          <SelectTrigger id={`${id}-frequency`} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="every_request">Every request</SelectItem>
-            <SelectItem value="user_turn">Every new user message</SelectItem>
-            <SelectItem value="session" disabled={Boolean(restriction)}>
-              Once per session
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">{restriction?.reason ?? frequencyDescription}</p>
-      </div>
-      {usesJudge && (
+    <div
+      className={
+        {
+          all: "mb-6 grid gap-4 sm:grid-cols-2",
+          frequency: "mb-6 grid gap-4",
+          judge: "grid gap-4",
+        }[section]
+      }
+    >
+      {section !== "judge" && (
+        <div className="space-y-2">
+          <Label htmlFor={`${id}-frequency`}>How often to classify</Label>
+          <Select
+            items={[
+              { value: "every_request", label: "Every request" },
+              { value: "user_turn", label: "Every new user message" },
+              { value: "session", label: "Once per session" },
+            ]}
+            value={frequency}
+            onValueChange={(frequency) => {
+              if (frequency) onChange(withClassificationFrequency(value, frequency as ClassificationFrequency));
+            }}
+          >
+            <SelectTrigger id={`${id}-frequency`} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="every_request">Every request</SelectItem>
+              <SelectItem value="user_turn">Every new user message</SelectItem>
+              <SelectItem value="session" disabled={Boolean(restriction)}>
+                Once per session
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{restriction?.reason ?? frequencyDescription}</p>
+        </div>
+      )}
+      {section !== "frequency" && usesJudge && (
         <div className="space-y-2">
           <Label htmlFor={`${id}-judge`}>Judge model</Label>
           <SearchSelect
