@@ -72,7 +72,6 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
-from litellm.exceptions import BadRequestError, ContentPolicyViolationError, ContextWindowExceededError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -229,6 +228,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
     has_unattempted_fallback_target,
+    is_bad_request_without_fallback,
     mid_stream_fallback_hop_kwargs,
     mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
@@ -7650,11 +7650,8 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        unsupported_params_without_fallback: Final = (
-            isinstance(e, BadRequestError)
-            and e.status_code == 400
-            and not isinstance(e, (ContextWindowExceededError, ContentPolicyViolationError))
-            and not self.fallback_on_unsupported_params
+        unsupported_params_without_fallback: Final = is_bad_request_without_fallback(
+            e, self.fallback_on_unsupported_params
         )
         if (
             disable_fallbacks is True

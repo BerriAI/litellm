@@ -222,6 +222,14 @@ def has_unattempted_fallback_target(
     return any((key := fallback_attempt_key(target)) is None or key not in attempted for target in fallback_model_group)
 
 
+def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupported_params: bool) -> bool:
+    if fallback_on_unsupported_params or not isinstance(exception, litellm.BadRequestError):
+        return False
+    if isinstance(exception, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError)):
+        return False
+    return exception.status_code == 400
+
+
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     """
     Handles wildcard routing scenario
