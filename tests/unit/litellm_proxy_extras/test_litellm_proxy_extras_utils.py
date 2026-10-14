@@ -655,6 +655,49 @@ class _FakePsycopgConn:
         return _FakeCursor()
 
 
+class TestLensRenamePendingCheck:
+    _DATABASE_URL: Final = "postgresql://litellm:hunter2@localhost:5432/litellm"
+
+    def test_database_failure_text_reaches_the_raised_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import psycopg
+
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+
+        def refuse(conninfo: str, *, connect_timeout: int, autocommit: bool) -> NoReturn:
+            raise psycopg.OperationalError("FATAL:  sorry, too many clients already")
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_lens_rename_pending(connect=refuse)
+        assert "FATAL:  sorry, too many clients already" in str(err.value)
+
+    def test_password_libpq_echoes_is_redacted_from_the_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import psycopg
+
+        password: Final = "p%zzword"
+        database_url: Final = f"postgresql://litellm:{password}@localhost:5432/litellm"
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        with pytest.raises(psycopg.Error) as libpq:
+            psycopg.connect(database_url, connect_timeout=10, autocommit=True)
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_lens_rename_pending()
+        assert password not in str(err.value)
+        assert str(err.value).endswith(str(libpq.value).strip().replace(password, "REDACTED"))
+
+    def test_legacy_tables_keep_their_own_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
+        executed: Final[list[tuple[str, tuple[str]]]] = []
+
+        def legacy_tables_present(conninfo: str, *, connect_timeout: int, autocommit: bool) -> _FakePsycopgConn:
+            return _FakePsycopgConn(executed)
+
+        with pytest.raises(RuntimeError) as err:
+            ProxyExtrasDBManager.raise_if_lens_rename_pending(connect=legacy_tables_present)
+        assert str(err.value).startswith("Legacy Lens tables exist.")
+        assert executed[0][1] == ("public",)
+
+
 class TestSpendLogsPartitionDetectionSchemaScope:
     """A same-named LiteLLM_SpendLogs in another schema must not trip the
     detector: the catalog lookup has to be scoped to Prisma's target schema."""
@@ -721,6 +764,28 @@ _P3009_DEADLOCK_LOGS = "ERROR: deadlock detected\nDETAIL: Process 72 waits for S
 _P3005_STDERR = """Error: P3005
 
 The database schema is not empty. Read more about how to baseline an existing production database: https://pris.ly/d/migrate-baseline
+"""
+
+_LOCK_TIMEOUT_MIGRATION = "20260818000000_add_spend_log_timestamps"
+
+_P3018_LOCK_TIMEOUT_STDERR = (
+    "Error: P3018\n\n"
+    "A migration failed to apply. New migrations cannot be applied before the error is recovered from. "
+    "Read more about how to resolve migration issues in a production database: "
+    "https://pris.ly/d/migrate-resolve\n\n"
+    "Migration name: 20260818000000_add_spend_log_timestamps\n\n"
+    "Database error code: 55P03\n\n"
+    "Database error:\n"
+    "ERROR: canceling statement due to lock timeout\n\n"
+    'DbError { severity: "ERROR", parsed_severity: Some(Error), code: SqlState(E55P03), '
+    'message: "canceling statement due to lock timeout", detail: None, hint: None, position: None, '
+    "where_: None, schema: None, table: None, column: None, datatype: None, constraint: None, "
+    'file: Some("postgres.c"), line: Some(3298), routine: Some("ProcessInterrupts") }\n'
+)
+
+_LOCK_TIMEOUT_CONTENTION_STDERR = """Error: ERROR: canceling statement due to lock timeout
+   0: schema_core::state::ApplyMigrations
+             at schema-engine/core/src/state.rs:201
 """
 
 
@@ -816,7 +881,11 @@ class _FakeLedger:
     "pooled,direct,expected",
     (
         ("postgresql://pool/db?pgbouncer=true", None, "postgresql://pool/db?pgbouncer=true"),
-        ("postgresql://pool/db?pgbouncer=true", "postgresql://writer/db", "postgresql://writer/db?schema=public"),
+        (
+            "postgresql://pool/db?pgbouncer=true",
+            "postgresql://writer/db",
+            "postgresql://writer/db?schema=public",
+        ),
         (
             "postgresql://pool/db?schema=tenant%20one&pgbouncer=true",
             "postgresql://writer/db?sslmode=require&schema=wrong",
@@ -849,13 +918,18 @@ class _MigrateDeployHarness:
         repeat_last=False,
         confirmed_migrations=(),
         ledger: "_FakeLedger | None" = None,
+        database_url: str = "postgresql://u:p@localhost:9/x",
+        prisma_env: dict[str, str] | None = None,
     ):
         import subprocess as subprocess_module
 
         import litellm_proxy_extras.utils as utils_module
 
         self.deploy_calls = []
+        self.deploy_environments = []
         self.resolved = []
+        self.rolled_back = []
+        self.sleeps = []
         self.baselines = 0
         self._outcomes = list(outcomes)
         self._repeat_last = repeat_last
@@ -864,13 +938,15 @@ class _MigrateDeployHarness:
 
         if ledger is None:
             monkeypatch.delenv("DATABASE_URL", raising=False)
+            monkeypatch.delenv("DIRECT_URL", raising=False)
         else:
-            monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+            monkeypatch.setenv("DATABASE_URL", database_url)
+            monkeypatch.delenv("DIRECT_URL", raising=False)
             monkeypatch.setattr("psycopg.connect", ledger.connect)
         monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
-        monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: {})
-        monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
+        monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: prisma_env or {})
+        monkeypatch.setattr(utils_module.time, "sleep", self.sleeps.append)
 
         self.baseline_succeeds = True
 
@@ -887,14 +963,19 @@ class _MigrateDeployHarness:
         raise AssertionError("prisma migrate deploy called more times than scripted")
 
     def _fake_run(self, cmd, **kwargs):
-        assert cmd[1:] == ["migrate", "deploy"], f"unexpected prisma command: {cmd}"
-        self.deploy_calls.append(cmd)
-        outcome = self._next_outcome()
-        if outcome == "ok":
+        if cmd[1:] == ["migrate", "deploy"]:
+            self.deploy_calls.append(cmd)
+            self.deploy_environments.append(kwargs["env"].get("DATABASE_URL", ""))
+            outcome = self._next_outcome()
+            if outcome == "ok":
+                return _FakeCompleted()
+            if outcome == "timeout":
+                raise self._subprocess_module.TimeoutExpired(cmd, 1)
+            raise self._subprocess_module.CalledProcessError(1, cmd, stderr=outcome)
+        if cmd[1:4] == ["migrate", "resolve", "--rolled-back"] and len(cmd) == 5:
+            self.rolled_back.append(cmd[4])
             return _FakeCompleted()
-        if outcome == "timeout":
-            raise self._subprocess_module.TimeoutExpired(cmd, 1)
-        raise self._subprocess_module.CalledProcessError(1, cmd, stderr=outcome)
+        raise AssertionError(f"unexpected prisma command: {cmd}")
 
     def run(self):
         while not ProxyExtrasDBManager._run_database_v2(
@@ -992,6 +1073,26 @@ class TestConcurrentP3009Recovery:
 
 
 class TestMigrateDeployAttemptAccounting:
+    def test_migrate_deploy_does_not_add_startup_options_to_a_pooled_url(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from urllib.parse import parse_qsl, urlsplit
+
+        pooled_url: Final = "postgresql://pool/db?schema=tenant&connection_limit=5"
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            ["ok"],
+            ledger=_FakeLedger(at_error=(), after_peer=()),
+            database_url=pooled_url,
+            prisma_env={"DATABASE_URL": pooled_url},
+        )
+
+        assert harness.run() is True
+        received_url: Final = harness.deploy_environments[0]
+        assert received_url == pooled_url
+        assert all(key != "options" for key, _ in parse_qsl(urlsplit(received_url).query))
+
     def test_a_push_created_database_finishes_bootstrapping(self, monkeypatch, tmp_path):
         harness = _MigrateDeployHarness(
             monkeypatch,
@@ -1102,6 +1203,156 @@ class TestMigrateDeployAttemptAccounting:
             harness.run()
         assert len(harness.deploy_calls) == 1
         assert harness.resolved == []
+
+
+class TestMigrationLockTimeoutRecovery:
+    """A migration whose DDL wait Postgres cancelled (55P03, from the lock_timeout the
+    migration SQL sets locally) is retryable: the half-written ledger row is rolled back and
+    the next attempt reruns the migration, priced like a deadlock retry."""
+
+    def test_a_lock_timed_out_migration_rolls_back_and_retries(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_P3018_LOCK_TIMEOUT_STDERR, "ok"],
+        )
+
+        assert harness.run() is True
+        assert len(harness.deploy_calls) == 2
+        assert harness.rolled_back == [_LOCK_TIMEOUT_MIGRATION]
+        assert len(harness.sleeps) == 1
+
+    def test_repeated_lock_timeouts_spend_the_failure_budget(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_P3018_LOCK_TIMEOUT_STDERR],
+            repeat_last=True,
+        )
+
+        with pytest.raises(RuntimeError, match="SET LOCAL lock_timeout"):
+            harness.run()
+        assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
+        assert harness.rolled_back == [_LOCK_TIMEOUT_MIGRATION] * _ATTEMPT_BUDGET
+
+    def test_lock_timeout_on_prismas_own_lock_wait_is_contention(self, monkeypatch, tmp_path):
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_LOCK_TIMEOUT_CONTENTION_STDERR] * 6 + ["ok"],
+        )
+
+        assert harness.run() is True
+        assert len(harness.deploy_calls) == 7
+        assert harness.rolled_back == []
+        assert harness.sleeps == []
+
+    def test_a_p3009_row_logging_a_lock_timeout_rolls_back_and_retries(self, monkeypatch, tmp_path):
+        locked_row = _LedgerRow(
+            _LOCK_TIMEOUT_MIGRATION,
+            _P3009_STARTED_AT,
+            logs=_P3018_LOCK_TIMEOUT_STDERR,
+        )
+        harness = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_p3009_stderr(_LOCK_TIMEOUT_MIGRATION, _P3009_STARTED_AT), "ok"],
+            ledger=_FakeLedger(at_error=(locked_row,), after_peer=(locked_row,)),
+        )
+
+        assert harness.run() is True
+        assert len(harness.deploy_calls) == 2
+        assert harness.rolled_back == [_LOCK_TIMEOUT_MIGRATION]
+
+    def test_a_lock_timeout_with_a_permission_error_stays_fatal(self, monkeypatch, tmp_path):
+        stderr = _P3018_LOCK_TIMEOUT_STDERR + "ERROR: permission denied for table LiteLLM_SpendLogs\n"
+        harness = _MigrateDeployHarness(monkeypatch, tmp_path, [stderr])
+
+        with pytest.raises(RuntimeError, match="insufficient"):
+            harness.run()
+        assert len(harness.deploy_calls) == 1
+        assert harness.rolled_back == []
+
+
+class TestLogMigrationLockHolders:
+    _MIGRATION_SQL = (
+        "-- AlterTable\n"
+        'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMP(3);\n'
+    )
+
+    def _migration_file(self, tmp_path: Path) -> None:
+        migration_dir = tmp_path / "migrations" / _LOCK_TIMEOUT_MIGRATION
+        migration_dir.mkdir(parents=True)
+        (migration_dir / "migration.sql").write_text(self._MIGRATION_SQL)
+
+    def test_the_current_lock_holders_are_logged(self, monkeypatch, tmp_path, caplog):
+        self._migration_file(tmp_path)
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+        executed: list[tuple[object, object]] = []
+        connect_kwargs: list[dict[str, object]] = []
+
+        class _Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def execute(self, query, params):
+                executed.append((query, params))
+                row = (
+                    1234,
+                    "LiteLLM_SpendLogs",
+                    "AccessExclusiveLock",
+                    "idle in transaction",
+                    "proxy-1",
+                    "0:00:42",
+                )
+                return type("Cur", (), {"fetchall": staticmethod(lambda: (row,))})()
+
+        def fake_connect(*args, **kwargs):
+            connect_kwargs.append(kwargs)
+            return _Conn()
+
+        monkeypatch.setattr("psycopg.connect", fake_connect)
+
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            ProxyExtrasDBManager._log_migration_lock_holders(_LOCK_TIMEOUT_MIGRATION)
+
+        assert len(executed) == 1
+        assert connect_kwargs[0]["options"] == "-c statement_timeout=5000"
+        assert executed[0][1] == ("public", ["LiteLLM_SpendLogs"])
+        assert "pg_locks" in str(executed[0][0])
+        assert "a.query" not in str(executed[0][0])
+        assert "1234" in caplog.text
+        assert "LiteLLM_SpendLogs" in caplog.text
+        assert "AccessExclusiveLock" in caplog.text
+        assert "0:00:42" in caplog.text
+
+    def test_a_database_that_cannot_be_reached_is_skipped_quietly(self, monkeypatch, tmp_path):
+        import psycopg
+
+        self._migration_file(tmp_path)
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+
+        def refuse(*args, **kwargs):
+            raise psycopg.OperationalError("connection refused")
+
+        monkeypatch.setattr("psycopg.connect", refuse)
+
+        assert ProxyExtrasDBManager._log_migration_lock_holders(_LOCK_TIMEOUT_MIGRATION) is None
+
+    def test_a_migration_without_sql_on_disk_never_connects(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+        connections = []
+        monkeypatch.setattr("psycopg.connect", lambda *args, **kwargs: connections.append(1))
+
+        ProxyExtrasDBManager._log_migration_lock_holders("99999999999999_not_on_disk")
+
+        assert connections == []
 
 
 @pytest.mark.parametrize(
@@ -1824,3 +2075,11 @@ def test_redact_command_error_masks_password_in_tuple_url_argument(
     assert message.startswith("Command '('")
     assert password not in message
     assert "postgresql://REDACTED@db:5432/litellm" in message
+
+
+def test_repair_survives_an_unreachable_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:9/x?schema=whatever")
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes() is False
+

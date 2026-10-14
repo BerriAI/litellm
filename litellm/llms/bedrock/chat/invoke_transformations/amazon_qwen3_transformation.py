@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
@@ -21,6 +22,9 @@ from litellm.types.utils import ModelResponse, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
@@ -179,10 +183,10 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         Transform Qwen3 Bedrock response to OpenAI format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
             # Extract the generated text - Qwen3 uses "generation" field
-            generated_text = response_data.get("generation", "")
+            generated_text = _TEXT.validate_python(response_data.get("generation", ""))
 
             # Clean up the response (remove assistant start token if present)
             generated_text = generated_text.removeprefix("<|im_start|>assistant\n")
@@ -196,14 +200,16 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
 
             # Set usage information if available in response
             if "usage" in response_data:
-                usage_data: Final = response_data["usage"]
+                usage_data: Final = _JSON_OBJECT.validate_python(response_data["usage"])
                 setattr(
                     model_response,
                     "usage",
-                    Usage(
-                        prompt_tokens=usage_data.get("prompt_tokens", 0),
-                        completion_tokens=usage_data.get("completion_tokens", 0),
-                        total_tokens=usage_data.get("total_tokens", 0),
+                    Usage.model_validate(
+                        {
+                            "prompt_tokens": usage_data.get("prompt_tokens", 0),
+                            "completion_tokens": usage_data.get("completion_tokens", 0),
+                            "total_tokens": usage_data.get("total_tokens", 0),
+                        }
                     ),
                 )
 
