@@ -121,12 +121,20 @@ class ResponseMetadata:
         ## ADD OTHER HIDDEN PARAMS
         model_info: Final = kwargs.get("model_info", {}) or {}
         model_id: Final = model_info.get("id", None)
+        cache_hit: Final = (
+            self._hidden_params.get("cache_hit")
+            if isinstance(self._hidden_params, dict)
+            else getattr(self._hidden_params, "cache_hit", None)
+        )
         new_params: Final = {
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
             "response_cost": logging_obj.response_cost_calculator(
-                result=self.result, litellm_model_name=model, router_model_id=model_id
+                result=self.result,
+                cache_hit=cache_hit,
+                litellm_model_name=model,
+                router_model_id=model_id,
             ),
             "additional_headers": process_response_headers(
                 self._get_additional_headers_from_hidden_params() or {},

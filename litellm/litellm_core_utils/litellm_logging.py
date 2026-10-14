@@ -1849,6 +1849,17 @@ class Logging(LiteLLMLoggingBaseClass):
         """
 
         if cache_hit is None:
+            if hasattr(result, "_hidden_params"):
+                hidden = getattr(result, "_hidden_params", None)
+                if isinstance(hidden, dict):
+                    cache_hit = hidden.get("cache_hit")
+                elif hidden is not None:
+                    cache_hit = getattr(hidden, "cache_hit", None)
+        if cache_hit is None:
+            caching_details = getattr(self, "caching_details", None)
+            if caching_details is not None:
+                cache_hit = getattr(caching_details, "cache_hit", None)
+        if cache_hit is None:
             cache_hit = self.model_call_details.get("cache_hit", False)
 
         if cache_hit is True:

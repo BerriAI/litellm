@@ -1568,3 +1568,40 @@ def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> No
     assert key_a != bare
     assert key_a == key_a_again
     assert grouped_a == grouped_b
+
+
+def test_cache_hit_response_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    request: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f"cache hit cost {uuid.uuid4().hex}"}],
+        "caching": True,
+    }
+
+    first: Final = completion(**request, mock_response="hi there " * 50)
+    second: Final = completion(**request, mock_response="hi there " * 50)
+
+    assert first._hidden_params.get("cache_hit") is not True
+    assert (first._hidden_params.get("response_cost") or 0.0) > 0.0
+    assert second._hidden_params.get("cache_hit") is True
+    assert second._hidden_params.get("response_cost") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_async_cache_hit_response_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    request: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f"async cache hit cost {uuid.uuid4().hex}"}],
+        "caching": True,
+    }
+
+    first: Final = await acompletion(**request, mock_response="hi there " * 50)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    second: Final = await acompletion(**request, mock_response="hi there " * 50)
+
+    assert first._hidden_params.get("cache_hit") is not True
+    assert (first._hidden_params.get("response_cost") or 0.0) > 0.0
+    assert second._hidden_params.get("cache_hit") is True
+    assert second._hidden_params.get("response_cost") == 0.0
+
