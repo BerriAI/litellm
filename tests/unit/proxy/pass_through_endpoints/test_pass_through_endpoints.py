@@ -4699,6 +4699,7 @@ def test_get_response_headers_replaces_upstream_traceresponse_only_when_gateway_
         relayed_with_gateway_header: Final = HttpPassThroughEndpointHelpers.get_response_headers(upstream_headers)
     finally:
         set_global_response_propagator(previous_propagator)
+        is_otel_v2_enabled.cache_clear()
 
     assert relayed_without_gateway_header["traceresponse"] == upstream_headers["traceresponse"]
     assert "traceresponse" not in relayed_with_gateway_header
