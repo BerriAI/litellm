@@ -176,7 +176,7 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
         warmed_info: Final = peer.request("GET", "/organization/info", params={"organization_id": organization_id})
         assert warmed_info.status_code == 200, warmed_info.text
 
-        _observed(upstream)
+        assert _observed(upstream) == []
         for proxy in (gateway, peer):
             for key in (organization_key, team_key, other_key):
                 text: Final = f"warm {uuid.uuid4().hex}"
@@ -198,7 +198,8 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
                 seconds=10,
             )
             assert refused_peer.json() == _token_not_found_error(key), refused_peer.text
-        _observed(upstream)
+        refused_observations: Final = _observed(upstream)
+        assert refused_observations == [], refused_observations
         for proxy in (gateway, peer):
             for key in (organization_key, team_key):
                 refused_again: Final = _chat(proxy, model, key, f"refused {uuid.uuid4().hex}")

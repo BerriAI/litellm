@@ -447,7 +447,7 @@ def test_user_budget_update_propagates_to_gateway_and_peer(gateway: Gateway, pee
         scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
         key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
 
-        _observed(upstream)
+        assert _observed(upstream) == []
         for proxy in (gateway, peer):
             warm: Final = f"warm {uuid.uuid4().hex}"
             assert (
@@ -472,7 +472,8 @@ def test_user_budget_update_propagates_to_gateway_and_peer(gateway: Gateway, pee
             ),
             user_id,
         )
-        _observed(upstream)
+        denied_observations: Final = _observed(upstream)
+        assert denied_observations == [], denied_observations
         for proxy in (gateway, peer):
             _assert_user_budget_refusal(_user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}"), user_id)
         assert _observed(upstream) == []
@@ -510,7 +511,7 @@ def test_user_models_update_with_metadata_propagates_to_gateway_and_peer(gateway
         scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
         key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
 
-        _observed(upstream)
+        assert _observed(upstream) == []
         for proxy in (gateway, peer):
             warm: Final = f"warm {uuid.uuid4().hex}"
             assert (
@@ -538,7 +539,8 @@ def test_user_models_update_with_metadata_propagates_to_gateway_and_peer(gateway
             seconds=30,
         )
         assert denied_peer.json() == _user_model_denied_error(model), denied_peer.text
-        _observed(upstream)
+        model_denied_observations: Final = _observed(upstream)
+        assert model_denied_observations == [], model_denied_observations
         for proxy in (gateway, peer):
             denied_again: Final = _user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
             assert denied_again.status_code == 403, denied_again.text
@@ -610,7 +612,7 @@ def test_user_models_only_update_is_enforced_on_the_gateway(gateway: Gateway) ->
         scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
         key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
 
-        _observed(upstream)
+        assert _observed(upstream) == []
         warm: Final = f"warm {uuid.uuid4().hex}"
         warmed: Final = _user_chat(gateway, model, key, warm)
         assert warmed.status_code == 200, warmed.text
@@ -618,7 +620,7 @@ def test_user_models_only_update_is_enforced_on_the_gateway(gateway: Gateway) ->
 
         narrowed: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": ["no-default-models"]})
         assert narrowed.status_code == 200, narrowed.text
-        _observed(upstream)
+        assert _observed(upstream) == []
         denied: Final = _user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
         assert denied.status_code == 403, denied.text
         assert denied.json() == _user_model_denied_error(model), denied.text

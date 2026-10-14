@@ -112,7 +112,7 @@ def test_user_delete_revokes_keys_and_memberships(gateway: Gateway, peer: Gatewa
         invitation: Final = gateway.post("/invitation/new", {"user_id": user_id})
         assert string_value(object_value(invitation)["user_id"]) == user_id
 
-        _observed(upstream)
+        assert _observed(upstream) == []
         expected: Final = []
         for proxy in (gateway, peer):
             for key in keys:
@@ -137,7 +137,8 @@ def test_user_delete_revokes_keys_and_memberships(gateway: Gateway, peer: Gatewa
             )
             assert denied_peer.json() == _token_not_found_error(key), denied_peer.text
 
-        _observed(upstream)
+        denied_observations: Final = _observed(upstream)
+        assert denied_observations == [], denied_observations
         for proxy in (gateway, peer):
             for key in keys:
                 denied_again: Final = _chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
@@ -199,7 +200,7 @@ def test_org_admin_can_only_delete_users_inside_their_orgs(
             {"organization_id": org_a, "member": {"role": "internal_user", "user_id": victim_a}},
         )
 
-        _observed(upstream)
+        assert _observed(upstream) == []
         refused: Final = gateway.request(
             "POST",
             "/user/delete",
@@ -324,7 +325,7 @@ def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway, monkeypa
             session_info: Final = proxy.request("GET", "/user/info", params={"user_id": user_id}, key=ui_token)
             assert session_info.status_code == 200, session_info.text
             assert object_value(object_value(session_info.json())["user_info"])["user_id"] == user_id, session_info.text
-        _observed(upstream)
+        assert _observed(upstream) == []
 
         deleted: Final = gateway.request("DELETE", f"/scim/v2/Users/{user_id}")
         assert deleted.status_code == 204, deleted.text

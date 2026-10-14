@@ -178,7 +178,8 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
         assert removed_team.status_code == 200, removed_team.text
         assert _team_groups(team_id) == [{"access_group_ids": []}]
         _assert_denied(_chat(gateway, model, team_key, "denied"), model, "team_model_access_denied")
-        assert _observed(upstream) == []
+        denied_observations: Final = _observed(upstream)
+        assert denied_observations == [], denied_observations
         still_granted: Final = f"still granted {uuid.uuid4().hex}"
         _assert_served(_chat(gateway, model, assigned_key, still_granted))
         assert _observed(upstream) == [_observation(still_granted)]
@@ -214,7 +215,8 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
         )
         for key, denied_type in denied_pairs:
             _assert_denied(_chat(gateway, model, key, "deleted"), model, denied_type)
-        assert _observed(upstream) == []
+        deleted_observations: Final = _observed(upstream)
+        assert deleted_observations == [], deleted_observations
         for key, denied_type in denied_pairs:
             _assert_denied(_chat(gateway, model, key, "deleted"), model, denied_type)
         assert _observed(upstream) == []
@@ -247,7 +249,7 @@ def test_deleting_an_access_group_revokes_a_still_assigned_team_and_key(gateway:
         assert _group_row(access_group_id) == [{"assigned_team_ids": [team_id], "assigned_key_ids": [hashed_key]}]
         assert _team_groups(team_id) == [{"access_group_ids": [access_group_id]}]
         assert _key_groups(hashed_key) == [{"access_group_ids": [access_group_id]}]
-        _observed(upstream)
+        assert _observed(upstream) == []
 
         team_text: Final = f"delete warm team {uuid.uuid4().hex}"
         team_response: Final = eventually(
@@ -270,7 +272,7 @@ def test_deleting_an_access_group_revokes_a_still_assigned_team_and_key(gateway:
         assert _group_row(access_group_id) == []
         assert _team_groups(team_id) == [{"access_group_ids": []}]
         assert _key_groups(hashed_key) == [{"access_group_ids": []}]
-        _observed(upstream)
+        assert _observed(upstream) == []
         denied_pairs: Final = (
             (team_key, "team_model_access_denied"),
             (assigned_key, "key_model_access_denied"),

@@ -180,7 +180,7 @@ def test_listed_end_user_is_refused_and_unblock_restores_serving(gateway: Gatewa
         with proxy.scenario() as scenario:
             model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
             key: Final = scenario.key(models=[model])
-            _observed(upstream)
+            assert _observed(upstream) == []
 
             refused: Final = _chat(proxy, model, key, end_user)
             _assert_blocked_refusal(refused, end_user)
