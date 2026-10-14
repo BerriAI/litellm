@@ -1336,6 +1336,22 @@
         "interactions": true
       }
     },
+    "gradium": {
+      "display_name": "Gradium (`gradium`)",
+      "url": "https://docs.litellm.ai/docs/providers/gradium",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "groq": {
       "display_name": "Groq AI (`groq`)",
       "url": "https://docs.litellm.ai/docs/providers/groq",

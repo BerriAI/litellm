@@ -8540,12 +8540,14 @@ def speech(
         )
 
         if text_to_speech_provider_config is None:
-            text_to_speech_provider_config = GradiumTextToSpeechConfig()
+            text_to_speech_provider_config = GradiumTextToSpeechConfig()  # rebind-ok: shared across every provider branch of speech()
 
-        gradium_config: Final = cast(GradiumTextToSpeechConfig, text_to_speech_provider_config)
+        gradium_config: Final = cast(  # cast-ok: narrowed to the config the branch above just selected
+            GradiumTextToSpeechConfig, text_to_speech_provider_config
+        )
 
-        gradium_voice_id = voice if isinstance(voice, str) else None
-        if gradium_voice_id is None or not gradium_voice_id.strip():
+        gradium_voice_id: Final = voice.strip() if isinstance(voice, str) else ""
+        if not gradium_voice_id:
             raise litellm.BadRequestError(
                 message="'voice' must resolve to a Gradium voice id for Gradium TTS",
                 model=model,
@@ -8557,10 +8559,10 @@ def speech(
         if api_key is not None:
             litellm_params_dict["api_key"] = api_key
 
-        response = base_llm_http_handler.text_to_speech_handler(
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: shared across every provider branch of speech()
             model=model,
             input=input,
-            voice=gradium_voice_id.strip(),
+            voice=gradium_voice_id,
             text_to_speech_provider_config=gradium_config,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,

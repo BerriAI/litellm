@@ -117,12 +117,30 @@ def test_sends_the_api_key_as_x_api_key():
     assert headers["x-api-key"] == "gd_abc"
 
 
-def test_builds_the_rest_tts_url_from_api_base():
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://eu.api.gradium.ai",
+        "https://eu.api.gradium.ai/",
+        # Gradium documents its regional bases with /api already appended.
+        "https://eu.api.gradium.ai/api",
+        "https://eu.api.gradium.ai/api/",
+    ],
+)
+def test_builds_the_rest_tts_url_without_doubling_the_api_segment(api_base: str):
     config = GradiumTextToSpeechConfig()
 
-    url = config.get_complete_url(model="default", api_base="https://eu.example.com/", litellm_params={})
+    url = config.get_complete_url(model="default", api_base=api_base, litellm_params={})
 
-    assert url == "https://eu.example.com/api/post/speech/tts"
+    assert url == "https://eu.api.gradium.ai/api/post/speech/tts"
+
+
+def test_defaults_to_the_latency_routed_endpoint():
+    config = GradiumTextToSpeechConfig()
+
+    url = config.get_complete_url(model="default", api_base=None, litellm_params={})
+
+    assert url == "https://api.gradium.ai/api/post/speech/tts"
 
 
 def test_requests_raw_audio_rather_than_a_json_message_stream():
