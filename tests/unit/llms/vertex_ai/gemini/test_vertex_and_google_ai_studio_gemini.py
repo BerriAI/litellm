@@ -9684,3 +9684,43 @@ def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
 
     assert chunk.usage.prompt_tokens == 1536 + 1280
     assert chunk.usage.cache_creation_input_tokens == 1280
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_managed_cache_streaming_error_preserves_vertex_status(respx_mock, asynchronous):
+    from litellm.llms.vertex_ai.context_caching.redis_cache_ids import CacheReference, Registry
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import make_call, make_sync_call
+
+    reference = CacheReference("projects/p/locations/global/cachedContents/c", Registry(Mock(), ("scope",), {}), [], {})
+    reference.rebuild = lambda: {"contents": []}
+    body = {"cachedContent": reference, "contents": []}
+    route = respx_mock.post("https://provider.invalid/streamGenerateContent").respond(
+        403, json={"error": {"message": "permission denied"}}
+    )
+    client = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()) if asynchronous else HTTPHandler()
+    try:
+        kwargs = dict(
+            client=client,
+            gemini_client=client,
+            api_base="https://provider.invalid/streamGenerateContent",
+            headers={},
+            data=json.dumps(body),
+            model="gemini-2.5-flash",
+            messages=[],
+            logging_obj=Mock(),
+            cache_body=body,
+        )
+        with pytest.raises(VertexAIError) as error:
+            if asynchronous:
+                await make_call(**kwargs)
+            else:
+                make_sync_call(**kwargs)
+        assert error.value.status_code == 403
+        assert "permission denied" in str(error.value)
+        assert route.call_count == 1
+    finally:
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()
