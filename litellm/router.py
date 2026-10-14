@@ -23,6 +23,7 @@ import weakref
 from collections import defaultdict
 from collections.abc import (
     AsyncGenerator,
+    AsyncIterable,
     AsyncIterator,
     Awaitable,
     Callable,
@@ -218,6 +219,7 @@ from litellm.router_utils.cooldown_handlers import (
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
+    attempted_fallback_targets_from,
     attempted_retries_for_request,
     carry_over_pre_routing_selection,
     carry_over_routed_deployment,
@@ -229,6 +231,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
     has_unattempted_fallback_target,
+    is_bad_request_without_fallback,
     mid_stream_fallback_hop_kwargs,
     mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
@@ -691,6 +694,67 @@ def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
     return error.original_exception if error.original_exception is not None else error
 
 
+@dataclass(frozen=True, slots=True)
+class _FirstChunk:
+    """The chunk Router._acompletion / _completion already read off a stream; None means the provider closed it empty."""
+
+    chunk: ModelResponseStream | None
+
+
+async def _aread_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
+    """
+    Read the first chunk while Router._acompletion still holds the request, so a
+    stream that fails before any token raises there, inside async_function_with_retries
+    and the fallback chain, instead of surfacing to the caller mid-iteration.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+
+    try:
+        return _FirstChunk(chunk=await stream.__anext__())
+    except StopAsyncIteration:
+        return _FirstChunk(chunk=None)
+    except MidStreamFallbackError as e:
+        raise _mid_stream_retry_trigger(e) from e
+
+
+def _read_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
+    """Sync twin of _aread_first_chunk for Router._completion."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    try:
+        return _FirstChunk(chunk=next(stream))
+    except StopIteration:
+        return _FirstChunk(chunk=None)
+    except MidStreamFallbackError as e:
+        raise _mid_stream_retry_trigger(e) from e
+
+
+def _chunks_with_first(model_response: Iterable[object], taken: _FirstChunk | None) -> Iterator[object]:
+    """The stream with the chunk _read_first_chunk already read put back in front (None: the stream as is)."""
+    if taken is None:
+        yield from model_response
+        return
+    if taken.chunk is None:
+        return
+    yield taken.chunk
+    yield from model_response
+
+
+async def _achunks_with_first(
+    model_response: AsyncIterable[object], taken: _FirstChunk | None
+) -> AsyncIterator[object]:
+    """Async twin of _chunks_with_first."""
+    if taken is None:
+        async for item in model_response:
+            yield item
+        return
+    if taken.chunk is None:
+        return
+    yield taken.chunk
+    async for item in model_response:
+        yield item
+
+
 def _stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
     """
     Whether `chunk` should make Router._aanthropic_messages_streaming_iterator
@@ -960,6 +1024,7 @@ class Router:
         allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
         cooldown_time: float | None = None,  # (seconds) time to cooldown a deployment after failure
         disable_cooldowns: bool | None = None,
+        fallback_on_unsupported_params: bool = True,
         routing_strategy: RoutingStrategyName = "simple-shuffle",
         optional_pre_call_checks: OptionalPreCallChecks | None = None,
         routing_strategy_args: dict = {},  # just for latency-based
@@ -1202,6 +1267,7 @@ class Router:
         self.cooldown_time = cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
         self.cooldown_cache = CooldownCache(cache=self.cache, default_cooldown_time=self.cooldown_time)
         self.disable_cooldowns = disable_cooldowns
+        self.fallback_on_unsupported_params = fallback_on_unsupported_params
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
@@ -2791,6 +2857,7 @@ class Router:
                     model_response=response,
                     messages=messages,
                     initial_kwargs=input_kwargs_for_streaming_fallback,
+                    first_chunk=_read_first_chunk(response),
                 )
 
             return response
@@ -3050,6 +3117,7 @@ class Router:
         messages: list[dict[str, str]],
         initial_kwargs: dict,
         deployment_slot: contextlib.AsyncExitStack | None = None,
+        first_chunk: _FirstChunk | None = None,
     ) -> CustomStreamWrapper:
         """
         Helper to iterate over a streaming response.
@@ -3058,6 +3126,8 @@ class Router:
 
         `deployment_slot` holds the deployment's max_parallel_requests semaphore; it is
         released when the stream is exhausted, closed, or falls back to another deployment
+
+        `first_chunk` carries the chunk _acompletion already read (None: iterate from the start)
         """
         from litellm.exceptions import MidStreamFallbackError
 
@@ -3102,7 +3172,7 @@ class Router:
         async def stream_with_fallbacks():
             fallback_response = None  # Track for cleanup in finally
             try:
-                async for item in model_response:
+                async for item in _achunks_with_first(model_response, first_chunk):
                     yield item
             except MidStreamFallbackError as e:
                 with anyio.CancelScope(shield=True):
@@ -3204,7 +3274,7 @@ class Router:
         wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
         # weak, so the generator closing over it does not keep the wrapper out of
         # refcount teardown and delay the `finally` that releases the deployment slot
-        wrapper_ref: Final = weakref.ref(wrapped_response)
+        wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
         return wrapped_response
 
     @staticmethod
@@ -3677,6 +3747,7 @@ class Router:
         model_response: CustomStreamWrapper,
         messages: list[dict[str, str]],
         initial_kwargs: dict,
+        first_chunk: _FirstChunk | None = None,
     ) -> CustomStreamWrapper:
         """
         Sync equivalent of _acompletion_streaming_iterator.
@@ -3712,7 +3783,7 @@ class Router:
         def stream_with_fallbacks():
             fallback_response = None
             try:
-                for item in model_response:
+                for item in _chunks_with_first(model_response, first_chunk):
                     yield item
             except MidStreamFallbackError as e:
                 if fallbacks_disabled_for_request(initial_kwargs) or (
@@ -3808,7 +3879,7 @@ class Router:
 
         wrapped_response: Final = SyncFallbackStreamWrapper(stream_with_fallbacks())
         # weak, for the same reason as the async twin
-        wrapper_ref: Final = weakref.ref(wrapped_response)
+        wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
         return wrapped_response
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
@@ -3959,6 +4030,9 @@ class Router:
                     and response.make_call is not None
                 ):
                     await response.fetch_stream()
+                first_chunk: Final = (
+                    await _aread_first_chunk(response) if isinstance(response, CustomStreamWrapper) else None
+                )
 
                 self.success_calls[model_name] += 1
                 verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -3975,6 +4049,7 @@ class Router:
                         messages=messages,
                         initial_kwargs=input_kwargs_for_streaming_fallback,
                         deployment_slot=deployment_slot.pop_all(),
+                        first_chunk=first_chunk,
                     )
 
                 return response
@@ -7649,6 +7724,7 @@ class Router:
         original_exception: Final = e
         fallback_model_group = None
         original_model_group: Final[str | None] = kwargs.get("model")
+        fallback_walk: Final = attempted_fallback_targets_from(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # keep legacy kwargs untyped
         # A pre-routing hook (complexity / auto / adaptive / quality routers) picks a tier
         # behind the router name, and fallbacks are configured per tier, not per router.
         lookup_groups: Final[tuple[str, ...]] = fallback_lookup_groups(kwargs, model_group)
@@ -7657,13 +7733,22 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        if disable_fallbacks is True or original_model_group is None or is_guardrail_intervention(e):
+        unsupported_params_without_fallback: Final = is_bad_request_without_fallback(
+            e, self.fallback_on_unsupported_params
+        )
+        if (
+            disable_fallbacks is True
+            or original_model_group is None
+            or is_guardrail_intervention(e)
+            or unsupported_params_without_fallback
+        ):
             raise e
 
         input_kwargs: Final = {
             "litellm_router": self,
             "original_exception": original_exception,
             **kwargs,
+            "attempted_targets": fallback_walk,
         }
 
         if "max_fallbacks" not in input_kwargs:
@@ -7893,7 +7978,10 @@ class Router:
             and not nested_fallback_hop
         ):
             original_exception.message += format_fallback_outcome_message(
-                model_group, attempted_fallback_group, fallback_failure_exception_str
+                model_group,
+                attempted_fallback_group,
+                fallback_failure_exception_str,
+                skipped=fallback_walk.skipped,
             )
 
         raise original_exception
@@ -12731,6 +12819,7 @@ class Router:
             "enable_weighted_failover",
             "enable_tag_filtering",
             "tag_routing_prefix",
+            "fallback_on_unsupported_params",
         ]
 
         for var in vars_to_include:

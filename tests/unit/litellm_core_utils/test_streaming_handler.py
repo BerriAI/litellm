@@ -732,6 +732,42 @@ def test_set_response_id_propagation_valid_to_invalid(
     assert initialized_custom_stream_wrapper.response_id == "first-valid-id"
 
 
+@pytest.mark.parametrize(
+    "last_delta",
+    [
+        Delta(content="Hello"),
+        Delta(provider_specific_fields={"stop_reason": "refusal"}),
+    ],
+    ids=["content", "provider_specific_fields"],
+)
+def test_logged_response_keeps_received_model_id_when_the_finish_chunk_is_synthesized(
+    logging_obj: Logging, last_delta: Delta
+):
+    upstream_id: Final = "chatcmpl-upstream-id"
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                ModelResponseStream(
+                    id=upstream_id,
+                    model="gpt-4o-mini",
+                    choices=[StreamingChoices(index=0, delta=last_delta, finish_reason="content_filter")],
+                )
+            ]
+        ),
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+
+    emitted: Final = list(wrapper)
+    logged: Final = litellm.stream_chunk_builder(chunks=wrapper.chunks)
+
+    assert len(emitted) == 2
+    assert [chunk._hidden_params.get("received_model_id") for chunk in emitted] == [upstream_id, upstream_id]
+    assert logged is not None
+    assert logged._hidden_params.get("received_model_id") == upstream_id
+
+
 @pytest.mark.asyncio
 async def test_streaming_completion_start_time(logging_obj: Logging):
     """Test that the start time is set correctly"""

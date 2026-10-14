@@ -648,6 +648,20 @@
               ],
               "title": "Access Model Names"
             },
+            "access_skill_names": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Skill Names"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -686,6 +700,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "required": [
@@ -812,6 +843,14 @@
               "title": "Access Model Names",
               "type": "array"
             },
+            "access_skill_names": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Access Skill Names",
+              "type": "array"
+            },
             "assigned_key_ids": {
               "items": {
                 "type": "string"
@@ -866,6 +905,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             },
             "updated_at": {
               "format": "date-time",
@@ -957,6 +1013,20 @@
               ],
               "title": "Access Model Names"
             },
+            "access_skill_names": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Access Skill Names"
+            },
             "assigned_key_ids": {
               "anyOf": [
                 {
@@ -995,6 +1065,23 @@
                 }
               ],
               "title": "Description"
+            },
+            "mcp_tool_permissions": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Tool Permissions"
             }
           },
           "title": "AccessGroupUpdateRequest",
@@ -7644,7 +7731,7 @@
     "paths": {
       "/claude-code/marketplace.json": {
         "get": {
-          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
+          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` or an access group on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
           "operationId": "get_marketplace_claude_code_marketplace_json_get",
           "parameters": [
             {

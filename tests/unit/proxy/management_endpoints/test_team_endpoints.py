@@ -11386,6 +11386,7 @@ class TestResolveTeamAccessGroupResources:
         row1.access_model_names = ["gpt-4", "claude-3"]
         row1.access_mcp_server_ids = ["mcp-1"]
         row1.access_agent_ids = []
+        row1.access_skill_names = ["private-plugin", "shared-plugin"]
 
         row2 = MagicMock()
         row2.access_group_id = "ag-2"
@@ -11393,6 +11394,7 @@ class TestResolveTeamAccessGroupResources:
         row2.access_model_names = ["claude-3", "gemini"]
         row2.access_mcp_server_ids = []
         row2.access_agent_ids = ["agent-1"]
+        row2.access_skill_names = ["shared-plugin"]
 
         fake_prisma = MagicMock()
         fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
@@ -11413,13 +11415,43 @@ class TestResolveTeamAccessGroupResources:
         ]
         assert resolved.access_group_mcp_server_ids == ["mcp-1"]
         assert resolved.access_group_agent_ids == ["agent-1"]
+        assert resolved.access_group_skill_names == ()
+        assert resolved.unresolved_access_group_ids == ("ag-missing",)
         assert [
-            (d.access_group_id, d.access_group_name, d.models, d.mcp_server_ids, d.agent_ids)
+            (d.access_group_id, d.access_group_name, d.models, d.mcp_server_ids, d.agent_ids, d.skill_names)
             for d in (resolved.access_group_details or [])
         ] == [
-            ("ag-1", "shared-models", ("gpt-4", "claude-3"), ("mcp-1",), ()),
-            ("ag-2", "extra-models", ("claude-3", "gemini"), (), ("agent-1",)),
+            ("ag-1", "shared-models", ("gpt-4", "claude-3"), ("mcp-1",), (), ("private-plugin", "shared-plugin")),
+            ("ag-2", "extra-models", ("claude-3", "gemini"), (), ("agent-1",), ("shared-plugin",)),
         ]
+
+    @pytest.mark.asyncio
+    async def test_skill_names_resolve_when_every_listed_group_exists(self):
+        """The flat skill list is the effective grant: names from every group when all rows
+        exist, nothing while any listed id has no row, since the skill check then clamps
+        the team's keys to public plugins."""
+        from litellm.proxy._types import TeamInfoResponseObjectTeamTable
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_team_access_group_resources,
+        )
+
+        row = MagicMock()
+        row.access_group_id = "ag-1"
+        row.access_group_name = "skills-group"
+        row.access_model_names = []
+        row.access_mcp_server_ids = []
+        row.access_agent_ids = []
+        row.access_skill_names = ["private-plugin"]
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[row])
+
+        with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+            resolved = await _resolve_team_access_group_resources(
+                TeamInfoResponseObjectTeamTable(team_id="team-1", access_group_ids=["ag-1"])
+            )
+
+        assert resolved.access_group_skill_names == ("private-plugin",)
+        assert resolved.unresolved_access_group_ids == ()
 
     @pytest.mark.asyncio
     async def test_no_access_groups_leaves_details_unset(self):
@@ -16948,6 +16980,41 @@ async def test_update_team_team_admin_echoing_unpermitted_fields_unchanged_is_al
 
     assert result["data"].team_id == "test_team_id"
     assert prisma.db.litellm_teamtable.update.called
+
+
+@pytest.mark.asyncio
+async def test_update_team_team_admin_resending_stored_member_defaults_is_not_an_edit(
+    disable_audit_logging_for_mocked_team,
+):
+    import contextlib
+    from litellm.models.budget import LiteLLM_BudgetTable
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {"team_member_budget_id": "member-budget-1"})
+        prisma.db.litellm_budgettable.find_unique = AsyncMock(
+            return_value=LiteLLM_BudgetTable(
+                budget_id="member-budget-1", max_budget=10.0, budget_duration="30d", tpm_limit=100, rpm_limit=5
+            )
+        )
+        stack.enter_context(
+            patch("litellm.proxy.proxy_server.general_settings", {"team_admin_editable_team_fields": ["tpm_limit"]})  # test-quality-ok: update_team reads general_settings as a proxy_server module global
+        )
+        result = await update_team(
+            data=UpdateTeamRequest(
+                team_id="test_team_id",
+                team_member_budget=10.0,
+                team_member_budget_duration="30d",
+                team_member_tpm_limit=100,
+                team_member_rpm_limit=5,
+                tpm_limit=6,
+            ),
+            http_request=_update_request_stub(),
+            user_api_key_dict=_TEAM_ADMIN_CALLER,
+        )
+
+    assert result["data"].team_id == "test_team_id"
+    assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["tpm_limit"] == 6
+    assert not prisma.db.litellm_budgettable.update.called
 
 
 @pytest.mark.asyncio

@@ -430,6 +430,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     cache_control: dict[str, Any] | None  # Automatic prompt caching
     reasoning_effort: str | None
     safeguards: ReadOnly[list[dict[str, object]] | None]
+    service_tier: ReadOnly[str | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
