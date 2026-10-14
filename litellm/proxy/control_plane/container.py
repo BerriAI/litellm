@@ -1,12 +1,14 @@
 """Long-lived objects built once per process and handed to the app. Tests build their own."""
 
+from __future__ import annotations
+
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -27,11 +29,15 @@ from litellm.proxy.control_plane.auth.rbac import (
     parse_role_definition,
 )
 from litellm.proxy.control_plane.common.fanout import Fanout
+from litellm.proxy.control_plane.common.tracing import Telemetry, build_telemetry
 from litellm.proxy.control_plane.dataplanes.client import DataplaneClient, HttpTransport, RetryPolicy
 from litellm.proxy.control_plane.dataplanes.credentials import TokenExchanger, http_token_exchanger
 from litellm.proxy.control_plane.dataplanes.registry import DataplaneRegistry, build_registry
 from litellm.proxy.control_plane.settings import ControlPlaneSettings
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+if TYPE_CHECKING:
+    from opentelemetry.sdk.trace import TracerProvider
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +50,7 @@ class Container:
     dataplane_client: DataplaneClient
     fanout: Fanout
     audit_log: AuditLog
+    telemetry: Telemetry
 
 
 class InvalidRolePolicy(ValueError):
@@ -113,6 +120,7 @@ def build_container(
     jwks: JwksKeyLookup | None = None,
     transport: HttpTransport | None = None,
     exchanger: TokenExchanger | None = None,
+    tracer_provider: TracerProvider | None = None,
 ) -> Container:
     master_key: Final = settings.master_key.get_secret_value()
     policy: Final = build_role_policy(settings)
@@ -130,6 +138,7 @@ def build_container(
         policy=policy,
     )
     password: Final = settings.ui_password
+    telemetry: Final = build_telemetry(settings, tracer_provider)
     return Container(
         settings=settings,
         policy=policy,
@@ -147,7 +156,9 @@ def build_container(
             transport=http,
             timeout_seconds=settings.dataplane_timeout_seconds,
             retry=RetryPolicy(attempts=settings.dataplane_retry_attempts),
+            tracing=telemetry.recorder,
         ),
         fanout=Fanout(concurrency=settings.fanout_concurrency),
         audit_log=build_audit_log(settings.audit_capacity),
+        telemetry=telemetry,
     )

@@ -932,6 +932,13 @@ def _export_one_span(cfg: OpenTelemetryV2Config) -> None:
     provider.shutdown()
 
 
+def test_traces_endpoint_alone_creates_an_otlp_http_exporter_spec():
+    endpoint: Final = "https://collector.example.test/custom/traces"
+    config: Final = OpenTelemetryV2Config(traces_endpoint=endpoint)
+    (spec,) = config.exporters
+    assert spec.kind == "otlp_http" and spec.traces_endpoint == endpoint
+
+
 def test_traces_endpoint_env_posts_to_the_configured_url_verbatim(monkeypatch, otlp_collector):
     base_url, received_paths = otlp_collector
     for var in ("OTEL_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_ENDPOINT"):
