@@ -74,6 +74,36 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: echo "name=rust-bridge-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+  rust-bridge-windows:
+    name: rust-bridge-windows
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        timeout-minutes: 3
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        timeout-minutes: 3
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Build the Rust bridge
+        timeout-minutes: 25
+        uses: ./.github/actions/rust-bridge
   assert-shard-coverage:
     permissions:
       contents: read
