@@ -9,6 +9,7 @@ Supported for both `v1/chat/completions` (via the prompt-management hook) and
 
 """
 
+import bisect
 import copy
 import itertools
 import os
@@ -838,21 +839,18 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
         verbose_logger.debug("Dropping the latest prompt_cache_breakpoint marks past the cap under drop_params")
         marks_before: Final = tuple(itertools.accumulate((sum(flags) for flags in created), initial=0))
-        capped_requests: Final = (
-            (
-                kept_marks,
-                tuple(
-                    _message_keeping_created_cache_controls_below(message, flags, before, kept_marks)
-                    for message, flags, before in zip(translated, created, marks_before)
-                ),
+
+        def capped_request(kept_marks: int) -> tuple[AllMessageValues, ...]:
+            return tuple(
+                _message_keeping_created_cache_controls_below(message, flags, before, kept_marks)
+                for message, flags, before in zip(translated, created, marks_before)
             )
-            for kept_marks in range(max(0, created_marks - excess), -1, -1)
-        )
-        return next(
-            capped
-            for kept_marks, capped in capped_requests
-            if kept_marks == 0 or sum(map(sent_breakpoints, capped)) + external <= MAX_CACHE_CONTROL_BLOCKS
-        )
+
+        def over_cap(kept_marks: int) -> bool:
+            return sum(map(sent_breakpoints, capped_request(kept_marks))) + external > MAX_CACHE_CONTROL_BLOCKS
+
+        first_over_cap: Final = bisect.bisect_left(range(max(0, created_marks - excess) + 1), True, key=over_cap)
+        return capped_request(max(0, first_over_cap - 1))
 
     @staticmethod
     def _insert_prompt_cache_breakpoint_in_message(message: AllMessageValues) -> AllMessageValues:
