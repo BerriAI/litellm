@@ -17829,6 +17829,20 @@ def test_stored_client_assertion_signing_alg_falls_back_to_rs256_for_non_approve
     assert "client_assertion_signing_alg" in caplog.text and "HS256" in caplog.text and "srv" in caplog.text
 
 
+def test_stored_client_assertion_signing_alg_warns_eddsa_key_cannot_sign_fallback(caplog):
+    """A stored EdDSA server kept booting pre-allowlist; the fallback warning must say its
+    Ed25519 key cannot produce the RS256 fallback, so exchanges fail until the key is rotated."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        _stored_client_assertion_signing_alg,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert _stored_client_assertion_signing_alg("EdDSA", "srv") == "RS256"
+    assert "EdDSA" in caplog.text and "srv" in caplog.text
+    assert "cannot sign" in caplog.text and "token exchange will fail" in caplog.text
+    assert "rotated" in caplog.text
+
+
 def test_stored_client_assertion_signing_alg_passes_through_approved(caplog):
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _stored_client_assertion_signing_alg,

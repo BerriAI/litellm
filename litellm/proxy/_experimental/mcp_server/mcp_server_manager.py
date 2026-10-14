@@ -225,7 +225,11 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPServer,
     parse_pinned_tools,
 )
-from litellm.types.proxy.auth.jwt_algorithms import APPROVED_JWT_ALGORITHMS, ApprovedJwtAlgorithm
+from litellm.types.proxy.auth.jwt_algorithms import (
+    APPROVED_JWT_ALGORITHMS,
+    LEGACY_JWT_ALGORITHMS,
+    ApprovedJwtAlgorithm,
+)
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
@@ -1607,11 +1611,22 @@ def _stored_client_assertion_signing_alg(value: object, server_name: str) -> App
     if value in APPROVED_JWT_ALGORITHMS:
         return value
     if value is not None:
-        verbose_logger.warning(
-            "MCP server %s: client_assertion_signing_alg %r is not an approved algorithm, using RS256",
-            server_name,
-            value,
-        )
+        if value in LEGACY_JWT_ALGORITHMS:
+            # An Ed25519 key cannot produce the RS256 fallback, so this server's token exchange
+            # fails until the stored key is rotated; do not imply the fallback "just works".
+            verbose_logger.warning(
+                "MCP server %s: client_assertion_signing_alg %r is legacy and not approved for signing; the "
+                "stored client_private_key cannot sign the RS256 fallback, so token exchange will fail until "
+                "the key is rotated to RSA or EC (see APPROVED_JWT_ALGORITHMS)",
+                server_name,
+                value,
+            )
+        else:
+            verbose_logger.warning(
+                "MCP server %s: client_assertion_signing_alg %r is not an approved algorithm, using RS256",
+                server_name,
+                value,
+            )
     return "RS256"
 
 

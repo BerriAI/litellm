@@ -7652,16 +7652,32 @@ def test_jwks_keys_for_filters_by_declared_or_inferred_algorithm(key, algorithms
 def test_jwks_keys_for_warns_when_dropping_key_with_unapproved_algorithm(caplog):
     import logging
 
-    from litellm.proxy.auth.jwt_algorithms import jwks_keys_for
+    from litellm.proxy.auth.jwt_algorithms import _warn_dropped_jwks_key_once, jwks_keys_for
+
+    def dropped_key_warnings() -> "list[str]":
+        return [r.message for r in caplog.records if "dropped a JWKS key" in r.message]
 
     rsa_key: Final = {"kty": "RSA", "alg": "RS256", "kid": "rsa-key"}
     eddsa_key: Final = {"kty": "OKP", "alg": "EdDSA", "kid": "legacy-ed-key"}
+    enc_key: Final = {"kty": "RSA", "alg": "RSA-OAEP", "kid": "enc-key", "use": "enc"}
 
+    _warn_dropped_jwks_key_once.cache_clear()
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        usable: Final = list(jwks_keys_for([rsa_key, eddsa_key], ("RS256", "ES256")))
+        usable: Final = list(jwks_keys_for([rsa_key, eddsa_key, enc_key], ("RS256", "ES256")))
 
     assert usable == [rsa_key]
     assert "EdDSA" in caplog.text and "legacy-ed-key" in caplog.text
+    # Encryption keys (e.g. Keycloak's default RSA-OAEP) are dropped by design: no warning, no migration advice.
+    assert "enc-key" not in caplog.text and "RSA-OAEP" not in caplog.text
+
+    # The filter re-runs on every JWT-authenticated request; the warning must fire once per key, not per request.
+    assert len(dropped_key_warnings()) == 1
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        list(jwks_keys_for([rsa_key, eddsa_key, enc_key], ("RS256", "ES256")))
+        list(jwks_keys_for([eddsa_key], ("RS256",)))
+    assert len(dropped_key_warnings()) == 0
+    _warn_dropped_jwks_key_once.cache_clear()
 
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
@@ -7735,6 +7751,8 @@ async def test_get_public_key_from_jwks_warns_on_eddsa_key_dropped_in_fips_mode(
     """An operator whose JWKS mixes approved and EdDSA keys must see why the EdDSA key is unusable."""
     import logging
 
+    from litellm.proxy.auth.jwt_algorithms import _warn_dropped_jwks_key_once
+
     _, ed_jwk = _okp_keypair_and_jwk()
     ed_jwk = {**ed_jwk, "kid": "legacy-ed-key"}
     _, rsa_jwk = _get_rsa_key_and_jwk(kid="rsa-key")
@@ -7747,6 +7765,7 @@ async def test_get_public_key_from_jwks_warns_on_eddsa_key_dropped_in_fips_mode(
     )
     jwt_handler.http_handler = endpoint
 
+    _warn_dropped_jwks_key_once.cache_clear()
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         public_key = await jwt_handler._get_public_key_from_jwks_url(
             jwks_url="https://issuer.example.com/keys",
@@ -7764,6 +7783,7 @@ async def test_get_public_key_from_jwks_warns_on_eddsa_key_dropped_in_fips_mode(
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
     ed_only_handler.http_handler = _ScriptedJWKSEndpoint(({"keys": [ed_jwk]},))
+    _warn_dropped_jwks_key_once.cache_clear()
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         with pytest.raises(NoMatchingJWTPublicKeyError):
             await ed_only_handler._get_public_key_from_jwks_url(

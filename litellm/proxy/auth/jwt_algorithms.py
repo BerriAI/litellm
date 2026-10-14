@@ -1,4 +1,5 @@
 from collections.abc import Collection, Mapping, Sequence
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Final, TypeVar
 
@@ -35,15 +36,29 @@ def jwks_keys_for(keys: Sequence[_JWTMappingT], algorithms: Collection[str]) -> 
 
 
 def _warn_dropped_jwks_key(key: Mapping[str, object]) -> None:
-    """Surface why a JWKS key was filtered out. alg/kid/kty are public JWKS header fields, never key material."""
+    """Surface why a JWKS key was filtered out, once per distinct key (the filter re-runs on every
+    JWT-authenticated request). alg/kid/kty/use are public JWKS header fields, never key material."""
+    if key.get("use") == "enc":
+        return  # encryption keys (e.g. Keycloak's default RSA-OAEP) are dropped by design: nothing to migrate
     alg: Final = key.get("alg")
-    verbose_proxy_logger.warning(
-        "JWT Auth: dropped a JWKS key unusable for token verification: alg=%s, kid=%s, kty=%s; "
-        "allowed algorithms follow APPROVED_JWT_ALGORITHMS (EdDSA is legacy, allowed only outside FIPS mode) — "
-        "move the IdP signing key to an approved algorithm such as RS256",
+    _warn_dropped_jwks_key_once(
         alg if isinstance(alg, str) else "undeclared",
-        key.get("kid"),
-        key.get("kty"),
+        str(key.get("kid")),
+        str(key.get("kty")),
+        str(key.get("use")),
+    )
+
+
+@lru_cache(maxsize=256)
+def _warn_dropped_jwks_key_once(alg: str, kid: str, kty: str, use: str) -> None:
+    verbose_proxy_logger.warning(
+        "JWT Auth: dropped a JWKS key unusable for token verification: alg=%s, kid=%s, kty=%s, use=%s; "
+        "allowed algorithms follow APPROVED_JWT_ALGORITHMS (EdDSA is legacy, allowed only outside FIPS mode) — "
+        "if this key signs tokens, move the IdP signing key to an approved algorithm such as RS256",
+        alg,
+        kid,
+        kty,
+        use,
     )
 
 
