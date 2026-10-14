@@ -1,9 +1,10 @@
 import asyncio
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 
 async def _first_non_none(read):
@@ -184,3 +185,160 @@ async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
     model_id_3: Final = response3._hidden_params["model_id"]
 
     assert model_id_1 == model_id_2 == model_id_3
+
+
+def _marked_tool(
+    name: str, cache_control: dict | None = None, *, nested: bool = False
+) -> ChatCompletionToolParam:
+    tool: Final = {
+        "type": "function",
+        "function": {"name": name, "description": "word " * 40, "parameters": {"type": "object", "properties": {}}},
+    }
+    if cache_control is not None and nested:
+        return cast(
+            ChatCompletionToolParam,
+            {**tool, "function": {**tool["function"], "cache_control": cache_control}},
+        )
+    if cache_control is not None:
+        return cast(ChatCompletionToolParam, {**tool, "cache_control": cache_control})
+    return cast(ChatCompletionToolParam, tool)
+
+
+def test_prepend_system_prompt_dedupes_the_string_standard_logging_prepends():
+    """
+    The success event logs the string system prompt already prepended as a system message, and the
+    request still carries it in `system`. Prepending unconditionally would hash the prefix twice on
+    one side, so the copy already sitting at messages[0] must be recognized as the same prompt.
+    """
+    messages = cast(
+        list[AllMessageValues],
+        [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}],
+    )
+
+    assert PromptCachingCache.prepend_system_prompt(messages, "be brief") is messages
+
+
+def test_prepend_system_prompt_prepends_a_list_system_prompt():
+    """
+    Standard logging only prepends a string system, so a /v1/messages list system never reaches the
+    write side's messages. Both sides have to rebuild the same list the provider caches.
+    """
+    system: Final = [{"type": "text", "text": "be brief", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    messages = cast(list[AllMessageValues], [{"role": "user", "content": "hi"}])
+
+    result = PromptCachingCache.prepend_system_prompt(messages, system)
+
+    assert result == [{"role": "system", "content": system}, *messages]
+
+
+@pytest.mark.parametrize("system", [None, "", [], 0, {"type": "text"}])
+def test_prepend_system_prompt_leaves_unsystem_values_untouched(system):
+    messages = cast(list[AllMessageValues], [{"role": "user", "content": "hi"}])
+
+    assert PromptCachingCache.prepend_system_prompt(messages, system) is messages
+
+
+def test_prepend_system_prompt_never_mutates_the_input_messages():
+    system: Final = [{"type": "text", "text": "be brief"}]
+    user_message: Final = {"role": "user", "content": "hi"}
+    messages = cast(list[AllMessageValues], [user_message])
+
+    result = PromptCachingCache.prepend_system_prompt(messages, system)
+
+    assert result is not messages
+    assert messages == [user_message]
+
+
+def test_a_tool_breakpoint_emits_a_position_zero_key_even_without_messages():
+    """
+    A request that marks only its tools still hits the provider prompt cache on the tool prefix, so
+    the pin has to exist at a position before the first message block.
+    """
+    tools: Final = [_marked_tool("read", {"type": "ephemeral"})]
+
+    positions = PromptCachingCache.prefix_positions([], tools)
+    assert len(positions) == 1
+    assert positions[0].position == 0
+
+    with_messages = PromptCachingCache.prefix_positions(
+        cast(
+            list[AllMessageValues],
+            [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}],
+        ),
+        tools,
+    )
+    assert [position.position for position in with_messages] == [0, 1]
+
+
+def test_a_retimed_or_moved_tool_breakpoint_keeps_the_same_key():
+    """
+    cache_control on a tool is a boundary marker, not part of the cached content, so a ttl change
+    or a breakpoint that leaves an earlier tool unmarked hashes to the same prefix key.
+    """
+    marked: Final = {"type": "ephemeral"}
+    retimed: Final = {"type": "ephemeral", "ttl": "1h"}
+    tools_5m: Final = [_marked_tool("read", marked)]
+    tools_1h: Final = [_marked_tool("read", retimed)]
+
+    key_5m: Final = PromptCachingCache.get_prompt_caching_cache_key([], tools_5m)
+    key_1h: Final = PromptCachingCache.get_prompt_caching_cache_key([], tools_1h)
+
+    assert key_5m is not None
+    assert key_5m == key_1h
+
+    both_marked: Final = [_marked_tool("read", marked), _marked_tool("write", marked)]
+    last_marked: Final = [_marked_tool("read"), _marked_tool("write", retimed)]
+
+    key_both: Final = PromptCachingCache.get_prompt_caching_cache_key([], both_marked)
+    key_last: Final = PromptCachingCache.get_prompt_caching_cache_key([], last_marked)
+    assert key_both == key_last
+
+
+def test_a_nested_function_cache_control_marks_a_boundary_and_strips_from_the_key():
+    """
+    LiteLLM also honors the OpenAI-style mark nested inside `function` (the Anthropic transform
+    maps it to the tool's cache_control), so it has to mark a boundary and hash away exactly like
+    the top-level form, or a client that marks that way loses affinity to a breakpoint that moved.
+    """
+    marked: Final = {"type": "ephemeral"}
+    retimed: Final = {"type": "ephemeral", "ttl": "1h"}
+
+    positions = PromptCachingCache.prefix_positions([], [_marked_tool("read", marked, nested=True)])
+    assert len(positions) == 1
+    assert positions[0].position == 0
+
+    key_nested: Final = PromptCachingCache.get_prompt_caching_cache_key(
+        [], [_marked_tool("read", marked, nested=True)]
+    )
+    key_nested_retimed: Final = PromptCachingCache.get_prompt_caching_cache_key(
+        [], [_marked_tool("read", retimed, nested=True)]
+    )
+    key_toplevel: Final = PromptCachingCache.get_prompt_caching_cache_key([], [_marked_tool("read", marked)])
+
+    assert key_nested is not None
+    assert key_nested == key_nested_retimed
+    assert key_nested == key_toplevel
+
+
+def test_unmarked_tools_change_the_key_marked_tools_do_not_share():
+    """Tools are provider-cached content, so a different tool set must never read another request's pin."""
+    tools_a: Final = [_marked_tool("read", {"type": "ephemeral"})]
+    tools_b: Final = [_marked_tool("write", {"type": "ephemeral"})]
+
+    key_a: Final = PromptCachingCache.get_prompt_caching_cache_key([], tools_a)
+    key_b: Final = PromptCachingCache.get_prompt_caching_cache_key([], tools_b)
+
+    assert key_a is not None
+    assert key_a != key_b
+
+
+def test_empty_and_missing_tools_seed_the_same_key():
+    """`tools=[]` and no tools at all are the same request to the provider, so they must key alike."""
+    messages = cast(
+        list[AllMessageValues],
+        [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}],
+    )
+
+    key_none: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, None)
+    key_empty: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, [])
+    assert key_none == key_empty

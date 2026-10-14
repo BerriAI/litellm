@@ -84,14 +84,75 @@ def _chain_digest(digest: bytes, unit: bytes) -> bytes:
     return hashlib.sha256(digest + unit).digest()
 
 
+def _is_ephemeral_mark(mark: object) -> bool:
+    if not isinstance(mark, dict):
+        return False
+    mark_map: Final = cast(  # cast-ok: cache_control marks are plain JSON dicts
+        Mapping[str, object], mark
+    )
+    return mark_map.get("type") == "ephemeral"
+
+
+def _tool_carries_ephemeral_mark(tool: ChatCompletionToolParam) -> bool:
+    tool_map: Final = cast(  # cast-ok: TypedDict.get rejects keys the type does not declare
+        Mapping[str, object], tool
+    )
+    if _is_ephemeral_mark(tool_map.get("cache_control")):
+        return True
+    function: Final = tool_map.get("function")
+    if not isinstance(function, dict):
+        return False
+    return _is_ephemeral_mark(
+        cast(Mapping[str, object], function).get("cache_control")  # cast-ok: function is a plain JSON dict
+    )
+
+
+def _strip_tool_cache_control(tool: JsonValue) -> JsonValue:
+    if not isinstance(tool, dict):
+        return tool
+    function: Final = tool.get("function")
+    stripped_function: Final = (
+        {key: value for key, value in function.items() if key != "cache_control"}
+        if isinstance(function, dict) and "cache_control" in function
+        else function
+    )
+    return {
+        key: (stripped_function if key == "function" else value)
+        for key, value in tool.items()
+        if key != "cache_control"
+    }
+
+
+def _pin_cache_key(digest: bytes) -> str:
+    return f"deployment:{digest.hex()}:prompt_caching"
+
+
 def _seed(tools: Sequence[ChatCompletionToolParam] | None) -> bytes:
-    if tools is None:
+    if not tools:
         return hashlib.sha256(b"").digest()
     return hashlib.sha256(
         _canonical_bytes(
-            _TOOLS_ADAPTER.validate_python(to_jsonable_python(tools, serialize_unknown=True, bytes_mode="base64"))
+            tuple(
+                _strip_tool_cache_control(tool)
+                for tool in _TOOLS_ADAPTER.validate_python(
+                    to_jsonable_python(tools, serialize_unknown=True, bytes_mode="base64")
+                )
+            )
         )
     ).digest()
+
+
+def _tool_boundary_position(tools: Sequence[ChatCompletionToolParam] | None) -> tuple[PrefixPosition, ...]:
+    if not tools:
+        return ()
+    last_marked: Final = max(
+        (index for index, tool in enumerate(tools) if _tool_carries_ephemeral_mark(tool)),
+        default=None,
+    )
+    if last_marked is None:
+        return ()
+    digest: Final = _seed(tools[: last_marked + 1])
+    return (PrefixPosition(cache_key=_pin_cache_key(digest), position=0),)
 
 
 def _positions_of(
@@ -105,7 +166,7 @@ def _positions_of(
         for run_type, previous in zip(run_types, (None, *run_types[:-1]))
     )
     return tuple(
-        PrefixPosition(cache_key=f"deployment:{digest.hex()}:prompt_caching", position=position)
+        PrefixPosition(cache_key=_pin_cache_key(digest), position=position)
         for digest, position in zip(digests, positions)
     )
 
@@ -224,6 +285,22 @@ class PromptCachingCache:
         return cacheable_prefix
 
     @staticmethod
+    def prepend_system_prompt(
+        messages: list[AllMessageValues],  # mutable-ok: callers pass the request messages list through
+        system: object,
+    ) -> list[AllMessageValues]:  # mutable-ok: callers bind the result back into list-typed slots
+        if not isinstance(system, (str, list)) or not system:
+            return messages
+        first: Final = cast(  # cast-ok: every AllMessageValues member is a dict
+            Mapping[str, object], messages[0] if messages else {}
+        )
+        if first.get("role") == "system" and first.get("content") == system:
+            return messages
+        return cast(  # cast-ok: the prepended system message is a plain dict the AllMessageValues union covers
+            list[AllMessageValues], [{"role": "system", "content": system}, *messages]
+        )
+
+    @staticmethod
     def prefix_positions(
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
@@ -241,17 +318,21 @@ class PromptCachingCache:
         already replaced by their size placeholder, so a request carrying the raw image bytes
         derives the same keys the write side stored.
         """
+        boundary: Final = _tool_boundary_position(tools)
         if not messages:
-            return ()
-        return _positions_of(
-            _PREFIX_ADAPTER.validate_python(
-                to_jsonable_python(
-                    truncate_base64_in_messages(PromptCachingCache.extract_cacheable_prefix(messages)),
-                    serialize_unknown=True,
-                    bytes_mode="base64",
-                )
+            return boundary
+        return (
+            *boundary,
+            *_positions_of(
+                _PREFIX_ADAPTER.validate_python(
+                    to_jsonable_python(
+                        truncate_base64_in_messages(PromptCachingCache.extract_cacheable_prefix(messages)),
+                        serialize_unknown=True,
+                        bytes_mode="base64",
+                    )
+                ),
+                tools,
             ),
-            tools,
         )
 
     @staticmethod
@@ -259,7 +340,7 @@ class PromptCachingCache:
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
     ) -> tuple[PrefixPosition, ...]:
-        if not messages:
+        if not messages and not _tool_boundary_position(tools):
             return ()
         return await offload_token_count(PromptCachingCache.prefix_positions)(messages, tools)
 

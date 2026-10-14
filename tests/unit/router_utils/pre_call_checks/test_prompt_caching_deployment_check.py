@@ -12,6 +12,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT, PROMPT_CACHE_LOOKBACK_POSITIONS
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
     _get_min_token_count_for_deployments,
@@ -1075,3 +1076,223 @@ async def test_router_with_prompt_caching(anthropic_messages):
         print("response=", response)
 
         assert response._hidden_params["model_id"] == initial_model_id
+
+
+_OPENAI_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "word " * 3000,
+        "parameters": {"type": "object", "properties": {}},
+    },
+    "cache_control": {"type": "ephemeral"},
+}
+_ANTHROPIC_TOOL: Final = {
+    "name": "get_weather",
+    "description": "word " * 3000,
+    "input_schema": {"type": "object", "properties": {}},
+    "cache_control": {"type": "ephemeral"},
+}
+
+
+def _success_kwargs(
+    *,
+    call_type: str,
+    model: str,
+    model_id: str,
+    request_messages: list,
+    request_kwargs: dict,
+) -> dict:
+    """The success event shape: `messages` is what standard logging produced, `system`/`tools` stay raw."""
+    return {
+        "standard_logging_object": {
+            "call_type": call_type,
+            "model": model,
+            "model_id": model_id,
+            "messages": StandardLoggingPayloadSetup.append_system_prompt_messages(
+                kwargs=request_kwargs, messages=copy.deepcopy(request_messages)
+            ),
+        },
+        "system": request_kwargs.get("system"),
+        "tools": request_kwargs.get("tools"),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type,request_messages,request_kwargs",
+    [
+        pytest.param(
+            "acompletion",
+            [{"role": "user", "content": "weather?"}],
+            {"tools": [_OPENAI_TOOL]},
+            id="chat_tool_breakpoint_only",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "word " * 3000, "cache_control": {"type": "ephemeral"}},
+                    ],
+                }
+            ],
+            {"system": "you are terse"},
+            id="anthropic_messages_string_system_and_marked_user_block",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            [{"role": "user", "content": "hi"}],
+            {
+                "system": [
+                    {
+                        "type": "text",
+                        "text": "word " * 3000,
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ]
+            },
+            id="anthropic_messages_list_system_breakpoint_only",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            [{"role": "user", "content": "weather?"}],
+            {"tools": [_ANTHROPIC_TOOL]},
+            id="anthropic_messages_tool_breakpoint_only",
+        ),
+        pytest.param(
+            "acompletion",
+            [{"role": "user", "content": "weather?"}],
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "word " * 3000,
+                            "parameters": {"type": "object", "properties": {}},
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    }
+                ]
+            },
+            id="chat_nested_function_cache_control_only",
+        ),
+        pytest.param(
+            "anthropic_messages",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "word " * 3000, "cache_control": {"type": "ephemeral"}},
+                    ],
+                }
+            ],
+            {},
+            id="control_message_breakpoint_no_system",
+        ),
+    ],
+)
+async def test_affinity_key_covers_the_tools_and_system_prompt_the_provider_sees(
+    call_type, request_messages, request_kwargs
+):
+    """
+    The write side keys the pin on what standard logging logged plus the raw `system`/`tools`
+    kwargs, and the read side must rebuild the same prefix from the raw request. Anything the
+    provider caches that the key ignores (tools, the /v1/messages system prompt) either writes no
+    pin or writes one the lookup can never compute.
+    """
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+
+    await check.async_log_success_event(
+        kwargs=_success_kwargs(
+            call_type=call_type,
+            model=AUTO_CACHING_MODEL,
+            model_id="dep-1",
+            request_messages=request_messages,
+            request_kwargs=request_kwargs,
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=cast(list[AllMessageValues], request_messages),
+        request_kwargs=request_kwargs,
+    )
+
+    assert filtered == [deployments[0]]
+
+
+@pytest.mark.asyncio
+async def test_a_different_tool_set_does_not_share_the_pin():
+    """Tools hash into the prefix, so a same-messages request with other tools must not read the pin."""
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    request_messages = [{"role": "user", "content": "weather?"}]
+    other_tool = {**_OPENAI_TOOL, "function": {**_OPENAI_TOOL["function"], "name": "get_time"}}
+
+    await check.async_log_success_event(
+        kwargs=_success_kwargs(
+            call_type="acompletion",
+            model=AUTO_CACHING_MODEL,
+            model_id="dep-1",
+            request_messages=request_messages,
+            request_kwargs={"tools": [_OPENAI_TOOL]},
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=cast(list[AllMessageValues], request_messages),
+        request_kwargs={"tools": [other_tool]},
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
+async def test_a_pin_written_without_tools_is_read_when_tools_is_an_empty_list():
+    """`tools=None` on the write and `tools=[]` on the read are the same empty seed."""
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    request_messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "word " * 3000, "cache_control": {"type": "ephemeral"}}],
+        }
+    ]
+
+    await check.async_log_success_event(
+        kwargs=_success_kwargs(
+            call_type="anthropic_messages",
+            model=AUTO_CACHING_MODEL,
+            model_id="dep-1",
+            request_messages=request_messages,
+            request_kwargs={},
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=cast(list[AllMessageValues], request_messages),
+        request_kwargs={"tools": []},
+    )
+
+    assert filtered == [deployments[0]]
