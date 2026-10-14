@@ -7148,6 +7148,17 @@
         "PluginListItem": {
           "description": "Plugin item in list responses.",
           "properties": {
+            "archive_sha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Archive Sha256"
+            },
             "author": {
               "anyOf": [
                 {
@@ -7462,7 +7473,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL. LiteLLM supplies the sha256 for gateway-hosted archives. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
               "title": "Installation Preference"
             },
             "keywords": {
@@ -7502,7 +7513,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Plugin source reference. Supported formats:\n- GitHub: {'source': 'github', 'repo': 'org/repo'}\n- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n- Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}",
+              "description": "Plugin source reference. Supported formats:\n- GitHub: {'source': 'github', 'repo': 'org/repo'}\n- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n- Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}\n- Gateway-hosted archive: {'source': 'hosted'}; upload the zip to LiteLLM after registering the plugin",
               "title": "Source",
               "type": "object"
             },
@@ -7629,7 +7640,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL. LiteLLM supplies the sha256 for gateway-hosted archives. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
               "title": "Installation Preference"
             },
             "keywords": {
@@ -7663,7 +7674,7 @@
               "additionalProperties": {
                 "type": "string"
               },
-              "description": "Plugin source reference. Supported formats:\n- GitHub: {'source': 'github', 'repo': 'org/repo'}\n- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n- Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}",
+              "description": "Plugin source reference. Supported formats:\n- GitHub: {'source': 'github', 'repo': 'org/repo'}\n- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n- Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}\n- Gateway-hosted archive: {'source': 'hosted'}; upload the zip to LiteLLM after registering the plugin",
               "title": "Source",
               "type": "object"
             },
@@ -7684,6 +7695,31 @@
             "source"
           ],
           "title": "UpdatePluginRequest",
+          "type": "object"
+        },
+        "UploadPluginArchiveResponse": {
+          "properties": {
+            "plugin": {
+              "$ref": "#/components/schemas/PluginResponse",
+              "description": "Updated plugin information"
+            },
+            "sha256": {
+              "description": "SHA-256 digest of the uploaded archive",
+              "title": "Sha256",
+              "type": "string"
+            },
+            "size_bytes": {
+              "description": "Size of the uploaded archive in bytes",
+              "title": "Size Bytes",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "plugin",
+            "sha256",
+            "size_bytes"
+          ],
+          "title": "UploadPluginArchiveResponse",
           "type": "object"
         },
         "ValidationError": {
@@ -8012,6 +8048,128 @@
             }
           ],
           "summary": "Update Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/plugins/{plugin_name}/archive": {
+        "put": {
+          "description": "Upload and validate a zip archive for an existing hosted plugin.",
+          "operationId": "upload_plugin_archive_claude_code_plugins__plugin_name__archive_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "application/zip": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/UploadPluginArchiveResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Upload Plugin Archive",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/plugins/{plugin_name}/archive.zip": {
+        "get": {
+          "description": "Download a hosted plugin archive when it is visible to the caller.",
+          "operationId": "download_plugin_archive_claude_code_plugins__plugin_name__archive_zip_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Download Plugin Archive",
           "tags": [
             "claude_code_marketplace"
           ]

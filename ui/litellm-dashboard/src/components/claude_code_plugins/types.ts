@@ -6,7 +6,7 @@
 import type { components } from "@/lib/http/schema";
 
 export interface PluginSource {
-  source: "github" | "url" | "git-subdir" | "archive";
+  source: "github" | "url" | "git-subdir" | "archive" | "hosted";
   repo?: string; // Format: "org/repo" for GitHub
   url?: string; // Full URL for other sources
   path?: string; // Subdirectory path for git-subdir

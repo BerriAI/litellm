@@ -152,6 +152,31 @@ describe("exchangeLoginCode - storeLoginToken integration", () => {
   });
 });
 
+describe("uploadClaudeCodePluginArchive", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("sends the zip bytes as a raw application/zip body", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const file = new File(["zip bytes"], "plugin.zip", { type: "application/zip" });
+
+    await Networking.uploadClaudeCodePluginArchive("sk-test", "hosted plugin", file);
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain("/claude-code/plugins/hosted%20plugin/archive");
+    expect(init.method).toBe("PUT");
+    expect(init.body).toBe(file);
+    expect(init.headers).toMatchObject({
+      Authorization: "Bearer sk-test",
+      "Content-Type": "application/zip",
+    });
+  });
+});
+
 describe("modelInfoCall", () => {
   let currentFetch: typeof global.fetch;
 

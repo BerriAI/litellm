@@ -1608,12 +1608,24 @@ model LiteLLM_ClaudeCodePluginTable {
   description   String?
   manifest_json String?
   files_json    String?   @default("{}")
+  archive_sha256 String?
   enabled       Boolean   @default(true)
   created_at    DateTime? @default(now())
   updated_at    DateTime? @default(now()) @updatedAt
   created_by    String?
+  archive       LiteLLM_ClaudeCodePluginArchiveTable?
 
   @@map("LiteLLM_ClaudeCodePluginTable")
+}
+
+model LiteLLM_ClaudeCodePluginArchiveTable {
+  plugin_id  String   @id
+  content    Bytes
+  size_bytes Int
+  updated_at DateTime @default(now()) @updatedAt
+  plugin     LiteLLM_ClaudeCodePluginTable @relation(fields: [plugin_id], references: [id], onDelete: Cascade)
+
+  @@map("LiteLLM_ClaudeCodePluginArchiveTable")
 }
 
 // User/team-scoped memory store with a GLOBAL unique key.

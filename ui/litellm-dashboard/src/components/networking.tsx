@@ -7301,6 +7301,15 @@ export const registerClaudeCodePlugin = async (accessToken: string, pluginData: 
   }
 };
 
+export const uploadClaudeCodePluginArchive = async (accessToken: string, pluginName: string, file: File) => {
+  const path = `/claude-code/plugins/${encodeURIComponent(pluginName)}/archive`;
+  return apiClient.put<void>(path, {
+    accessToken,
+    rawBody: file,
+    headers: { "Content-Type": "application/zip" },
+  });
+};
+
 /**
  * Enable a Claude Code plugin (admin only)
  * @param accessToken - Admin access token

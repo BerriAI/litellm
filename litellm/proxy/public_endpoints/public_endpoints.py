@@ -85,6 +85,9 @@ class _PluginRow(Protocol):
     @property
     def manifest_json(self) -> str | None: ...
 
+    @property
+    def archive_sha256(self) -> str | None: ...
+
 
 class _PluginTableActions(Protocol):
     def find_many(self, *, where: Mapping[str, bool]) -> Awaitable[Sequence[_PluginRow]]: ...
@@ -355,6 +358,7 @@ async def public_skill_hub():
                     domain=manifest.get("domain"),
                     namespace=manifest.get("namespace"),
                     installation_preference=get_installation_preference(MANIFEST_FIELDS.validate_python(manifest)),
+                    archive_sha256=plugin.archive_sha256 if manifest.get("source") == {"source": "hosted"} else None,
                 )
             )
         return ListPluginsResponse(plugins=items, count=len(items))

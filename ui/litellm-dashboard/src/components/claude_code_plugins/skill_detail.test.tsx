@@ -54,4 +54,10 @@ describe("SkillDetail source", () => {
     expect(screen.getByText("git@ghe.example.com:org/repo.git @ plugins/x")).toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
+
+  it("labels a hosted source without rendering it as a URL", () => {
+    render(<SkillDetail skill={buildSkill({ source: "hosted" })} onBack={vi.fn()} />);
+    expect(screen.getByText("Hosted on LiteLLM")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
 });

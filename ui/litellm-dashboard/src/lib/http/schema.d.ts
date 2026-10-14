@@ -2550,6 +2550,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/claude-code/plugins/{plugin_name}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Upload Plugin Archive
+         * @description Upload and validate a zip archive for an existing hosted plugin.
+         */
+        put: operations["upload_plugin_archive_claude_code_plugins__plugin_name__archive_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/plugins/{plugin_name}/archive.zip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Plugin Archive
+         * @description Download a hosted plugin archive when it is visible to the caller.
+         */
+        get: operations["download_plugin_archive_claude_code_plugins__plugin_name__archive_zip_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/plugins/{plugin_name}/disable": {
         parameters: {
             query?: never;
@@ -40366,6 +40406,8 @@ export interface components {
          * @description Plugin item in list responses.
          */
         PluginListItem: {
+            /** Archive Sha256 */
+            archive_sha256?: string | null;
             author?: components["schemas"]["PluginAuthor"] | null;
             /** Category */
             category?: string | null;
@@ -41843,7 +41885,7 @@ export interface components {
             homepage?: string | null;
             /**
              * Installation Preference
-             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL. LiteLLM supplies the sha256 for gateway-hosted archives. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
              */
             installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
@@ -41868,6 +41910,7 @@ export interface components {
              *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
              *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
              *     - Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}
+             *     - Gateway-hosted archive: {'source': 'hosted'}; upload the zip to LiteLLM after registering the plugin
              */
             source: {
                 [key: string]: string;
@@ -48009,7 +48052,7 @@ export interface components {
             homepage?: string | null;
             /**
              * Installation Preference
-             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL. LiteLLM supplies the sha256 for gateway-hosted archives. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
              */
             installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
@@ -48029,6 +48072,7 @@ export interface components {
              *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
              *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
              *     - Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}
+             *     - Gateway-hosted archive: {'source': 'hosted'}; upload the zip to LiteLLM after registering the plugin
              */
             source: {
                 [key: string]: string;
@@ -48552,6 +48596,21 @@ export interface components {
             user_id?: string | null;
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
+        };
+        /** UploadPluginArchiveResponse */
+        UploadPluginArchiveResponse: {
+            /** @description Updated plugin information */
+            plugin: components["schemas"]["PluginResponse"];
+            /**
+             * Sha256
+             * @description SHA-256 digest of the uploaded archive
+             */
+            sha256: string;
+            /**
+             * Size Bytes
+             * @description Size of the uploaded archive in bytes
+             */
+            size_bytes: number;
         };
         /** UsageAIChatRequest */
         UsageAIChatRequest: {
@@ -54282,6 +54341,75 @@ export interface operations {
     delete_plugin_claude_code_plugins__plugin_name__delete: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_plugin_archive_claude_code_plugins__plugin_name__archive_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+                "application/zip": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadPluginArchiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_plugin_archive_claude_code_plugins__plugin_name__archive_zip_get: {
+        parameters: {
+            query?: {
+                key?: string | null;
+            };
             header?: never;
             path: {
                 plugin_name: string;
