@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
+from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -4673,6 +4674,21 @@ class TestHandleLLMApiExceptionRetryAfter:
     async def test_handle_llm_api_exception_no_retry_after_for_plain_exception(self):
         proxy_exc = await self._invoke(ValueError("some other failure"))
         assert "retry-after" not in proxy_exc.headers
+
+    @pytest.mark.parametrize(
+        "exc",
+        (
+            RouterRateLimitError(model="gpt-4", cooldown_time=42.3, enable_pre_call_checks=False, cooldown_list=[]),
+            RouterRateLimitErrorBasic(model="gpt-4"),
+        ),
+        ids=("cooldown", "basic"),
+    )
+    async def test_handle_llm_api_exception_answers_a_cooldown_with_429_and_no_bug_notice(self, exc, caplog):
+        with caplog.at_level("ERROR"):
+            proxy_exc = await self._invoke(exc)
+
+        assert (proxy_exc.code, proxy_exc.type) == ("429", "rate_limit_error")
+        assert ISSUE_URL_BASE not in caplog.text
 
     async def test_handle_llm_api_exception_strips_bug_report_notice_from_client_message(self, caplog):
         report = build_bug_report(RuntimeError("boom"), surface="sdk")
