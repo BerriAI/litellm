@@ -89,6 +89,12 @@ _CLAUDE_SEARCH_CALL: Final = {
 
 _BM25_TOOL: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
 _DEFERRED_WEATHER: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
+_CLIENT_TOOL_SEARCH: Final = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "Search the tool catalog",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+}
 
 
 def _undeferred(tool: Mapping[str, object]) -> dict[str, object]:
@@ -372,12 +378,43 @@ class TestOpenAIResponsesAPIConfig:
 
         assert tools == [_undeferred(_DEFERRED_WEATHER)]
 
-    def test_drop_params_keeps_a_callers_own_tool_search_unchanged(self) -> None:
-        own_search: Final = [{"type": "tool_search"}, _DEFERRED_WEATHER]
+    @pytest.mark.parametrize(
+        ("sent", "expected"),
+        [
+            pytest.param(
+                [{"type": "tool_search"}, _DEFERRED_WEATHER], [{"type": "tool_search"}, _DEFERRED_WEATHER], id="alone"
+            ),
+            pytest.param(
+                [_CLIENT_TOOL_SEARCH, _BM25_TOOL, _undeferred(_DEFERRED_WEATHER)],
+                [_CLIENT_TOOL_SEARCH, _undeferred(_DEFERRED_WEATHER)],
+                id="beside-anthropic-search",
+            ),
+        ],
+    )
+    def test_drop_params_keeps_a_callers_own_tool_search_unchanged(
+        self, sent: list[dict[str, object]], expected: list[dict[str, object]]
+    ) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=False), sent, True)
 
-        tools: Final = self._transform_tools(_openai_model(supports_tool_search=False), own_search, True)
+        assert tools == expected
 
-        assert tools == own_search
+    @pytest.mark.parametrize("drop_params", [False, True])
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            pytest.param({"type": None, "name": "x"}, id="null-type"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": "oops"}, id="string-members"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": ["x"]}, id="string-member"),
+        ],
+    )
+    def test_malformed_tool_beside_the_search_tool_reaches_openai_as_sent(
+        self, malformed: dict[str, object], drop_params: bool
+    ) -> None:
+        model: Final = _openai_model(supports_tool_search=True)
+
+        tools: Final = self._transform_tools(model, [_BM25_TOOL, malformed], drop_params)
+
+        assert malformed in tools
 
     @pytest.mark.parametrize(
         "deferred",

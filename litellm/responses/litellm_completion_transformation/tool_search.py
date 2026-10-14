@@ -25,11 +25,12 @@ __all__ = [
     "input_without_unanswered_anthropic_tool_search_calls",
     "is_anthropic_tool_search_chat_tool",
     "is_anthropic_tool_search_use",
+    "is_openai_tool_search_tool",
     "is_server_tool_search_tool",
     "provider_builds_anthropic_request",
     "tool_search_call_ids",
     "tools_with_anthropic_tool_search_mapped",
-    "tools_without_tool_search",
+    "tools_without_anthropic_tool_search",
     "without_tool_search_calls",
     "without_tool_search_uses",
 ]
@@ -76,7 +77,7 @@ def is_anthropic_tool_search_chat_tool(tool: object) -> bool:
     return tool_type in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
-def _is_openai_tool_search_tool(tool: object) -> bool:
+def is_openai_tool_search_tool(tool: object) -> bool:
     return _tool_type(tool) == "tool_search"
 
 
@@ -85,8 +86,8 @@ def tools_with_anthropic_tool_search_mapped(
 ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
     if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
         return tools
-    if any(_is_openai_tool_search_tool(tool) for tool in tools):
-        return tuple(tool for tool in tools if not is_anthropic_tool_search_chat_tool(tool))
+    if any(is_openai_tool_search_tool(tool) for tool in tools):
+        return tools_without_anthropic_tool_search(tools)
     first_search_index: Final = next(
         index for index, tool in enumerate(tools) if is_anthropic_tool_search_chat_tool(tool)
     )
@@ -98,14 +99,10 @@ def tools_with_anthropic_tool_search_mapped(
     )
 
 
-def _is_tool_search_tool(tool: object) -> bool:
-    return is_anthropic_tool_search_chat_tool(tool) or _is_openai_tool_search_tool(tool)
-
-
-def tools_without_tool_search(
+def tools_without_anthropic_tool_search(
     tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS],
 ) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
-    return tuple(tool for tool in tools if not _is_tool_search_tool(tool))
+    return tuple(tool for tool in tools if not is_anthropic_tool_search_chat_tool(tool))
 
 
 class _FunctionCallItemFields(LiteLLMBaseModel):
@@ -123,8 +120,7 @@ def _function_call_fields(item: object) -> _FunctionCallItemFields:
         return _FunctionCallItemFields()
 
 
-def _is_unanswered_anthropic_tool_search_call(item: object, answered_call_ids: Set[str]) -> bool:
-    fields: Final = _function_call_fields(item)
+def _is_unanswered_anthropic_tool_search_call(fields: _FunctionCallItemFields, answered_call_ids: Set[str]) -> bool:
     return (
         fields.type == "function_call"
         and is_anthropic_tool_search_use(fields.call_id, fields.name)
@@ -137,10 +133,15 @@ def input_without_unanswered_anthropic_tool_search_calls(
 ) -> str | ResponseInputParam:
     if isinstance(input, str):
         return input
+    item_fields: Final = tuple(map(_function_call_fields, input))
     answered_call_ids: Final = frozenset(
-        fields.call_id for fields in map(_function_call_fields, input) if fields.type == "function_call_output"
+        fields.call_id for fields in item_fields if fields.type == "function_call_output"
     )
-    kept: Final = [item for item in input if not _is_unanswered_anthropic_tool_search_call(item, answered_call_ids)]
+    kept: Final = [
+        item
+        for item, fields in zip(input, item_fields)
+        if not _is_unanswered_anthropic_tool_search_call(fields, answered_call_ids)
+    ]
     return input if len(kept) == len(input) else kept
 
 

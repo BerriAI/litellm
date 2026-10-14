@@ -31,8 +31,9 @@ from litellm.responses.litellm_completion_transformation.reasoning_items import 
 from litellm.responses.litellm_completion_transformation.tool_search import (
     input_without_unanswered_anthropic_tool_search_calls,
     is_anthropic_tool_search_chat_tool,
+    is_openai_tool_search_tool,
     tools_with_anthropic_tool_search_mapped,
-    tools_without_tool_search,
+    tools_without_anthropic_tool_search,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -107,8 +108,21 @@ def _defer_loading_removed(fields: Mapping[str, object]) -> Mapping[str, object]
     return {key: value for key, value in fields.items() if key != "defer_loading"}
 
 
+def _tool_deferral(tool: object) -> _ToolDeferral:
+    try:
+        return _ToolDeferral.model_validate(tool)
+    except ValidationError:
+        return _ToolDeferral()
+
+
+def _runs_tool_search(model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS]) -> bool:
+    return any(_tool_deferral(tool).defers for tool in tools) and litellm.supports_tool_search(
+        model=model, custom_llm_provider=LlmProviders.OPENAI.value
+    )
+
+
 def _without_defer_loading(tool: ALL_RESPONSES_API_TOOL_PARAMS) -> ALL_RESPONSES_API_TOOL_PARAMS:
-    deferral: Final = _ToolDeferral.model_validate(tool)
+    deferral: Final = _tool_deferral(tool)
     if not deferral.defers:
         return tool
     undeferred: Final = _defer_loading_removed(tool)
@@ -485,17 +499,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
         if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
             return tools
-        searchable: Final = any(_ToolDeferral.model_validate(tool).defers for tool in tools) and (
-            litellm.supports_tool_search(model=model, custom_llm_provider=LlmProviders.OPENAI.value)
-        )
-        if searchable or not _drops_params(litellm_params):
+        callers_own_search: Final = any(is_openai_tool_search_tool(tool) for tool in tools)
+        if callers_own_search or not _drops_params(litellm_params) or _runs_tool_search(model, tools):
             return tools_with_anthropic_tool_search_mapped(tools)
         verbose_logger.warning(
             "Dropping tool search under drop_params: OpenAI model '%s' cannot run it or no tool is deferred, so every "
             "tool loads up front.",
             model,
         )
-        return tuple(_without_defer_loading(tool) for tool in tools_without_tool_search(tools))
+        return tuple(_without_defer_loading(tool) for tool in tools_without_anthropic_tool_search(tools))
 
     def _reads_prompt_cache_breakpoints(
         self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object
