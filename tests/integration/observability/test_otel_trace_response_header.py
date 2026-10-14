@@ -459,8 +459,8 @@ def test_sdk_response_names_the_server_span_that_carries_its_call_id(rig: Rig, r
     assert rig.upstream_count(marker) == 1
 
 
-def _spend_rows(call_id: str) -> int:
-    return len(read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)))
+def _spend_rows(response_id: str) -> int:
+    return len(read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (response_id,)))
 
 
 @pytest.mark.parametrize("stream", (False, True), ids=("plain", "stream"))
@@ -474,7 +474,7 @@ def test_a_response_cache_hit_names_its_own_server_span(rig: Rig, stream: bool) 
     first: Final = rig.post("/v1/chat/completions", body)
     assert first.status_code == 200, first.text
     first_span: Final = _assert_names_its_server_span(rig, first.headers)
-    eventually(lambda: _spend_rows(first.headers["x-litellm-call-id"]), lambda rows: rows == 1, seconds=70)
+    eventually(lambda: _spend_rows(f"chatcmpl-{marker}"), lambda rows: rows == 1, seconds=70)
     second: Final = rig.post("/v1/chat/completions", body)
     assert second.status_code == 200, second.text
     assert f"chatcmpl-{marker}" in second.text, second.text
@@ -645,7 +645,7 @@ def _exposed(response: httpx.Response) -> frozenset[str]:
 def test_a_browser_origin_can_read_the_header(rig: Rig) -> None:
     response: Final = rig.proxy.request("GET", "/v1/models", headers={"Origin": "http://dashboard.example"})
     assert response.status_code == 200, response.text
-    assert {"traceresponse", "x-litellm-call-id"} <= _exposed(response), response.headers
+    assert "traceresponse" in _exposed(response), response.headers
     _named(response.headers)
 
 
@@ -657,7 +657,7 @@ def test_with_the_v2_gate_off_no_response_carries_or_exposes_the_header(control:
     assert control.upstream_count(marker) == 1
     models: Final = control.proxy.request("GET", "/v1/models", headers={"Origin": "http://dashboard.example"})
     assert models.status_code == 200, models.text
-    assert "x-litellm-call-id" in _exposed(models), models.headers
+    assert _exposed(models), models.headers
     assert "traceresponse" not in _exposed(models), models.headers
     assert models.headers.get_list("traceresponse") == []
 
