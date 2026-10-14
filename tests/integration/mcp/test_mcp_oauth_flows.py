@@ -277,9 +277,14 @@ class _Pkce:
 
 
 def _authorize_through_gateway(
-    gateway: Gateway, auth: AuthorizationServer, alias: str, key: str, client_id: str, pkce: _Pkce,
+    gateway: Gateway,
+    auth: AuthorizationServer,
+    alias: str,
+    key: str,
+    client_id: str,
+    pkce: _Pkce,
     scope: str = "tools.call",
-) -> str:
+) -> tuple[str, str]:
     started: Final = gateway.client.get(
         f"/{alias}/authorize",
         params={
@@ -310,7 +315,8 @@ def _authorize_through_gateway(
     final: Final = parse_qs(urlsplit(returned.headers["location"]).query)
     assert returned.headers["location"].startswith(CLIENT_REDIRECT)
     assert final["state"] == ["client-state"], final
-    return final["code"][0]
+    upstream_code: Final = parse_qs(urlsplit(callback).query)["code"][0]
+    return final["code"][0], upstream_code
 
 
 def _redeem(gateway: Gateway, alias: str, key: str, client_id: str, code: str, pkce: _Pkce) -> httpx.Response:
@@ -325,6 +331,28 @@ def _redeem(gateway: Gateway, alias: str, key: str, client_id: str, code: str, p
             "redirect_uri": CLIENT_REDIRECT,
         },
     )
+
+
+def _expected_authorization_header(auth_method: str, secret: str) -> str | None:
+    if auth_method == "client_secret_post":
+        return None
+    return "Basic " + base64.b64encode(f"ac-client:{secret}".encode()).decode()
+
+
+def _assert_upstream_token_request(
+    request: Request, auth_method: str, secret: str, expected_form: Mapping[str, str]
+) -> None:
+    """One scripted-IdP token request must carry the gateway's exact form and, for
+    client_secret_basic, the stored credentials in a Basic header, and never the
+    caller's placeholder secret."""
+    form: Final = {name: values[0] for name, values in parse_qs(request.body.decode()).items()}
+    assert form == dict(expected_form), form
+    assert request.headers.get("authorization") == _expected_authorization_header(auth_method, secret), request.headers
+    assert "dummy" not in request.body.decode() and "dummy" not in repr(request.headers), request
+
+
+def _upstream_token_requests(auth: AuthorizationServer) -> tuple[Request, ...]:
+    return tuple(item for item in auth.drain() if item.target.startswith("/token"))
 
 
 @pytest.mark.parametrize("auth_method", ("client_secret_post", "client_secret_basic"))
@@ -348,6 +376,18 @@ def test_upstream_token_requests_carry_the_gateway_callback_and_server_credentia
                 "token_endpoint_auth_method": auth_method,
             },
         )
+        # A second oauth2 server keeps the root /token path honest: with two registered
+        # oauth2 servers the single-server root fallback cannot resolve, so the root
+        # spelling works only when client_id itself names the server.
+        _register_oauth(
+            scenario,
+            peer,
+            auth,
+            "rt3o" + uuid.uuid4().hex[:9],
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "ac-other", "client_secret": "other-secret", "scopes": ["tools.call"]},
+        )
         persisted: Final = gateway.request("GET", f"/v1/mcp/server/{identity}")
         assert persisted.status_code == 200, persisted.text
         persisted_body: Final = _response_object(persisted)
@@ -358,8 +398,26 @@ def test_upstream_token_requests_carry_the_gateway_callback_and_server_credentia
         )
         assert registered.status_code in (200, 201), registered.text
         client_id: Final = str(_response_object(registered)["client_id"])
+
+        def expected_code_form(code: str, verifier: str) -> dict[str, str]:
+            return {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": f"{_base(gateway)}/callback",
+                "code_verifier": verifier,
+                **({"client_id": "ac-client", "client_secret": secret} if auth_method == "client_secret_post" else {}),
+            }
+
+        def expected_refresh_form(refresh_token: str) -> dict[str, str]:
+            return {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "scope": "tools.call",
+                **({"client_id": "ac-client", "client_secret": secret} if auth_method == "client_secret_post" else {}),
+            }
+
         pkce: Final = _Pkce(secrets.token_urlsafe(32))
-        code: Final = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
+        code, upstream_code = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
         authorize_requests: Final = tuple(item for item in auth.drain() if item.target.startswith("/authorize"))
         assert len(authorize_requests) == 1, authorize_requests
         authorize_query: Final = parse_qs(urlsplit(authorize_requests[0].target).query)
@@ -379,29 +437,11 @@ def test_upstream_token_requests_carry_the_gateway_callback_and_server_credentia
         )
         assert redeemed.status_code == 200, redeemed.text
         issued: Final = _response_object(redeemed)
-        initial_token_requests: Final = tuple(item for item in auth.drain() if item.target.startswith("/token"))
+        initial_token_requests: Final = _upstream_token_requests(auth)
         assert len(initial_token_requests) == 1, initial_token_requests
-        initial_request: Final = initial_token_requests[0]
-        initial_form: Final = {name: values[0] for name, values in parse_qs(initial_request.body.decode()).items()}
-        expected_authorization: Final = "Basic " + base64.b64encode(f"ac-client:{secret}".encode()).decode()
-        if auth_method == "client_secret_post":
-            assert initial_form == {
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": f"{_base(gateway)}/callback",
-                "code_verifier": pkce.verifier,
-                "client_id": "ac-client",
-                "client_secret": secret,
-            }, initial_form
-            assert initial_request.headers.get("authorization") is None, initial_request.headers
-        else:
-            assert initial_form == {
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": f"{_base(gateway)}/callback",
-                "code_verifier": pkce.verifier,
-            }, initial_form
-            assert initial_request.headers.get("authorization") == expected_authorization, initial_request.headers
+        _assert_upstream_token_request(
+            initial_token_requests[0], auth_method, secret, expected_code_form(upstream_code, pkce.verifier)
+        )
 
         upstream_refresh_token: Final = str(issued["refresh_token"])
         refreshed: Final = gateway.client.post(
@@ -417,23 +457,60 @@ def test_upstream_token_requests_carry_the_gateway_callback_and_server_credentia
         )
         assert refreshed.status_code == 200, refreshed.text
         assert _response_object(refreshed)["access_token"] != issued["access_token"], refreshed.text
-        refresh_requests: Final = tuple(item for item in auth.drain() if item.target.startswith("/token"))
+        refresh_requests: Final = _upstream_token_requests(auth)
         assert len(refresh_requests) == 1, refresh_requests
-        refresh_request: Final = refresh_requests[0]
-        refresh_form: Final = {name: values[0] for name, values in parse_qs(refresh_request.body.decode()).items()}
-        expected_refresh_form: Final = {
-            "grant_type": "refresh_token",
-            "refresh_token": upstream_refresh_token,
-            "scope": "tools.call",
-            **({"client_id": "ac-client", "client_secret": secret} if auth_method == "client_secret_post" else {}),
-        }
-        assert refresh_form == expected_refresh_form, refresh_form
-        if auth_method == "client_secret_post":
-            assert refresh_request.headers.get("authorization") is None, refresh_request.headers
-        else:
-            assert refresh_request.headers.get("authorization") == expected_authorization, refresh_request.headers
-        assert "dummy" not in refresh_request.body.decode() and "dummy" not in repr(refresh_request.headers), (
-            refresh_request
+        _assert_upstream_token_request(
+            refresh_requests[0], auth_method, secret, expected_refresh_form(upstream_refresh_token)
+        )
+
+        pkce_root: Final = _Pkce(secrets.token_urlsafe(32))
+        root_code, root_upstream_code = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce_root)
+        root_authorize_requests: Final = tuple(item for item in auth.drain() if item.target.startswith("/authorize"))
+        assert len(root_authorize_requests) == 1, root_authorize_requests
+        root_authorize_query: Final = parse_qs(urlsplit(root_authorize_requests[0].target).query)
+        assert root_authorize_query["redirect_uri"] == [f"{_base(gateway)}/callback"], root_authorize_query
+
+        root_redeemed: Final = gateway.client.post(
+            "/token",
+            headers={"x-litellm-api-key": owner},
+            data={
+                "grant_type": "authorization_code",
+                "code": root_code,
+                "code_verifier": pkce_root.verifier,
+                "client_id": alias,
+                "client_secret": "dummy",
+                "redirect_uri": CLIENT_REDIRECT,
+            },
+        )
+        assert root_redeemed.status_code == 200, root_redeemed.text
+        root_issued: Final = _response_object(root_redeemed)
+        root_token_requests: Final = _upstream_token_requests(auth)
+        assert len(root_token_requests) == 1, root_token_requests
+        _assert_upstream_token_request(
+            root_token_requests[0],
+            auth_method,
+            secret,
+            expected_code_form(root_upstream_code, pkce_root.verifier),
+        )
+
+        root_refresh_token: Final = str(root_issued["refresh_token"])
+        root_refreshed: Final = gateway.client.post(
+            "/token",
+            headers={"x-litellm-api-key": owner},
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": root_refresh_token,
+                "client_id": alias,
+                "client_secret": "dummy",
+                "scope": "tools.call",
+            },
+        )
+        assert root_refreshed.status_code == 200, root_refreshed.text
+        assert _response_object(root_refreshed)["access_token"] != root_issued["access_token"], root_refreshed.text
+        root_refresh_requests: Final = _upstream_token_requests(auth)
+        assert len(root_refresh_requests) == 1, root_refresh_requests
+        _assert_upstream_token_request(
+            root_refresh_requests[0], auth_method, secret, expected_refresh_form(root_refresh_token)
         )
 
 
@@ -464,11 +541,11 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
         assert registered.status_code in (200, 201), registered.text
         client_id: Final = str(_response_object(registered)["client_id"])
         pkce: Final = _Pkce(secrets.token_urlsafe(32))
-        code: Final = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
+        code, _ = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
         wrong_verifier: Final = _redeem(gateway, alias, owner, client_id, code, _Pkce("wrong-" + pkce.verifier))
         assert wrong_verifier.status_code == 400, wrong_verifier.text
         assert tool_calls(peer.drain()) == ()
-        code2: Final = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
+        code2, _ = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
         redeemed: Final = _redeem(gateway, alias, owner, client_id, code2, pkce)
         assert redeemed.status_code == 200, redeemed.text
         issued: Final = redeemed.json()
@@ -733,6 +810,127 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
         _assert_upstream_call(calls[0], "add", {"a": 20, "b": 22})
 
 
+def test_per_server_resource_scopes_the_session_bearer_to_the_named_server(gateway: Gateway) -> None:
+    base: Final = _base(gateway)
+    with mcp_peer() as peer_a, mcp_peer() as peer_b, gateway.scenario() as scenario:
+        alias_a: Final = "sca" + uuid.uuid4().hex[:10]
+        alias_b: Final = "scb" + uuid.uuid4().hex[:10]
+        server_a: Final = register_mcp(scenario, peer_a, alias_a)
+        server_b: Final = register_mcp(scenario, peer_b, alias_b)
+        member: Final = scenario.member(scenario.team(object_permission={"mcp_servers": [server_a, server_b]}))
+        registered: Final = gateway.client.post(
+            "/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        pkce: Final = _Pkce(secrets.token_urlsafe(48))
+        cookies: Final = _ui_session_cookie(gateway, member)
+        started: Final = gateway.client.get(
+            "/authorize/mcp-session",
+            params={
+                "client_id": client_id,
+                "redirect_uri": CLIENT_REDIRECT,
+                "response_type": "code",
+                "state": "sca-state",
+                "code_challenge": pkce.challenge,
+                "code_challenge_method": "S256",
+                "resource": f"{base}/mcp/{alias_a}",
+            },
+            cookies=cookies,
+        )
+        assert started.status_code == 303, started.text
+        connect_location: Final = urlsplit(started.headers["location"])
+        assert (
+            connect_location.scheme + "://" + connect_location.netloc + connect_location.path == f"{base}/ui/connect"
+        ), started.headers["location"]
+        connect_flow: Final = parse_qs(connect_location.query)["connect_flow"][0]
+        flow_cookie: Final = f"mcp_connect_flow_{connect_flow}"
+        assert flow_cookie in started.cookies, started.headers
+        flow_cookies: Final = {**cookies, flow_cookie: started.cookies[flow_cookie]}
+        described: Final = gateway.client.get("/authorize/flow", params={"flow": connect_flow}, cookies=flow_cookies)
+        assert described.status_code == 200, described.text
+        assert _response_object(described) == {
+            "state": "m2m",
+            "client_origin": "http://127.0.0.1:9",
+            "server_id": server_a,
+            "server_name": alias_a,
+            "connected": True,
+        }, described.text
+        completed: Final = gateway.client.post("/authorize/complete", data={"flow": connect_flow}, cookies=flow_cookies)
+        assert completed.status_code == 303, completed.text
+        callback: Final = parse_qs(urlsplit(completed.headers["location"]).query)
+        assert callback["state"] == ["sca-state"], completed.headers["location"]
+        assert set(callback) == {"code", "state"}, callback
+        token: Final = gateway.client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": callback["code"][0],
+                "redirect_uri": CLIENT_REDIRECT,
+                "client_id": client_id,
+                "code_verifier": pkce.verifier,
+            },
+        )
+        assert token.status_code == 200, token.text
+        token_body: Final = _response_object(token)
+        assert set(token_body) == {"access_token", "token_type", "expires_in", "refresh_token"}, token.text
+        bearer: Final = str(token_body["access_token"])
+        assert bearer.startswith("llm_session_"), token.text
+        initialized: Final = gateway.client.post(
+            "/mcp",
+            headers={"Authorization": f"Bearer {bearer}", **ACCEPT},
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": dict(INITIALIZE)},
+        )
+        assert initialized.status_code == 200, initialized.text
+        open_before: Final = _open_aliases()
+        listed_response: Final = gateway.client.post(
+            "/mcp",
+            headers={"Authorization": f"Bearer {bearer}", **ACCEPT},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        assert listed_response.status_code == 200, listed_response.text
+        listed: Final = _outcome_from_rpc(listed_response)
+        assert listed.ok, listed.raw
+        open_after: Final = open_before | _open_aliases()
+        assert _without_foreign_open_servers(listed.tools, open_after) == {
+            f"{alias_a}-add",
+            f"{alias_a}-multiply",
+            f"{alias_a}-fail",
+        }, listed.tools
+        peer_a.drain()
+        peer_b.drain()
+        called_response: Final = gateway.client.post(
+            "/mcp",
+            headers={"Authorization": f"Bearer {bearer}", **ACCEPT},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": f"{alias_a}-add", "arguments": {"a": 20, "b": 22}},
+            },
+        )
+        assert called_response.status_code == 200, called_response.text
+        called: Final = _outcome_from_rpc(called_response)
+        assert called.ok and called.text == "42", called.raw
+        calls: Final = tool_calls(peer_a.drain())
+        assert len(calls) == 1, calls
+        _assert_upstream_call(calls[0], "add", {"a": 20, "b": 22})
+        assert tool_calls(peer_b.drain()) == ()
+        refused_response: Final = gateway.client.post(
+            "/mcp",
+            headers={"Authorization": f"Bearer {bearer}", **ACCEPT},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": f"{alias_b}-add", "arguments": ADD},
+            },
+        )
+        refused: Final = _outcome_from_rpc(refused_response)
+        assert not refused.ok, refused.raw
+        assert tool_calls(peer_b.drain()) == ()
+
+
 def test_rotated_session_refresh_token_cannot_be_replayed_after_revocation(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "rt6" + uuid.uuid4().hex[:10]
@@ -776,7 +974,7 @@ def test_rotated_session_refresh_token_cannot_be_replayed_after_revocation(gatew
         assert after_revoke.status_code == 400, after_revoke.text
         assert _response_object(after_revoke) == {
             "error": "invalid_grant",
-            "error_description": "the refresh token was already used",
+            "error_description": "the refresh token was revoked",
         }, after_revoke.text
         unknown_client: Final = gateway.client.post(
             "/revoke", data={"token": r2, "client_id": "dcr-unknown-" + uuid.uuid4().hex}
@@ -916,7 +1114,7 @@ def test_lite_logout_revokes_the_cli_refresh_token_sent_the_way_the_cli_sends_it
         assert after_logout.status_code == 400, after_logout.text
         assert _response_object(after_logout) == {
             "error": "invalid_grant",
-            "error_description": "the refresh token was already used",
+            "error_description": "the refresh token was revoked",
         }, after_logout.text
         completion: Final = gateway.request(
             "POST",
@@ -1419,9 +1617,7 @@ def test_idp_subject_token_exchange_binds_the_team_claim_and_refuses_a_signed_su
             lambda rows: len(rows) == 1,
             seconds=70,
         )
-        assert spend == [{"team_id": team_id, "user_api_key_user_id": subject, "user_api_key_team_id": team_id}], (
-            spend
-        )
+        assert spend == [{"team_id": team_id, "user_api_key_user_id": subject, "user_api_key_team_id": team_id}], spend
         no_user: Final = idp_team_rig.gateway.client.post(
             "/token",
             data=_token_exchange_form(
@@ -1686,6 +1882,7 @@ def _scope_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpPeer, 
         ScriptedTool("write_op", lambda _: text_result("write completed")),
         ScriptedTool("forbid_op", lambda _: text_result("must not execute")),
     ) as inner:
+
         def enforce(request: Request) -> Reply:
             body: Final = json.loads(request.body) if request.body else {}
             if body.get("method") == "tools/call":
@@ -1697,9 +1894,18 @@ def _scope_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpPeer, 
                 with auth.lock:
                     granted: Final = auth.access_tokens.get(token, {}).get("scope", "")
                 if required not in granted.split():
-                    return Reply(status=403, headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", scope="{required}"'})
-            forwarded: Final = httpx.request(request.method, inner.url, content=request.body, headers=dict(request.headers))
-            return Reply(status=forwarded.status_code, body=forwarded.content, content_type=forwarded.headers.get("content-type", "application/json"))
+                    return Reply(
+                        status=403,
+                        headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", scope="{required}"'},
+                    )
+            forwarded: Final = httpx.request(
+                request.method, inner.url, content=request.body, headers=dict(request.headers)
+            )
+            return Reply(
+                status=forwarded.status_code,
+                body=forwarded.content,
+                content_type=forwarded.headers.get("content-type", "application/json"),
+            )
 
         with wire_server(enforce) as wire:
             yield McpPeer(wire.url + "/mcp", inner.calls), wire
@@ -1707,10 +1913,19 @@ def _scope_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpPeer, 
 
 @pytest.mark.parametrize("entry", ["rest", "server_mcp"])
 def test_managed_scope_step_up_preserves_read_and_write_without_retry(gateway: Gateway, entry: EntryPoint) -> None:
-    with oauth_server(scopes=("tools.read", "tools.write")) as auth, _scope_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
+    with (
+        oauth_server(scopes=("tools.read", "tools.write")) as auth,
+        _scope_enforcing_peer(auth) as (peer, wire),
+        gateway.scenario() as scenario,
+    ):
         alias: Final = "scope" + uuid.uuid4().hex[:8]
         identity: Final = _register_oauth(
-            scenario, peer, auth, alias, auth_type="oauth2", oauth2_flow="authorization_code",
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
             credentials={"client_id": "scope-client", "client_secret": "scope-secret", "scopes": ["tools.read"]},
         )
         owner: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
@@ -1725,16 +1940,23 @@ def test_managed_scope_step_up_preserves_read_and_write_without_retry(gateway: G
         peer.drain()
         wire.drain()
         denied: Final = (
-            call_tool(gateway, owner, identity, f"{alias}-write_op", {}) if entry == "rest"
+            call_tool(gateway, owner, identity, f"{alias}-write_op", {})
+            if entry == "rest"
             else caller.rpc("tools/call", {"name": f"{alias}-write_op", "arguments": {}})
         )
         assert denied.status_code == 403, denied.text
         challenge: Final = denied.headers["www-authenticate"]
         assert 'error="insufficient_scope"' in challenge and 'scope="tools.write"' in challenge
         assert f'resource_metadata="{_base(gateway)}/.well-known/oauth-protected-resource/' in challenge
-        attempts: Final = tuple(request for request in wire.drain() if request.body and json.loads(request.body).get("method") == "tools/call")
+        attempts: Final = tuple(
+            request
+            for request in wire.drain()
+            if request.body and json.loads(request.body).get("method") == "tools/call"
+        )
         assert len(attempts) == 1 and tool_calls(peer.drain()) == (), "denied operation was retried or executed"
-        second_code: Final = _authorize_through_gateway(gateway, auth, alias, owner, "scope-client", pkce, "tools.write")
+        second_code: Final = _authorize_through_gateway(
+            gateway, auth, alias, owner, "scope-client", pkce, "tools.write"
+        )
         second: Final = _redeem(gateway, alias, owner, "scope-client", second_code, pkce)
         assert second.status_code == 200, second.text
         with auth.lock:

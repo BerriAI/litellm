@@ -119,7 +119,10 @@ def test_callback_forwards_the_code_only_for_the_sealed_issuer_and_relays_idp_er
         assert correct_location.scheme + "://" + correct_location.netloc + correct_location.path == CLIENT_REDIRECT, (
             correct.headers["location"]
         )
-        assert parse_qs(correct_location.query) == {"code": ["c"], "state": ["client-state"]}, correct.headers[
+        correct_query: Final = parse_qs(correct_location.query)
+        assert set(correct_query) == {"code", "state"}, correct.headers["location"]
+        assert correct_query["state"] == ["client-state"], correct.headers["location"]
+        assert len(correct_query["code"]) == 1 and correct_query["code"][0].startswith("llm_scope_"), correct.headers[
             "location"
         ]
         _assert_cleared_oauth_state_cookie(correct, correct_cookie)
@@ -250,10 +253,13 @@ def test_callback_refuses_a_response_without_iss_when_the_authorization_server_a
         assert trusted_location.scheme + "://" + trusted_location.netloc + trusted_location.path == CLIENT_REDIRECT, (
             trusted.headers["location"]
         )
-        assert parse_qs(trusted_location.query) == {
-            "code": [trusted_code],
-            "state": ["client-state"],
-        }, trusted.headers["location"]
+        trusted_query: Final = parse_qs(trusted_location.query)
+        assert set(trusted_query) == {"code", "state"}, trusted.headers["location"]
+        assert trusted_query["state"] == ["client-state"], trusted.headers["location"]
+        assert len(trusted_query["code"]) == 1 and trusted_query["code"][0].startswith("llm_scope_"), trusted.headers[
+            "location"
+        ]
+        assert trusted_query["code"][0] != trusted_code, trusted.headers["location"]
         _assert_cleared_oauth_state_cookie(trusted, trusted_cookie)
 
         wire_requests: Final = wire.drain()
