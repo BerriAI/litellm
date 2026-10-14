@@ -8444,12 +8444,10 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
 
-        # Own try: the model reconcile above must not decide whether guardrails, vector
-        # stores, MCP servers and agents get hydrated. They read their own tables.
         try:
             # initialize vector stores, guardrails, etc. table in db
             await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
-        except Exception as e:  # noqa: BLE001 - same swallow the single handler above already had; a hydration failure must not stop the reconcile
+        except Exception as e:  # noqa: BLE001  # log and carry on, like the reconcile handler above
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:add_deployment non-LLM objects - %s", e
             )
