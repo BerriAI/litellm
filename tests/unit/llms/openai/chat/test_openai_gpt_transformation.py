@@ -1756,3 +1756,46 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         )
 
         assert request["tools"][0] is tool
+
+
+_NO_NONE_MODEL: Final = "openai/gpt-5-test-none-disabled"
+_NO_NONE_ENTRY: Final = {
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_reasoning": True,
+    "supports_none_reasoning_effort": False,
+}
+
+
+def test_reasoning_effort_none_raises_when_the_model_map_disables_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(litellm.model_cost, _NO_NONE_MODEL, _NO_NONE_ENTRY)
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="reasoning_effort=none"):
+        OpenAIGPT5Config().map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model=_NO_NONE_MODEL,
+            drop_params=False,
+        )
+
+
+def test_reasoning_effort_none_is_dropped_when_the_model_map_disables_it_and_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, _NO_NONE_MODEL, _NO_NONE_ENTRY)
+    mapped: Final = OpenAIGPT5Config().map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model=_NO_NONE_MODEL,
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in mapped, mapped
+
+
+def test_reasoning_effort_none_passes_through_for_a_model_the_map_does_not_know() -> None:
+    mapped: Final = OpenAIGPT5Config().map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="openai/gpt-5-test-unknown-to-the-map",
+        drop_params=False,
+    )
+    assert mapped.get("reasoning_effort") == "none", mapped

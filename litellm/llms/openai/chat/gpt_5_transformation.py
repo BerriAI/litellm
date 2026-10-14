@@ -307,8 +307,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                         message=(f"reasoning_effort={effective_effort} is not supported for this model."),
                         status_code=400,
                     )
-        elif effective_effort in ("minimal", "low"):
-            # minimal/low are opt-out: unknown models pass through; only block when
+        elif effective_effort in ("none", "minimal", "low"):
+            # none/minimal/low are opt-out: unknown models pass through; only block when
             # the model map explicitly sets supports_{level}_reasoning_effort=false.
             # Example: gpt-5.5-pro only accepts {medium, high, xhigh}, so it sets
             # supports_low_reasoning_effort=false (and supports_minimal=false).
