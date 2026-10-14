@@ -1,4 +1,3 @@
-import json
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -54,7 +53,6 @@ _PROVIDERS: Final[tuple[Provider, ...]] = (
     "vertex_ai",
     "azure_ai",
 )
-_AUTOMATIC_CACHING_PROVIDERS: Final = tuple(provider for provider in _PROVIDERS if provider != "bedrock_converse")
 _SITES: Final[tuple[Site, ...]] = ("tool", "system", "user_part", "tool_call", "tool_result", "string_message")
 _FIVE_SITES: Final[tuple[Site, ...]] = ("tool", "system", "user_part", "tool_call", "string_message")
 _EXPLICIT: Final[dict[str, JsonValue]] = {"mode": "explicit"}
@@ -172,11 +170,6 @@ def _only_request(wire: Wire) -> Request:
     received: Final = wire.drain()
     assert len(received) == 1, [request.target for request in received]
     return received[0]
-
-
-def _automatic_mark(request: Request) -> JsonValue:
-    body: Final = json.loads(request.body)
-    return body.get("cache_control") if isinstance(body, dict) else None
 
 
 @pytest.mark.parametrize("site", _SITES)
@@ -307,56 +300,6 @@ def test_injection_points_stand_down_behind_the_latest_four_breakpoints(gateway:
         assert status == 200, text
         assert anthropic_labels(_only_request(wire)) == _latest_four("anthropic", marker)
     assert gateway_injected(response_id) is False
-
-
-@pytest.mark.parametrize("provider", _AUTOMATIC_CACHING_PROVIDERS)
-def test_implicit_prompt_cache_options_turn_on_claude_automatic_caching(gateway: Gateway, provider: Provider) -> None:
-    marker: Final = new_marker()
-    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire, provider)
-        status, _, text = post_chat(gateway, _body(model, marker, {}, prompt_cache_options={"mode": "implicit"}))
-        assert status == 200, text
-        request: Final = _only_request(wire)
-    assert b"prompt_cache_options" not in request.body, request.body
-    assert _automatic_mark(request) == EPHEMERAL
-
-
-@pytest.mark.parametrize("provider", _PROVIDERS)
-def test_explicit_prompt_cache_options_leave_only_the_breakpoints(gateway: Gateway, provider: Provider) -> None:
-    marker: Final = new_marker()
-    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire, provider)
-        status, _, text = post_chat(
-            gateway, _body(model, marker, _marked(("user_part",)), prompt_cache_options=_EXPLICIT)
-        )
-        assert status == 200, text
-        request: Final = _only_request(wire)
-    assert b"prompt_cache_options" not in request.body, request.body
-    assert _labels(provider, request) == [ASK_LABEL]
-
-
-def test_implicit_prompt_cache_options_are_a_400_where_claude_has_no_automatic_caching(gateway: Gateway) -> None:
-    marker: Final = new_marker()
-    with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire, "bedrock_converse")
-        status, _, text = post_chat(gateway, _body(model, marker, {}, prompt_cache_options={"mode": "implicit"}))
-        received: Final = wire.drain()
-    assert status == 400, text
-    assert "prompt_cache_options" in text and "drop_params" in text, text
-    assert received == (), [request.target for request in received]
-
-
-def test_implicit_prompt_cache_options_are_dropped_where_claude_has_no_automatic_caching_under_drop_params(
-    gateway: Gateway,
-) -> None:
-    marker: Final = new_marker()
-    with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire, "bedrock_converse", drop_params=True)
-        status, _, text = post_chat(gateway, _body(model, marker, {}, prompt_cache_options={"mode": "implicit"}))
-        assert status == 200, text
-        request: Final = _only_request(wire)
-    assert b"prompt_cache_options" not in request.body, request.body
-    assert bedrock_labels(request) == []
 
 
 def _drop_params_config(directory: Path) -> Path:

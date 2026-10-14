@@ -1,5 +1,4 @@
-"""OpenAI's ``prompt_cache_breakpoint`` and ``prompt_cache_options`` on a chat request bound for Claude, rewritten as
-Claude's ``cache_control``."""
+"""OpenAI's ``prompt_cache_breakpoint`` on a chat request bound for Claude, rewritten as Claude's ``cache_control``."""
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -31,7 +30,6 @@ _CLAUDE_TTL_MARKS: Final = MappingProxyType(
 class ClaudePromptCache:
     messages: tuple[object, ...]
     tools: tuple[object, ...] | None
-    params: _Fields
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,31 +71,6 @@ def _breakpoint_mark(marker: object) -> ChatCompletionCachedContent | Unsupporte
             "prompt_cache_breakpoint", marker, 'expected {"mode": "explicit"} with an optional ttl', fallback=None
         )
     return _ttl_mark(fields.get("ttl"), "prompt_cache_breakpoint", marker)
-
-
-def _automatic_mark(
-    options: object, accepts_automatic_caching: bool
-) -> ChatCompletionCachedContent | UnsupportedPromptCacheParam | None:
-    if options is None:
-        return None
-    fields: Final = _fields(options)
-    if fields is None or fields.get("mode") not in (None, "implicit", "explicit"):
-        return UnsupportedPromptCacheParam(
-            "prompt_cache_options", options, 'expected a "mode" of "implicit" or "explicit"', fallback=None
-        )
-    if fields.get("mode") != "implicit":
-        return (
-            None
-            if fields.get("ttl") is None
-            else UnsupportedPromptCacheParam(
-                "prompt_cache_options", options, 'Claude applies a ttl only with "mode": "implicit"', fallback=None
-            )
-        )
-    if not accepts_automatic_caching:
-        return UnsupportedPromptCacheParam(
-            "prompt_cache_options", options, "this route has no automatic caching", fallback=None
-        )
-    return _ttl_mark(fields.get("ttl"), "prompt_cache_options", options)
 
 
 def _indexed_fields(values: Sequence[object]) -> Iterator[tuple[int, _Fields]]:
@@ -216,43 +189,26 @@ def claude_prompt_cache(
     tools: Sequence[object] | None,
     params: _Fields,
     *,
-    accepts_automatic_caching: bool,
     drop_params: bool,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
-    """``prompt_cache_breakpoint`` marks renamed to ``cache_control``, and ``prompt_cache_options`` with
-    ``"mode": "implicit"`` turned into the request-level ``cache_control`` (Claude's automatic caching). A mark or
-    option Claude cannot honor is reported unless ``drop_params``, which keeps what Claude can use and, when the
-    request ends up with more than Claude's four breakpoints, the latest four. A request carrying neither param is
-    returned as written."""
+    """``prompt_cache_breakpoint`` marks renamed to ``cache_control``. A mark Claude cannot honor is reported unless
+    ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
+    breakpoints, the latest four. A request-level ``cache_control`` in ``params`` takes one of the four. A request
+    carrying no breakpoint is returned as written."""
     listed_tools: Final = tools or ()
-    options: Final = params.get("prompt_cache_options")
     blocks: Final = tuple(block for _, block in _markable(messages, listed_tools))
-    if options is None and all(block.get("prompt_cache_breakpoint") is None for block in blocks):
-        return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools), params)
-    automatic: Final = _automatic_mark(options, accepts_automatic_caching)
-    problem: Final = (
-        automatic
-        if isinstance(automatic, UnsupportedPromptCacheParam)
-        else next(filter(None, map(_breakpoint_problem, blocks)), None)
-    )
+    if all(block.get("prompt_cache_breakpoint") is None for block in blocks):
+        return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
+    problem: Final = next(filter(None, map(_breakpoint_problem, blocks)), None)
     if problem is not None and not drop_params:
         return problem
     if problem is not None:
         verbose_logger.debug("Claude: adjusting %s=%r because %s", problem.param, problem.value, problem.reason)
-    automatic_mark: Final = automatic.fallback if isinstance(automatic, UnsupportedPromptCacheParam) else automatic
-    request_params: Final = {
-        **{key: value for key, value in params.items() if key != "prompt_cache_options"},
-        **(
-            {"cache_control": automatic_mark}
-            if automatic_mark is not None and params.get("cache_control") is None
-            else {}
-        ),
-    }
     renamed_messages, renamed_tools = _marked_request(messages, listed_tools, _renamed)
     sites: Final = tuple(
         path for path, block in _markable(renamed_messages, renamed_tools) if block.get("cache_control") is not None
     )
-    excess: Final = len(sites) + int(request_params.get("cache_control") is not None) - MAX_CACHE_CONTROL_BLOCKS
+    excess: Final = len(sites) + int(params.get("cache_control") is not None) - MAX_CACHE_CONTROL_BLOCKS
     if excess > 0 and drop_params:
         verbose_logger.debug("Claude: dropping the earliest %d cache breakpoints", excess)
     trimmed_messages, trimmed_tools = (
@@ -260,7 +216,7 @@ def claude_prompt_cache(
         if excess > 0 and drop_params
         else (renamed_messages, renamed_tools)
     )
-    return ClaudePromptCache(trimmed_messages, None if tools is None else trimmed_tools, request_params)
+    return ClaudePromptCache(trimmed_messages, None if tools is None else trimmed_tools)
 
 
 def resolved_claude_prompt_cache(
