@@ -450,6 +450,7 @@ class _BreakerMetrics:
             "litellm_redis_circuit_breaker_state",
             "Number of Redis circuit breakers currently in each state",
             labelnames=("state",),
+            multiprocess_mode="livesum",
         )
         self._transitions = PromCounter(
             "litellm_redis_circuit_breaker_transitions",

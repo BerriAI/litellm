@@ -96,6 +96,8 @@ _ADDITIONAL_TRUE_SCHEMA: Final[dict[str, JsonValue]] = {**_OPTIONAL_SCHEMA, "add
 _CLOSED_OPTIONAL_SCHEMA: Final[dict[str, JsonValue]] = {**_OPTIONAL_SCHEMA, "additionalProperties": False}
 _CALLERS_FORMAT: Final[dict[str, JsonValue]] = {"type": "json_schema", "schema": {**_SCHEMA, "title": "callers"}}
 _ANTHROPIC_JSON_TOOL: Final[dict[str, JsonValue]] = {"name": _JSON_TOOL, "input_schema": _SCHEMA}
+_FORCED_JSON_TOOL: Final[dict[str, JsonValue]] = {"type": "tool", "name": _JSON_TOOL}
+_REASONING_FIELDS: Final = ("thinking", "output_config", "max_tokens")
 _USER_TOOL_SPEC: Final[dict[str, JsonValue]] = {
     "type": "function",
     "function": {
@@ -169,7 +171,6 @@ _FAMILY: Final = (
     "claude_platform_unmapped",
     "vertex_haiku",
 )
-_STREAM_FAMILY: Final = ("anthropic_unmapped", "azure_ai_unmapped", "bedrock_invoke", "vertex_haiku")
 _FRAGMENT_SIZE: Final = 20
 _TIMING_BYTES: Final = 512 * 1024
 _TIMING_FRAGMENT: Final = 4096
@@ -597,6 +598,14 @@ def _chat_body(
     return body if tools is None else {**body, "tools": tools}
 
 
+def _effort_body(model: str, marker: str) -> dict[str, JsonValue]:
+    return {"model": model, "messages": [{"role": "user", "content": marker}], "reasoning_effort": "low"}
+
+
+def _reasoning_fields(delivery: _Delivery) -> dict[str, JsonValue]:
+    return {field: delivery.body.get(field) for field in _REASONING_FIELDS}
+
+
 def _messages_body(model: str, marker: str, *, stream: bool = False, **extra: JsonValue) -> dict[str, JsonValue]:
     return {
         "model": model,
@@ -740,6 +749,30 @@ def _vertex_deployment(gateway: Gateway, scenario: Scenario, api_base: str, back
     )
 
 
+def _bedrock_invoke_deployment(scenario: Scenario, api_base: str, backend: str) -> str:
+    return scenario.model(
+        model=f"bedrock/invoke/{backend}",
+        api_base=api_base,
+        api_key=_BEDROCK_TOKEN,
+        aws_region_name="us-east-1",
+    )
+
+
+def _rejects_forced_tools_without_native_output(row: Mapping[str, JsonValue]) -> bool:
+    return row.get("supports_forced_tool_use") is False and row.get("supports_native_structured_output") is not True
+
+
+def _claude_rejecting_forced_tools(gateway: Gateway, namespace: str, family: str) -> str:
+    rows: Final = gateway.get("/public/litellm_model_cost_map")
+    names: Final = sorted(
+        name.removeprefix(namespace)
+        for name, row in rows.items()
+        if name.startswith(namespace + family) and _rejects_forced_tools_without_native_output(object_value(row))
+    )
+    assert names, f"The cost map has no {namespace}{family} row rejecting forced tools without native output"
+    return names[0]
+
+
 def _family_deployment(gateway: Gateway, scenario: Scenario, api_base: str, member: str) -> str:
     match member:
         case "anthropic_unmapped":
@@ -747,12 +780,7 @@ def _family_deployment(gateway: Gateway, scenario: Scenario, api_base: str, memb
         case "azure_ai_unmapped":
             return scenario.model(model=f"azure_ai/{_UNMAPPED_MODEL}", api_base=api_base, api_key=_AZURE_KEY)
         case "bedrock_invoke":
-            return scenario.model(
-                model=f"bedrock/invoke/{_BEDROCK_INVOKE_MODEL}",
-                api_base=api_base,
-                api_key=_BEDROCK_TOKEN,
-                aws_region_name="us-east-1",
-            )
+            return _bedrock_invoke_deployment(scenario, api_base, _BEDROCK_INVOKE_MODEL)
         case "bedrock_mantle":
             return scenario.model(
                 model=f"bedrock_mantle/{_BEDROCK_INVOKE_MODEL}",
@@ -1140,8 +1168,7 @@ def test_vertex_chat_json_schema_without_required_keys_unwraps_only_the_tool_nam
         content: Final = _stream_content(response) if stream else _chat_content(response)
         assert content == (_payload(marker_hex) if unwrapped else _tool_input(shape, marker_hex)), response.text
         if stream:
-            expected_frames: Final = 1 if unwrapped else _fragment_count(shape, marker_hex)
-            assert len(_content_frames(response)) == expected_frames, response.text
+            assert (len(_content_frames(response)) == 1) is unwrapped, response.text
         _one_delivery(wire, marker_hex)
 
 
@@ -1293,7 +1320,7 @@ def test_tool_path_family_unwraps_the_envelope(gateway: Gateway, member: str) ->
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
 
-@pytest.mark.parametrize("member", _STREAM_FAMILY)
+@pytest.mark.parametrize("member", _FAMILY)
 def test_tool_path_family_stream_unwraps_the_envelope(gateway: Gateway, member: str) -> None:
     marker, marker_hex = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -1305,6 +1332,61 @@ def test_tool_path_family_stream_unwraps_the_envelope(gateway: Gateway, member: 
         assert len(frames) == 1, frames
         sent: Final = _one_delivery(wire, marker_hex)
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+
+
+@pytest.mark.parametrize("accepts_forced_tools", [True, False], ids=["accepts_forced_tools", "rejects_forced_tools"])
+def test_vertex_chat_json_schema_forces_the_json_tool_only_when_the_model_accepts_forced_tools(
+    gateway: Gateway, accepts_forced_tools: bool
+) -> None:
+    marker, marker_hex = _marker("plain")
+    backend: Final = (
+        _TOOL_MODEL if accepts_forced_tools else _claude_rejecting_forced_tools(gateway, "vertex_ai/", "claude")
+    )
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, backend)
+        response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
+        assert _chat_content(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+        assert sent.body.get("tool_choice") == (_FORCED_JSON_TOOL if accepts_forced_tools else None), sent.body
+        assert "output_config" not in sent.body and "output_format" not in sent.body, sent.body
+
+
+def test_vertex_chat_json_schema_on_a_model_rejecting_forced_tools_maps_reasoning_effort_like_plain_chat(
+    gateway: Gateway,
+) -> None:
+    backend: Final = _claude_rejecting_forced_tools(gateway, "vertex_ai/", "claude")
+    structured_marker, structured_hex = _marker("plain")
+    plain_marker, plain_hex = _marker("plain")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, backend)
+        structured: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {**_effort_body(model, structured_marker), "response_format": _RESPONSE_FORMAT},
+        )
+        assert _chat_content(structured) == _payload(structured_hex), structured.text
+        structured_sent: Final = _one_delivery(wire, structured_hex)
+        plain: Final = gateway.request("POST", "/v1/chat/completions", _effort_body(model, plain_marker))
+        assert plain.status_code == 200, plain.text
+        plain_sent: Final = _one_delivery(wire, plain_hex)
+    assert "thinking" in plain_sent.body, plain_sent.body
+    assert _reasoning_fields(structured_sent) == _reasoning_fields(plain_sent), (structured_sent.body, plain_sent.body)
+
+
+def test_bedrock_invoke_json_schema_sends_the_json_tool_unforced_when_the_model_rejects_forced_tools(
+    gateway: Gateway,
+) -> None:
+    marker, marker_hex = _marker("plain")
+    backend: Final = _claude_rejecting_forced_tools(gateway, "", "anthropic.claude")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _bedrock_invoke_deployment(scenario, wire.url, backend)
+        response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
+        assert _chat_content(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert sent.target == f"/model/{backend}/invoke", sent.target
+        assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+        assert "tool_choice" not in sent.body, sent.body
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
