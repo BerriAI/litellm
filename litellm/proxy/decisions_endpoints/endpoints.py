@@ -92,7 +92,7 @@ async def _invalid_request(
     )
 
 
-_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "audio", "videos"})
+_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "images", "audio", "videos"})
 
 
 def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, object]:
