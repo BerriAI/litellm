@@ -2415,6 +2415,31 @@ def test_register_model_openrouter_without_slash():
     assert "openai/gpt-4-turbo" in litellm.openrouter_models
 
 
+def test_register_model_makes_the_model_resolvable_and_wildcard_visible_without_a_restart():
+    model_name: Final = "my-tuned-gemini-regression"
+    try:
+        litellm.register_model(
+            {
+                model_name: {
+                    "litellm_provider": "vertex_ai-language-models",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                }
+            },
+            persist_across_reloads=False,
+        )
+
+        _, provider, _, _ = litellm.get_llm_provider(model=model_name)
+
+        assert provider == "vertex_ai"
+        assert model_name in litellm.models_by_provider["vertex_ai"]
+    finally:
+        litellm.model_cost.pop(model_name, None)
+        litellm.vertex_language_models.discard(model_name)
+        litellm.models_by_provider["vertex_ai"].discard(model_name)
+
+
 def test_reasoning_content_preserved_in_text_completion_wrapper():
     """Ensure reasoning_content is copied from delta to text_choices."""
     chunk = ModelResponseStream(
