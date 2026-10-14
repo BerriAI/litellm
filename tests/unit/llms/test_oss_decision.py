@@ -19,6 +19,9 @@ pytestmark: Final = pytest.mark.parametrize("provider", ["laya", "bespoke"])
         ("http://decision.test/root", "explicit-key", "http://decision.test/root", "explicit-key"),
         ("http://decision.test/root/v1/", None, "http://decision.test/root", "oss-env-key"),
         ("http://decision.test/root/v2", None, "http://decision.test/root/v2", None),
+        ("http://v1", None, "http://v1", None),
+        ("http://v1/v1/", None, "http://v1", None),
+        ("http://[::1]:8000/v1", None, "http://[::1]:8000", None),
     ],
 )
 def test_oss_credentials_stay_with_their_configured_destination(

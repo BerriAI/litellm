@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
@@ -47,7 +48,8 @@ def validate_oss_api_base(provider: OssDecisionProvider, value: str) -> str:
 
 
 def _server_root(provider: OssDecisionProvider, base: str) -> str:
-    return validate_oss_api_base(provider, base).removesuffix("/v1")
+    parts: Final = urlsplit(validate_oss_api_base(provider, base))
+    return parts._replace(path=parts.path.removesuffix("/v1")).geturl()
 
 
 def _is_env_server(provider: OssDecisionProvider, server: str, env_base: str | None) -> bool:
