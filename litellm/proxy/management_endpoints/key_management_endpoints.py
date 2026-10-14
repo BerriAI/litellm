@@ -115,6 +115,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TEAM_ADMIN_MEMBER_KEY_TYPE,
     team_admin_key_edit_verdict,
     team_admin_key_request_or_raise,
+    team_admin_may_create_member_keys,
     team_admin_may_edit_member_key_budgets,
     team_admin_member_key_creation_or_raise,
     team_admin_member_key_creation_verdict,
@@ -1269,11 +1270,16 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
     )
     if acting_as_team_admin:
+        general_settings: Final = _general_settings()
         team_admin_member_key_creation_or_raise(
             team_admin_member_key_creation_verdict(
-                _general_settings(),
+                general_settings,
                 key_type=data.key_type,
-                owner_role=await _stored_user_role(prisma_client, data.user_id),
+                owner_role=(
+                    await _stored_user_role(prisma_client, data.user_id)
+                    if team_admin_may_create_member_keys(general_settings)
+                    else None
+                ),
             )
         )
     common_key_access_checks(

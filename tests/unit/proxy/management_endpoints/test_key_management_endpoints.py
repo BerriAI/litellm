@@ -22482,6 +22482,17 @@ async def test_team_admin_cannot_create_a_key_owned_by_a_proxy_admin_teammate():
 
 
 @pytest.mark.asyncio
+async def test_member_key_request_with_the_setting_off_is_refused_without_reading_the_owner():
+    find_owner: Final = AsyncMock(side_effect=ConnectionError("db down"))
+
+    with pytest.raises(HTTPException) as exc:
+        await _team_admin_generates_member_key(find_owner, AsyncMock(), editable_fields=())
+
+    assert exc.value.status_code == 403
+    find_owner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
     import json
     from types import SimpleNamespace
