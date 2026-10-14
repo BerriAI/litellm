@@ -318,6 +318,7 @@ class PromptCachingCache:
         if cache_key is None:
             return
 
+        self.cache.in_memory_cache.delete_cache(cache_key)
         self.cache.set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
@@ -342,6 +343,7 @@ class PromptCachingCache:
             if honors_one_hour_ttl
             else PROMPT_CACHE_PIN_TTL_SECONDS
         )
+        self.cache.in_memory_cache.delete_cache(positions[-1].cache_key)
         with service_target(_PROMPT_CACHE_PINS_TARGET):
             await self.cache.async_set_cache(
                 positions[-1].cache_key,

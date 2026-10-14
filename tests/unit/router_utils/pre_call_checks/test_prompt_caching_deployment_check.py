@@ -717,6 +717,13 @@ class _ManualClock:
         ),
         pytest.param("anthropic", "claude-sonnet-4-5", None, False, id="model-not-in-cost-map"),
         pytest.param(
+            "anthropic",
+            "claude-sonnet-4-5",
+            {"cache_creation_input_token_cost_above_1hr": 0.0},
+            False,
+            id="one-hour-cache-writes-priced-at-zero",
+        ),
+        pytest.param(
             "bedrock",
             "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
             {"cache_creation_input_token_cost_above_1hr": None},

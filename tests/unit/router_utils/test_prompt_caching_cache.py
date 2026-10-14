@@ -206,6 +206,56 @@ async def test_one_hour_prefix_on_a_deployment_without_one_hour_caching_keeps_th
     assert await cache.async_get_model_id(messages=one_hour, tools=None) is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_write", "second_write", "pinned_past_five_minutes"),
+    [
+        pytest.param(
+            ("deployment-1h", True),
+            ("deployment-5m-only", False),
+            None,
+            id="five-minute-deployment-after-a-one-hour-pin",
+        ),
+        pytest.param(
+            ("deployment-5m-only", False),
+            ("deployment-1h", True),
+            {"model_id": "deployment-1h"},
+            id="one-hour-deployment-after-a-five-minute-pin",
+        ),
+    ],
+)
+async def test_latest_write_sets_the_pin_lifetime_in_a_mixed_group(
+    first_write: tuple[str, bool],
+    second_write: tuple[str, bool],
+    pinned_past_five_minutes: dict[str, str] | None,
+) -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+    one_hour: Final = _system_block_messages({"type": "ephemeral", "ttl": "1h"})
+
+    await cache.async_add_model_id(
+        model_id=first_write[0], messages=one_hour, tools=None, honors_one_hour_ttl=first_write[1]
+    )
+    await cache.async_add_model_id(
+        model_id=second_write[0], messages=one_hour, tools=None, honors_one_hour_ttl=second_write[1]
+    )
+
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+    assert await cache.async_get_model_id(messages=one_hour, tools=None) == pinned_past_five_minutes
+
+
+def test_sync_five_minute_deployment_after_a_one_hour_pin_keeps_the_five_minute_pin() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+    one_hour: Final = _message_level_messages({"type": "ephemeral", "ttl": "1h"})
+
+    cache.add_model_id(model_id="deployment-1h", messages=one_hour, tools=None, honors_one_hour_ttl=True)
+    cache.add_model_id(model_id="deployment-5m-only", messages=one_hour, tools=None, honors_one_hour_ttl=False)
+
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+    assert cache.get_model_id(messages=one_hour, tools=None) is None
+
+
 def test_sync_one_hour_message_level_pin_outlives_the_five_minute_window() -> None:
     clock: Final = _ManualClock()
     cache: Final = _pin_cache(clock)
