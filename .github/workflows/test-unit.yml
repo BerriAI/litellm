@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   setup:
-    name: setup
+    name: unit setup
     permissions:
       contents: read
       pull-requests: read

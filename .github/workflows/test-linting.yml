@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   setup:
-    name: setup
+    name: lint setup
     permissions:
       contents: read
     outputs:

@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   setup:
-    name: setup
+    name: smoke setup
     permissions:
       contents: read
     outputs:
