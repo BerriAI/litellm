@@ -262,6 +262,18 @@ def test_a_routing_group_sends_every_poll_and_download_back_to_the_member_that_c
     assert sorted(polled_tasks(rig.b.drain())) == sorted((*b_tasks, *b_tasks))
 
 
+def test_a_key_rate_limit_on_a_routing_group_counts_its_polls_against_the_group(rig: _Rig) -> None:
+    video_id: Final = created_id(create(rig.gateway, {"model": rig.group, "seconds": "5", "size": "1280x720"}))
+    served, other = (rig.b, rig.a) if task_of(video_id).startswith("b-") else (rig.a, rig.b)
+    key: Final = rig.scenario.key(models=[rig.group], model_rpm_limit={rig.group: 2})
+    rig.drain()
+    polls: Final = tuple(_poll(rig, video_id, key) for _ in range(3))
+    assert [response.status_code for response in polls] == [200, 200, 429], [response.text for response in polls]
+    assert f":{rig.group}. Limit type: requests." in error_message(polls[2]), polls[2].text
+    assert other.drain() == ()
+    assert polled_tasks(served.drain()) == (task_of(video_id), task_of(video_id))
+
+
 def test_a_key_scoped_to_a_wildcard_route_gets_an_id_without_a_served_group_and_polls_through_the_wildcard(
     rig: _Rig,
 ) -> None:

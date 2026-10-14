@@ -24,6 +24,7 @@ from integration.providers._dashscope_video_support import (
     TASKS_PATH,
     create_bodies,
     created_id,
+    forged_id,
     json_reply,
     polled_tasks,
     task_api,
@@ -37,6 +38,7 @@ _CHAOS_TIMEOUT: Final = int(4 * graceful_stop_seconds() + 240)
 _GROUP: Final = "dashscope-video-group"
 _MEMBER_A: Final = "dashscope-video-a"
 _MEMBER_B: Final = "dashscope-video-b"
+_CATCH_ALL_KEY: Final = "catch-all-openai-key"
 _ROUTED_ENVIRONMENT: Final = (
     "DASHSCOPE_API_BASE",
     "DASHSCOPE_API_BASE_VIDEO",
@@ -202,16 +204,34 @@ def environment_wires() -> Iterator[Mapping[str, Wire]]:
 
 
 @pytest.fixture(scope="module")
+def catch_all_wire() -> Iterator[Wire]:
+    with wire_server(
+        lambda _request: json_reply({"error": {"message": "catch-all", "type": "invalid_request_error"}}, 404)
+    ) as wire:
+        yield wire
+
+
+@pytest.fixture(scope="module")
 def environment_proxy(
-    environment_wires: Mapping[str, Wire], tmp_path_factory: pytest.TempPathFactory
+    environment_wires: Mapping[str, Wire], catch_all_wire: Wire, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[OwnedProxy]:
     directory: Final = tmp_path_factory.mktemp("dashscope-video-environment")
     path: Final = _config(
         directory,
         "dashscope-video-environment",
-        tuple(
-            {"model_name": f"env-{provider}", "litellm_params": {"model": f"{provider}/{MODEL}"}}
-            for provider in environment_wires
+        (
+            *(
+                {"model_name": f"env-{provider}", "litellm_params": {"model": f"{provider}/{MODEL}"}}
+                for provider in environment_wires
+            ),
+            {
+                "model_name": "*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_base": f"{catch_all_wire.url}/v1",
+                    "api_key": _CATCH_ALL_KEY,
+                },
+            },
         ),
         {},
         {"drop_params": True},
@@ -266,6 +286,29 @@ def test_each_dashscope_prefix_reaches_its_own_environment_base_with_its_own_env
     assert all(
         other.drain() == () for name, other in environment_wires.items() if name != provider
     ), "A prefix reached another prefix's environment base"
+
+
+@pytest.mark.timeout(_CHAOS_TIMEOUT)
+def test_a_catch_all_over_another_provider_never_takes_a_poll_for_an_id_only_its_pattern_matches(
+    environment_proxy: OwnedProxy, environment_wires: Mapping[str, Wire], catch_all_wire: Wire
+) -> None:
+    wire: Final = environment_wires["dashscope"]
+    candidate: Final = environment_proxy.gateway
+    task: Final = task_of(created_id(_create(candidate, {"model": "env-dashscope", "seconds": "5"})))
+    polled: Final = forged_id("dashscope", MODEL, task, None)
+    wire.drain()
+    catch_all_wire.drain()
+    assert _completed(candidate, polled)
+    download: Final = candidate.request("GET", f"/v1/videos/{polled}/content")
+    assert download.status_code == 200 and download.content == MP4, download.text
+    assert catch_all_wire.drain() == ()
+    received: Final = wire.drain()
+    assert [(request.method, request.target) for request in received] == [
+        ("GET", f"{TASKS_PATH}{task}"),
+        ("GET", f"{TASKS_PATH}{task}"),
+        ("GET", f"{OSS_PATH}{task}.mp4"),
+    ]
+    assert [request.headers.get("authorization") for request in received[:2]] == ["Bearer env-dashscope-key"] * 2
 
 
 @pytest.mark.timeout(_CHAOS_TIMEOUT)
