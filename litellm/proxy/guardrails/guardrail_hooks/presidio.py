@@ -211,6 +211,20 @@ def _pii_token(entity_type: str, original: str, pii_tokens: Mapping[str, str], s
     return short if pii_tokens.get(short, original) == original else f"<{entity_type}_{digest}>"
 
 
+def _pii_token_scope(request_data: Mapping[str, object]) -> str:
+    """API key hash + end user of the request, the ``scope`` of :func:`_pii_token`."""
+
+    def section(key: str) -> Mapping[str, object]:
+        value: Final = request_data.get(key)
+        return cast("Mapping[str, object]", value) if isinstance(value, dict) else {}  # cast-ok: JSON keys are str
+
+    # /v1/messages keeps litellm's own metadata in `litellm_metadata`;
+    # `metadata` there is Anthropic's ({"user_id": ...}).
+    metadata: Final = {**section("metadata"), **section("litellm_metadata")}
+    end_user: Final = request_data.get("user") or metadata.get("user_api_key_end_user_id") or metadata.get("user_id")
+    return "\0".join(str(v or "") for v in (metadata.get("user_api_key_hash"), end_user))
+
+
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
@@ -851,18 +865,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"] = {}
         if "pii_tokens" not in request_data["metadata"]:
             request_data["metadata"]["pii_tokens"] = {}
-        pii_tokens: Final = request_data["metadata"]["pii_tokens"]
-
-        # /v1/messages keeps litellm's own metadata in `litellm_metadata`;
-        # `metadata` there is Anthropic's ({"user_id": ...}).
-        metadata: Final = {**request_data["metadata"], **(request_data.get("litellm_metadata") or {})}
-        scope: Final = "\0".join(
-            str(v or "")
-            for v in (
-                metadata.get("user_api_key_hash"),
-                request_data.get("user") or metadata.get("user_api_key_end_user_id") or metadata.get("user_id"),
-            )
-        )
+        metadata: Final[dict[str, object]] = request_data["metadata"]  # mutable-ok: holds the shared token map
+        pii_tokens: Final = cast("dict[str, str]", metadata["pii_tokens"])  # cast-ok: only this hook writes it
+        scope: Final = _pii_token_scope(cast("Mapping[str, object]", request_data))  # cast-ok: JSON keys are str
 
         # Apply replacements in reverse order by start position so
         # that replacing later spans first does not shift earlier
