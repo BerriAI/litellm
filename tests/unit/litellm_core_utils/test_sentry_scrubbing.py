@@ -30,6 +30,7 @@ MASTER_KEY: Final = "sk-master-key-under-test"
 DATABASE_URL: Final = "postgresql://litellm:db-password-under-test@db.internal:5432/litellm"
 PII_ON: Final = {"SENTRY_DSN": "https://key@sentry.example/1", "SENTRY_SEND_DEFAULT_PII": "true"}
 PII_OFF: Final = {"SENTRY_DSN": "https://key@sentry.example/1"}
+PROMPT: Final = "confidential prompt text under test"
 
 
 class RecordingTransport(Transport):
@@ -62,8 +63,12 @@ def raise_with_identity_locals() -> None:
 
 
 def raise_with_source_context_named_locals() -> None:
-    metadata: Final = {"context_line": f"Bearer {VIRTUAL_KEY}", "pre_context": [EMAIL], "post_context": [KEY_HASH]}
-    stacktrace: Final = {"frames": [{"context_line": MASTER_KEY, "pre_context": [EMAIL]}]}
+    metadata: Final = {
+        "context_line": f"Bearer {VIRTUAL_KEY}",
+        "pre_context": [MASTER_KEY],
+        "post_context": [VIRTUAL_KEY],
+    }
+    stacktrace: Final = {"frames": [{"context_line": MASTER_KEY, "pre_context": [VIRTUAL_KEY]}]}
     raise RuntimeError(f"rejected with {len(metadata)} metadata fields and {len(stacktrace)} stack fields")
 
 
@@ -92,15 +97,21 @@ def test_default_event_carries_no_email_hash_or_secret_anywhere() -> None:
     assert MASTER_KEY not in serialized
     assert VIRTUAL_KEY not in serialized
     assert "db-password-under-test" not in serialized
-    frame_vars: Final = innermost_frame_vars(serialized)
-    assert frame_vars["raw_headers"] == {"authorization": FILTERED, "x-api-key": FILTERED, "content-type": "'application/json'"}
-    assert f"token='{FILTERED}'" in frame_vars["valid_token"]
-    assert f"user_id='{FILTERED}'" in frame_vars["valid_token"]
-    assert f"user_email='{FILTERED}'" in frame_vars["user_obj"]
-    assert frame_vars["general_settings"] == {"master_key": FILTERED, "database_url": FILTERED}
-    assert frame_vars["data"] == {"metadata": {"user_api_key_hash": FILTERED, "user_api_key_user_email": FILTERED}}
-    assert "key_name='sk-...test'" in frame_vars["valid_token"]
-    assert "user_role='internal_user'" in frame_vars["user_obj"]
+
+
+def raise_with_prompt_locals() -> None:
+    messages: Final = [{"role": "user", "content": PROMPT}]
+    raise RuntimeError(f"provider rejected {len(messages)} messages")
+
+
+@pytest.mark.parametrize(("env", "locals_sent"), ((PII_OFF, False), (PII_ON, True)), ids=("default", "pii-opt-in"))
+def test_frame_locals_carrying_prompts_are_sent_only_with_the_pii_opt_in(
+    env: Mapping[str, str], locals_sent: bool
+) -> None:
+    serialized: Final = capture_serialized_event(env, raise_with_prompt_locals)
+    frames: Final = json.loads(serialized)["exception"]["values"][0]["stacktrace"]["frames"]
+    assert (PROMPT in serialized) is locals_sent
+    assert any("vars" in frame for frame in frames) is locals_sent
 
 
 def test_source_context_lines_are_left_readable() -> None:
@@ -115,11 +126,9 @@ def test_source_context_lines_are_left_readable() -> None:
 
 
 def test_source_context_names_outside_stack_frames_are_scrubbed() -> None:
-    serialized: Final = capture_serialized_event(PII_OFF, raise_with_source_context_named_locals)
+    serialized: Final = capture_serialized_event(PII_ON, raise_with_source_context_named_locals)
     assert VIRTUAL_KEY not in serialized
     assert MASTER_KEY not in serialized
-    assert EMAIL not in serialized
-    assert KEY_HASH not in serialized
     frame_vars: Final = innermost_frame_vars(serialized)
     assert frame_vars["metadata"] == {
         "context_line": f"'Bearer {FILTERED}'",

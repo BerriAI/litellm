@@ -66,6 +66,7 @@ class SentryInitOptions(TypedDict):
     sample_rate: ReadOnly[float]
     send_default_pii: ReadOnly[bool]
     max_request_body_size: ReadOnly[Literal["never"]]
+    include_local_variables: ReadOnly[bool]
     event_scrubber: ReadOnly[EventScrubber]
     before_send: ReadOnly[EventScrubFn]
     before_send_transaction: ReadOnly[EventScrubFn]
@@ -142,6 +143,7 @@ def build_sentry_init_options(env: Mapping[str, str]) -> SentryInitOptions:
         sample_rate=float(env.get("SENTRY_API_SAMPLE_RATE") or "1.0"),
         send_default_pii=send_default_pii,
         max_request_body_size="never",
+        include_local_variables=send_default_pii,
         event_scrubber=EventScrubber(
             denylist=list(SECRET_FIELD_NAMES),
             pii_denylist=list(PII_FIELD_NAMES),
