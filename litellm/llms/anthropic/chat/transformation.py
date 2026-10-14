@@ -39,6 +39,7 @@ from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
     response_format_schema,
+    split_response_format_answer,
     type_to_response_format_param,
     unwrap_response_format_envelope,
 )
@@ -2268,13 +2269,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if json_tool.get("function", {}).get("arguments") is None:
                 return None, tool_calls, None
             _message: Final = AnthropicConfig.convert_tool_response_to_message(
-                tool_calls=[json_tool], response_format_schema=response_format_schema
+                tool_calls=tool_calls, response_format_schema=response_format_schema
             )
             return _message, [], None
 
-        first_json: Final = tool_calls[json_indices[0]]
         json_msg: Final = AnthropicConfig.convert_tool_response_to_message(
-            [first_json], response_format_schema=response_format_schema
+            [tool_calls[i] for i in json_indices], response_format_schema=response_format_schema
         )
         extra_content: Final[str | None] = json_msg.content if json_msg is not None else None
         filtered_tools: Final = [t for i, t in enumerate(tool_calls) if i not in json_indices]
@@ -2895,6 +2895,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
         if json_mode_content_str is None:
             return None
+        split_answer: Final = (
+            None
+            if response_format_schema is None
+            else split_response_format_answer(
+                tuple(tool_call["function"].get("arguments") or "" for tool_call in tool_calls),
+                response_format_schema,
+            )
+        )
+        if split_answer is not None:
+            return litellm.Message(content=json.dumps(split_answer))
         try:
             payload: Final[object] = json.loads(json_mode_content_str)
         except (json.JSONDecodeError, RecursionError):

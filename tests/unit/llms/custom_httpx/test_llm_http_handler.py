@@ -4228,6 +4228,54 @@ async def test_completion_streams_after_the_async_transform_request():
     assert "".join(chunk.choices[0].delta.content or "" for chunk in collected) == "async"
 
 
+class _IteratorRecordingConfig(_TransformRecordingConfig):
+    def __init__(self):
+        super().__init__(transform_async=False)
+        self.iterator_requests = []
+
+    def get_model_response_iterator(self, streaming_response, sync_stream, json_mode=False):
+        self.iterator_requests.append({"sync_stream": sync_stream, "json_mode": json_mode})
+        return super().get_model_response_iterator(streaming_response, sync_stream, json_mode)
+
+
+def _json_mode_stream(config, **transport):
+    return BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_streaming_logging_obj(),
+        optional_params={"json_mode": True},
+        timeout=10.0,
+        litellm_params={},
+        stream=True,
+        provider_config=config,
+        **transport,
+    )
+
+
+def _streamed_text(chunks):
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+async def test_json_mode_stream_reaches_the_iterator_of_a_config_without_a_request_hook_only_when_sync():
+    config = _IteratorRecordingConfig()
+    sync_client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_sse_echoing_transformed_by)))
+    async_client = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(_sse_echoing_transformed_by))
+
+    sync_chunks = list(_json_mode_stream(config, acompletion=False, client=sync_client))
+    async_chunks = [chunk async for chunk in await _json_mode_stream(config, acompletion=True, client=async_client)]
+
+    assert (_streamed_text(sync_chunks), _streamed_text(async_chunks)) == ("sync", "sync")
+    assert config.iterator_requests == [
+        {"sync_stream": True, "json_mode": True},
+        {"sync_stream": False, "json_mode": False},
+    ]
+
+
 class _ImageEditRecordingConfig(BaseImageEditConfig):
     def __init__(self):
         self.transform_calls = []

@@ -25,7 +25,10 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
+    names_a_response_format_property,
+    partial_response_format_answer,
     response_format_envelope_contents,
+    split_response_format_answer,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -85,6 +88,9 @@ _NAME_VALUE_PREFIX: Final = re.compile(
     r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATTERN + r')"\s*:\s*(?:"(?:[^"\\]|\\.)*\\?)?$'
 )
 _STRING_VALUE_THEN_KEY: Final = re.compile(r'^"(?:[^"\\]|\\.)*"\s*,\s*"((?:[^"\\]|\\.)*)"\s*:')
+_LABEL_THEN_KEY: Final = re.compile(r'"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*:\s*')
+_LEADING_LABELS: Final = re.compile(r'(?:"(?:[^"\\]|\\.)*"\s*,\s*"(?:[^"\\]|\\.)*"\s*:\s*)*')
+_CLOSED_STRING: Final = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _UNDECIDED_PREFIX_LIMIT: Final = 4096
 
 
@@ -95,14 +101,45 @@ def _key_after_a_string_verdict(string_value_start: str, schema: ResponseFormatS
     return "pass_through" if next_key.group(1) in schema.property_names else "hold"
 
 
-def _first_value_verdict(after_first_key: str, schema: ResponseFormatSchema) -> _EnvelopeVerdict:
+def _is_a_label(text: str, schema: ResponseFormatSchema, tool_name: str) -> bool:
+    return text in schema.property_names or text == tool_name
+
+
+def _label_verdict(label: str, next_key: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+    if _is_a_label(label, schema, tool_name):
+        return "hold"
+    return "pass_through" if next_key in schema.property_names else "undecided"
+
+
+def _leading_labels_verdict(string_value_start: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+    last_value_start: Final = _LEADING_LABELS.sub("", string_value_start, count=1)
+    labelled: Final = string_value_start[: len(string_value_start) - len(last_value_start)]
+    verdicts: Final[tuple[_EnvelopeVerdict, ...]] = tuple(
+        _label_verdict(pair.group(1), pair.group(2), schema, tool_name) for pair in _LABEL_THEN_KEY.finditer(labelled)
+    )
+    decided: Final[_EnvelopeVerdict | None] = next((verdict for verdict in verdicts if verdict != "undecided"), None)
+    if decided is not None:
+        return decided
+    last_label: Final = _CLOSED_STRING.match(last_value_start)
+    if last_label is not None and _is_a_label(last_label.group(1), schema, tool_name):
+        return "hold"
+    return "undecided" if not last_value_start or last_value_start.startswith('"') else "pass_through"
+
+
+def _string_value_verdict(string_value_start: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+    if schema.required_names:
+        return _key_after_a_string_verdict(string_value_start, schema)
+    return _leading_labels_verdict(string_value_start, schema, tool_name)
+
+
+def _first_value_verdict(after_first_key: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
     value_start: Final = after_first_key.lstrip()
     if not value_start:
         return "undecided"
-    if value_start.startswith("{"):
+    if value_start.startswith('"'):
+        return _string_value_verdict(value_start, schema, tool_name)
+    if value_start.startswith("{") and not schema.accepts_a_lone_undeclared_key:
         return "hold"
-    if value_start.startswith('"') and schema.required_names:
-        return _key_after_a_string_verdict(value_start, schema)
     return "pass_through"
 
 
@@ -116,9 +153,11 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
             return "hold"
         if first_value is None and _NAME_VALUE_PREFIX.match(buffered_json):
             return "undecided"
-    if first_key.group(1) in schema.property_names or not schema.property_names or schema.accepts_a_lone_undeclared_key:
+    if first_key.group(1) == "values" and "values" not in schema.property_names:
+        return "hold"
+    if first_key.group(1) in schema.property_names or not schema.property_names:
         return "pass_through"
-    return _first_value_verdict(buffered_json[first_key.end() :], schema)
+    return _first_value_verdict(buffered_json[first_key.end() :], schema, tool_name)
 
 
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
@@ -128,6 +167,13 @@ def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
         return held
     contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
     return held if contents is None else json.dumps(contents)
+
+
+def _split_answer_text(blocks: tuple[str, ...], schema: ResponseFormatSchema) -> str:
+    answer: Final = split_response_format_answer(blocks, schema)
+    if answer is not None:
+        return json.dumps(answer)
+    return "".join(_held_answer(block, schema) for block in blocks)
 
 
 def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
@@ -655,6 +701,9 @@ class ModelResponseIterator:
         self.response_format_schema = response_format_schema
         self._response_format_buffer: io.StringIO = io.StringIO()
         self._response_format_verdict: _EnvelopeVerdict = "undecided"
+        self._split_answer_blocks: tuple[str, ...] = ()
+        self._withheld_answer_close: str = ""
+        self._streamed_answer_keys: frozenset[str] | None = None
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -917,7 +966,7 @@ class ModelResponseIterator:
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
                 if content_block_start["content_block"]["type"] == "text":
-                    text = content_block_start["content_block"]["text"]
+                    text = self._release_answer_close() + content_block_start["content_block"]["text"]
                 elif (
                     content_block_start["content_block"]["type"] == "tool_use"
                     or content_block_start["content_block"]["type"] == "server_tool_use"
@@ -1049,6 +1098,7 @@ class ModelResponseIterator:
                 pass
             elif type_chunk == "message_delta":
                 finish_reason, usage, container = self._handle_message_delta(chunk)
+                text = self._release_answer_close() + self._drain_split_answer_blocks()
                 if container:
                     provider_specific_fields["container"] = container
                     # Store container_id and re-emit code_interpreter_results
@@ -1155,6 +1205,8 @@ class ModelResponseIterator:
             # (per Anthropic's fine-grained streaming pattern)
             tool_name: Final = tool_use.get("function", {}).get("name", "")
             self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
+            if self.is_response_format_tool:
+                self.tool_index -= 1
 
         if self.is_response_format_tool and self.response_format_schema is not None:
             self.converted_response_format_tool = True
@@ -1176,25 +1228,69 @@ class ModelResponseIterator:
     ) -> str:
         if tool_use.get("id") is not None:
             self._response_format_buffer = io.StringIO()
-            self._response_format_verdict = "undecided"
+            held_back: Final = self._split_answer_blocks or self._streamed_answer_keys is not None
+            self._response_format_verdict = "hold" if held_back else "undecided"
             return ""
         fragment: Final = tool_use.get("function", {}).get("arguments") or ""
-        if self._response_format_verdict == "pass_through":
-            return fragment
         self._response_format_buffer.write(fragment)
+        if self._response_format_verdict == "pass_through":
+            return self._withhold_answer_close(fragment)
         if self._response_format_verdict == "hold":
             return ""
         buffered: Final = self._response_format_buffer.getvalue()
         self._response_format_verdict = _envelope_verdict(buffered, schema, RESPONSE_FORMAT_TOOL_NAME)
-        return buffered if self._response_format_verdict == "pass_through" else ""
+        return self._withhold_answer_close(buffered) if self._response_format_verdict == "pass_through" else ""
+
+    def _withhold_answer_close(self, text: str) -> str:
+        pending: Final = self._withheld_answer_close + text
+        body: Final = pending.rstrip()
+        cut: Final = len(body) - 1 if body.endswith("}") else len(pending)
+        self._withheld_answer_close = pending[cut:]
+        return pending[:cut]
+
+    def _release_answer_close(self) -> str:
+        close: Final = self._withheld_answer_close
+        self._withheld_answer_close = ""
+        self._streamed_answer_keys = None
+        return close
+
+    def _join_streamed_answer(self, held: str, schema: ResponseFormatSchema) -> str | None:
+        streamed: Final = self._streamed_answer_keys
+        fields: Final = partial_response_format_answer(held, schema)
+        if streamed is None or fields is None or not streamed.isdisjoint(fields):
+            return None
+        self._streamed_answer_keys = streamed | frozenset(fields)
+        separator: Final = ", " if streamed else ""
+        return f"{separator}{json.dumps(fields)[1:-1]}" if fields else ""
 
     def _flush_response_format_buffer(self) -> str:
-        if self.response_format_schema is None or self._response_format_verdict == "pass_through":
+        schema: Final = self.response_format_schema
+        if schema is None:
             return ""
         held: Final = self._response_format_buffer.getvalue()
+        verdict: Final = self._response_format_verdict
         self._response_format_buffer = io.StringIO()
         self._response_format_verdict = "undecided"
-        return _held_answer(held, self.response_format_schema) if held else ""
+        if verdict == "pass_through":
+            answer: Final = partial_response_format_answer(held, schema)
+            close: Final = "" if answer is not None else self._release_answer_close()
+            self._streamed_answer_keys = None if answer is None else frozenset(answer)
+            return close
+        joined: Final = self._join_streamed_answer(held, schema)
+        if joined is not None:
+            return joined
+        released: Final = self._release_answer_close()
+        if self._split_answer_blocks or names_a_response_format_property(held, schema):
+            self._split_answer_blocks = (*self._split_answer_blocks, held)
+            return released
+        return released + (_held_answer(held, schema) if held else "")
+
+    def _drain_split_answer_blocks(self) -> str:
+        blocks: Final = self._split_answer_blocks
+        self._split_answer_blocks = ()
+        if self.response_format_schema is None or not blocks:
+            return ""
+        return _split_answer_text(blocks, self.response_format_schema)
 
     def _handle_message_delta(self, chunk: dict) -> tuple[str, Usage | None, dict[str, Any] | None]:
         """
@@ -1207,11 +1303,13 @@ class ModelResponseIterator:
             Tuple of (finish_reason, usage, container)
         """
         message_delta: Final = MessageBlockDelta(**chunk)
-        finish_reason = map_finish_reason(finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop")
-        # Override finish_reason to "stop" if we converted response_format tools
-        # (matches OpenAI behavior and non-streaming Anthropic implementation)
-        if self.converted_response_format_tool:
-            finish_reason = "stop"
+        provider_finish_reason: Final = map_finish_reason(
+            finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop"
+        )
+        called_only_the_response_format_tool: Final = (
+            provider_finish_reason == "tool_calls" and self.converted_response_format_tool and self.tool_index < 0
+        )
+        finish_reason: Final = "stop" if called_only_the_response_format_tool else provider_finish_reason
         usage: Final = (
             self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
         )
