@@ -1893,3 +1893,91 @@ async def test_populate_team_access_grants_all_proxy_models_user_direct_access(
 
     assert [m["model_info"]["id"] for m in visible] == ["global-id-1"]
     assert visible[0]["model_info"]["direct_access"] is True
+
+
+def _global_row() -> dict:
+    return {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_resolves_team_service_account_key(monkeypatch):
+    """A team service account key has no user_id, so its team comes from the key
+    itself. Before the fix no team was looked up, every deployment lost its
+    access_via_team_ids, and include_team_models=true returned an empty list (#46418)."""
+    router = MagicMock()
+    get_all_team_models = AsyncMock(return_value={"byok-id-1": ["team-abc-123"], "global-id-1": ["team-abc-123"]})
+    monkeypatch.setattr(ps, "get_all_team_models", get_all_team_models)
+
+    service_account = UserAPIKeyAuth(
+        user_id=None,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="team-abc-123",
+        metadata={"service_account_id": "agent-sa"},
+        models=[],
+        team_models=[],
+    )
+    assert service_account.is_team_service_account
+
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=service_account,
+        prisma_client=MagicMock(),
+        llm_router=router,
+        all_models=[_team_row(), _other_team_row(), _global_row()],
+    )
+
+    assert get_all_team_models.await_args.kwargs["user_teams"] == ["team-abc-123"]
+    accessible = ps._filter_models_to_user_accessible(result)
+    assert [m["model_info"]["id"] for m in accessible] == ["byok-id-1", "global-id-1"]
+    assert all(m["model_info"]["direct_access"] is False for m in result)
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_adds_the_key_team_to_the_user_teams(monkeypatch):
+    """The key's team_id is authoritative (#30983), so a user's key scoped to a team
+    the user row does not list still resolves that team, alongside the user's own."""
+    router = MagicMock()
+    router.get_model_ids.return_value = []
+    get_all_team_models = AsyncMock(return_value={})
+    monkeypatch.setattr(ps, "get_all_team_models", get_all_team_models)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="user-1", teams=["team-other"], models=[])
+    )
+    caller = UserAPIKeyAuth(
+        user_id="user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="team-abc-123",
+        models=[],
+        team_models=[],
+    )
+
+    await ps._populate_team_access_on_models(
+        user_api_key_dict=caller,
+        prisma_client=prisma_client,
+        llm_router=router,
+        all_models=[_team_row(), _other_team_row(), _global_row()],
+    )
+
+    assert get_all_team_models.await_args.kwargs["user_teams"] == ["team-other", "team-abc-123"]
+
+
+@pytest.mark.asyncio
+async def test_populate_team_access_leaves_a_key_without_user_or_team_unresolved(monkeypatch):
+    get_all_team_models = AsyncMock(return_value={})
+    monkeypatch.setattr(ps, "get_all_team_models", get_all_team_models)
+    caller = UserAPIKeyAuth(user_id=None, user_role=LitellmUserRoles.INTERNAL_USER, team_id=None, models=[], team_models=[])
+
+    result = await ps._populate_team_access_on_models(
+        user_api_key_dict=caller,
+        prisma_client=MagicMock(),
+        llm_router=MagicMock(),
+        all_models=[_team_row(), _global_row()],
+    )
+
+    get_all_team_models.assert_not_awaited()
+    assert ps._filter_models_to_user_accessible(result) == []

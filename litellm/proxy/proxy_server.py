@@ -14907,9 +14907,17 @@ async def _populate_team_access_on_models(
                 llm_router=llm_router,
                 key_models=cast(Sequence[str], user_api_key_dict.models),  # cast-ok: key.models is a String[] column
             )
-    if user_teams is not None:
+    # The key's own team is authoritative (#30983): a team service account key has no
+    # user row at all, and a user's key can be scoped to a team the user row does not list.
+    key_team_id: Final = user_api_key_dict.team_id
+    teams_to_resolve: Final = (
+        [*(user_teams or ()), key_team_id]
+        if key_team_id is not None and user_teams != "*" and key_team_id not in (user_teams or ())
+        else user_teams
+    )
+    if teams_to_resolve is not None:
         team_models: Final = await get_all_team_models(
-            user_teams=user_teams,
+            user_teams=teams_to_resolve,
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
