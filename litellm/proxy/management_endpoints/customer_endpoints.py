@@ -652,8 +652,6 @@ async def _update_single_customer(
                     code=404,
                     param="user_id",
                 )
-            if not data.user_id:
-                raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
             end_user_table_data_typed: Final = LiteLLM_EndUserTable.model_validate(end_user_table_data.model_dump())
             permission_upsert: Final = await _prepare_customer_object_permission_update(
                 data=data,
