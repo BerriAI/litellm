@@ -2310,6 +2310,7 @@ def test_video_get_character_accepts_encoded_character_id(video_proxy_test_clien
     )
     mock_router = MagicMock()
     mock_router.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+    mock_router.has_model_id.return_value = False
 
     with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         with patch.object(
@@ -2467,6 +2468,8 @@ def test_edit_and_extension_route_with_encoded_video_ids(
 
     mock_router = MagicMock()
     mock_router.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+    mock_router.has_model_id.return_value = False
+    mock_router.get_deployment.return_value = None
 
     with patch("litellm.proxy.proxy_server.llm_router", mock_router):
         with patch.object(
