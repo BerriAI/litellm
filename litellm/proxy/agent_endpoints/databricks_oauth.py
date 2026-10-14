@@ -142,14 +142,16 @@ def parse_databricks_oauth_config(
 ) -> DatabricksAppOAuthConfig | None:
     """Build a Databricks App OAuth config from an agent's ``litellm_params``.
 
-    Returns ``None`` when the agent has no ``databricks_oauth`` block. Raises a 400
-    ``litellm.BadRequestError`` when the block is present but incomplete, so misconfiguration
-    surfaces loudly instead of silently sending an unauthenticated request.
+    Returns ``None`` when the agent has no ``databricks_oauth`` block. A block that is present but incomplete
+    raises instead of sending an unauthenticated request: a 400 ``litellm.BadRequestError`` for a
+    ``databricks_agent``, and the ``ValueError`` URL agents raised before ``databricks_agent`` existed.
     """
     config: Final = databricks_oauth_config(litellm_params)
-    if isinstance(config, DatabricksOAuthConfigError):
+    if not isinstance(config, DatabricksOAuthConfigError):
+        return config
+    if litellm_params and _is_databricks_agent(litellm_params):
         raise _config_error(config.message)
-    return config
+    raise ValueError(config.message)
 
 
 def databricks_oauth_config(
@@ -324,16 +326,6 @@ async def resolve_databricks_backend_auth(litellm_params: Mapping[str, object]) 
     """A ``databricks_agent`` completes with the minted token as its ``api_key``, so the token outranks a personal
     access token and a client ``Authorization`` header; any other agent sends it as the outbound header."""
     return await _backend_auth(litellm_params, parse_databricks_oauth_config(litellm_params))
-
-
-async def resolve_url_agent_chat_auth(litellm_params: Mapping[str, object]) -> AgentBackendAuth:
-    """Chat to a URL agent sent no OAuth token before ``databricks_oauth`` applied there, so a block that does not
-    parse keeps that call unauthenticated by the proxy instead of failing it."""
-    config: Final = databricks_oauth_config(litellm_params)
-    if isinstance(config, DatabricksOAuthConfigError):
-        verbose_logger.warning("Ignoring the agent's %s on chat: %s", DATABRICKS_OAUTH_PARAM, config.message)
-        return AgentBackendAuth(litellm_params=without_databricks_oauth_params(litellm_params), header=None)
-    return await _backend_auth(litellm_params, config)
 
 
 async def _backend_auth(

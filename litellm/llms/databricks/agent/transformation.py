@@ -69,6 +69,7 @@ _SAMPLING_PARAMS: Final = ("temperature", "top_p", "user")
 _OUTPUT_TOKEN_PARAMS: Final = ("max_completion_tokens", "max_tokens")
 _STRING_METADATA: Final = TypeAdapter(Mapping[str, StrictStr])
 _METADATA: Final = TypeAdapter(Mapping[str, object])
+_PINNED_BODY_FIELDS: Final = ("model", "input")
 
 
 def endpoint_name_from_model(model: str) -> str:
@@ -263,6 +264,38 @@ def _has_string_values_only(metadata: object) -> bool:
     return True
 
 
+def _without_pinned_fields(extra_body: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    pinned: Final = tuple(key for key in _PINNED_BODY_FIELDS if key in extra_body)
+    if not pinned:
+        return extra_body
+    if not drop_params:
+        raise DatabricksException(
+            status_code=400,
+            message=(
+                f"extra_body cannot set {', '.join(pinned)} on a Databricks ResponsesAgent request, "
+                "since the agent's endpoint and the messages set them; remove them, "
+                "or set drop_params: true to drop them"
+            ),
+        )
+    return {key: value for key, value in extra_body.items() if key not in _PINNED_BODY_FIELDS}
+
+
+def _with_string_metadata(extra_body: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    if "metadata" not in extra_body or _has_string_values_only(extra_body["metadata"]):
+        return extra_body
+    if not drop_params:
+        raise DatabricksException(
+            status_code=400,
+            message=(
+                "metadata sent to a Databricks ResponsesAgent must map names to string values; "
+                "send string values only, or set drop_params: true to drop the others"
+            ),
+        )
+    kept: Final = _string_metadata_entries(extra_body["metadata"])
+    rest: Final = {key: value for key, value in extra_body.items() if key != "metadata"}
+    return {**rest, **({"metadata": kept} if kept else {})}
+
+
 class DatabricksAgentConfig(BaseConfig):
     @staticmethod
     def resolve_api_base_and_key(api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
@@ -355,19 +388,8 @@ class DatabricksAgentConfig(BaseConfig):
         model: str,
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, object]:
-        if "metadata" not in extra_body or _has_string_values_only(extra_body["metadata"]):
-            return extra_body
-        if not _drop_params_enabled(litellm_params):
-            raise DatabricksException(
-                status_code=400,
-                message=(
-                    "metadata sent to a Databricks ResponsesAgent must map names to string values; "
-                    "send string values only, or set drop_params: true to drop the others"
-                ),
-            )
-        kept: Final = _string_metadata_entries(extra_body["metadata"])
-        rest: Final = {key: value for key, value in extra_body.items() if key != "metadata"}
-        return {**rest, **({"metadata": kept} if kept else {})}
+        drop_params: Final = _drop_params_enabled(litellm_params)
+        return _with_string_metadata(_without_pinned_fields(extra_body, drop_params), drop_params)
 
     def transform_response(
         self,

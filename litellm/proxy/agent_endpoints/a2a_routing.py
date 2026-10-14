@@ -21,13 +21,13 @@ from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     resolve_databricks_backend_auth,
-    resolve_url_agent_chat_auth,
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.types.agents import AgentResponse
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 _AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
+_CLIENT_TARGET_KWARGS: Final = ("api_base", "base_url")
 
 
 def _agent_extra_headers(agent_kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
@@ -60,19 +60,6 @@ def _client_extra_headers(data: Mapping[str, object], litellm_params: Mapping[st
 def _with_headers(data: Mapping[str, object], extra_headers: Mapping[str, str] | None) -> Mapping[str, object]:
     request: Final = {key: value for key, value in data.items() if key != "extra_headers"}
     return {**request, **({"extra_headers": extra_headers} if extra_headers else {})}
-
-
-def _with_backend_auth(
-    data: Mapping[str, object],
-    litellm_params: Mapping[str, object],
-    backend_auth: Mapping[str, str] | None,
-) -> Mapping[str, object]:
-    if not backend_auth:
-        return data
-    return _with_headers(
-        data,
-        merge_agent_headers(dynamic_headers=_client_extra_headers(data, litellm_params), static_headers=backend_auth),
-    )
 
 
 def _bridge_request_data(
@@ -166,8 +153,7 @@ async def route_a2a_agent_request(
     data["api_base"] = agent.agent_card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
 
-    url_agent_auth: Final = await resolve_url_agent_chat_auth(litellm_params)
-    return _call_route(route_type, _with_backend_auth(data, litellm_params, url_agent_auth.header))
+    return _call_route(route_type, data)
 
 
 def _bridge_agent_request(
@@ -177,7 +163,8 @@ def _bridge_agent_request(
 ) -> Mapping[str, object]:
     card_url: Final[object] = (agent.agent_card_params or {}).get("url")
     api_base: Final = {"api_base": card_url} if card_url else {}
-    return _bridge_request_data({**data, **api_base}, litellm_params, agent.static_headers)
+    request: Final = {key: value for key, value in data.items() if key not in _CLIENT_TARGET_KWARGS}
+    return _bridge_request_data({**request, **api_base}, litellm_params, agent.static_headers)
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:

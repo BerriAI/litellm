@@ -114,23 +114,30 @@ def test_parse_custom_scope():
     assert config.scope == "custom-scope"
 
 
+AGENT_KINDS: Final = pytest.mark.parametrize(
+    ("agent_params", "error"),
+    [({}, ValueError), ({"custom_llm_provider": "databricks_agent"}, litellm.BadRequestError)],
+    ids=["url-agent", "databricks-agent"],
+)
+
+
+@AGENT_KINDS
 @pytest.mark.parametrize("missing_field", ["client_id", "client_secret", "workspace_url"])
-def test_parse_raises_on_missing_field(missing_field):
+def test_parse_raises_on_missing_field(missing_field, agent_params, error):
     block = {
         "client_id": "cid",
         "client_secret": "secret",
         "workspace_url": "https://dbc-abc.cloud.databricks.com",
     }
     block.pop(missing_field)
-    with pytest.raises(litellm.BadRequestError, match=missing_field) as info:
-        parse_databricks_oauth_config({"databricks_oauth": block})
-    assert info.value.status_code == 400
+    with pytest.raises(error, match=missing_field):
+        parse_databricks_oauth_config({**agent_params, "databricks_oauth": block})
 
 
-def test_parse_raises_on_non_mapping_block():
-    with pytest.raises(litellm.BadRequestError, match="mapping") as info:
-        parse_databricks_oauth_config({"databricks_oauth": "not-a-dict"})
-    assert info.value.status_code == 400
+@AGENT_KINDS
+def test_parse_raises_on_non_mapping_block(agent_params, error):
+    with pytest.raises(error, match="mapping"):
+        parse_databricks_oauth_config({**agent_params, "databricks_oauth": "not-a-dict"})
 
 
 @pytest.mark.parametrize(

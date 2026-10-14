@@ -391,40 +391,20 @@ async def test_route_a2a_bridge_agent_with_databricks_oauth_sends_the_minted_tok
 
 
 @respx.mock
-async def test_route_a2a_url_agent_with_databricks_oauth_sends_the_minted_token(httpx_transport: None) -> None:
-    agent_url = "https://my-a2a-app.azure.databricksapps.com"
-    agent = AgentResponse(
-        agent_id="a2a-app-id",
-        agent_name="a2a-app",
-        agent_card_params={"url": agent_url},
-        litellm_params={"databricks_oauth": {"client_id": "sp", "client_secret": "s", "workspace_url": WORKSPACE}},
-    )
-    _token_route(WORKSPACE)
-    app = respx.post(agent_url).mock(return_value=httpx.Response(200, json=A2A_REPLY))
-    data = {"model": "a2a/a2a-app", "messages": [{"role": "user", "content": "ping"}]}
-
-    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
-        response = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
-
-    sent = app.calls.last.request
-    assert sent.headers["Authorization"] == "Bearer minted-oauth"
-    assert json.loads(sent.content)["method"] == "message/send"
-    assert response.choices[0].message.content == "pong"
-
-
-@respx.mock
 @pytest.mark.parametrize(
     "oauth_block",
     [
+        {"client_id": "sp", "client_secret": "s", "workspace_url": WORKSPACE},
         {"client_id": "sp"},
         "not-a-mapping",
         {"client_id": "sp", "client_secret": "s", "workspace_url": "https://my-app-1.azure.databricksapps.com"},
     ],
+    ids=["complete", "partial", "not-a-mapping", "app-host-as-workspace"],
 )
-async def test_route_a2a_url_agent_with_an_unusable_oauth_block_keeps_calling_its_card_url_on_chat(
+async def test_route_a2a_url_agent_chat_keeps_the_client_authorization_over_its_databricks_oauth(
     httpx_transport: None, oauth_block: object
 ) -> None:
-    agent_url = "https://my-a2a-app.example.com"
+    agent_url = "https://my-a2a-app.azure.databricksapps.com"
     agent = AgentResponse(
         agent_id="a2a-app-id",
         agent_name="a2a-app",
@@ -433,12 +413,18 @@ async def test_route_a2a_url_agent_with_an_unusable_oauth_block_keeps_calling_it
     )
     token = _token_route(WORKSPACE)
     app = respx.post(agent_url).mock(return_value=httpx.Response(200, json=A2A_REPLY))
-    data = {"model": "a2a/a2a-app", "messages": [{"role": "user", "content": "ping"}]}
+    data = {
+        "model": "a2a/a2a-app",
+        "messages": [{"role": "user", "content": "ping"}],
+        "extra_headers": {"Authorization": "Bearer client-token"},
+    }
 
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
         response = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
 
-    assert "Authorization" not in app.calls.last.request.headers
+    sent = app.calls.last.request
+    assert sent.headers["Authorization"] == "Bearer client-token"
+    assert json.loads(sent.content)["method"] == "message/send"
     assert not token.called
     assert response.choices[0].message.content == "pong"
 
@@ -465,7 +451,10 @@ async def test_route_a2a_agent_with_another_provider_keeps_calling_its_card_url_
 
 
 @respx.mock
-async def test_route_a2a_bridge_agent_ignores_a_client_api_base_over_its_card_url(httpx_transport: None) -> None:
+@pytest.mark.parametrize("client_target", ["api_base", "base_url"])
+async def test_route_a2a_bridge_agent_ignores_a_client_target_over_its_card_url(
+    httpx_transport: None, client_target: str
+) -> None:
     agent = AgentResponse(
         agent_id="dbx-agent-id",
         agent_name="dbx-agent",
@@ -477,13 +466,14 @@ async def test_route_a2a_bridge_agent_ignores_a_client_api_base_over_its_card_ur
     )
     data = {
         "model": "a2a/dbx-agent",
-        "api_base": "https://collector.example.com",
+        client_target: "https://collector.example.com",
         "messages": [{"role": "user", "content": "ping"}],
     }
 
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
         response = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
 
+    assert endpoint.call_count == 1
     assert endpoint.calls.last.request.headers["Authorization"] == "Bearer pat-1"
     assert response.choices[0].message.content == "pong"
 

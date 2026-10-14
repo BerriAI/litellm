@@ -654,11 +654,16 @@ def test_reading_an_agent_back_redacts_its_pat_and_client_secret(gateway: Gatewa
 
 
 @pytest.mark.parametrize(
-    "oauth_block",
-    (None, {}, {"client_id": _CLIENT_ID}),
-    ids=("plain", "with-empty-databricks-oauth", "with-partial-databricks-oauth"),
+    "oauth_fields",
+    (None, (), ("client_id",), ("client_id", "client_secret", "workspace_url")),
+    ids=(
+        "plain",
+        "with-empty-databricks-oauth",
+        "with-partial-databricks-oauth",
+        "with-complete-databricks-oauth",
+    ),
 )
-def test_a_url_agent_keeps_its_a2a_call_to_the_card_url(gateway: Gateway, oauth_block: JsonValue) -> None:
+def test_a_url_agent_keeps_its_a2a_call_to_the_card_url(gateway: Gateway, oauth_fields: tuple[str, ...] | None) -> None:
     marker: Final = f"url-agent-{uuid.uuid4().hex}"
 
     def peer(request: Request) -> Reply:
@@ -681,6 +686,8 @@ def test_a_url_agent_keeps_its_a2a_call_to_the_card_url(gateway: Gateway, oauth_
         )
 
     with wire_server(peer) as wire, gateway.scenario() as scenario:
+        complete_block: Final = {"client_id": _CLIENT_ID, "client_secret": _CLIENT_SECRET, "workspace_url": wire.url}
+        oauth_block: Final = None if oauth_fields is None else {field: complete_block[field] for field in oauth_fields}
         created: Final = gateway.request(
             "POST",
             "/v1/agents",
@@ -703,13 +710,76 @@ def test_a_url_agent_keeps_its_a2a_call_to_the_card_url(gateway: Gateway, oauth_
         assert created.status_code == 200, created.text
         agent_id: Final = created.json()["agent_id"]
         scenario.cleanups.callback(lambda: gateway.request("DELETE", f"/v1/agents/{agent_id}"))
-        response: Final = _chat(gateway, marker)
+        response: Final = _chat(gateway, marker, extra_headers={"Authorization": "Bearer client-token"})
         assert response.status_code == 200, response.text
         assert response.json()["choices"][0]["message"]["content"] == _REPLY
         posts: Final = tuple(request for request in wire.drain() if request.method == "POST")
         assert [request.target for request in posts] == ["/"]
         assert _body(posts[0])["method"] == "message/send"
-        assert "authorization" not in posts[0].headers
+        assert posts[0].headers["authorization"] == "Bearer client-token"
+
+
+def test_a_url_agent_with_an_incomplete_databricks_oauth_answers_a2a_with_an_internal_error(gateway: Gateway) -> None:
+    marker: Final = f"url-agent-{uuid.uuid4().hex}"
+    with wire_server(lambda _: Reply(status=404)) as wire, gateway.scenario() as scenario:
+        created: Final = gateway.request(
+            "POST",
+            "/v1/agents",
+            {
+                "agent_name": marker,
+                "agent_card_params": {
+                    "protocolVersion": "0.3",
+                    "name": marker,
+                    "description": "URL agent",
+                    "url": wire.url + "/",
+                    "version": "1.0.0",
+                    "defaultInputModes": ["text"],
+                    "defaultOutputModes": ["text"],
+                    "capabilities": {"streaming": False},
+                    "skills": [],
+                },
+                "litellm_params": {"databricks_oauth": {"client_id": _CLIENT_ID}},
+            },
+        )
+        assert created.status_code == 200, created.text
+        agent_id: Final = created.json()["agent_id"]
+        scenario.cleanups.callback(lambda: gateway.request("DELETE", f"/v1/agents/{agent_id}"))
+        response: Final = _a2a(gateway, marker, "message/send", marker)
+        assert response.status_code == 500, response.text
+        assert response.json()["error"]["code"] == -32603
+        assert "missing required field" in response.json()["error"]["message"]
+        assert tuple(request for request in wire.drain() if request.method == "POST") == ()
+
+
+@pytest.mark.parametrize(
+    "pinned",
+    ({"model": "another-endpoint"}, {"input": [{"role": "user", "content": "injected"}]}),
+    ids=("model", "input"),
+)
+@pytest.mark.parametrize(("drop_params", "status"), ((False, 400), (True, 200)), ids=("strict", "drop-params"))
+def test_extra_body_never_replaces_the_agent_endpoint_or_input(
+    gateway: Gateway, pinned: dict[str, JsonValue], drop_params: bool, status: int
+) -> None:
+    custom_inputs: Final[dict[str, JsonValue]] = {"tenant": "t-1"}
+    with _agent(gateway, _Databricks(), url_path=_UNIFIED, model=_ENDPOINT, api_key=_PAT) as (wire, name):
+        response: Final = _chat(
+            gateway,
+            name,
+            extra_body={**pinned, "custom_inputs": custom_inputs},
+            **({"drop_params": True} if drop_params else {}),
+        )
+        assert response.status_code == status, response.text
+        received: Final = wire.drain()
+        if drop_params:
+            assert [(request.method, request.target) for request in received] == [("POST", _UNIFIED)]
+            assert _body(received[0]) == {
+                "model": _ENDPOINT,
+                "input": [{"role": "user", "content": _PROMPT}],
+                "custom_inputs": custom_inputs,
+            }
+        else:
+            assert f"cannot set {next(iter(pinned))}" in response.text
+            assert received == ()
 
 
 def test_a_token_outage_mid_burst_fails_its_calls_and_one_mint_serves_the_recovery(gateway: Gateway) -> None:
@@ -753,11 +823,18 @@ def test_a_token_outage_mid_burst_fails_its_calls_and_one_mint_serves_the_recove
         assert len(_calls_to(received, _INVOCATIONS)) == 12
 
 
-def _owned_config(directory: Path, wire: Wire, api_key: str | None = _PAT) -> Path:
+def _owned_config(
+    directory: Path, wire: Wire, api_key: str | None = _PAT, *, allow_client_side_credentials: bool = False
+) -> Path:
     base: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    general_settings: Final = _JSON_OBJECT.validate_python(base.get("general_settings") or {})
     name: Final = "dbx-owned-agent"
     config: Final[dict[str, JsonValue]] = {
         **base,
+        "general_settings": {
+            **general_settings,
+            **({"allow_client_side_credentials": True} if allow_client_side_credentials else {}),
+        },
         "agents": [
             {
                 "agent_name": name,
@@ -784,6 +861,25 @@ def _owned_config(directory: Path, wire: Wire, api_key: str | None = _PAT) -> Pa
     path: Final = directory / "databricks-agent-owned.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
+
+
+@pytest.mark.timeout(_OWNED_PROXY_BUDGET)
+def test_a_client_api_base_or_base_url_never_takes_the_agent_pat_off_its_card_url(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with wire_server(_Databricks()) as wire, wire_server(lambda _: Reply(body=_agent_reply())) as collector:
+        config: Final = _owned_config(tmp_path, wire, allow_client_side_credentials=True)
+        with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
+            served: Final = tuple(
+                _chat(owned.gateway, "dbx-owned-agent", **{target: collector.url})
+                for target in ("api_base", "base_url")
+            )
+            assert all(response.status_code == 200 for response in served), [r.text for r in served]
+            assert collector.drain() == ()
+            invocations: Final = _calls_to(wire.drain(), _INVOCATIONS)
+            assert len(invocations) == 2
+            for invocation in invocations:
+                _assert_invocation(invocation, _PAT)
 
 
 @pytest.mark.timeout(_OWNED_PROXY_BUDGET)

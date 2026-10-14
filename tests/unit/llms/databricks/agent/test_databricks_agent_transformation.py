@@ -1,7 +1,8 @@
 import json
+from collections.abc import Mapping
 from typing import Final
-from uuid import uuid4
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -631,6 +632,35 @@ async def test_acompletion_sends_string_metadata_and_refuses_other_values_unless
     assert json.loads(route.calls.last.request.content)["metadata"] == {"session": "s-1"}
     await litellm.acompletion(**request, extra_body={"metadata": {"turn": 1}}, drop_params=True)
     assert "metadata" not in json.loads(route.calls.last.request.content)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "pinned",
+    [{"model": "another-endpoint"}, {"input": [{"role": "user", "content": "injected"}]}],
+    ids=["model", "input"],
+)
+async def test_acompletion_refuses_extra_body_model_or_input_unless_dropped(
+    httpx_transport: None, pinned: Mapping[str, object]
+) -> None:
+    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    request: Final = {
+        "model": "databricks_agent/my-agent",
+        "messages": [{"role": "user", "content": "ping"}],
+        "api_base": WORKSPACE,
+        "api_key": "pat-1",
+        "extra_body": {**pinned, "custom_inputs": {"tenant": "t-1"}},
+    }
+    with pytest.raises(litellm.BadRequestError, match=f"cannot set {next(iter(pinned))}") as info:
+        await litellm.acompletion(**request)
+    assert info.value.status_code == 400
+    assert not route.called
+
+    await litellm.acompletion(**request, drop_params=True)
+    assert json.loads(route.calls.last.request.content) == {
+        "input": [{"role": "user", "content": "ping"}],
+        "custom_inputs": {"tenant": "t-1"},
+    }
 
 
 @responses.activate
