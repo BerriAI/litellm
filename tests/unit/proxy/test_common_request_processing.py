@@ -6142,6 +6142,29 @@ class TestAllmPassthroughStreamingProviderGate:
 
         return _NativeHooksGuardrail(guardrail_name="native", event_hook="post_call", default_on=True)
 
+    @classmethod
+    def _release_on_scan_guardrail(cls):
+        guardrail = cls._apply_guardrail()
+        guardrail.streaming_buffer_until_moderated = True
+        guardrail.streaming_buffer_release_on_scan = True
+        return guardrail
+
+    @staticmethod
+    def _holding_release_on_scan_guardrail():
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _HoldingGuardrail(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return inputs
+
+            async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+                async for item in response:
+                    yield item
+
+        guardrail = _HoldingGuardrail(guardrail_name="held", event_hook="post_call", default_on=True)
+        guardrail.streaming_buffer_release_on_scan = True
+        return guardrail
+
     @staticmethod
     def _recording_upstream(frames: list[bytes], events: list[str]):
         class _Upstream:
@@ -6208,7 +6231,13 @@ class TestAllmPassthroughStreamingProviderGate:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "guardrail_factory",
-        ["_success_hook_guardrail", "_native_hooks_guardrail", "_mask_response_guardrail"],
+        [
+            "_success_hook_guardrail",
+            "_native_hooks_guardrail",
+            "_mask_response_guardrail",
+            "_release_on_scan_guardrail",
+            "_holding_release_on_scan_guardrail",
+        ],
     )
     async def test_bedrock_converse_stream_is_buffered_for_a_guardrail_that_needs_the_whole_response(
         self, monkeypatch, guardrail_factory
@@ -6231,8 +6260,25 @@ class TestAllmPassthroughStreamingProviderGate:
         assert recorded == {}
 
     @pytest.mark.asyncio
-    async def test_bedrock_converse_stream_relays_frames_for_an_apply_guardrail_guardrail(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "streaming_flags",
+        [
+            {},
+            {"streaming_buffer_release_on_scan": True},
+            {
+                "streaming_buffer_until_moderated": True,
+                "streaming_buffer_release_on_scan": True,
+                "streaming_end_of_stream_only": True,
+            },
+        ],
+        ids=["sampled", "release-on-scan-while-sampled", "release-on-scan-at-end-of-stream-only"],
+    )
+    async def test_bedrock_converse_stream_relays_frames_for_an_apply_guardrail_guardrail(
+        self, monkeypatch, streaming_flags
+    ):
         guardrail = self._apply_guardrail()
+        for name, value in streaming_flags.items():
+            setattr(guardrail, name, value)
         stream = b"".join(self._converse_stream())
 
         result, body, mock_handler, recorded = await self._run_converse_stream(

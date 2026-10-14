@@ -3439,8 +3439,9 @@ class ProxyBaseLLMRequestProcessing:
         holds the stream until moderated by default, or None when the stream must be buffered whole instead.
 
         A guardrail relays when ``post_call_success_hook`` would scan it through ``apply_guardrail``. One that runs
-        its own ``async_post_call_success_hook``, masks responses with ``mask_response_content``, or is a step of a
-        post_call policy pipeline still needs the whole response, so its stream stays buffered.
+        its own ``async_post_call_success_hook``, masks responses with ``mask_response_content``, releases a held
+        stream as each scan passes, or is a step of a post_call policy pipeline still needs the whole response, so
+        its stream stays buffered.
         """
         from litellm.proxy.proxy_server import llm_router
         from litellm.proxy.utils import pipeline_managed_guardrail_names
@@ -3462,10 +3463,33 @@ class ProxyBaseLLMRequestProcessing:
             ):
                 continue
             leaf_attrs = type(cb).__dict__
-            if "apply_guardrail" not in leaf_attrs or cb.use_native_lifecycle_hooks or cb.mask_response_content:
+            holds_until_moderated = "async_post_call_streaming_iterator_hook" in leaf_attrs
+            if (
+                "apply_guardrail" not in leaf_attrs
+                or cb.use_native_lifecycle_hooks
+                or cb.mask_response_content
+                or ProxyBaseLLMRequestProcessing._releases_held_stream_on_scan(cb, holds_until_moderated)
+            ):
                 return None
-            relayed.append((cb, "async_post_call_streaming_iterator_hook" in leaf_attrs))
+            relayed.append((cb, holds_until_moderated))
         return tuple(relayed)
+
+    @staticmethod
+    def _releases_held_stream_on_scan(guardrail: CustomGuardrail, holds_until_moderated: bool) -> bool:
+        """
+        Whether the unified guardrail holds this guardrail's stream and releases each window once its scan passes
+        (``streaming_buffer_release_on_scan``). Those windows go out as received, without the scan's masks.
+        """
+        from litellm.proxy.utils import unified_guardrail
+
+        def flag(name: str, default: bool) -> bool:
+            return bool(unified_guardrail.resolve_streaming_flag(guardrail, name, default))
+
+        return (
+            flag("streaming_buffer_until_moderated", holds_until_moderated)
+            and flag("streaming_buffer_release_on_scan", False)
+            and not flag("streaming_end_of_stream_only", False)
+        )
 
     async def _relay_guarded_passthrough_event_stream(
         self,

@@ -45,6 +45,7 @@ FAILING_HELD: Final = "relay-failing-held"
 END_ONLY: Final = "relay-end-only"
 OUTAGE: Final = "relay-outage"
 STACKED: Final = "relay-stacked"
+RELEASE_ON_SCAN: Final = "relay-release-on-scan"
 CODE_BLOCK_REASON: Final = "code says no"
 BLOCK_REASON: Final = "Violated guardrail policy"
 MASKED_WORD: Final = "Paris"
@@ -118,6 +119,27 @@ def verdict(request: Request) -> Reply:
     return Reply(body=json.dumps({"action": "NONE"}).encode())
 
 
+def bedrock_texts(request: Request) -> tuple[str, ...]:
+    return tuple(str(item["text"]["text"]) for item in json.loads(request.body)["content"])
+
+
+def bedrock_verdict(request: Request) -> Reply:
+    """ApplyGuardrail anonymizing ``MASKED_WORD``, as a Bedrock sensitive-information policy does."""
+    texts: Final = bedrock_texts(request)
+    if not any(MASKED_WORD in text for text in texts):
+        return Reply(body=json.dumps({"action": "NONE", "outputs": [], "assessments": []}).encode())
+    pii: Final = {"match": MASKED_WORD, "type": "ADDRESS", "action": "ANONYMIZED"}
+    return Reply(
+        body=json.dumps(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": text.replace(MASKED_WORD, MASK)} for text in texts],
+                "assessments": [{"sensitiveInformationPolicy": {"piiEntities": [pii]}}],
+            }
+        ).encode()
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Rig:
     gateway: Gateway
@@ -131,6 +153,13 @@ class Rig:
     def scans(self, guardrail: str, marker: str) -> tuple[tuple[str, ...], ...]:
         return tuple(
             tuple(json.loads(request.body)["texts"])
+            for request in self.sink.drain()
+            if request.target.startswith(f"/{guardrail}/") and marker.encode() in request.body
+        )
+
+    def bedrock_scans(self, guardrail: str, marker: str) -> tuple[tuple[str, ...], ...]:
+        return tuple(
+            bedrock_texts(request)
             for request in self.sink.drain()
             if request.target.startswith(f"/{guardrail}/") and marker.encode() in request.body
         )
@@ -203,6 +232,8 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         failing: Final = request.target.startswith((f"/{FAILING}/", f"/{FAILING_HELD}/"))
         if failing or (outage.is_set() and request.target.startswith(f"/{OUTAGE}/")):
             return Reply(status=503, body=b'{"error":"guardrail vendor unavailable"}')
+        if request.target.startswith(f"/{RELEASE_ON_SCAN}/"):
+            return bedrock_verdict(request)
         return verdict(request)
 
     with httpx.Client(base_url=os.environ["INTEGRATION_PROXY_URL"], timeout=30, trust_env=False) as root_client:
@@ -221,6 +252,21 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 _guardrail(FAILING_HELD, sink, streaming_buffer_until_moderated=True),
                 _guardrail(END_ONLY, sink, streaming_end_of_stream_only=True),
                 _guardrail(OUTAGE, sink),
+                {
+                    "guardrail_name": RELEASE_ON_SCAN,
+                    "litellm_params": {
+                        "guardrail": "bedrock",
+                        "mode": "post_call",
+                        "default_on": False,
+                        "guardrailIdentifier": "relay-release-on-scan",
+                        "guardrailVersion": "1",
+                        "aws_access_key_id": "AKIASYNTHETICGUARD",
+                        "aws_secret_access_key": "synthetic-guardrail-secret",
+                        "aws_region_name": "us-east-1",
+                        "aws_bedrock_runtime_endpoint": f"{sink.url}/{RELEASE_ON_SCAN}",
+                        "streaming_buffer_release_on_scan": True,
+                    },
+                },
                 {
                     "guardrail_name": CODE,
                     "litellm_params": {
@@ -253,7 +299,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             config_path.write_text(yaml.safe_dump(config))
             with owned_proxy_process(root, directory, {}, config=config_path, workers=2) as owned:
                 with owned.gateway.scenario() as scenario:
-                    single: Final = (SAMPLED, BUFFERED, CODE, FAILING, FAILING_HELD, END_ONLY, OUTAGE)
+                    single: Final = (SAMPLED, BUFFERED, CODE, FAILING, FAILING_HELD, END_ONLY, OUTAGE, RELEASE_ON_SCAN)
                     yield Rig(
                         owned.gateway,
                         scenario,
@@ -551,6 +597,18 @@ def test_end_of_stream_only_scans_a_clean_stream_once_and_relays_it_unchanged(ri
     status, _, body = _stream(rig, END_ONLY, marker)
     assert status == 200 and body == b"".join(frames), decode(body)
     assert rig.scans(END_ONLY, marker) == ((f"Fine {marker} one two three four five",),)
+
+
+def test_held_stream_released_on_scan_stays_buffered_and_applies_masks(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM,
+        chunks=converse_frames((f"{marker} ", MASKED_WORD, " is", " the", " capital", " of", " France")),
+    )
+    status, content_type, body = _stream(rig, RELEASE_ON_SCAN, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    assert block_texts(decode(body)) == {0: f"{marker} {MASK} is the capital of France"}, decode(body)
+    assert rig.bedrock_scans(RELEASE_ON_SCAN, marker) == ((f"{marker} {MASKED_WORD} is the capital of France",),)
 
 
 def test_sampled_and_held_guardrails_on_one_key_hold_the_stream_and_mask_it(rig: Rig) -> None:
