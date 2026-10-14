@@ -3434,7 +3434,8 @@ class MCPRequestHandler:
             return list(MCPRequestHandler._server_grants_with_group_scope(all_servers, object_permission))
         except Exception as e:
             raise UnloadableEntitlementError(
-                f"end user {user_api_key_auth.end_user_id!r} has an object permission whose MCP servers could not be read"
+                f"end user {user_api_key_auth.end_user_id!r} has an object permission "
+                "whose MCP servers could not be read"
             ) from e
 
     @staticmethod
