@@ -416,23 +416,50 @@ def test_member_update_lowering_the_budget_below_spend_blocks_the_next_call(
         pytest.param(_javascript_iso_string, id="javascript-toisostring"),
     ],
 )
+@pytest.mark.parametrize(
+    "budget_source",
+    [
+        pytest.param("own-budget", id="own-budget"),
+        pytest.param("team-default", id="team-default"),
+    ],
+)
 def test_member_update_temp_budget_increase_readmits_a_blocked_member(
-    gateway: Gateway, upstream: httpx.Client, spell_expiry: Callable[[datetime], str]
+    gateway: Gateway,
+    upstream: httpx.Client,
+    spell_expiry: Callable[[datetime], str],
+    budget_source: str,
 ) -> None:
     with gateway.scenario() as scenario:
         model, provider_model = _priced_model(scenario)
-        team: Final = scenario.team(models=[model])
+        team: Final = (
+            scenario.team(models=[model], team_member_budget=0.05)
+            if budget_source == "team-default"
+            else scenario.team(models=[model])
+        )
         user: Final = scenario.user()
+        member_add_body: Final = {"team_id": team, "member": {"user_id": user, "role": "user"}}
         added: Final = gateway.request(
             "POST",
             "/team/member_add",
-            {
-                "team_id": team,
-                "member": {"user_id": user, "role": "user"},
-                "max_budget_in_team": 0.05,
-            },
+            member_add_body | ({"max_budget_in_team": 0.05} if budget_source == "own-budget" else {}),
         )
         assert added.status_code == 200, added.text
+        default_budget_id: Final = _team_default_budget_id(team) if budget_source == "team-default" else None
+        default_budget_before: Final = (
+            _budget_record(default_budget_id) if default_budget_id is not None else ()
+        )
+        if default_budget_id is not None:
+            assert len(default_budget_before) == 1, repr(default_budget_before)
+            assert default_budget_before[0].max_budget == 0.05, default_budget_before
+            assert default_budget_before[0].temp_budget_increase is None, default_budget_before
+            assert default_budget_before[0].temp_budget_expiry is None, default_budget_before
+        initial_state: Final = _budget_state(team, user)
+        assert len(initial_state) == 1, initial_state
+        if budget_source == "own-budget":
+            assert initial_state[0].max_budget == 0.05, initial_state
+        else:
+            assert default_budget_id is not None
+            assert initial_state[0].budget_id == default_budget_id, initial_state
         key: Final = scenario.key(team_id=team, user_id=user)
 
         first: Final = _chat(gateway, model, key, f"initial member budget {uuid.uuid4().hex}")
@@ -471,18 +498,32 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(
         ), repr(updated)
         state: Final = _budget_state(team, user)
         assert len(state) == 1, state
-        assert state[0].max_budget == 0.05, state
+        if budget_source == "own-budget":
+            assert state[0].max_budget == 0.05, state
+        else:
+            assert default_budget_id is not None
+            assert state[0].budget_id != default_budget_id, state
+            assert state[0].max_budget is None, state
+            default_budget_after: Final = _budget_record(default_budget_id)
+            assert default_budget_after == default_budget_before, repr(default_budget_after)
+            assert default_budget_after[0].max_budget == 0.05, default_budget_after
+            assert default_budget_after[0].temp_budget_increase is None, default_budget_after
+            assert default_budget_after[0].temp_budget_expiry is None, default_budget_after
         assert state[0].temp_budget_increase == 1.0, state
         assert state[0].temp_budget_expiry is not None, state
         assert state[0].temp_budget_expiry.replace(tzinfo=timezone.utc) == expiry, state
         team_info: Final = _team_info(gateway, team)
         listed: Final = next(member for member in team_info.team_memberships if member.user_id == user)
+        assert listed.budget_id == state[0].budget_id, repr(listed)
         assert listed.litellm_budget_table is not None, repr(listed)
+        assert listed.litellm_budget_table.budget_id == state[0].budget_id, repr(listed)
         assert listed.litellm_budget_table.temp_budget_increase == 1.0, repr(listed)
         assert listed.litellm_budget_table.temp_budget_expiry is not None, repr(listed)
         assert listed.litellm_budget_table.temp_budget_expiry.replace(tzinfo=timezone.utc) == expiry, repr(listed)
         member_info: Final = _member_me(gateway, team, key)
+        assert member_info.budget_id == state[0].budget_id, repr(member_info)
         assert member_info.litellm_budget_table is not None, repr(member_info)
+        assert member_info.litellm_budget_table.budget_id == state[0].budget_id, repr(member_info)
         assert member_info.litellm_budget_table.temp_budget_increase == 1.0, repr(member_info)
         assert member_info.litellm_budget_table.temp_budget_expiry is not None, repr(member_info)
         assert member_info.litellm_budget_table.temp_budget_expiry.replace(tzinfo=timezone.utc) == expiry, repr(
@@ -496,6 +537,64 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(
         assert observed_before_block + observed_after_readmission == (provider_model, provider_model), repr(
             (observed_before_block, observed_after_readmission)
         )
+
+
+@pytest.mark.covers("spend.team_member.runtime_rpm_limit_is_enforced_after_member_update")
+def test_member_rpm_limit_update_changes_runtime_admission(gateway: Gateway, upstream: httpx.Client) -> None:
+    pytest.skip("BUG: updating a team member RPM limit does not change admission for a warmed team key")
+    with gateway.scenario() as scenario:
+        model, provider_model = _free_model(scenario)
+        team: Final = scenario.team(models=[model])
+        user: Final = scenario.user()
+        added: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"user_id": user, "role": "user"}},
+        )
+        assert added.status_code == 200, added.text
+        key: Final = scenario.key(team_id=team, user_id=user)
+
+        warm: Final = _chat(gateway, model, key, f"warm member key before rpm limit {uuid.uuid4().hex}")
+        assert warm.status_code == 200, warm.text
+        updated: Final = _member_update(gateway, {"team_id": team, "user_id": user, "rpm_limit": 1})
+        assert updated.rpm_limit == 1, repr(updated)
+
+        admitted: Final = _chat(gateway, model, key, f"member rpm admitted request {uuid.uuid4().hex}")
+        assert admitted.status_code == 200, admitted.text
+        limited: Final = _chat(gateway, model, key, f"member rpm limited request {uuid.uuid4().hex}")
+        assert limited.status_code == 429, limited.text
+        assert _ErrorResponse.model_validate_json(limited.text).error.type == "rate_limit_error", limited.text
+        observed: Final = _observed_models(upstream)
+        assert observed == (provider_model, provider_model), repr(observed)
+
+
+@pytest.mark.covers("spend.team_member.runtime_tpm_limit_is_enforced_after_member_update")
+def test_member_tpm_limit_update_changes_runtime_admission(gateway: Gateway, upstream: httpx.Client) -> None:
+    pytest.skip("BUG: updating a team member TPM limit does not change admission for a warmed team key")
+    with gateway.scenario() as scenario:
+        model, provider_model = _free_model(scenario)
+        team: Final = scenario.team(models=[model])
+        user: Final = scenario.user()
+        added: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"user_id": user, "role": "user"}},
+        )
+        assert added.status_code == 200, added.text
+        key: Final = scenario.key(team_id=team, user_id=user)
+
+        warm: Final = _chat(gateway, model, key, "warm member key before tpm limit")
+        assert warm.status_code == 200, warm.text
+        updated: Final = _member_update(gateway, {"team_id": team, "user_id": user, "tpm_limit": 45})
+        assert updated.tpm_limit == 45, repr(updated)
+
+        admitted: Final = _chat(gateway, model, key, "first member tpm-limited request")
+        assert admitted.status_code == 200, admitted.text
+        limited: Final = _chat(gateway, model, key, "second member tpm-limited request")
+        assert limited.status_code == 429, limited.text
+        assert _ErrorResponse.model_validate_json(limited.text).error.type == "rate_limit_error", limited.text
+        observed: Final = _observed_models(upstream)
+        assert observed == (provider_model, provider_model), repr(observed)
 
 
 def test_member_update_by_email_sets_models_role_and_forks_the_team_default_budget(

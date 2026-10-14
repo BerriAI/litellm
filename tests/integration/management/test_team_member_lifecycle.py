@@ -68,6 +68,12 @@ class _MemberAddResponse(BaseModel):
     updated_team_memberships: list[_TeamMembership]
 
 
+class _MemberUpdateResponse(BaseModel):
+    team_id: str
+    user_id: str
+    max_budget_in_team: float | None = None
+
+
 class _GeneratedKey(BaseModel):
     key: str
 
@@ -320,6 +326,104 @@ def test_member_delete_by_email_removes_a_legacy_email_only_roster_entry(
         assert observed_before_delete + after_refused + observed == (provider_model, provider_model), repr(
             (observed_before_delete, after_refused, observed)
         )
+
+
+def test_member_delete_by_case_variant_email_removes_member_and_refuses_warmed_key(
+    gateway: Gateway, upstream: httpx.Client
+) -> None:
+    pytest.skip("BUG: case-variant email does not match the member during team deletion")
+
+    with gateway.scenario() as scenario:
+        model, provider_model = _model(scenario)
+        team: Final = scenario.team(models=[model])
+        email: Final = f"case-delete-{uuid.uuid4().hex}@integration.test"
+        user: Final = scenario.user(user_email=email)
+        _remove_default_user(gateway, team)
+        stayer: Final = scenario.member(team)
+        added: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"role": "user", "user_email": email}},
+        )
+        assert added.status_code == 200, added.text
+        leaver_key: Final = _key(scenario, team_id=team, user_id=user)
+        warmed: Final = _chat(gateway, model, leaver_key, f"warm case-variant leaver {uuid.uuid4().hex}")
+        assert warmed.status_code == 200, warmed.text
+        observed_before_delete: Final = _models(upstream)
+        assert observed_before_delete == (provider_model,), repr(observed_before_delete)
+
+        deleted: Final = gateway.request(
+            "POST",
+            "/team/member_delete",
+            {"team_id": team, "user_email": email.upper()},
+        )
+        assert deleted.status_code == 200, deleted.text
+        info: Final = _team_info(gateway, team)
+        stayer_roster: Final = _roster_member(stayer, None)
+        assert info.team_info.members_with_roles == [_RosterMember.model_validate(stayer_roster)], repr(info)
+        assert read_rows('SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)) == [
+            {"members_with_roles": [stayer_roster]}
+        ], deleted.text
+        assert read_rows(
+            'SELECT user_id, team_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s AND user_id = %s',
+            (team, user),
+        ) == [], deleted.text
+
+        refused: Final = _chat(gateway, model, leaver_key, f"deleted case-variant leaver {uuid.uuid4().hex}")
+        _refused(refused, 401, "token_not_found_in_db")
+        after_refused: Final = _models(upstream)
+        assert after_refused == (), repr(after_refused)
+        assert observed_before_delete + after_refused == (provider_model,), repr(
+            (observed_before_delete, after_refused)
+        )
+
+
+def test_member_update_by_case_variant_email_updates_the_member(
+    gateway: Gateway,
+) -> None:
+    pytest.skip("BUG: case-variant email does not match the member during team update")
+
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        email: Final = f"case-update-{uuid.uuid4().hex}@integration.test"
+        user: Final = scenario.user(user_email=email)
+        _remove_default_user(gateway, team)
+        added: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"role": "user", "user_email": email}},
+        )
+        assert added.status_code == 200, added.text
+
+        response: Final = gateway.request(
+            "POST",
+            "/team/member_update",
+            {"team_id": team, "user_email": email.upper(), "max_budget_in_team": 12},
+        )
+        assert response.status_code == 200, response.text
+        updated: Final = _MemberUpdateResponse.model_validate_json(response.text)
+        assert updated.user_id == user, response.text
+        assert updated.max_budget_in_team == 12, response.text
+
+        membership_rows: Final = read_rows(
+            'SELECT user_id, team_id, budget_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s AND user_id = %s',
+            (team, user),
+        )
+        assert len(membership_rows) == 1, membership_rows
+        budget_id: Final = membership_rows[0]["budget_id"]
+        assert isinstance(budget_id, str), membership_rows
+        budget_rows: Final = read_rows(
+            'SELECT budget_id, max_budget FROM "LiteLLM_BudgetTable" WHERE budget_id = %s',
+            (budget_id,),
+        )
+        assert budget_rows == [{"budget_id": budget_id, "max_budget": 12.0}], budget_rows
+
+        info: Final = _team_info(gateway, team)
+        assert info.team_memberships is not None, repr(info)
+        updated_membership: Final = next(member for member in info.team_memberships if member.user_id == user)
+        assert updated_membership.budget_id == budget_id, repr(updated_membership)
+        assert updated_membership.litellm_budget_table is not None, repr(updated_membership)
+        assert updated_membership.litellm_budget_table.max_budget == 12, repr(updated_membership)
 
 
 def test_member_add_by_email_provisions_a_new_user_and_resolves_an_existing_one(

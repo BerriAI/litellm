@@ -250,10 +250,12 @@ def test_permissions_bulk_update_appends_only_to_the_listed_teams(
     with gateway.scenario() as scenario:
         listed: Final = _member(scenario, ["/key/info"])
         team_two: Final = scenario.team(team_member_permissions=["/key/info", "/key/update"])
+        team_three_permission: Final = "/team/daily/activity"
+        team_three: Final = _member(scenario, [team_three_permission])
         unlisted: Final = _member(scenario, ["/key/info"])
-        team_ids: Final = (listed.team_id, team_two, unlisted.team_id)
+        team_ids: Final = (listed.team_id, team_two, team_three.team_id, unlisted.team_id)
         for proxy in (gateway, peer):
-            for member in (listed, unlisted):
+            for member in (listed, team_three, unlisted):
                 _refused(_update_team_key(proxy, member, "member before bulk"), 401, PERMISSION_ERROR)
         before_non_admin: Final = _team_permission_rows(team_ids)
         caller: Final = scenario.user(user_role="internal_user")
@@ -274,13 +276,13 @@ def test_permissions_bulk_update_appends_only_to_the_listed_teams(
         selected: Final = gateway.request(
             "POST",
             "/team/permissions_bulk_update",
-            {"permissions": ["/key/update"], "team_ids": [listed.team_id, team_two]},
+            {"permissions": ["/key/update"], "team_ids": [listed.team_id, team_two, team_three.team_id]},
         )
         assert selected.status_code == 200, selected.text
         selected_response: Final = _BulkPermissionsUpdate.model_validate_json(selected.text)
         assert selected_response == _BulkPermissionsUpdate(
             message="Team permissions updated successfully",
-            teams_updated=1,
+            teams_updated=2,
             permissions_appended=["/key/update"],
         ), selected.text
         selected_rows: Final = _team_permission_rows(team_ids)
@@ -289,6 +291,10 @@ def test_permissions_bulk_update_appends_only_to_the_listed_teams(
                 (
                     _TeamPermissionRow(team_id=listed.team_id, team_member_permissions=["/key/info", "/key/update"]),
                     _TeamPermissionRow(team_id=team_two, team_member_permissions=["/key/info", "/key/update"]),
+                    _TeamPermissionRow(
+                        team_id=team_three.team_id,
+                        team_member_permissions=["/key/update", team_three_permission],
+                    ),
                     _TeamPermissionRow(team_id=unlisted.team_id, team_member_permissions=["/key/info"]),
                 ),
                 key=lambda row: row.team_id,
@@ -296,6 +302,10 @@ def test_permissions_bulk_update_appends_only_to_the_listed_teams(
         ), repr(selected_rows)
         listed_readback: Final = _permissions(gateway, listed.team_id)
         assert listed_readback.team_member_permissions == ["/key/info", "/key/update"], repr(listed_readback)
+        team_three_readback: Final = _permissions(gateway, team_three.team_id)
+        assert team_three_readback.team_member_permissions == ["/key/update", team_three_permission], repr(
+            team_three_readback
+        )
         unlisted_readback: Final = _permissions(gateway, unlisted.team_id)
         assert unlisted_readback.team_member_permissions == ["/key/info"], repr(unlisted_readback)
 
