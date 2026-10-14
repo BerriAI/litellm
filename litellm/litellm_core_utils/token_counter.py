@@ -1112,9 +1112,8 @@ def _format_type(props, indent):
             return " | ".join([f'"{item}"' for item in props["enum"]])
         return "string"
     elif type == "array":
-        items: Final = props.get("items")
-        if isinstance(items, dict):
-            return f"{_format_type(items, indent)}[]"
+        if "items" in props and isinstance(props["items"], dict):
+            return f"{_format_type(props['items'], indent)}[]"
         return "any[]"
     elif type == "object":
         return f"{{\n{_format_object_parameters(props, indent + 2)}\n}}"
