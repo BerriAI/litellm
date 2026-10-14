@@ -2496,13 +2496,27 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(mocker:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("field", "new_limit"),
-    [("tpm_limit", 100), ("rpm_limit", 1), ("tpm_limit", None), ("rpm_limit", None)],
-    ids=["tpm_limit", "rpm_limit", "tpm_limit-cleared", "rpm_limit-cleared"],
+    ("field", "new_value"),
+    [
+        ("tpm_limit", 100),
+        ("rpm_limit", 1),
+        ("tpm_limit", None),
+        ("rpm_limit", None),
+        ("models", ["model-fir"]),
+        ("user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value),
+    ],
+    ids=[
+        "tpm_limit",
+        "rpm_limit",
+        "tpm_limit-cleared",
+        "rpm_limit-cleared",
+        "models",
+        "user_role",
+    ],
 )
 @pytest.mark.parametrize("all_users", [False, True], ids=["single-user", "bulk-all-users"])
-async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
-    mocker: MockerFixture, field: str, new_limit: int | None, all_users: bool
+async def test_user_update_reaches_cached_user_on_every_worker(
+    mocker: MockerFixture, field: str, new_value: object, all_users: bool
 ) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.auth.auth_checks import get_user_object
@@ -2560,9 +2574,16 @@ async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
             self.update_data_payload = data
             return {"user_id": user_id, "data": self.updated_user}
 
-    saved_user: Final = LiteLLM_UserTable(user_id="user-spruce", tpm_limit=100000, rpm_limit=1000)
-    updated_user: Final = saved_user.model_copy(update={field: new_limit})
-    old_limit: Final = 100000 if field == "tpm_limit" else 1000
+    saved_user: Final = LiteLLM_UserTable(
+        user_id="user-spruce",
+        tpm_limit=100000,
+        rpm_limit=1000,
+        models=["model-spruce"],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    updated_user: Final = saved_user.model_copy(update={field: new_value})
+    old_value: Final = saved_user.model_dump()[field]
+    assert old_value != new_value
 
     prisma_client: Final = _PrismaClientMock(
         db=_DatabaseMocks(
@@ -2614,28 +2635,28 @@ async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
         user_id_upsert=False,
     )
     assert handling_user_before is not None
-    assert handling_user_before.model_dump()[field] == old_limit
+    assert handling_user_before.model_dump()[field] == old_value
     assert other_user_before is not None
-    assert other_user_before.model_dump()[field] == old_limit
+    assert other_user_before.model_dump()[field] == old_value
 
     admin: Final = UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN)
     if all_users:
         await bulk_user_update(
             data=BulkUpdateUserRequest(
                 all_users=True,
-                user_updates=UpdateUserRequestNoUserIDorEmail.model_validate({field: new_limit}),
+                user_updates=UpdateUserRequestNoUserIDorEmail.model_validate({field: new_value}),
             ),
             user_api_key_dict=admin,
             litellm_changed_by=None,
         )
-        prisma_client.db.litellm_usertable.update_many.assert_awaited_once_with(where={}, data={field: new_limit})
+        prisma_client.db.litellm_usertable.update_many.assert_awaited_once_with(where={}, data={field: new_value})
     else:
         await user_update(
-            data=UpdateUserRequest.model_validate({"user_id": saved_user.user_id, field: new_limit}),
+            data=UpdateUserRequest.model_validate({"user_id": saved_user.user_id, field: new_value}),
             user_api_key_dict=admin,
         )
         assert prisma_client.update_data_payload is not None
-        assert prisma_client.update_data_payload[field] == new_limit
+        assert prisma_client.update_data_payload[field] == new_value
 
     remote_subscriber: Final = AuthCacheInvalidationSubscriber(
         redis_cache=cast("RedisCache", _FakeRedisCache()),
@@ -2659,10 +2680,10 @@ async def test_user_rate_limit_update_reaches_cached_user_on_every_worker(
         user_id_upsert=False,
     )
     assert handling_user_after is not None
-    assert handling_user_after.model_dump()[field] == new_limit
+    assert handling_user_after.model_dump()[field] == new_value
     assert other_user_after is not None
-    assert other_user_after.model_dump()[field] == new_limit, (
-        "another worker still enforces the old limit; the update was never broadcast"
+    assert other_user_after.model_dump()[field] == new_value, (
+        "another worker still serves the old user row; the update was never broadcast"
     )
 
 
