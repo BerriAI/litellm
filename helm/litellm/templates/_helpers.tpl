@@ -27,6 +27,30 @@ Common naming + label helpers shared by gateway, backend, and ui templates.
 {{- printf "%s-ui" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "litellm.ui.publicOrigin" -}}
+{{- $origin := .Values.ui.publicUrl | trim | trimSuffix "/" -}}
+{{- if not (regexMatch "^https?://[^/\\s]+$" $origin) -}}
+{{- fail "ui.publicUrl must be an origin like https://ui.example.com, without a path" -}}
+{{- end -}}
+{{- $origin -}}
+{{- end -}}
+
+{{- define "litellm.ui.backendOrigin" -}}
+{{- $origin := .Values.ui.backendUrl | trim | trimSuffix "/" -}}
+{{- if not (regexMatch "^https?://[^/\\s]+$" $origin) -}}
+{{- fail "ui.backendUrl must be an origin like https://backend.example.com, without a path, when ingress.componentHosts is set" -}}
+{{- end -}}
+{{- $origin -}}
+{{- end -}}
+
+{{- define "litellm.backend.gatewayOrigin" -}}
+{{- $origin := .Values.backend.gatewayUrl | trim | trimSuffix "/" -}}
+{{- if not (regexMatch "^https?://[^/\\s]+$" $origin) -}}
+{{- fail "backend.gatewayUrl must be an origin like https://gateway.example.com, without a path, when ingress.componentHosts is set" -}}
+{{- end -}}
+{{- $origin -}}
+{{- end -}}
+
 {{- define "litellm.commonLabels" -}}
 app.kubernetes.io/name: {{ include "litellm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
