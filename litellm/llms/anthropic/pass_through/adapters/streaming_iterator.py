@@ -214,35 +214,23 @@ class _CombinedChunkSplitter:
         pieces: Final = tuple(copy.deepcopy(chunk) for _ in present_groups)
         for index, (piece, group) in enumerate(zip(pieces, present_groups)):
             copied_delta = piece.choices[0].delta
-            fields = {field: value for field in group if (value := getattr(copied_delta, field, None))}
-            fields = _CombinedChunkSplitter._normalize_reasoning_fields(fields)
+            reasoning_content = (
+                getattr(copied_delta, "reasoning_content", None) if "reasoning_content" in group else None
+            )
+            thinking_blocks = getattr(copied_delta, "thinking_blocks", None) if "thinking_blocks" in group else None
+            unsigned_text = _CombinedChunkSplitter._unsigned_thinking_text(thinking_blocks) if thinking_blocks else None
+            if unsigned_text:
+                reasoning_content = unsigned_text
+                thinking_blocks = None
             role = getattr(copied_delta, "role", None) if index == 0 else None
-            piece.choices[0].delta = Delta(role=role, **fields)
+            piece.choices[0].delta = Delta(
+                role=role,
+                reasoning_content=reasoning_content if reasoning_content else None,
+                thinking_blocks=thinking_blocks if thinking_blocks else None,
+                content=(copied_delta.content if "content" in group and copied_delta.content else None),
+                tool_calls=(copied_delta.tool_calls if "tool_calls" in group and copied_delta.tool_calls else None),
+            )
         return pieces
-
-    @staticmethod
-    def _normalize_reasoning_fields(fields: "dict[str, Any]") -> "dict[str, Any]":
-        """Collapse signature-less ``thinking_blocks`` into ``reasoning_content``.
-
-        The block opener seeds a ``thinking_blocks`` start body with the full
-        thinking text while the delta re-emits it, so SSE accumulators would
-        collect it twice; the ``reasoning_content`` branch opens an empty body.
-        Signature-carrying blocks are kept intact so ``signature_delta``
-        suppression of the full-text snapshot still applies.
-        """
-        thinking_blocks: Final = fields.get("thinking_blocks")
-        if not thinking_blocks:
-            return fields
-        if any(block.get("signature") for block in thinking_blocks if isinstance(block, dict)):
-            return fields
-        thinking_text: Final = "".join(
-            block.get("thinking") or ""
-            for block in thinking_blocks
-            if isinstance(block, dict) and block.get("type") == "thinking"
-        )
-        if not thinking_text:
-            return fields
-        return {"reasoning_content": thinking_text}
 
     @staticmethod
     def _split(chunk: "ModelResponseStream") -> "list[ModelResponseStream]":
@@ -269,6 +257,27 @@ class _CombinedChunkSplitter:
 
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
+
+    @staticmethod
+    def _unsigned_thinking_text(
+        blocks: Sequence[Mapping[str, Any]],
+    ) -> str | None:
+        """Return the combined thinking text when no block carries a signature.
+
+        The block opener seeds a ``thinking_blocks`` start body with the full
+        thinking text while the delta re-emits it, so SSE accumulators would
+        collect it twice; the ``reasoning_content`` branch opens an empty body.
+        Signature-carrying blocks are kept intact so ``signature_delta``
+        suppression of the full-text snapshot still applies.
+        """
+        if any(block.get("signature") for block in blocks if isinstance(block, dict)):
+            return None
+        thinking_text: Final = "".join(
+            block.get("thinking") or ""
+            for block in blocks
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        )
+        return thinking_text or None
 
     def __next__(self) -> "ModelResponseStream":
         if self._buffer:

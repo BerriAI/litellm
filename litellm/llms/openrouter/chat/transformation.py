@@ -8,10 +8,10 @@ Docs: https://openrouter.ai/docs/parameters
 
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -27,10 +27,10 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
-_RESPONSE_JSON_ADAPTER: Final = TypeAdapter(dict[str, object])
+
 _ERROR_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, str])
-_RESPONSE_COST_ADAPTER: Final = TypeAdapter(float)
 
 
 class _PostCallLogger(Protocol):
@@ -234,7 +234,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         try:
             raw_usage: Final = response_json.get("usage")
             if isinstance(raw_usage, dict) and raw_usage:
-                usage: Final = _RESPONSE_JSON_ADAPTER.validate_python(raw_usage)
+                usage: Final = _JSON_OBJECT.validate_python(raw_usage)
                 response_cost: Final = usage.get("cost")
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
@@ -248,9 +248,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
                     additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
                         dict[str, object], hidden_params["additional_headers"]
                     )
-                    additional_headers["llm_provider-x-litellm-response-cost"] = _RESPONSE_COST_ADAPTER.validate_python(
-                        response_cost
-                    )
+                    if isinstance(response_cost, str | int | float):
+                        additional_headers["llm_provider-x-litellm-response-cost"] = float(response_cost)
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass
@@ -259,7 +258,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
     def _get_response_json(self, raw_response: httpx.Response) -> Mapping[str, object]:
         try:
-            response_json: Final = _RESPONSE_JSON_ADAPTER.validate_python(raw_response.json())
+            response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         except ValueError as e:
             status_code: Final = 502 if 200 <= raw_response.status_code < 300 else raw_response.status_code
             response_text: Final = raw_response.text
@@ -275,13 +274,13 @@ class OpenrouterConfig(OpenAIGPTConfig):
         raw_error: Final = response_json.get("error")
         if not isinstance(raw_error, dict):
             return
-        error_response: Final = _RESPONSE_JSON_ADAPTER.validate_python(raw_error)
+        error_response: Final = _JSON_OBJECT.validate_python(raw_error)
         if not error_response.get("message") and error_response.get("code") is None:
             return
 
         raw_metadata: Final = error_response.get("metadata", {})
         metadata: Final[Mapping[str, object]] = (
-            _RESPONSE_JSON_ADAPTER.validate_python(raw_metadata) if isinstance(raw_metadata, dict) else {}
+            _JSON_OBJECT.validate_python(raw_metadata) if isinstance(raw_metadata, dict) else {}
         )
         raw_status_code: Final = error_response.get("code")
         status_code: Final = (
@@ -317,7 +316,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "OpenRouterChatCompletionStreamingHandler":
         return OpenRouterChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
