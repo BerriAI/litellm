@@ -23,9 +23,13 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
+from integration._support.openai_wire import answering_model_discovery, chat_reply
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     ANTHROPIC_MODEL,
+    ASK,
+    ASK_LABEL,
+    CITIES,
     EPHEMERAL,
     PROVIDER_KEY,
     SYSTEM,
@@ -33,9 +37,15 @@ from integration.providers._cache_control_marks_support import (
     anthropic_deployment,
     anthropic_labels,
     anthropic_peer,
+    bedrock_labels,
+    bedrock_peer,
+    call_id,
+    final_label,
     final_text,
     marker_of,
     new_marker,
+    owned_config,
+    tool_use_label,
 )
 from pydantic import JsonValue, TypeAdapter
 
@@ -43,6 +53,12 @@ pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _OWNED: Final = "bridge-mark-owned"
+_OWNED_DROP: Final = "bridge-mark-owned-drop"
+_NOVA: Final = "bridge-mark-nova"
+_CHAT: Final = "bridge-mark-chat"
+_COMPARE: Final = "Compare the three cities."
+_CHECK: Final = "I will check."
+_TOOL: Final[dict[str, JsonValue]] = {"type": "function", "name": "lookup_weather", "parameters": {"type": "object"}}
 _UNMARKED: Final = "unmarked"
 _RecordProperty: TypeAlias = Callable[[str, object], None]
 
@@ -71,11 +87,11 @@ class _StoredRig:
         return self.proxy.gateway
 
 
-def _owned_config(directory: Path, api_base: str) -> Path:
+def _owned_config(directory: Path, model_list: Sequence[JsonValue]) -> Path:
     stock: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final[Mapping[str, JsonValue]] = {
         **stock,
-        "model_list": [anthropic_deployment(_OWNED, api_base)],
+        "model_list": list(model_list),
         "general_settings": {**object_value(stock["general_settings"]), "store_prompts_in_spend_logs": True},
         "router_settings": {**object_value(stock.get("router_settings") or {}), "num_retries": 0},
     }
@@ -84,11 +100,56 @@ def _owned_config(directory: Path, api_base: str) -> Path:
     return path
 
 
+def _stored_peer(request: Request) -> Reply:
+    if "/converse" in request.target:
+        return bedrock_peer(request)
+    if request.target.endswith("/chat/completions"):
+        return chat_reply(f"chatcmpl-{marker_of(request)}", "gpt-5.4", "sunny", stream=False)
+    return anthropic_peer(request)
+
+
+def _stored_models(api_base: str) -> list[JsonValue]:
+    return [
+        anthropic_deployment(_OWNED, api_base),
+        anthropic_deployment(_OWNED_DROP, api_base, drop_params=True),
+        {
+            "model_name": _NOVA,
+            "litellm_params": {
+                "model": "bedrock/converse/us.amazon.nova-2-lite-v1:0",
+                "api_key": PROVIDER_KEY,
+                "api_base": api_base,
+                "aws_region_name": "us-east-1",
+                "aws_bedrock_runtime_endpoint": api_base,
+            },
+        },
+        {
+            "model_name": _CHAT,
+            "litellm_params": {
+                "model": "openai/gpt-5.4",
+                "api_key": PROVIDER_KEY,
+                "api_base": f"{api_base}/v1",
+                "use_chat_completions_api": True,
+            },
+        },
+    ]
+
+
 @pytest.fixture(scope="module")
 def stored_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_StoredRig]:
     directory: Final = tmp_path_factory.mktemp("bridge-mark-stored")
+    with wire_server(answering_model_discovery(_stored_peer)) as wire, gateway_from_environment() as gateway:
+        config: Final = _owned_config(directory, _stored_models(wire.url))
+        with owned_proxy_process(gateway, directory, {}, config=config, workers=2) as owned:
+            yield _StoredRig(wire, owned)
+
+
+@pytest.fixture(scope="module")
+def yaml_drop_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_StoredRig]:
+    directory: Final = tmp_path_factory.mktemp("bridge-mark-yaml-drop")
     with wire_server(anthropic_peer) as wire, gateway_from_environment() as gateway:
-        config: Final = _owned_config(directory, wire.url)
+        config: Final = owned_config(
+            directory, [anthropic_deployment(_OWNED, wire.url)], litellm_settings={"drop_params": True}
+        )
         with owned_proxy_process(gateway, directory, {}, config=config, workers=2) as owned:
             yield _StoredRig(wire, owned)
 
@@ -283,7 +344,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering(
     calls: Final = _calls(20, stream=False)
     held: Final = _Held(threading.Event(), SimpleQueue())
     with wire_server(held.respond) as wire:
-        config: Final = _owned_config(tmp_path, wire.url)
+        config: Final = _owned_config(tmp_path, [anthropic_deployment(_OWNED, wire.url)])
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
             candidate: Final = owned.gateway
             workers: Final = _worker_pids(owned)
@@ -311,7 +372,7 @@ async def test_proxy_restart_mid_burst_never_lands_a_served_call_twice(
     calls: Final = _calls(20, stream=False)
     held: Final = _Held(threading.Event(), SimpleQueue())
     with wire_server(held.respond) as wire:
-        config: Final = _owned_config(tmp_path, wire.url)
+        config: Final = _owned_config(tmp_path, [anthropic_deployment(_OWNED, wire.url)])
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as first:
             _worker_pids(first)
             burst: Final = await _hold_burst(held, first.gateway, _OWNED, calls)
@@ -368,3 +429,147 @@ def test_previous_response_replay_keeps_the_system_mark(stored_rig: _StoredRig, 
     body: Final = _JSON_OBJECT.validate_json(replayed[0].body)
     assert isinstance(body["messages"], list) and len(body["messages"]) == 3, body
     assert anthropic_labels(replayed[0]) == [SYSTEM_LABEL]
+
+
+def _respond(rig: _StoredRig, body: Mapping[str, JsonValue]) -> httpx.Response:
+    response: Final = rig.gateway.request("POST", "/v1/responses", dict(body))
+    assert response.status_code == 200, response.text
+    assert _JSON_OBJECT.validate_json(response.text)["status"] == "completed", response.text
+    return response
+
+
+def _stored_turn(rig: _StoredRig, spend: pcb.SpendLogs, model: str, items: Sequence[JsonValue]) -> tuple[str, Request]:
+    rig.wire.drain()
+    first: Final = _respond(
+        rig, {"model": model, "max_output_tokens": 64, "cache": {"no-cache": True}, "tools": [_TOOL], "input": items}
+    )
+    spend.landed(model, first.headers["x-litellm-call-id"], None)
+    (posted,) = _marked_posts(rig.wire)
+    return string_value(_JSON_OBJECT.validate_json(first.text)["id"]), posted
+
+
+def _replayed(rig: _StoredRig, model: str, previous: str, items: Sequence[JsonValue]) -> Request:
+    _respond(
+        rig,
+        {
+            "model": model,
+            "max_output_tokens": 64,
+            "cache": {"no-cache": True},
+            "tools": [_TOOL],
+            "previous_response_id": previous,
+            "input": list(items),
+        },
+    )
+    (posted,) = _marked_posts(rig.wire)
+    return posted
+
+
+def _marked(role: str, text: str, mark: JsonValue = EPHEMERAL) -> dict[str, JsonValue]:
+    return {"role": role, "content": text, "cache_control": mark}
+
+
+def _weather_call(**fields: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "type": "function_call",
+        "call_id": call_id(CITIES[0]),
+        "name": "lookup_weather",
+        "arguments": '{"city": "London"}',
+        **fields,
+    }
+
+
+def _weather_output(**fields: JsonValue) -> dict[str, JsonValue]:
+    return {"type": "function_call_output", "call_id": call_id(CITIES[0]), "output": "sunny.", **fields}
+
+
+def _marked_tool_round() -> list[JsonValue]:
+    return [
+        {"role": "user", "content": ASK},
+        _weather_call(cache_control=EPHEMERAL),
+        _weather_output(cache_control=EPHEMERAL),
+    ]
+
+
+def test_replay_gives_the_current_marks_their_slots_first(stored_rig: _StoredRig, spend: pcb.SpendLogs) -> None:
+    first_marker: Final = new_marker()
+    second_marker: Final = new_marker()
+    previous, first = _stored_turn(
+        stored_rig,
+        spend,
+        _OWNED,
+        [_marked("system", SYSTEM), _marked("user", ASK), _marked("user", final_text(first_marker))],
+    )
+    assert anthropic_labels(first) == [SYSTEM_LABEL, ASK_LABEL, final_label(first_marker)]
+    replayed: Final = _replayed(
+        stored_rig, _OWNED, previous, [_marked("user", _COMPARE), _marked("user", final_text(second_marker))]
+    )
+    assert anthropic_labels(replayed) == [
+        ASK_LABEL,
+        final_label(first_marker),
+        f"user:text:{_COMPARE}",
+        final_label(second_marker),
+    ]
+
+
+def test_replay_never_forwards_a_mark_drop_params_dropped(stored_rig: _StoredRig, spend: pcb.SpendLogs) -> None:
+    previous, first = _stored_turn(
+        stored_rig,
+        spend,
+        _OWNED_DROP,
+        [_marked("system", SYSTEM, "ephemeral"), {"role": "user", "content": final_text(new_marker())}],
+    )
+    assert b"cache_control" not in first.body, first.body
+    replayed: Final = _replayed(stored_rig, _OWNED, previous, [{"role": "user", "content": final_text(new_marker())}])
+    assert b"cache_control" not in replayed.body, replayed.body
+
+
+def test_replay_into_nova_drops_the_tool_block_marks(stored_rig: _StoredRig, spend: pcb.SpendLogs) -> None:
+    previous, first = _stored_turn(
+        stored_rig, spend, _OWNED, [*_marked_tool_round(), {"role": "user", "content": final_text(new_marker())}]
+    )
+    assert anthropic_labels(first) == [tool_use_label(CITIES[0]), f"user:tool_result:{call_id(CITIES[0])}"]
+    replayed: Final = _replayed(stored_rig, _NOVA, previous, [{"role": "user", "content": final_text(new_marker())}])
+    assert "/converse" in replayed.target, replayed.target
+    assert bedrock_labels(replayed) == []
+
+
+def test_replay_into_a_chat_route_without_marks_sends_none(stored_rig: _StoredRig, spend: pcb.SpendLogs) -> None:
+    previous, first = _stored_turn(
+        stored_rig,
+        spend,
+        _OWNED,
+        [_marked("system", SYSTEM), {"role": "user", "content": final_text(new_marker())}],
+    )
+    assert anthropic_labels(first) == [SYSTEM_LABEL]
+    replayed: Final = _replayed(stored_rig, _CHAT, previous, [{"role": "user", "content": final_text(new_marker())}])
+    assert replayed.target == "/v1/chat/completions", replayed.target
+    assert b"cache_control" not in replayed.body, replayed.body
+
+
+def test_yaml_drop_params_keeps_the_newest_four_marks(yaml_drop_rig: _StoredRig) -> None:
+    marker: Final = new_marker()
+    yaml_drop_rig.wire.drain()
+    _respond(
+        yaml_drop_rig,
+        {
+            "model": _OWNED,
+            "max_output_tokens": 64,
+            "cache": {"no-cache": True},
+            "tools": [_TOOL],
+            "input": [
+                _marked("system", SYSTEM),
+                _marked("user", ASK),
+                _marked("assistant", _CHECK),
+                _weather_call(),
+                _weather_output(cache_control=EPHEMERAL),
+                _marked("user", final_text(marker)),
+            ],
+        },
+    )
+    (posted,) = _marked_posts(yaml_drop_rig.wire)
+    assert anthropic_labels(posted) == [
+        ASK_LABEL,
+        f"assistant:text:{_CHECK}",
+        f"user:tool_result:{call_id(CITIES[0])}",
+        final_label(marker),
+    ]

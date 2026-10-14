@@ -1,6 +1,7 @@
 import json
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from typing import Final, cast
 
 import httpx
@@ -10,6 +11,7 @@ from integration._support import bedrock_runtime_peer
 from integration._support import prompt_cache_breakpoint as pcb
 from integration._support.client import Gateway, Scenario, object_value
 from integration._support.openai_wire import answering_model_discovery, chat_reply
+from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     ANTHROPIC_MODEL,
@@ -31,8 +33,10 @@ from integration.providers._cache_control_marks_support import (
     client_marked,
     final_label,
     final_text,
+    marker_of,
     new_marker,
     responses_body,
+    tool_use_label,
 )
 from openai.types.responses import ResponseInputParam
 from pydantic import JsonValue, TypeAdapter
@@ -85,8 +89,8 @@ def _marked_system(model: str, marker: str, mark: JsonValue = EPHEMERAL, **field
 
 def _role_items(role: str, marker: str) -> list[JsonValue]:
     match role:
-        case "system":
-            return [_item("system", SYSTEM), {"role": "user", "content": final_text(marker)}]
+        case "system" | "developer":
+            return [_item(role, SYSTEM), {"role": "user", "content": final_text(marker)}]
         case "user":
             return [_item("user", ASK), {"role": "user", "content": final_text(marker)}]
         case _:
@@ -201,6 +205,7 @@ def _bedrock_ttls(request: Request) -> list[JsonValue]:
     ("role", "expected"),
     (
         pytest.param("system", SYSTEM_LABEL, id="system"),
+        pytest.param("developer", SYSTEM_LABEL, id="developer"),
         pytest.param("user", ASK_LABEL, id="user"),
         pytest.param("assistant", _ASSISTANT_LABEL, id="assistant"),
     ),
@@ -795,3 +800,315 @@ def test_provider_error_on_a_marked_request_reaches_the_caller(gateway: Gateway,
         assert "overloaded_error" in answer.text, answer.text
         assert labels == [SYSTEM_LABEL]
         spend.landed(model, answer.call_id, None, status="failure")
+
+
+_SAP_DISCOVERY: Final = ("/oauth/token", "/v2/lm/")
+_SAP_COMPLETION: Final = "/sap-deployment/v2/completion"
+
+
+def _only_post(wire: Wire) -> Request:
+    posted: Final = [
+        request
+        for request in wire.drain()
+        if request.method == "POST" and not request.target.startswith(_SAP_DISCOVERY)
+    ]
+    assert len(posted) == 1, [request.target for request in posted]
+    return posted[0]
+
+
+def _message_mark_labels(message: JsonValue) -> list[str]:
+    fields: Final = object_value(message)
+    content: Final = fields.get("content")
+    blocks: Final = content if isinstance(content, list) else []
+    block_labels: Final = [
+        f"{fields.get('role')}:block" for block in blocks if object_value(block).get("cache_control") is not None
+    ]
+    return [f"{fields.get('role')}:message"] * int(fields.get("cache_control") is not None) + block_labels
+
+
+def _openai_mark_labels(request: Request) -> list[str]:
+    messages: Final = _JSON_OBJECT.validate_json(request.body)["messages"]
+    return list(chain.from_iterable(map(_message_mark_labels, messages if isinstance(messages, list) else [])))
+
+
+def _sap_mark_labels(request: Request) -> list[str]:
+    config: Final = object_value(_JSON_OBJECT.validate_json(request.body)["config"])
+    prompt: Final = object_value(object_value(object_value(config["modules"])["prompt_templating"])["prompt"])
+    template: Final = prompt["template"]
+    return list(chain.from_iterable(map(_message_mark_labels, template if isinstance(template, list) else [])))
+
+
+def _route_mark_labels(request: Request) -> list[str]:
+    if "/converse" in request.target:
+        return bedrock_labels(request)
+    if request.target.endswith("/chat/completions"):
+        return _openai_mark_labels(request)
+    if request.target == _SAP_COMPLETION:
+        return _sap_mark_labels(request)
+    return anthropic_labels(request)
+
+
+def _sap_peer(request: Request) -> Reply:
+    match request.target:
+        case "/oauth/token":
+            return Reply(body=json.dumps({"access_token": "scripted", "expires_in": 3600}).encode())
+        case "/v2/lm/deployments":
+            deployment: Final = {
+                "scenarioId": "orchestration",
+                "configurationId": "orchestration-config",
+                "deploymentUrl": f"http://{request.headers['host']}/sap-deployment",
+                "createdAt": "2026-01-01T00:00:00Z",
+            }
+            return Reply(body=json.dumps({"resources": [deployment]}).encode())
+        case "/v2/lm/configurations/orchestration-config":
+            return Reply(body=json.dumps({"executableId": "orchestration"}).encode())
+        case _:
+            completion: Final = chat_reply(f"chatcmpl-{marker_of(request)}", "scripted", "sunny", stream=False)
+            return Reply(body=json.dumps({"final_result": json.loads(completion.body)}).encode())
+
+
+def _route_peer(request: Request) -> Reply:
+    if "/converse" in request.target:
+        return bedrock_peer(request)
+    if request.target.endswith("/chat/completions"):
+        return chat_reply(f"chatcmpl-{marker_of(request)}", "scripted", "sunny", stream=False)
+    if request.target.startswith((*_SAP_DISCOVERY, "/sap-deployment/")):
+        return _sap_peer(request)
+    return anthropic_peer(request)
+
+
+def _route_deployment(gateway: Gateway, scenario: Scenario, wire: Wire, route: str) -> str:
+    match route:
+        case "vertex-claude":
+            return scenario.model(
+                model=f"vertex_ai/{ANTHROPIC_MODEL}",
+                api_key=None,
+                api_base=wire.url,
+                vertex_project="scripted-project",
+                vertex_location="us-east5",
+                vertex_credentials=service_account_json("scripted-project", gateway.upstream_url.rstrip("/")),
+            )
+        case "bedrock-llama":
+            return scenario.model(
+                model="bedrock/converse/meta.llama3-3-70b-instruct-v1:0",
+                api_key=PROVIDER_KEY,
+                api_base=wire.url,
+                aws_region_name="us-east-1",
+                aws_bedrock_runtime_endpoint=wire.url,
+            )
+        case "sap-claude":
+            service_key: Final = {
+                "clientid": "scripted",
+                "clientsecret": PROVIDER_KEY,
+                "url": wire.url,
+                "serviceurls": {"AI_API_URL": wire.url},
+            }
+            return scenario.model(
+                model="sap/anthropic--claude-4.5-sonnet", api_base=wire.url, api_key=json.dumps(service_key)
+            )
+        case _ if route.startswith("openrouter/"):
+            return scenario.model(model=route, api_base=wire.url, api_key=PROVIDER_KEY, use_chat_completions_api=True)
+        case _:
+            return scenario.model(model=route, api_base=wire.url, api_key=PROVIDER_KEY)
+
+
+def _chat_with_tool_mark(model: str, marker: str) -> dict[str, JsonValue]:
+    tool_call: Final[dict[str, JsonValue]] = {
+        "id": call_id(CITIES[0]),
+        "type": "function",
+        "function": {"name": "lookup_weather", "arguments": json.dumps({"city": CITIES[0]})},
+    }
+    return {
+        "model": model,
+        "max_tokens": 64,
+        "tools": [{"type": "function", "function": {"name": "lookup_weather", "parameters": {"type": "object"}}}],
+        "messages": [
+            {"role": "user", "content": ASK},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": call_id(CITIES[0]), "content": "sunny.", "cache_control": EPHEMERAL},
+            {"role": "user", "content": final_text(marker)},
+        ],
+    }
+
+
+def _shaped_requests(model: str, shape: str) -> tuple[dict[str, JsonValue], dict[str, JsonValue]]:
+    match shape:
+        case "tool":
+            bridged: Final = _responses(model, _tool_items(new_marker(), output_mark=EPHEMERAL), tools=[_TOOL])
+            return _chat_with_tool_mark(model, new_marker()), bridged
+        case _:
+            return _chat_with_message_mark(model, new_marker()), _marked_system(model, new_marker())
+
+
+@pytest.mark.parametrize(
+    ("route", "shape", "keeps"),
+    (
+        pytest.param("dashscope/qwen-plus", "system", True, id="dashscope"),
+        pytest.param("minimax/MiniMax-M2", "system", True, id="minimax"),
+        pytest.param("zai/glm-4.6", "system", True, id="zai"),
+        pytest.param(f"openrouter/anthropic/{ANTHROPIC_MODEL}", "system", True, id="openrouter-claude"),
+        pytest.param("openrouter/google/gemini-3.8-flash", "system", True, id="openrouter-gemini"),
+        pytest.param("snowflake/claude-4-sonnet", "tool", True, id="snowflake-claude-tool-output"),
+        pytest.param("vertex-claude", "system", True, id="vertex-claude"),
+        pytest.param("sap-claude", "system", True, id="sap-claude"),
+        pytest.param("snowflake/claude-4-sonnet", "system", False, id="snowflake-claude-string-system"),
+        pytest.param("openrouter/openai/gpt-5.4", "system", False, id="openrouter-gpt"),
+        pytest.param("snowflake/llama3.1-70b", "system", False, id="snowflake-llama"),
+        pytest.param("bedrock-llama", "system", False, id="bedrock-llama"),
+    ),
+)
+def test_item_mark_reaches_each_route_the_way_a_chat_message_mark_does(
+    gateway: Gateway, route: str, shape: str, keeps: bool
+) -> None:
+    with wire_server(answering_model_discovery(_route_peer)) as wire, gateway.scenario() as scenario:
+        model: Final = _route_deployment(gateway, scenario, wire, route)
+        on_chat_body, bridged_body = _shaped_requests(model, shape)
+        on_chat: Final = gateway.request("POST", "/v1/chat/completions", on_chat_body)
+        assert on_chat.status_code == 200, on_chat.text
+        chat_request: Final = _only_post(wire)
+        _assert_completed(_send(gateway, bridged_body))
+        bridged_request: Final = _only_post(wire)
+    bridged_labels: Final = _route_mark_labels(bridged_request)
+    assert bridged_request.target == chat_request.target
+    assert bridged_labels == (_route_mark_labels(chat_request) if keeps else [])
+    assert bool(bridged_labels) is keeps, bridged_labels
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected"),
+    (
+        pytest.param(False, [_BEDROCK_SYSTEM_LABEL], id="as-sent"),
+        pytest.param(True, [], id="drop-params"),
+    ),
+)
+def test_unmapped_bedrock_arn_keeps_the_item_mark_unless_drop_params(
+    gateway: Gateway, drop_params: bool, expected: list[str]
+) -> None:
+    marker: Final = new_marker()
+    with wire_server(_bedrock_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="bedrock/converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/scripted",
+            api_key=PROVIDER_KEY,
+            api_base=wire.url,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint=wire.url,
+            drop_params=drop_params,
+        )
+        answer: Final = _send(gateway, _marked_system(model, marker))
+        assert answer.status == 200, answer.text
+        assert bedrock_labels(_only_request(wire)) == expected
+
+
+@pytest.mark.parametrize("request_drop_params", (True, "true"), ids=("bool", "string"))
+def test_request_drop_params_trims_five_marks_to_the_newest_four(
+    gateway: Gateway, request_drop_params: JsonValue
+) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire)
+        items: Final = _many_marks(marker, assistant_marked=True)
+        _assert_completed(_send(gateway, _responses(model, items, tools=[_TOOL], drop_params=request_drop_params)))
+        labels: Final = anthropic_labels(_only_request(wire))
+    assert labels == [ASK_LABEL, _ASSISTANT_LABEL, _RESULT_LABEL, final_label(marker)]
+
+
+@pytest.mark.parametrize(
+    ("deployment_fields", "request_drop_params"),
+    (
+        pytest.param({}, None, id="request-null"),
+        pytest.param({}, "", id="request-empty-string"),
+        pytest.param({"drop_params": True}, False, id="request-false-over-deployment-true"),
+    ),
+)
+def test_request_without_drop_params_forwards_five_marks_as_sent(
+    gateway: Gateway, deployment_fields: dict[str, JsonValue], request_drop_params: JsonValue
+) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"anthropic/{ANTHROPIC_MODEL}", api_base=wire.url, api_key=PROVIDER_KEY, **deployment_fields
+        )
+        items: Final = _many_marks(marker, assistant_marked=True)
+        answer: Final = _send(gateway, _responses(model, items, tools=[_TOOL], drop_params=request_drop_params))
+        labels: Final = anthropic_labels(_only_request(wire))
+    assert answer.status == 400, answer.text
+    assert "A maximum of 4 blocks with cache_control" in answer.text, answer.text
+    assert len(labels) == 5, labels
+
+
+def _marked_function_call_items(marker: str) -> list[JsonValue]:
+    calls: Final[list[JsonValue]] = [
+        {
+            "type": "function_call",
+            "call_id": call_id(city),
+            "name": "lookup_weather",
+            "arguments": json.dumps({"city": city}),
+            "cache_control": EPHEMERAL,
+        }
+        for city in CITIES
+    ]
+    outputs: Final[list[JsonValue]] = [
+        {"type": "function_call_output", "call_id": call_id(city), "output": "sunny."} for city in CITIES
+    ]
+    return [{"role": "user", "content": ASK}, *calls, *outputs, {"role": "user", "content": final_text(marker)}]
+
+
+def test_injection_points_count_a_marked_function_tool_toward_the_cap(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, inject=True)
+        body: Final = _responses(
+            model,
+            _marked_function_call_items(marker),
+            instructions=SYSTEM,
+            tools=[{**_TOOL, "cache_control": EPHEMERAL}],
+        )
+        _assert_completed(_send(gateway, body))
+        labels: Final = anthropic_labels(_only_request(wire))
+    assert labels == ["tool:lookup_weather", *(tool_use_label(city) for city in CITIES)]
+
+
+def test_assistant_text_after_a_function_call_keeps_its_mark(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    items: Final[list[JsonValue]] = [
+        {"role": "user", "content": ASK},
+        {
+            "type": "function_call",
+            "call_id": call_id(CITIES[0]),
+            "name": "lookup_weather",
+            "arguments": json.dumps({"city": CITIES[0]}),
+        },
+        _item("assistant", _CHECK),
+        {"type": "function_call_output", "call_id": call_id(CITIES[0]), "output": "sunny."},
+        {"role": "user", "content": final_text(marker)},
+    ]
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire)
+        _assert_completed(_send(gateway, _responses(model, items, tools=[_TOOL])))
+        labels: Final = anthropic_labels(_only_request(wire))
+    assert labels == [_ASSISTANT_LABEL]
+
+
+_COUNTED_TOKENS: Final = 42
+
+
+def _count_peer(request: Request) -> Reply:
+    if request.target.endswith("/count_tokens"):
+        return Reply(body=json.dumps({"input_tokens": _COUNTED_TOKENS}).encode())
+    return anthropic_peer(request)
+
+
+def test_input_tokens_counts_marked_items_without_their_marks(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(_count_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire)
+        body: Final = {"model": model, "input": _many_marks(marker, assistant_marked=True), "tools": [_TOOL]}
+        response: Final = gateway.request("POST", "/v1/responses/input_tokens", body)
+        counted: Final = _only_request(wire)
+    assert response.status_code == 200, response.text
+    assert _JSON_OBJECT.validate_json(response.text) == {
+        "object": "response.input_tokens",
+        "input_tokens": _COUNTED_TOKENS,
+    }
+    assert counted.target.endswith("/count_tokens"), counted.target
+    assert anthropic_labels(counted) == []
