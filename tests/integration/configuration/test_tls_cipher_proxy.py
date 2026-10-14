@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 import yaml
 from anthropic import Anthropic
@@ -444,20 +443,13 @@ def test_proxy_burst_survives_losing_one_worker(cipher_owned_proxy: OwnedProxy, 
             lambda successes: successes >= 2,
             seconds=60,
         )
-        children: Final = psutil.Process(cipher_owned_proxy.process.pid).children()
-        assert children, "two-worker proxy has no child processes to kill"
+        workers: Final = cipher_owned_proxy.worker_pids()
+        assert workers, "two-worker proxy has no serving workers to kill"
         killed_at: Final = time.monotonic()
-        children[0].kill()
-        finished: Final = tuple(future.result(timeout=120) for future in futures)
+        with cipher_owned_proxy.replacing_worker(min(workers)) as kill:
+            kill()
+            finished: Final = tuple(future.result(timeout=120) for future in futures)
     assert len(finished) == 12, finished
     assert any(outcome.finished_at > killed_at for outcome in finished), finished
     post_kill_id: Final = _sync_completion(proxy, "tls-peer", f"post-kill-{marker}")
     assert post_kill_id == f"chatcmpl-post-kill-{marker}"
-
-    def _ready() -> bool:
-        try:
-            return proxy.client.get("/health/readiness").status_code == 200
-        except httpx.TransportError:
-            return False
-
-    eventually(_ready, lambda ready: ready, seconds=60)
