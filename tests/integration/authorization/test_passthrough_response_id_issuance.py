@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -45,6 +46,10 @@ _TAKE_OWNER_TABLE_OFFLINE: Final = (
 _BRING_OWNER_TABLE_BACK: Final = (
     'ALTER TABLE "LiteLLM_ManagedObjectTable_offline" RENAME TO "LiteLLM_ManagedObjectTable"'
 )
+
+_SEARCH_STORE: Final = "integration-search-store"
+_SEARCH_KEY: Final = "synthetic-search-key"
+_SEARCH_RESULTS: Final = Reply(body=json.dumps({"value": []}).encode())
 
 Route = Literal[
     "retrieve",
@@ -153,6 +158,51 @@ def _owner_table_offline(database_url: str) -> Iterator[None]:
             yield
         finally:
             admin.execute(_BRING_OWNER_TABLE_BACK)
+
+
+def _search_settings(search: Wire) -> str:
+    return (
+        _MANAGED
+        + "vector_store_registry:\n"
+        + f"  - vector_store_name: {_SEARCH_STORE}\n"
+        + "    litellm_params:\n"
+        + f"      vector_store_id: {_SEARCH_STORE}\n"
+        + "      custom_llm_provider: azure_ai\n"
+        + f"      api_key: {_SEARCH_KEY}\n"
+        + f"      api_base: {search.url}\n"
+    )
+
+
+@contextmanager
+def _search_index(gateway: Gateway) -> Iterator[str]:
+    index: Final = f"integration-index-{uuid.uuid4().hex}"
+    gateway.post(
+        "/v1/indexes",
+        {"index_name": index, "litellm_params": {"vector_store_index": index, "vector_store_name": _SEARCH_STORE}},
+    )
+    try:
+        yield index
+    finally:
+        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
+            admin.execute('DELETE FROM "LiteLLM_ManagedVectorStoreIndexTable" WHERE index_name = %s', (index,))
+
+
+@contextmanager
+def _search_rig(gateway: Gateway, directory: Path) -> Iterator[tuple[Gateway, Wire, str, str]]:
+    with (
+        wire_server(lambda _request: _SEARCH_RESULTS) as search,
+        wire_server(_respond) as openai_upstream,
+        _search_index(gateway) as index,
+        _proxy(gateway, directory, openai_upstream, settings=_search_settings(search)) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        scenario.model(model=f"azure/{_MODEL}", api_base=openai_upstream.url, api_key=_UPSTREAM_KEY)
+        reader: Final = scenario.key(
+            user_id=scenario.user(),
+            metadata={"allowed_vector_store_indexes": [{"index_name": index, "index_permissions": ["read"]}]},
+        )
+        yield candidate, search, index, reader
+        assert _forwarded(openai_upstream) == ()
 
 
 def _call(route: Route, vendor_id: str) -> tuple[str, str, bytes | None]:
@@ -382,6 +432,31 @@ def test_the_model_list_relay_hands_out_and_checks_gateway_ids(gateway: Gateway,
         ], [response.text for response in refusals]
         assert _forwarded(azure) == ()
         assert _forwarded(openai_upstream) == ()
+
+
+def test_an_azure_ai_search_query_reaches_the_index_unchanged(gateway: Gateway, tmp_path: Path) -> None:
+    query: Final = {"search": "mango", "top": 3}
+    with _search_rig(gateway, tmp_path) as (candidate, search, index, reader):
+        answered: Final = _send(
+            candidate, reader, "POST", f"/azure_ai/indexes/{index}/docs/search", json.dumps(query).encode()
+        )
+        assert answered.status_code == 200, answered.text
+        assert answered.json() == {"value": []}, answered.text
+        received: Final = search.drain()
+        assert [(request.method, urlsplit(request.target).path) for request in received] == [
+            ("POST", f"/indexes/{index}/docs/search")
+        ]
+        assert [_JSON_OBJECT.validate_json(request.body) for request in received] == [query]
+        assert [request.headers.get("api-key") for request in received] == [_SEARCH_KEY]
+
+
+def test_an_azure_ai_search_query_carrying_a_vendor_response_id_is_refused(gateway: Gateway, tmp_path: Path) -> None:
+    query: Final = {"search": "mango", "previous_response_id": _vendor_id()}
+    with _search_rig(gateway, tmp_path) as (candidate, search, index, reader):
+        _assert_unmanaged_refusal(
+            _send(candidate, reader, "POST", f"/azure_ai/indexes/{index}/docs/search", json.dumps(query).encode())
+        )
+        assert _forwarded(search) == ()
 
 
 def test_every_verdict_holds_through_a_burst_after_a_worker_is_replaced(gateway: Gateway, tmp_path: Path) -> None:
