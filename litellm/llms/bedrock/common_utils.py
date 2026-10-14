@@ -1179,10 +1179,7 @@ def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | Non
 
 
 def _is_claude(model: str) -> bool:
-    return (
-        get_bedrock_base_model(model).startswith("anthropic")
-        or (litellm.model_cost.get(model) or {}).get("litellm_provider") == "anthropic"
-    )
+    return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
