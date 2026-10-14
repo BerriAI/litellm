@@ -1015,12 +1015,13 @@ class TestResponsesWSDeclaredNonChatModel:
             ({"mode": "embedding"}, False),
         ],
     )
-    async def test_endpoint_rejects_a_model_declared_non_chat_before_routing(
+    async def test_session_closes_on_a_model_declared_non_chat_before_routing(
         self, query_model: str | None, model_info: dict[str, object], rejected: bool
     ):
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
         )
+        from litellm.proxy.route_llm_request import endpoint_unsupported_by_model
 
         router: Final = litellm.Router(
             model_list=[
@@ -1043,10 +1044,16 @@ class TestResponsesWSDeclaredNonChatModel:
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
 
+        async def gated_pre_call(**kwargs):
+            unsupported = endpoint_unsupported_by_model(
+                route_type=kwargs["route_type"], data={"model": kwargs["model"]}, llm_router=router, team_id=None
+            )
+            if unsupported is not None:
+                raise unsupported
+            return {"model": kwargs["model"], "litellm_metadata": {}}, MagicMock()
+
         processor = MagicMock()
-        processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "embed-only", "litellm_metadata": {}}, MagicMock())
-        )
+        processor.common_processing_pre_call_logic = AsyncMock(side_effect=gated_pre_call)
 
         async def fake_llm_call():
             return None
@@ -1084,7 +1091,6 @@ class TestResponsesWSDeclaredNonChatModel:
             "/v1/responses is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
         )
         ws.close.assert_awaited_once_with(code=1008, reason="Pre-call error")
-        processor.common_processing_pre_call_logic.assert_not_awaited()
         mock_route_request.assert_not_awaited()
 
 

@@ -613,6 +613,16 @@ def test_an_empty_request_fallback_list_keeps_the_rejection(rig: _Rig) -> None:
     _assert_rejected(rig, response, marker, _openai_error("/v1/chat/completions", model, "/v1/embeddings"))
 
 
+def test_fallbacks_that_cannot_answer_chat_keep_the_rejection(rig: _Rig) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    fallbacks: Final = [rig.names["image_generation"], model, f"gate-missing-{uuid.uuid4().hex}"]
+    response: Final = rig.gateway.request(
+        "POST", "/v1/chat/completions", {**_chat_body(model, marker), "fallbacks": fallbacks}
+    )
+    _assert_rejected(rig, response, marker, _openai_error("/v1/chat/completions", model, "/v1/embeddings"))
+
+
 def test_request_fallbacks_do_not_rescue_an_unknown_primary(rig: _Rig) -> None:
     marker: Final = _marker()
     response: Final = rig.gateway.request(
