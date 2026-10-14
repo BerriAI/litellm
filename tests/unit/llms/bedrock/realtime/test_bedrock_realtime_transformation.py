@@ -8,6 +8,7 @@ import pytest
 import base64
 
 from litellm.llms.bedrock.realtime.transformation import (
+    DEFAULT_SYSTEM_PROMPT,
     TRIGGER_LEADING_SILENCE,
     TRIGGER_TRAILING_SILENCE,
     BedrockRealtimeConfig,
@@ -194,8 +195,6 @@ class TestBedrockRealtimeConfig:
         assert session_start["event"]["sessionStart"]["inferenceConfiguration"]["temperature"] == 0.9
 
     def test_session_update_without_instructions_sends_default_system_prompt(self):
-        from litellm.llms.bedrock.realtime.transformation import DEFAULT_SYSTEM_PROMPT
-
         config = BedrockRealtimeConfig()
         session_update = {
             "type": "session.update",
@@ -1558,6 +1557,50 @@ class TestBedrockRealtimeUserEventsAndUsage:
         # Changed tools or instructions conflict
         assert config.session_update_conflict(update(tools=[other_tool])) is not None
         assert config.session_update_conflict(update(instructions="Be brief.")) is not None
+
+    @pytest.mark.parametrize(
+        "session,expects_conflict",
+        [
+            ({"instructions": DEFAULT_SYSTEM_PROMPT}, False),
+            ({"instructions": ""}, False),
+            ({"voice": "amy"}, True),
+            ({"output_audio_format": "g711_ulaw"}, True),
+            ({"output_sample_rate_hertz": 8000}, True),
+            ({"temperature": 0.1}, True),
+            ({"max_response_output_tokens": 512}, True),
+            ({"voice": "matthew", "temperature": 0.7}, False),
+            ({"input_audio_format": "g711_alaw"}, False),
+        ],
+    )
+    def test_session_update_conflict_locked_settings(self, session, expects_conflict):
+        config: Final = BedrockRealtimeConfig()
+        config.transform_session_update_event({"type": "session.update", "session": {"modalities": ["text"]}})
+        assert config.prompt_started
+
+        conflict: Final = config.session_update_conflict({"type": "session.update", "session": session})
+        assert (conflict is not None) == expects_conflict
+
+    def test_session_update_after_start_leaves_locked_attributes_unchanged(self):
+        config: Final = BedrockRealtimeConfig()
+        config.transform_session_update_event({"type": "session.update", "session": {"modalities": ["text"]}})
+
+        config.transform_session_update_event(
+            {
+                "type": "session.update",
+                "session": {"voice": "amy", "output_audio_format": "g711_ulaw", "temperature": 0.1},
+            }
+        )
+        assert config.voice_id == "matthew"
+        assert config.output_sample_rate_hertz == 24000
+        assert config.temperature == 0.7
+
+        # Input audio settings still apply mid-session
+        config.transform_session_update_event(
+            {"type": "session.update", "session": {"input_audio_format": "g711_alaw"}}
+        )
+        assert config.input_sample_rate_hertz == 8000
+        config.transform_session_update_event({"type": "session.update", "session": {"input_sample_rate_hertz": 16000}})
+        assert config.input_sample_rate_hertz == 16000
 
     def test_stray_non_assistant_content_end_emits_no_duplicate_done_events(self):
         events: Final = self._run(

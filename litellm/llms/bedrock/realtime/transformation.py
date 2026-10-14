@@ -5,6 +5,7 @@ Transforms between OpenAI Realtime API format and Bedrock Nova Sonic format.
 """
 
 import base64
+import dataclasses
 import json
 import uuid as uuid_lib
 from collections.abc import Mapping
@@ -92,6 +93,18 @@ TRIGGER_AUDIO_CHUNK_SIZE: Final = 1024
 DEFAULT_SYSTEM_PROMPT: Final = "You are a helpful assistant."
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class BedrockLockedSessionSettings:
+    """The session settings Bedrock Nova Sonic locks in once the prompt starts."""
+
+    tools: str
+    system_prompt: str
+    voice_id: str
+    output_sample_rate_hertz: int
+    temperature: float
+    max_tokens: int
+
+
 class BedrockRealtimeConfig(BaseRealtimeConfig):
     """Configuration for Bedrock Nova Sonic realtime transformations."""
 
@@ -143,8 +156,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self._message_output_index = 0
         self._assistant_block_open = False
         self._response_done_pending = False
-        self._started_tools: str = json.dumps([], sort_keys=True)
-        self._started_instructions: str | None = None
+        self._started_settings = BedrockLockedSessionSettings(
+            tools=json.dumps([], sort_keys=True),
+            system_prompt=DEFAULT_SYSTEM_PROMPT,
+            voice_id=self.voice_id,
+            output_sample_rate_hertz=self.output_sample_rate_hertz,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
 
     def get_error_class(
         self,
@@ -205,7 +224,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # Add tool configuration if tools are provided
         if tools:
             prompt_start_config["toolUseOutputConfiguration"] = {"mediaType": "application/json"}
-            prompt_start_config["toolConfiguration"] = {"tools": self._transform_tools_to_bedrock_format(tools)}
+            prompt_start_config["toolConfiguration"] = {"tools": self._transform_tools_to_bedrock_format(tools)}  # pyright: ignore[reportArgumentType]  # toolConfiguration carries a tool list, unlike the scalar config keys
 
         prompt_start: Final = {"event": {"promptStart": prompt_start_config}}
 
@@ -269,28 +288,21 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         messages: Final[list[str]] = []
 
         session_config: Final = json_message.get("session", {})
+        locked_settings: Final = self._apply_locked_settings(session_config, self._started_settings)
 
-        # Update inference configuration from session if provided
-        if "max_response_output_tokens" in session_config:
-            self.max_tokens = session_config["max_response_output_tokens"]
-        if "temperature" in session_config:
-            self.temperature = session_config["temperature"]
-
-        # Update audio output configuration from session if provided
-        if "voice" in session_config:
-            self.voice_id = session_config["voice"]
-        if "output_audio_format" in session_config:
-            output_format: Final = session_config["output_audio_format"]
-            self.output_sample_rate_hertz = self._map_audio_format_to_sample_rate(output_format, is_output=True)
+        # Settings Bedrock locks at prompt start may only change before it
+        if not self.prompt_started:
+            self.max_tokens = locked_settings.max_tokens
+            self.temperature = locked_settings.temperature
+            self.voice_id = locked_settings.voice_id
+            self.output_sample_rate_hertz = locked_settings.output_sample_rate_hertz
 
         # Update audio input configuration from session if provided
         if "input_audio_format" in session_config:
             input_format: Final = session_config["input_audio_format"]
             self.input_sample_rate_hertz = self._map_audio_format_to_sample_rate(input_format, is_output=False)
 
-        # Allow direct override of sample rates if provided (custom extension)
-        if "output_sample_rate_hertz" in session_config:
-            self.output_sample_rate_hertz = session_config["output_sample_rate_hertz"]
+        # Allow direct override of the input sample rate if provided (custom extension)
         if "input_sample_rate_hertz" in session_config:
             self.input_sample_rate_hertz = session_config["input_sample_rate_hertz"]
 
@@ -330,16 +342,15 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         tools: Final = session_config.get("tools")
         if tools:
             prompt_start_config["toolUseOutputConfiguration"] = {"mediaType": "application/json"}
-            prompt_start_config["toolConfiguration"] = {"tools": self._transform_tools_to_bedrock_format(tools)}
+            prompt_start_config["toolConfiguration"] = {"tools": self._transform_tools_to_bedrock_format(tools)}  # pyright: ignore[reportArgumentType]  # toolConfiguration carries a tool list, unlike the scalar config keys
 
         prompt_start: Final = {"event": {"promptStart": prompt_start_config}}
         messages.append(json.dumps(prompt_start))
         self.prompt_started = True
-        self._started_tools = json.dumps(tools or [], sort_keys=True)
-        self._started_instructions = session_config.get("instructions")
+        self._started_settings = locked_settings
 
         # Bedrock requires the first content block in a prompt to be SYSTEM role
-        instructions: Final = str(session_config.get("instructions") or DEFAULT_SYSTEM_PROMPT)
+        instructions: Final = locked_settings.system_prompt
         text_content_name: Final = str(uuid_lib.uuid4())
 
         # Content start
@@ -382,6 +393,32 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         return messages
 
+    def _apply_locked_settings(
+        self, session_config: Mapping[str, JsonValue], base: BedrockLockedSessionSettings
+    ) -> BedrockLockedSessionSettings:
+        output_rate_hertz: Final = session_config.get("output_sample_rate_hertz")
+        temperature: Final = session_config.get("temperature")
+        max_output_tokens: Final = session_config.get("max_response_output_tokens")
+        return dataclasses.replace(
+            base,
+            tools=json.dumps(session_config["tools"] or [], sort_keys=True)
+            if "tools" in session_config
+            else base.tools,
+            system_prompt=str(session_config["instructions"] or DEFAULT_SYSTEM_PROMPT)
+            if "instructions" in session_config
+            else base.system_prompt,
+            voice_id=str(session_config["voice"]) if "voice" in session_config else base.voice_id,
+            output_sample_rate_hertz=int(output_rate_hertz)
+            if isinstance(output_rate_hertz, int)
+            else (
+                self._map_audio_format_to_sample_rate(str(session_config["output_audio_format"]), is_output=True)
+                if "output_audio_format" in session_config
+                else base.output_sample_rate_hertz
+            ),
+            temperature=float(temperature) if isinstance(temperature, (int, float)) else base.temperature,
+            max_tokens=int(max_output_tokens) if isinstance(max_output_tokens, int) else base.max_tokens,
+        )
+
     def session_update_conflict(self, json_message: Mapping[str, JsonValue]) -> str | None:
         """Error message when a session.update changes what Bedrock locked at prompt start."""
         if not self.prompt_started:
@@ -389,11 +426,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         session_config: Final = json_message.get("session")
         if not isinstance(session_config, Mapping):
             return None
-        if (
-            "tools" in session_config
-            and json.dumps(session_config.get("tools") or [], sort_keys=True) != self._started_tools
-        ) or ("instructions" in session_config and session_config.get("instructions") != self._started_instructions):
-            return "Bedrock Nova Sonic cannot change tools or instructions after the session has started, so this session.update was not applied"
+        if self._apply_locked_settings(session_config, self._started_settings) != self._started_settings:
+            return "Bedrock Nova Sonic cannot change tools, instructions, voice, output audio format, temperature or max output tokens after the session has started, so this session.update was not applied"
         return None
 
     def transform_input_audio_buffer_append_event(self, json_message: dict) -> list[str]:
