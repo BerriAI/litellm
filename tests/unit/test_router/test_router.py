@@ -8135,6 +8135,7 @@ async def test_anthropic_messages_call_type_is_cached():
                 model_map_key="gpt-3.5-turbo", model_map_value=None
             ),
             model="gpt-3.5-turbo",
+            custom_llm_provider="anthropic",
             model_id="model-123",
             model_group="openai-gpt",
             api_base="https://api.openai.com",
