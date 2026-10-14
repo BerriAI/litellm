@@ -74,6 +74,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import (
+    SESSION_CLEANUP_TIMEOUT_MESSAGE,
     MCPClient,
     PersistentMCPSession,
     UpstreamSessionClosedError,
@@ -1824,6 +1825,13 @@ def _mcp_discovery_cache_ttl() -> float:
         verbose_logger.warning("Invalid LITELLM_MCP_DISCOVERY_CACHE_TTL; using 60 seconds")
         return 60.0
     return ttl
+
+
+def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
+    """The MCP client raises its own CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE) when a session's
+    teardown outlives its budget while the listing task keeps running. That one is the server's fault,
+    anything else is a real cancellation."""
+    return error.args != (SESSION_CLEANUP_TIMEOUT_MESSAGE,)
 
 
 class MCPServerManager:
@@ -5569,7 +5577,10 @@ class MCPServerManager:
             verbose_logger.warning("Timeout while listing tools from %s", server_name)
             raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
         except asyncio.CancelledError as e:
-            verbose_logger.warning("Task cancelled while listing tools from %s", server_name)
+            if _listing_task_was_cancelled(e):
+                verbose_logger.debug("Task cancelled while listing tools from %s", server_name)
+                raise
+            verbose_logger.warning("Listing tools from %s was abandoned by the client session: %s", server_name, e)
             raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
         except ConnectionError as e:
             verbose_logger.warning("Connection error while listing tools from %s: %s", server_name, e)

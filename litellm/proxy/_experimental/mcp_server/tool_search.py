@@ -599,21 +599,20 @@ async def handle_mcp_proxy_tool(
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server.operations import (
         _list_mcp_tools,
+        find_mcp_proxy_tool,
     )
-
-    listing: Final = await _list_mcp_tools(
-        user_api_key_auth=user_api_key_dict,
-        mcp_servers=mcp_servers,
-        client_ip=client_ip,
-        mcp_auth_header=mcp_auth_header,
-        mcp_server_auth_headers=mcp_server_auth_headers,
-        oauth2_headers=oauth2_headers,
-        raw_headers=raw_headers,
-        mcp_proxy_mode=True,
-    )
-    tools_by_id: Final = {mcp_proxy_tool_id(tool): tool for tool in listing.tools}
 
     if name == MCP_PROXY_SEARCH_TOOL_NAME:
+        listing: Final = await _list_mcp_tools(
+            user_api_key_auth=user_api_key_dict,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            mcp_proxy_mode=True,
+        )
         llm_router: Final = proxy_server.llm_router
         proxy_logging_obj: Final = proxy_server.proxy_logging_obj
         settings: Final = mcp_tool_search_settings()
@@ -639,7 +638,20 @@ async def handle_mcp_proxy_tool(
         return _text_tool_result(json.dumps(tuple(_proxy_search_result(hit) for hit in results)), is_error=False)
 
     tool_id: Final = arguments.get("tool_id")
-    tool: Final = tools_by_id.get(tool_id) if isinstance(tool_id, str) else None
+    tool: Final = (
+        await find_mcp_proxy_tool(
+            tool_id,
+            user_api_key_auth=user_api_key_dict,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+        if isinstance(tool_id, str)
+        else None
+    )
     if tool is None:
         return _text_tool_result("Unknown or unauthorized tool_id", is_error=True)
 
