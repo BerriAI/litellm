@@ -5599,7 +5599,13 @@ def get_max_tokens(model: str) -> int | None:
 
 
 def _strip_stable_vertex_version(model_name) -> str:
-    return re.sub(r"-\d+$", "", model_name)
+    stripped_region: Final = re.sub(
+        r"(^|/)(?:[a-z0-9_-]+\.)+(?=gem(?:ini|ma)-)",
+        r"\1",
+        model_name,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"-\d+$", "", stripped_region)
 
 
 _DATED_SNAPSHOT_SUFFIX: Final = re.compile(r"-\d{4}-\d{2}-\d{2}$")
@@ -10285,8 +10291,14 @@ def get_prompt_cache_min_tokens(model: str) -> int:
     """
     if MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE is not None:
         return MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE
+    normalized_model: Final = re.sub(
+        r"(^|/)(?:[a-z0-9_-]+\.)+(?=gem(?:ini|ma)-)",
+        r"\1",
+        model,
+        flags=re.IGNORECASE,
+    )
     try:
-        min_tokens: Final = get_model_info(model=model).get("prompt_cache_min_tokens")
+        min_tokens: Final = get_model_info(model=normalized_model).get("prompt_cache_min_tokens")
     except Exception:
         return DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
     if min_tokens is None:
