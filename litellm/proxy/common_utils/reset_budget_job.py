@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Generic, Literal, Protocol, TypeVar
 
@@ -65,6 +66,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
     LinkedSpendResetWrites,
     budget_cascade_unit_of_work,
+    enduser_spend_reset_unit_of_work,
     spend_reset_unit_of_work,
 )
 from litellm.repositories.verification_token_repository import (
@@ -222,8 +224,8 @@ def _budget_link_where(
 def _enduser_invalidation_where(budget_ids: Sequence[str]) -> dict[str, object]:
     """Customers whose cached spend a committed reset of these tiers invalidated.
 
-    Mirrors ``_queue_enduser_resets`` without its ``spend > 0`` filter, which
-    post-commit would match nobody.
+    ``_enduser_reset_where`` adds the ``spend > 0`` filter, which post-commit
+    would match nobody.
     """
     linked: Final = _budget_link_where(budget_ids)
     default_budget_id: Final = litellm.max_end_user_budget_id
@@ -251,26 +253,45 @@ def _queue_budget_linked_resets(
         writes.queue_spend_zero(where=_budget_link_where(plain_ids, extra))
 
 
-def _queue_enduser_resets(writes: LinkedSpendResetWrites, cascade: "_BudgetCascade") -> None:
-    """End users reset on the budget link like every other gated table, plus a
-    NULL-budget_id branch: rows created implicitly persist no link and ride the
-    default tier (litellm.max_end_user_budget_id).
+def _enduser_reset_where(cascade: "_BudgetCascade") -> Mapping[str, object]:
+    """End users with spend to reset: linked to an expiring tier, or carrying
+    no link and riding the default tier (litellm.max_end_user_budget_id)."""
+    return {**_enduser_invalidation_where(cascade.budget_ids), **_SPENT_ROWS_WHERE}
 
-    Matching on the link rather than enumerating user ids keeps a statement's
-    bind count proportional to the expiring tiers instead of the customer
-    population, which past ~32,700 dependents exceeds PostgreSQL's per-statement
-    bind ceiling and wedges the cascade permanently (#40564).
+
+def _enduser_tier(row: _EndUserRow) -> str | None:
+    return row.budget_id if row.budget_id is not None else litellm.max_end_user_budget_id
+
+
+def _enduser_ids_by_tier(rows: Sequence[_EndUserRow]) -> Mapping[str | None, tuple[str, ...]]:
+    tiers: Final = tuple(dict.fromkeys(_enduser_tier(row) for row in rows))
+    return MappingProxyType(
+        {tier: tuple(row.user_id for row in rows if _enduser_tier(row) == tier) for tier in tiers}
+    )
+
+
+def _queue_enduser_page_resets(
+    writes: LinkedSpendResetWrites, rows: Sequence[_EndUserRow], cascade: "_BudgetCascade"
+) -> None:
+    """The statements of ``_queue_budget_linked_resets`` for one page of end
+    users, keyed by their user ids so each statement touches at most one page.
+
+    A statement matching the budget link reads the whole end-user table (no
+    index on budget_id) and updates every linked row at once, which past a few
+    million end users outlives the prisma client's 30s request timeout (#46404).
+    A page of ids stays under PostgreSQL's per-statement bind ceiling (#40564)
+    and the spend predicates still classify each row at write time.
     """
-    _queue_budget_linked_resets(writes, cascade, extra=_SPENT_ROWS_WHERE)
-    default_budget_id: Final = litellm.max_end_user_budget_id
-    if default_budget_id is None or default_budget_id not in cascade.budget_ids:
-        return
-    cap: Final = cascade.rollover_caps.get(default_budget_id)
+    for tier, user_ids in _enduser_ids_by_tier(rows).items():
+        _queue_enduser_tier_resets(writes, user_ids, cap=cascade.rollover_caps.get(tier) if tier is not None else None)
+
+
+def _queue_enduser_tier_resets(writes: LinkedSpendResetWrites, user_ids: Sequence[str], cap: float | None) -> None:
     if cap is None:
-        writes.queue_spend_zero(where={"budget_id": None, **_SPENT_ROWS_WHERE})
+        writes.queue_spend_zero(where={"user_id": {"in": list(user_ids)}, **_SPENT_ROWS_WHERE})
         return
-    writes.queue_spend_zero(where={"budget_id": None, "spend": {"gt": 0, "lte": cap}})
-    writes.queue_spend_decrement(where={"budget_id": None, "spend": {"gt": cap}}, amount=cap)
+    writes.queue_spend_zero(where={"user_id": {"in": list(user_ids)}, "spend": {"gt": 0, "lte": cap}})
+    writes.queue_spend_decrement(where={"user_id": {"in": list(user_ids)}, "spend": {"gt": cap}}, amount=cap)
 
 
 @dataclass(frozen=True, slots=True)
@@ -824,6 +845,49 @@ class ResetBudgetJob:
             ),
         )
 
+    async def _reset_enduser_spend(self, cascade: _BudgetCascade) -> int:
+        """Reset the end users the expiring tiers gate, one committed page at a time.
+
+        Runs before ``_commit_budget_cascade`` so a failure here leaves the
+        tiers due: the next tick resumes with the pages still carrying spend.
+        Each page invalidates its own caches right after its commit, so no
+        zeroed row sits behind a cached spend that still rejects requests.
+        Capless like ``_invalidate_enduser_caches``, for its reason.
+        """
+        if not cascade.budget_ids:
+            return 0
+        where: Final = _enduser_reset_where(cascade)
+        walk = _EndUserWalk()  # rebind-ok: keyset cursor advances one committed page at a time
+        while walk.cursor is not None:
+            walk = await self._reset_enduser_page(cascade, where=where, cursor=walk.cursor, reached=walk.invalidated)
+        return walk.invalidated
+
+    async def _reset_enduser_page(
+        self, cascade: _BudgetCascade, where: Mapping[str, object], cursor: str, reached: int
+    ) -> _EndUserWalk:
+        rows: Final = await self._fetch_enduser_page(where=where, cursor=cursor)
+        if not rows:
+            return _EndUserWalk(cursor=None, invalidated=reached)
+        await self._with_db_write_retry(
+            lambda: self._commit_enduser_page(rows, cascade),
+            reason="reset_budget_write_endusers_failure",
+        )
+        await self._invalidate_caches(
+            counter_keys=tuple(_enduser_counter_key(row) for row in rows),
+            cache_keys=tuple(chain.from_iterable(_enduser_cache_keys(row) for row in rows)),
+        )
+        walked: Final = reached + len(rows)
+        if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
+            return _EndUserWalk(cursor=None, invalidated=walked)
+        return _EndUserWalk(cursor=rows[-1].user_id, invalidated=walked)
+
+    async def _commit_enduser_page(self, rows: Sequence[_EndUserRow], cascade: _BudgetCascade) -> None:
+        async with (
+            db_span("reset_budget_endusers", "LiteLLM_EndUserTable"),
+            enduser_spend_reset_unit_of_work(self._new_batch) as writes,
+        ):
+            _queue_enduser_page_resets(writes, rows, cascade)
+
     async def _commit_budget_cascade(self, cascade: _BudgetCascade) -> None:
         """Zero the gated spend and advance ``budget_reset_at`` in one transaction.
 
@@ -851,7 +915,6 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
-            _queue_enduser_resets(uow.endusers, cascade)
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
@@ -878,6 +941,7 @@ class ResetBudgetJob:
             return _BudgetCascadeFailed(cascade=_EMPTY_CASCADE, error=e)
 
         try:
+            await self._reset_enduser_spend(cascade)
             await self._commit_budget_cascade(cascade)
         except Exception as e:
             return _BudgetCascadeFailed(cascade=cascade, error=e)
@@ -896,9 +960,10 @@ class ResetBudgetJob:
         """
         Resets the spend a budget tier gates (end users, team members, keys,
         orgs, tags, model access groups) and advances the tier's
-        budget_reset_at, atomically.
+        budget_reset_at. End users commit in pages first, everything else
+        lands with the window advance in one transaction.
 
-        Caches are invalidated only after the transaction commits, so a failed
+        Caches are invalidated only after the commit they follow, so a failed
         run cannot leave a zeroed counter in front of an un-reset DB row.
         """
         await _run_phase_in_chunks(self._reset_budget_for_litellm_budget_table_chunk)
@@ -929,8 +994,8 @@ class ResetBudgetJob:
             case _BudgetCascadeFailed(cascade=cascade, error=error):
                 verbose_proxy_logger.exception(
                     "Failed to reset the budget table cascade (team member, enduser, org, tag and model access "
-                    "group spend, plus budget_reset_at); nothing was committed and the budgets stay due for the "
-                    "next run: %s",
+                    "group spend, plus budget_reset_at); the budgets stay due for the next run, which resumes "
+                    "with the end-user pages not committed yet: %s",
                     error,
                     exc_info=error,
                 )
