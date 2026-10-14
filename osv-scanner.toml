@@ -5,8 +5,8 @@ reason = "diskcache has no fixed release published; remove this entry once one e
 
 [[IgnoredVulns]]
 id = "GHSA-h7x2-h6g9-p789"
-ignoreUntil = 2026-10-14
-reason = "mlflow has no fixed release published (3.16.0, 2026-09-04, and master still store gateway secret api_base unvalidated); remove this entry once one exists"
+ignoreUntil = 2026-11-01
+reason = "mlflow has no fixed release published (OSV still lists no fixed version as of 2026-10-14, latest release is 3.17.1); remove this entry once one exists"
 
 [[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"
