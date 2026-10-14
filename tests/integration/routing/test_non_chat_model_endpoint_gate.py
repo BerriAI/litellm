@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import json
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
@@ -41,12 +41,76 @@ _EMBEDDING_MODEL: Final = "text-embedding-3-small"
 _CHAT_MODEL: Final = "gpt-4o-mini"
 _SERVED_TEXT: Final = "served by the chat upstream"
 _VECTOR: Final = (0.25, 0.5, 0.75)
+_COUNTED_TOKENS: Final = 17
 _CLOSE: Final = MappingProxyType({"connection": "close"})
 _RELOAD_SECONDS: Final = 5
 _LONG_ENDPOINT: Final = "/v1/embeddings/" + "x" * 5000
 _EMBED_ONLY: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {"mode": "embedding", "supported_endpoints": ["/v1/embeddings"]}
 )
+_CHAT_ENDPOINTS: Final = frozenset(
+    {
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/completions",
+        "/completions",
+        "/v1/messages",
+        "/v1/responses",
+        "/responses",
+        "/v1beta/interactions",
+    }
+)
+_CHAT_MODES: Final = frozenset({"chat", "completion", "responses"})
+_CATALOG: Final = TypeAdapter(dict[str, JsonValue]).validate_json(
+    (Path(__file__).resolve().parents[3] / "litellm/model_prices_and_context_window_backup.json").read_bytes()
+)
+_CATALOG_ENTRIES: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
+    {
+        key: object_value(entry)
+        for key, entry in sorted(_CATALOG.items())
+        if isinstance(entry, dict) and key != "sample_spec"
+    }
+)
+
+
+def _listed_endpoints(entry: Mapping[str, JsonValue]) -> frozenset[str] | None:
+    listed: Final = entry.get("supported_endpoints")
+    if not isinstance(listed, list) or not listed or not all(isinstance(item, str) for item in listed):
+        return None
+    return frozenset(string_value(item) for item in listed)
+
+
+def _non_chat_mode(entry: Mapping[str, JsonValue]) -> bool:
+    mode: Final = entry.get("mode")
+    return isinstance(mode, str) and mode not in _CHAT_MODES
+
+
+def _lists_only_other_endpoints(entry: Mapping[str, JsonValue]) -> bool:
+    listed: Final = _listed_endpoints(entry)
+    return (
+        _non_chat_mode(entry)
+        and listed is not None
+        and listed.isdisjoint(_CHAT_ENDPOINTS)
+        and listed != {"/v1/embeddings"}
+    )
+
+
+def _lists_a_chat_endpoint(entry: Mapping[str, JsonValue]) -> bool:
+    listed: Final = _listed_endpoints(entry)
+    return _non_chat_mode(entry) and listed is not None and not listed.isdisjoint(_CHAT_ENDPOINTS)
+
+
+def _catalog_key(matches: Callable[[Mapping[str, JsonValue]], bool]) -> str:
+    return next(key for key, entry in _CATALOG_ENTRIES.items() if matches(entry))
+
+
+_CATALOG_CHAT_KEY: Final = _catalog_key(lambda entry: entry.get("mode") == "chat")
+_CATALOG_EMBEDDING_KEY: Final = _catalog_key(
+    lambda entry: entry.get("mode") == "embedding" and "supported_endpoints" not in entry
+)
+_CATALOG_OTHER_ENDPOINTS_KEY: Final = _catalog_key(_lists_only_other_endpoints)
+_CATALOG_CHAT_LISTED_KEY: Final = _catalog_key(_lists_a_chat_endpoint)
+_CATALOG_OTHER_ENDPOINTS_ENTRY: Final = _CATALOG_ENTRIES[_CATALOG_OTHER_ENDPOINTS_KEY]
 
 
 def _embedding_reply() -> Reply:
@@ -92,11 +156,13 @@ def _respond(request: Request) -> Reply:
     streamed: Final = body.get("stream") is True
     if path == "/v1/embeddings":
         return _embedding_reply()
+    if path == "/v1/responses/input_tokens":
+        return Reply(body=json.dumps({"object": "response.input_tokens", "input_tokens": _COUNTED_TOKENS}).encode())
     if body.get("model") != _CHAT_MODEL:
         return _not_a_chat_model()
     if path == "/v1/chat/completions":
         return chat_reply(f"chatcmpl-{uuid.uuid4().hex}", _CHAT_MODEL, _SERVED_TEXT, stream=streamed)
-    if path == "/v1/responses":
+    if path in ("/v1/responses", "/v1/responses/compact"):
         return responses_reply(f"resp_{uuid.uuid4().hex}", _CHAT_MODEL, _SERVED_TEXT, stream=streamed)
     if path == "/v1/completions":
         return _text_completion_reply()
@@ -153,6 +219,19 @@ _GATED: Final[Mapping[str, tuple[_Deployment, str]]] = MappingProxyType(
             ),
             "/embeddings, /v1/embeddings",
         ),
+        "catalog_key_lists_other_endpoints": (
+            _single({**_EMBED_ONLY, "key": _CATALOG_OTHER_ENDPOINTS_KEY}),
+            "/v1/embeddings",
+        ),
+        "catalog_key_names_an_embedding_entry": (
+            _single({**_EMBED_ONLY, "key": _CATALOG_EMBEDDING_KEY}),
+            "/v1/embeddings",
+        ),
+        "catalog_key_not_in_the_catalog": (
+            _single({**_EMBED_ONLY, "key": "gate-uncatalogued-entry"}),
+            "/v1/embeddings",
+        ),
+        "catalog_key_not_a_string": (_single({**_EMBED_ONLY, "key": 7}), "/v1/embeddings"),
     }
 )
 
@@ -176,14 +255,27 @@ _UNGATED: Final[Mapping[str, _Deployment]] = MappingProxyType(
         ),
         "lists_messages": _single({"mode": "embedding", "supported_endpoints": ["/v1/embeddings", "/v1/messages"]}),
         "lists_bare_responses": _single({"mode": "embedding", "supported_endpoints": ["/v1/embeddings", "/responses"]}),
+        "lists_generate_content": _single({"mode": "embedding", "supported_endpoints": ["generateContent"]}),
+        "lists_responses_compact": _single({"mode": "embedding", "supported_endpoints": ["/v1/responses/compact"]}),
         "mixed_group": _Deployment(f"openai/{_CHAT_MODEL}", (_EMBED_ONLY, {"mode": "chat"})),
+        "catalog_key_serves_chat": _single({**_EMBED_ONLY, "key": _CATALOG_CHAT_KEY}),
+        "catalog_key_lists_a_chat_endpoint": _single({**_EMBED_ONLY, "key": _CATALOG_CHAT_LISTED_KEY}),
+        "catalog_endpoints_echoed": _single(
+            {
+                "key": _CATALOG_OTHER_ENDPOINTS_KEY,
+                "mode": _CATALOG_OTHER_ENDPOINTS_ENTRY["mode"],
+                "supported_endpoints": _CATALOG_OTHER_ENDPOINTS_ENTRY["supported_endpoints"],
+            }
+        ),
     }
 )
 
 _SHARED: Final[Mapping[str, _Deployment]] = MappingProxyType(
     {
         "embedding_only": _single(_EMBED_ONLY, f"openai/{_EMBEDDING_MODEL}"),
+        "embedding_only_second": _single(_EMBED_ONLY, f"openai/{_EMBEDDING_MODEL}"),
         "chat_target": _single({"mode": "chat"}),
+        "chat_rate_limited": _single({"mode": "chat"}),
         **{name: deployment for name, (deployment, _supported) in _GATED.items()},
         **_UNGATED,
         "mode_not_a_string": _single(
@@ -300,11 +392,17 @@ def _failure_row(call_id: str) -> dict[str, JsonValue]:
     return rows[0]
 
 
-def _assert_rejected(rig: _Rig, response: httpx.Response, marker: str, expected: dict[str, JsonValue]) -> None:
+def _assert_rejected_before(
+    upstream: _Upstream, response: httpx.Response, marker: str, expected: dict[str, JsonValue]
+) -> None:
     assert response.status_code == 400, response.text
     assert JSON_OBJECT.validate_json(response.content) == expected, response.text
-    assert rig.upstream.calls(marker) == (), rig.upstream.targets(marker)
+    assert upstream.calls(marker) == (), upstream.targets(marker)
     assert _failure_row(response.headers["x-litellm-call-id"])["status"] == "failure"
+
+
+def _assert_rejected(rig: _Rig, response: httpx.Response, marker: str, expected: dict[str, JsonValue]) -> None:
+    _assert_rejected_before(rig.upstream, response, marker, expected)
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,6 +639,20 @@ async def _websocket_first_frame_and_close(
         return first, ws.close_code, ws.close_reason
 
 
+def _websocket_rejection(model: str) -> tuple[dict[str, JsonValue], int | None, str | None]:
+    return (
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": f"/v1/responses is not supported by model={model}. Supported endpoints: /v1/embeddings",
+            },
+        },
+        1008,
+        "Pre-call error",
+    )
+
+
 @pytest.mark.parametrize("aliased", [False, True])
 def test_responses_websocket_closes_on_an_embedding_only_model_before_the_upstream(rig: _Rig, aliased: bool) -> None:
     target: Final = rig.names["embedding_only"]
@@ -548,18 +660,37 @@ def test_responses_websocket_closes_on_an_embedding_only_model_before_the_upstre
     marker: Final = _marker()
     with rig.gateway.scenario() as scenario:
         key: Final = scenario.key(aliases={alias: target})
-        frame, close_code, close_reason = asyncio.run(
+        closed: Final = asyncio.run(
             _websocket_first_frame_and_close(rig.gateway, key, alias if aliased else target, marker)
         )
-    assert frame == {
-        "type": "error",
-        "error": {
-            "type": "invalid_request_error",
-            "message": f"/v1/responses is not supported by model={target}. Supported endpoints: /v1/embeddings",
-        },
-    }
-    assert (close_code, close_reason) == (1008, "Pre-call error")
+    assert closed == _websocket_rejection(target)
     assert rig.upstream.calls(marker) == ()
+
+
+_RESERVING_KEYS: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
+    {
+        "max_parallel_requests": {"max_parallel_requests": 1},
+        "tpm_limit": {"tpm_limit": 100, "default_estimated_output_tokens": 80},
+    }
+)
+
+
+@pytest.mark.parametrize("limit", tuple(_RESERVING_KEYS))
+def test_responses_websocket_rejections_leave_the_key_reservation_free(rig: _Rig, limit: str) -> None:
+    target: Final = rig.names["embedding_only"]
+    markers: Final = tuple(_marker() for _ in range(3))
+    served_marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(**_RESERVING_KEYS[limit])
+        closed: Final = tuple(
+            asyncio.run(_websocket_first_frame_and_close(rig.gateway, key, target, marker)) for marker in markers
+        )
+        assert closed == (_websocket_rejection(target),) * 3
+        served: Final = rig.gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(rig.names["chat_target"], served_marker), key=key
+        )
+        _assert_served(rig, served, served_marker, "/v1/chat/completions")
+    assert [rig.upstream.calls(marker) for marker in markers] == [()] * 3
 
 
 def test_team_scoped_embedding_only_model_is_rejected_under_its_public_name(rig: _Rig) -> None:
@@ -652,7 +783,7 @@ def test_an_empty_request_fallback_list_keeps_the_rejection(rig: _Rig) -> None:
 def test_fallbacks_that_cannot_answer_chat_keep_the_rejection(rig: _Rig) -> None:
     model: Final = rig.names["embedding_only"]
     marker: Final = _marker()
-    fallbacks: Final = [rig.names["image_generation"], model, f"gate-missing-{uuid.uuid4().hex}"]
+    fallbacks: Final = [rig.names["image_generation"], model]
     response: Final = rig.gateway.request(
         "POST", "/v1/chat/completions", {**_chat_body(model, marker), "fallbacks": fallbacks}
     )
@@ -669,6 +800,203 @@ def test_request_fallbacks_do_not_rescue_an_unknown_primary(rig: _Rig) -> None:
     assert response.status_code == 400, response.text
     assert "Invalid model name" in response.text, response.text
     assert rig.upstream.calls(marker) == ()
+
+
+def _chat(rig: _Rig, model: str, marker: str, *, key: str | None = None, **extra: JsonValue) -> httpx.Response:
+    return rig.gateway.request("POST", "/v1/chat/completions", {**_chat_body(model, marker), **extra}, key=key)
+
+
+def _assert_rejected_chat(rig: _Rig, response: httpx.Response, marker: str, model: str) -> None:
+    _assert_rejected(rig, response, marker, _openai_error("/v1/chat/completions", model, "/v1/embeddings"))
+
+
+def test_a_fallback_chain_that_reaches_chat_two_hops_away_answers(rig: _Rig) -> None:
+    first, second, chat = rig.names["embedding_only"], rig.names["embedding_only_second"], rig.names["chat_target"]
+    marker: Final = _marker()
+    response: Final = _chat(rig, first, marker, fallbacks=[{first: [second]}, {second: [chat]}])
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert rig.upstream.targets(marker) == ("/v1/chat/completions",) * 3
+
+
+def test_a_fallback_chain_that_loops_between_embedding_only_groups_keeps_the_rejection(rig: _Rig) -> None:
+    first, second = rig.names["embedding_only"], rig.names["embedding_only_second"]
+    marker: Final = _marker()
+    response: Final = _chat(rig, first, marker, fallbacks=[{first: [second]}, {second: [first]}])
+    _assert_rejected_chat(rig, response, marker, first)
+
+
+def test_a_specific_chain_that_loops_beats_a_catch_all_that_could_answer(rig: _Rig) -> None:
+    first, second = rig.names["embedding_only"], rig.names["embedding_only_second"]
+    marker: Final = _marker()
+    response: Final = _chat(
+        rig, first, marker, fallbacks=[{"*": [rig.names["chat_target"]]}, {first: [second]}, {second: [first]}]
+    )
+    _assert_rejected_chat(rig, response, marker, first)
+
+
+def test_disable_fallbacks_keeps_the_rejection_over_request_fallbacks(rig: _Rig) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    response: Final = _chat(rig, model, marker, fallbacks=[rig.names["chat_target"]], disable_fallbacks=True)
+    _assert_rejected_chat(rig, response, marker, model)
+
+
+def test_client_sent_metadata_disable_fallbacks_does_not_block_the_fallback(rig: _Rig) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    response: Final = _chat(
+        rig, model, marker, fallbacks=[rig.names["chat_target"]], metadata={"_disable_fallbacks": True}
+    )
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert rig.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+
+
+_MALFORMED_FALLBACKS: Final[Mapping[str, Callable[[_Rig], JsonValue]]] = MappingProxyType(
+    {
+        "a_string": lambda rig: rig.names["chat_target"],
+        "an_object": lambda rig: {rig.names["embedding_only"]: [rig.names["chat_target"]]},
+    }
+)
+
+
+@pytest.mark.parametrize("shape", tuple(_MALFORMED_FALLBACKS))
+def test_malformed_request_fallbacks_step_aside_for_the_router(rig: _Rig, shape: str) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    response: Final = _chat(rig, model, marker, fallbacks=_MALFORMED_FALLBACKS[shape](rig))
+    assert "Supported endpoints" not in response.text, response.text
+    assert rig.upstream.targets(marker)[:1] == ("/v1/chat/completions",), response.text
+
+
+def _through_a_group_with_no_deployments(rig: _Rig) -> Mapping[str, JsonValue]:
+    ghost: Final = f"gate-ghost-{uuid.uuid4().hex}"
+    return {"fallbacks": [{rig.names["embedding_only"]: [ghost]}, {ghost: [rig.names["chat_target"]]}]}
+
+
+def _with_a_client_routing_stamp(rig: _Rig) -> Mapping[str, JsonValue]:
+    model, second = rig.names["embedding_only"], rig.names["embedding_only_second"]
+    return {
+        "fallbacks": [{model: [rig.names["chat_target"]]}, {second: [model]}],
+        "metadata": {"model_group": second},
+    }
+
+
+_FALLBACKS_THE_CHECK_CANNOT_FOLLOW: Final[Mapping[str, Callable[[_Rig], Mapping[str, JsonValue]]]] = MappingProxyType(
+    {
+        "a_group_with_no_deployments": _through_a_group_with_no_deployments,
+        "a_client_routing_stamp": _with_a_client_routing_stamp,
+    }
+)
+
+
+@pytest.mark.parametrize("shape", tuple(_FALLBACKS_THE_CHECK_CANNOT_FOLLOW))
+def test_fallbacks_the_check_cannot_follow_step_aside_for_the_router(rig: _Rig, shape: str) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    response: Final = _chat(rig, model, marker, **_FALLBACKS_THE_CHECK_CANNOT_FOLLOW[shape](rig))
+    assert "Supported endpoints" not in response.text, response.text
+    assert rig.upstream.targets(marker)[:1] == ("/v1/chat/completions",), response.text
+
+
+def test_team_router_settings_fallbacks_answer_for_an_embedding_only_primary(rig: _Rig) -> None:
+    model, chat = rig.names["embedding_only"], rig.names["chat_target"]
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        team: Final = scenario.team(router_settings={"fallbacks": [{model: [chat]}]})
+        response: Final = _chat(rig, model, marker, key=scenario.key(team_id=team))
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert rig.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+
+
+def test_key_router_settings_fallbacks_answer_for_an_embedding_only_primary(rig: _Rig) -> None:
+    model, chat = rig.names["embedding_only"], rig.names["chat_target"]
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(router_settings={"fallbacks": [{model: [chat]}]})
+        response: Final = _chat(rig, model, marker, key=key)
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert rig.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+
+
+def test_key_router_settings_that_cannot_answer_override_team_fallbacks_that_could(rig: _Rig) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        team: Final = scenario.team(router_settings={"fallbacks": [{model: [rig.names["chat_target"]]}]})
+        key: Final = scenario.key(
+            team_id=team, router_settings={"fallbacks": [{model: [rig.names["embedding_only_second"]]}]}
+        )
+        response: Final = _chat(rig, model, marker, key=key)
+        _assert_rejected_chat(rig, response, marker, model)
+
+
+def test_an_empty_request_fallback_list_overrides_key_router_settings_fallbacks(rig: _Rig) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(router_settings={"fallbacks": [{model: [rig.names["chat_target"]]}]})
+        response: Final = _chat(rig, model, marker, key=key, fallbacks=[])
+        _assert_rejected_chat(rig, response, marker, model)
+
+
+def test_local_rate_limit_fallback_skips_an_embedding_only_hop(rig: _Rig) -> None:
+    limited, chat, model = rig.names["chat_rate_limited"], rig.names["chat_target"], rig.names["embedding_only"]
+    first, second = _marker(), _marker()
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(
+            model_rpm_limit={limited: 1}, router_settings={"fallbacks": [{limited: [model, chat]}]}
+        )
+        served_first: Final = _chat(rig, limited, first, key=key)
+        served_second: Final = _chat(rig, limited, second, key=key)
+    assert (served_first.status_code, served_first.headers.get("x-litellm-model-group")) == (200, limited), (
+        served_first.text
+    )
+    assert (served_second.status_code, served_second.headers.get("x-litellm-model-group")) == (200, chat), (
+        served_second.text
+    )
+    assert (rig.upstream.targets(first), rig.upstream.targets(second)) == (
+        ("/v1/chat/completions",),
+        ("/v1/chat/completions",),
+    )
+
+
+_COMPACT_PATHS: Final = ("/v1/responses/compact", "/responses/compact", "/openai/v1/responses/compact")
+
+
+def _compact_body(model: str, marker: str) -> dict[str, JsonValue]:
+    return {"model": model, "input": [{"role": "user", "content": marker}]}
+
+
+@pytest.mark.parametrize("path", _COMPACT_PATHS)
+def test_responses_compact_rejects_an_embedding_only_model_before_the_upstream(rig: _Rig, path: str) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    response: Final = rig.gateway.request("POST", path, _compact_body(model, marker))
+    _assert_rejected(rig, response, marker, _openai_error("/v1/responses/compact", model, "/v1/embeddings"))
+
+
+def test_responses_compact_keeps_reaching_the_upstream_for_a_chat_model(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = rig.gateway.request(
+        "POST", "/v1/responses/compact", _compact_body(rig.names["chat_target"], marker)
+    )
+    _assert_served(rig, response, marker, "/v1/responses/compact")
+
+
+def test_count_tokens_keeps_counting_for_an_embedding_only_model(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/messages/count_tokens",
+        {"model": rig.names["embedding_only"], "messages": [{"role": "user", "content": marker}]},
+    )
+    assert response.status_code == 200, response.text
+    assert JSON_OBJECT.validate_json(response.content)["input_tokens"] == _COUNTED_TOKENS, response.text
+    assert rig.upstream.targets(marker) == ("/v1/responses/input_tokens",)
 
 
 def test_text_completions_reject_an_embedding_only_model_before_the_upstream(rig: _Rig) -> None:
@@ -927,3 +1255,389 @@ def test_yaml_embedding_only_model_stays_gated_through_an_upstream_pause_and_a_w
                 for _ in range(6)
             )
             _assert_gated_burst(respawned, embed[0])
+
+
+@dataclass(frozen=True, slots=True)
+class _Routed:
+    gateway: Gateway
+    upstream: _Upstream
+    names: Mapping[str, str]
+
+
+def _routed_entry(name: str, api_base: str, litellm_model: str, info: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "model_name": name,
+        "litellm_params": {"model": litellm_model, "api_base": api_base, "api_key": _PROVIDER_KEY},
+        "model_info": dict(info),
+    }
+
+
+def _routed_config(directory: Path, api_base: str, names: Mapping[str, str]) -> Path:
+    shared: Final = _CONFIG.validate_python(yaml.safe_load((_TESTS_ROOT / "integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **shared,
+        "model_list": [
+            _routed_entry(names["embed"], api_base, f"openai/{_EMBEDDING_MODEL}", _EMBED_ONLY),
+            _routed_entry(names["chat"], api_base, f"openai/{_CHAT_MODEL}", {"mode": "chat"}),
+        ],
+        "router_settings": {
+            **object_value(shared["router_settings"]),
+            "num_retries": 0,
+            "default_fallbacks": [names["chat"]],
+            "model_group_alias": {names["alias_embed"]: names["embed"], names["alias_chat"]: names["chat"]},
+        },
+    }
+    path: Final = directory / "gate-routed-config.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return path
+
+
+@pytest.fixture(scope="module")
+def routed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Routed]:
+    directory: Final = tmp_path_factory.mktemp("gate-routed")
+    suffix: Final = uuid.uuid4().hex[:12]
+    names: Final = MappingProxyType(
+        {label: f"gate-routed-{label}-{suffix}" for label in ("embed", "chat", "alias_embed", "alias_chat")}
+    )
+    with (
+        wire_server(answering_model_discovery(_respond)) as wire,
+        gateway_from_environment() as rig_gateway,
+        owned_proxy_process(
+            rig_gateway, directory, {}, config=_routed_config(directory, wire.url + "/v1", names), workers=2
+        ) as owned,
+    ):
+        eventually(
+            lambda: owned.gateway.request("POST", "/v1/chat/completions", _chat_body(names["chat"], "probe")),
+            lambda response: response.status_code == 200,
+            seconds=30,
+        )
+        yield _Routed(owned.gateway, _Upstream(wire), names)
+
+
+_ROUTED_TIMEOUT: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+_DEFAULT_FALLBACK_ROUTES: Final[Mapping[str, str]] = MappingProxyType(
+    {"chat_v1": "/v1/chat/completions", "messages": "/v1/responses", "responses_v1": "/v1/responses"}
+)
+
+
+@_ROUTED_TIMEOUT
+@pytest.mark.parametrize("route", tuple(_DEFAULT_FALLBACK_ROUTES))
+def test_router_default_fallbacks_answer_for_an_embedding_only_group(routed: _Routed, route: str) -> None:
+    marker: Final = _marker()
+    response: Final = _send(routed.gateway, _ROUTES[route], routed.names["embed"], marker)
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert routed.upstream.targets(marker) == (_DEFAULT_FALLBACK_ROUTES[route],) * 2
+
+
+_OPT_OUTS: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
+    {
+        "empty_fallbacks": {"fallbacks": []},
+        "null_fallbacks": {"fallbacks": None},
+        "disable_fallbacks": {"disable_fallbacks": True},
+    }
+)
+
+
+@_ROUTED_TIMEOUT
+@pytest.mark.parametrize("opt_out", tuple(_OPT_OUTS))
+def test_request_opt_outs_keep_the_rejection_over_router_default_fallbacks(routed: _Routed, opt_out: str) -> None:
+    model: Final = routed.names["embed"]
+    marker: Final = _marker()
+    response: Final = routed.gateway.request(
+        "POST", "/v1/chat/completions", {**_chat_body(model, marker), **_OPT_OUTS[opt_out]}
+    )
+    _assert_rejected_before(
+        routed.upstream, response, marker, _openai_error("/v1/chat/completions", model, "/v1/embeddings")
+    )
+
+
+@_ROUTED_TIMEOUT
+def test_model_group_alias_to_an_embedding_only_group_falls_back_to_the_default(routed: _Routed) -> None:
+    marker: Final = _marker()
+    response: Final = routed.gateway.request(
+        "POST", "/v1/chat/completions", _chat_body(routed.names["alias_embed"], marker)
+    )
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert routed.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+
+
+@_ROUTED_TIMEOUT
+def test_model_group_alias_to_an_embedding_only_group_is_rejected_without_fallbacks(routed: _Routed) -> None:
+    alias: Final = routed.names["alias_embed"]
+    marker: Final = _marker()
+    response: Final = routed.gateway.request(
+        "POST", "/v1/chat/completions", {**_chat_body(alias, marker), "disable_fallbacks": True}
+    )
+    _assert_rejected_before(
+        routed.upstream, response, marker, _openai_error("/v1/chat/completions", alias, "/v1/embeddings")
+    )
+
+
+@_ROUTED_TIMEOUT
+def test_model_group_alias_to_a_chat_group_keeps_reaching_the_upstream(routed: _Routed) -> None:
+    marker: Final = _marker()
+    response: Final = routed.gateway.request(
+        "POST", "/v1/chat/completions", _chat_body(routed.names["alias_chat"], marker)
+    )
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert routed.upstream.targets(marker) == ("/v1/chat/completions",)
+
+
+@_ROUTED_TIMEOUT
+def test_model_group_alias_to_an_embedding_only_group_keeps_serving_embeddings(routed: _Routed) -> None:
+    marker: Final = _marker()
+    response: Final = _owned_embedding(routed.gateway, routed.names["alias_embed"], marker)
+    assert response.status_code == 200, response.text
+    assert list_value(
+        object_value(list_value(JSON_OBJECT.validate_json(response.content)["data"])[0])["embedding"]
+    ) == list(_VECTOR), response.text
+    assert routed.upstream.targets(marker) == ("/v1/embeddings",)
+
+
+_REWRITER: Final = """from litellm.integrations.custom_guardrail import CustomGuardrail
+
+
+class WebSocketModelRewriter(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if call_type == "_aresponses_websocket" and data.get("model") == "__SOURCE__":
+            data["model"] = "__TARGET__"
+        return data
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class _Rewritten:
+    gateway: Gateway
+    upstream: _Upstream
+    source: str
+    target: str
+
+
+def _rewritten_config(directory: Path, api_base: str, source: str, target: str, module: str) -> Path:
+    shared: Final = _CONFIG.validate_python(yaml.safe_load((_TESTS_ROOT / "integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **shared,
+        "model_list": [
+            _routed_entry(source, api_base, f"openai/{_CHAT_MODEL}", {"mode": "chat"}),
+            _routed_entry(target, api_base, f"openai/{_EMBEDDING_MODEL}", _EMBED_ONLY),
+        ],
+        "router_settings": {**object_value(shared["router_settings"]), "num_retries": 0},
+        "guardrails": [
+            {
+                "guardrail_name": f"{module}-guardrail",
+                "litellm_params": {
+                    "guardrail": f"{module}.WebSocketModelRewriter",
+                    "mode": "pre_call",
+                    "default_on": True,
+                },
+            }
+        ],
+    }
+    path: Final = directory / "gate-rewritten-config.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return path
+
+
+@pytest.fixture(scope="module")
+def rewritten(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rewritten]:
+    directory: Final = tmp_path_factory.mktemp("gate-rewritten")
+    suffix: Final = uuid.uuid4().hex[:12]
+    source: Final = f"gate-rewrite-chat-{suffix}"
+    target: Final = f"gate-rewrite-embed-{suffix}"
+    module: Final = f"gate_ws_rewriter_{suffix}"
+    (directory / f"{module}.py").write_text(_REWRITER.replace("__SOURCE__", source).replace("__TARGET__", target))
+    with (
+        wire_server(answering_model_discovery(_respond)) as wire,
+        gateway_from_environment() as rig_gateway,
+        owned_proxy_process(
+            rig_gateway,
+            directory,
+            {},
+            config=_rewritten_config(directory, wire.url + "/v1", source, target, module),
+            workers=2,
+        ) as owned,
+    ):
+        eventually(
+            lambda: owned.gateway.request("POST", "/v1/chat/completions", _chat_body(source, "probe")),
+            lambda response: response.status_code == 200,
+            seconds=30,
+        )
+        yield _Rewritten(owned.gateway, _Upstream(wire), source, target)
+
+
+@_ROUTED_TIMEOUT
+@pytest.mark.parametrize("limit", tuple(_RESERVING_KEYS))
+def test_a_websocket_model_a_hook_rewrites_to_an_embedding_only_group_releases_the_key_reservation(
+    rewritten: _Rewritten, limit: str
+) -> None:
+    markers: Final = tuple(_marker() for _ in range(3))
+    served_marker: Final = _marker()
+    with rewritten.gateway.scenario() as scenario:
+        key: Final = scenario.key(**_RESERVING_KEYS[limit])
+        closed: Final = tuple(
+            asyncio.run(_websocket_first_frame_and_close(rewritten.gateway, key, rewritten.source, marker))
+            for marker in markers
+        )
+        assert closed == (_websocket_rejection(rewritten.target),) * 3
+        served: Final = rewritten.gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(rewritten.source, served_marker), key=key
+        )
+        assert served.status_code == 200, served.text
+        assert _SERVED_TEXT in served.text, served.text
+    assert [rewritten.upstream.calls(marker) for marker in markers] == [()] * 3
+    assert rewritten.upstream.targets(served_marker) == ("/v1/chat/completions",)
+
+
+@dataclass(frozen=True, slots=True)
+class _Addressed:
+    gateway: Gateway
+    rig: Gateway
+    upstream: _Upstream
+    names: Mapping[str, str]
+    addresses: Mapping[str, str]
+    api_base: str
+
+
+def _addressed_config(directory: Path, api_base: str, names: Mapping[str, str], suffix: str) -> Path:
+    shared: Final = _CONFIG.validate_python(yaml.safe_load((_TESTS_ROOT / "integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **shared,
+        "model_list": [
+            _routed_entry(
+                names["embed"], api_base, f"openai/gate-addr-backend-{suffix}", {**_EMBED_ONLY, "id": names["embed_id"]}
+            ),
+            _routed_entry(names["chat"], api_base, f"openai/{_CHAT_MODEL}", {"mode": "chat", "id": names["chat_id"]}),
+            _routed_entry(names["shared_embed"], api_base, f"openai/{_CHAT_MODEL}", _EMBED_ONLY),
+        ],
+        "router_settings": {**object_value(shared["router_settings"]), "num_retries": 0},
+        "general_settings": {
+            **object_value(shared["general_settings"]),
+            "proxy_config_reload_interval_seconds": 3600,
+        },
+    }
+    path: Final = directory / "gate-addressed-config.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return path
+
+
+@pytest.fixture(scope="module")
+def addressed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Addressed]:
+    directory: Final = tmp_path_factory.mktemp("gate-addressed")
+    suffix: Final = uuid.uuid4().hex[:12]
+    names: Final = MappingProxyType(
+        {label: f"gate-addr-{label}-{suffix}" for label in ("embed", "embed_id", "chat", "chat_id", "shared_embed")}
+    )
+    with (
+        wire_server(answering_model_discovery(_respond)) as wire,
+        gateway_from_environment() as rig_gateway,
+        owned_proxy_process(
+            rig_gateway,
+            directory,
+            {},
+            config=_addressed_config(directory, wire.url + "/v1", names, suffix),
+            workers=2,
+        ) as owned,
+    ):
+        eventually(
+            lambda: owned.gateway.request("POST", "/v1/chat/completions", _chat_body(names["chat"], "probe")),
+            lambda response: response.status_code == 200,
+            seconds=30,
+        )
+        yield _Addressed(
+            owned.gateway,
+            rig_gateway,
+            _Upstream(wire),
+            names,
+            MappingProxyType(
+                {"deployment_id": names["embed_id"], "backend_name": f"openai/gate-addr-backend-{suffix}"}
+            ),
+            wire.url + "/v1",
+        )
+
+
+_ADDRESSED_ROUTES: Final = ("chat_v1", "messages", "responses_v1")
+
+
+@_ROUTED_TIMEOUT
+@pytest.mark.parametrize("route", _ADDRESSED_ROUTES)
+@pytest.mark.parametrize("address", ("deployment_id", "backend_name"))
+def test_chat_sent_to_an_embedding_only_deployment_id_or_backend_name_is_rejected_before_the_upstream(
+    addressed: _Addressed, address: str, route: str
+) -> None:
+    spec: Final = _ROUTES[route]
+    model: Final = addressed.addresses[address]
+    marker: Final = _marker()
+    response: Final = _send(addressed.gateway, spec, model, marker)
+    expected: Final = (
+        _anthropic_error(model, "/v1/embeddings")
+        if spec.anthropic_shape
+        else _openai_error(spec.endpoint, model, "/v1/embeddings")
+    )
+    _assert_rejected_before(addressed.upstream, response, marker, expected)
+
+
+@_ROUTED_TIMEOUT
+@pytest.mark.parametrize("address", ("deployment_id", "backend_name"))
+def test_embeddings_sent_to_an_embedding_only_deployment_id_or_backend_name_keep_working(
+    addressed: _Addressed, address: str
+) -> None:
+    marker: Final = _marker()
+    response: Final = _owned_embedding(addressed.gateway, addressed.addresses[address], marker)
+    assert response.status_code == 200, response.text
+    assert list_value(
+        object_value(list_value(JSON_OBJECT.validate_json(response.content)["data"])[0])["embedding"]
+    ) == list(_VECTOR), response.text
+    assert addressed.upstream.targets(marker) == ("/v1/embeddings",)
+
+
+@_ROUTED_TIMEOUT
+@pytest.mark.parametrize("address", ("chat_deployment_id", "backend_name_a_chat_deployment_shares"))
+def test_chat_sent_to_a_chat_capable_deployment_id_or_backend_name_keeps_reaching_the_upstream(
+    addressed: _Addressed, address: str
+) -> None:
+    model: Final = addressed.names["chat_id"] if address == "chat_deployment_id" else f"openai/{_CHAT_MODEL}"
+    marker: Final = _marker()
+    response: Final = addressed.gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert addressed.upstream.targets(marker) == ("/v1/chat/completions",)
+
+
+@_ROUTED_TIMEOUT
+def test_request_fallbacks_naming_a_chat_deployment_id_answer_for_an_embedding_only_primary(
+    addressed: _Addressed,
+) -> None:
+    marker: Final = _marker()
+    response: Final = addressed.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {**_chat_body(addressed.names["embed"], marker), "fallbacks": [addressed.names["chat_id"]]},
+    )
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert addressed.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+
+
+@_ROUTED_TIMEOUT
+def test_an_embedding_only_model_the_read_through_loads_from_the_database_is_rejected_on_every_call(
+    addressed: _Addressed,
+) -> None:
+    name: Final = f"gate-addr-loaded-{uuid.uuid4().hex[:12]}"
+    markers: Final = tuple(_marker() for _ in range(6))
+    with addressed.rig.scenario() as scenario:
+        identity: Final = _create(
+            addressed.rig, name, {"model": f"openai/{_EMBEDDING_MODEL}", "api_base": addressed.api_base}, _EMBED_ONLY
+        )
+        scenario.cleanups.callback(scenario.delete_model, identity)
+        responses: Final = tuple(
+            addressed.gateway.request("POST", "/v1/chat/completions", _chat_body(name, marker), headers=_CLOSE)
+            for marker in markers
+        )
+    expected: Final = _openai_error("/v1/chat/completions", name, "/v1/embeddings")
+    assert [(response.status_code, JSON_OBJECT.validate_json(response.content)) for response in responses] == [
+        (400, expected)
+    ] * len(markers), [response.text for response in responses]
+    assert [addressed.upstream.calls(marker) for marker in markers] == [()] * len(markers)

@@ -1971,10 +1971,19 @@ def test_endpoint_unsupported_follows_a_model_group_alias():
     assert error.message == "/v1/messages is not supported by model=embed-alias. Supported endpoints: /v1/embeddings"
 
 
+UNRELATED_WILDCARD_DEPLOYMENT: Final = {
+    "model_name": "openai/*",
+    "litellm_params": {"model": "openai/*", "api_key": "test-key"},
+}
+
+
 @pytest.mark.parametrize("model", ["embed-1", "sagemaker/openai/embed-endpoint"])
-def test_endpoint_unsupported_rejects_chat_sent_to_the_deployment_id_or_backend_model(model):
+@pytest.mark.parametrize("extra_deployments", [(), (UNRELATED_WILDCARD_DEPLOYMENT,)])
+def test_endpoint_unsupported_rejects_chat_sent_to_the_deployment_id_or_backend_model(model, extra_deployments):
     router: Final = _router_with(
-        _embedding_deployment("embed-only", {**EMBEDDING_ONLY, "id": "embed-1"}), CHAT_FALLBACK_DEPLOYMENT
+        _embedding_deployment("embed-only", {**EMBEDDING_ONLY, "id": "embed-1"}),
+        CHAT_FALLBACK_DEPLOYMENT,
+        *extra_deployments,
     )
 
     error: Final = _unsupported("acompletion", model, router)
@@ -1989,7 +1998,7 @@ def test_endpoint_unsupported_rejects_chat_sent_to_the_deployment_id_or_backend_
     "extra_deployments, router_kwargs",
     [
         ((), {"router_general_settings": RouterGeneralSettings(pass_through_all_models=True)}),
-        (({"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}},), {}),
+        (({"model_name": "sagemaker/*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}},), {}),
     ],
 )
 def test_endpoint_unsupported_leaves_a_backend_model_to_the_route_that_serves_it(extra_deployments, router_kwargs):
@@ -2037,6 +2046,22 @@ EMBEDDING_FALLBACK_DEPLOYMENT: Final = _embedding_deployment(
         ({"fallbacks": [{"embed-only": ["chat-fallback"]}]}, {"metadata": {"_disable_fallbacks": True}}),
         ({}, {"fallbacks": {"chat-fallback": ["embed-fallback"]}}),
         ({}, {"fallbacks": ["chat-fallback-id"]}),
+        ({"fallbacks": [{"embed-only": ["missing-group"]}]}, {}),
+        ({}, {"fallbacks": ["embed-fallback", "missing-group"]}),
+        ({"fallbacks": [{"embed-only": ["missing-group"]}, {"missing-group": ["chat-fallback"]}]}, {}),
+        ({}, {"fallbacks": ["openai/gpt-4o-mini"]}),
+        (
+            {"fallbacks": [{"embed-only": ["chat-alias"]}], "model_group_alias": {"chat-alias": "openai/gpt-4o-mini"}},
+            {},
+        ),
+        (
+            {"fallbacks": [{"embed-only": ["chat-fallback"]}, {"embed-fallback": ["embed-only"]}]},
+            {"metadata": {"model_group": "embed-fallback"}},
+        ),
+        (
+            {"fallbacks": [{"embed-only": ["chat-fallback"]}, {"embed-fallback": ["embed-only"]}]},
+            {"litellm_metadata": {"pre_routing_selected_model": "embed-fallback"}},
+        ),
     ],
 )
 def test_endpoint_unsupported_lets_a_configured_fallback_answer(router_kwargs, request_kwargs):
@@ -2063,9 +2088,7 @@ def test_endpoint_unsupported_lets_a_configured_fallback_answer(router_kwargs, r
         ({}, {"fallbacks": [], "router_settings_override": {"fallbacks": [{"embed-only": ["chat-fallback"]}]}}),
         ({"fallbacks": [{"embed-only": ["embed-fallback"]}]}, {}),
         ({"fallbacks": [{"embed-only": ["embed-only"]}]}, {}),
-        ({"fallbacks": [{"embed-only": ["missing-group"]}]}, {}),
         ({"default_fallbacks": ["embed-fallback"]}, {}),
-        ({}, {"fallbacks": ["embed-fallback", "missing-group"]}),
         ({}, {"fallbacks": ["embed-fallback-id"]}),
         ({}, {"fallbacks": [{"model": "embed-fallback", "temperature": 0.2}]}),
         ({"fallbacks": [{"embed-only": ["embed-alias"]}], "model_group_alias": {"embed-alias": "embed-fallback"}}, {}),

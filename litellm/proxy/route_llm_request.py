@@ -468,7 +468,7 @@ def _deployments_by_backend_name(model: str, llm_router: LitellmRouter) -> tuple
     if (
         model not in llm_router.deployment_names
         or llm_router.router_general_settings.pass_through_all_models
-        or llm_router.pattern_router.patterns
+        or llm_router.pattern_router.get_deployments_by_pattern(model=model)
     ):
         return ()
     return tuple(
@@ -565,7 +565,7 @@ def _walk_one_layer(
     return _FallbackWalk(
         frontier=tuple(group for group, deployments in deployments_by_group if deployments),
         seen=walk.seen | frozenset(fresh),
-        reaches_chat=any(deployments and _any_serves_chat(deployments) for _, deployments in deployments_by_group),
+        reaches_chat=any(not deployments or _any_serves_chat(deployments) for _, deployments in deployments_by_group),
     )
 
 
@@ -598,6 +598,8 @@ def _fallback_would_answer(
     try:
         fallbacks: Final = _FALLBACK_LIST_ADAPTER.validate_python(raw_fallbacks)
     except ValidationError:
+        return True
+    if fallback_lookup_groups(data, model) != (model,):
         return True
     return _fallbacks_reach_chat(model, data, fallbacks, llm_router, team_id)
 
