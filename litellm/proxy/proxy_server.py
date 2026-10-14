@@ -23,7 +23,6 @@ from collections.abc import (
     Callable,
     Collection,
     Mapping,
-    MutableMapping,
     Sequence,
 )
 from dataclasses import dataclass
@@ -2153,7 +2152,10 @@ class _ConfigOverridesRow(Protocol):
 
 
 class _SSOConfigRow(Protocol):
-    sso_settings: MutableMapping[str, object]
+    sso_settings: object
+
+
+_STORED_SSO_SETTINGS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 _SSO_SETTINGS_KEPT_OUT_OF_ENVIRONMENT: Final = frozenset({"role_mappings", "team_mappings", "ui_access_mode"})
@@ -8357,9 +8359,11 @@ class ProxyConfig:
         if not removed_sso_keys:
             return
         stored_sso_settings: Final = await self._stored_sso_settings(prisma_client)
+        if stored_sso_settings is None:
+            self._db_environment_keys = self._db_environment_keys | removed_sso_keys
+            return
         self._restore_environment_without_db(removed_sso_keys)
-        if stored_sso_settings is not None:
-            self._apply_sso_settings(stored_sso_settings)
+        self._apply_sso_settings(stored_sso_settings)
 
     def _warn_about_shadowed_db_settings(self) -> None:
         shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
@@ -8788,7 +8792,16 @@ class ProxyConfig:
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - %s", e
             )
             return None
-        return {} if sso_settings is None else sso_settings.sso_settings
+        if sso_settings is None:
+            return {}
+        try:
+            return _STORED_SSO_SETTINGS.validate_python(sso_settings.sso_settings)
+        except ValidationError as e:
+            verbose_proxy_logger.error(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - stored SSO settings are not a JSON object: %s",
+                e,
+            )
+            return None
 
     def _apply_sso_settings(self, stored_sso_settings: Mapping[str, object]) -> None:
         sso_environment_variables: Final = {

@@ -96,7 +96,9 @@ def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_proxy_config_preserves_models_when_config_read_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_proxy_config_preserves_models_when_config_read_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy import proxy_server
 
     router = litellm.Router(model_list=[_deployment("config-deployment").to_json(exclude_none=True)])
@@ -129,6 +131,8 @@ async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
 
     assert desired == frozenset({"kept-deployment"})
     assert router.get_model_ids() == ["kept-deployment"]
+
+
 from tests._master_key import MASTER_KEY
 
 
@@ -142,7 +146,6 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
     assert is_lens_tracing_enabled(settings["tracing"], {}) is True
-
 
 
 @pytest.mark.asyncio
@@ -170,7 +173,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
         async with manage_tracing(enabled=True, client_factory=client):
-            logger: Final = next(callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter))
+            logger: Final = next(
+                callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter)
+            )
             await logger.async_log_success_event(
                 {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
             )
@@ -184,7 +189,6 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     assert rows[0]["response_id"] == "response-1"
     assert logger not in litellm._async_success_callback
     assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
-
 
 
 # ---------------------------------------------------------------------------
@@ -3801,7 +3805,9 @@ async def _sync_db_env_row(
     prisma_client: MagicMock | None = None,
 ) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
-    stored: Final = {key: encrypt_value_helper(value) if isinstance(value, str) else value for key, value in row.items()}
+    stored: Final = {
+        key: encrypt_value_helper(value) if isinstance(value, str) else value for key, value in row.items()
+    }
 
     async def get_config_param(_, param_name):
         if param_name != "environment_variables":
@@ -4047,6 +4053,44 @@ async def test_ProxyConfig_sso_key_moved_to_the_sso_table_stays_set_while_the_ta
     await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
 
     assert os.environ.get("GOOGLE_CLIENT_ID") == "table-read-saw-env-row-id"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sso_key_removed_while_the_sso_table_read_fails_keeps_its_value_until_a_read_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=[
+            RuntimeError("sso table read failed"),
+            SimpleNamespace(sso_settings={"google_client_id": encrypt_value_helper("sso-table-id")}),
+        ]
+    )
+    pc: Final = ProxyConfig()
+
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {}, prisma_client)
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+    while_the_read_fails: Final = os.environ.get("GOOGLE_CLIENT_ID")
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+
+    assert (while_the_read_fails, os.environ.get("GOOGLE_CLIENT_ID")) == ("env-row-id", "sso-table-id")
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sso_row_that_is_not_a_json_object_keeps_the_current_sso_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "already-applied")
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=SimpleNamespace(sso_settings="not-a-json-object")
+    )
+
+    await ProxyConfig()._init_sso_settings_in_db(prisma_client)
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "already-applied"
 
 
 @pytest.mark.asyncio
@@ -5219,7 +5263,9 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
+    monkeypatch, ui_settings_already_synced
+):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
