@@ -1062,35 +1062,32 @@ _extract_model_from_bedrock_endpoint: Final = extract_model_from_bedrock_endpoin
 AWS_ERROR_TYPE_HEADER: Final = "x-amzn-errortype"
 
 
-def _is_guardrail_refusal(error: Exception) -> bool:
-    """A block raised by a guardrail, as opposed to a request check that answers with the same 400, 403 or 422, or a
-    guardrail that could not reach its vendor and failed closed with a 5xx.
+def _guardrail_refusal_status(error: Exception) -> int | None:
+    """The status a guardrail blocked the request with. None for a request check that answers with the same 400, 403
+    or 422, and for a guardrail that could not reach its vendor and failed closed with a 5xx.
 
     Guardrail hooks stamp ``guardrail_name`` onto the detail of an HTTPException they raise."""
-    match error:
-        case HTTPException(detail=dict() as detail):
-            return is_guardrail_intervention(error) and "guardrail_name" in detail
-        case GuardrailRaisedException() | BlockedPiiEntityError():
-            return error.status_code < 500
-        case _:
-            return False
+    if isinstance(error, HTTPException):
+        detail: Final[object] = error.detail
+        stamped: Final = isinstance(detail, dict) and "guardrail_name" in detail
+        return error.status_code if stamped and is_guardrail_intervention(error) else None
+    if isinstance(error, (GuardrailRaisedException, BlockedPiiEntityError)) and error.status_code < 500:
+        return error.status_code
+    return None
 
 
 def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:
-    """Bedrock's own error response, when ``handled`` is the unchanged conversion of it by the shared handler."""
+    """Bedrock's own error response, for an error Bedrock answered with an AWS error type."""
     if not isinstance(error, httpx.HTTPStatusError):
         return None
     upstream: Final = error.response
-    if handled.detail != {"error": upstream.content.decode("utf-8")}:
-        return None
-    error_type: Final = upstream.headers.get(AWS_ERROR_TYPE_HEADER)
-    if error_type is None:
+    if AWS_ERROR_TYPE_HEADER not in upstream.headers:
         return None
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,
-        headers={**(handled.headers or {}), AWS_ERROR_TYPE_HEADER: error_type},
-        media_type=upstream.headers.get("content-type", "application/json"),
+        headers={**(handled.headers or {}), AWS_ERROR_TYPE_HEADER: upstream.headers[AWS_ERROR_TYPE_HEADER]},
+        media_type=upstream.headers["content-type"] if "content-type" in upstream.headers else "application/json",
     )
 
 
@@ -1115,7 +1112,8 @@ async def bedrock_passthrough_error_response(
             raise
         return response
     except ProxyException as handled:
-        if _is_guardrail_refusal(error):
+        refusal_status: Final = _guardrail_refusal_status(error)
+        if refusal_status is not None and str(refusal_status) == handled.code:
             raise AwsErrorTypeProxyException(handled, "ValidationException") from handled
         raise
 

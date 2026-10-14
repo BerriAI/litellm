@@ -1660,17 +1660,7 @@ class TestBedrockLLMProxyRoute:
 
         bedrock_error_message = '{"message":"ContentBlock object at messages.0.content.0 must set one of the following keys: text, image, toolUse, toolResult, document, video."}'
 
-        # Create a mock httpx.Response for the error
-        mock_error_response = Mock(spec=httpx.Response)
-        mock_error_response.status_code = 400
-        mock_error_response.aread = AsyncMock(return_value=bedrock_error_message.encode("utf-8"))
-
-        # Create the HTTPStatusError
-        mock_http_error = httpx.HTTPStatusError(
-            message="Bad Request",
-            request=Mock(spec=httpx.Request),
-            response=mock_error_response,
-        )
+        mock_http_error = _bedrock_status_error(400, bedrock_error_message.encode("utf-8"))
 
         # Create mocks for all required parameters
         mock_request = MagicMock(spec=Request)
@@ -2030,18 +2020,31 @@ class TestBedrockPassthroughAwsErrors:
 
     @pytest.mark.asyncio
     async def test_bedrock_error_replaced_by_a_failure_hook_keeps_the_replacement(self) -> None:
-        replacement: Final = _bedrock_status_error(
-            429, b'{"message":"rewritten by a callback"}', {"x-amzn-errortype": _THROTTLE_TYPE}
-        )
+        replacement: Final = HTTPException(status_code=503, detail={"error": "rewritten by a callback"})
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ProxyException) as exc_info:
             await self._drive(
                 "router",
                 _bedrock_status_error(429, _THROTTLE_BODY, {"x-amzn-errortype": _THROTTLE_TYPE}),
                 failure_hook_result=replacement,
             )
 
-        assert exc_info.value.detail == {"error": '{"message":"rewritten by a callback"}'}
+        assert not isinstance(exc_info.value, AwsErrorTypeProxyException)
+        assert (exc_info.value.message, exc_info.value.code) == ("rewritten by a callback", "503")
+
+    @pytest.mark.asyncio
+    async def test_guardrail_block_replaced_by_a_failure_hook_keeps_the_replacement(self) -> None:
+        replacement: Final = HTTPException(status_code=429, detail={"error": "try again later"})
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._drive(
+                "router",
+                HTTPException(status_code=400, detail=_guardrail_detail("Violated guardrail policy")),
+                failure_hook_result=replacement,
+            )
+
+        assert not isinstance(exc_info.value, AwsErrorTypeProxyException)
+        assert (exc_info.value.message, exc_info.value.code) == ("try again later", "429")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("route", ("router", "direct"))
@@ -2050,7 +2053,9 @@ class TestBedrockPassthroughAwsErrors:
         (
             pytest.param(
                 GuardrailRaisedException(
-                    guardrail_name="block-demo", message="synthetic policy says no", should_wrap_with_default_message=False
+                    guardrail_name="block-demo",
+                    message="synthetic policy says no",
+                    should_wrap_with_default_message=False,
                 ),
                 "synthetic policy says no",
                 "400",

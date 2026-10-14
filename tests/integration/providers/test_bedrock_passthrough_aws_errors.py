@@ -316,9 +316,7 @@ def test_bedrock_error_reaches_the_caller_as_bedrock_sent_it(
 
 @pytest.mark.parametrize("action", ("converse-stream", "converse"))
 @pytest.mark.parametrize("guardrail", (UNGUARDED, POST_CALL))
-def test_boto3_sees_bedrock_throttling_and_retries_it_as_against_bedrock(
-    rig: Rig, action: str, guardrail: str
-) -> None:
+def test_boto3_sees_bedrock_throttling_and_retries_it_as_against_bedrock(rig: Rig, action: str, guardrail: str) -> None:
     marker: Final = f"upstream-{uuid.uuid4().hex}"
     rig.errors[marker] = THROTTLED
     error: Final = rig.call(guardrail, action, marker, attempts=3)

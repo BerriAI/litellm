@@ -2076,7 +2076,7 @@ async def aws_error_type_exception_handler(request: Request, exc: AwsErrorTypePr
     response: Final = await openai_exception_handler(request, exc)
     return JSONResponse(
         status_code=response.status_code,
-        content={"message": exc.message, **JSON_OBJECT.validate_json(response.body)},
+        content={"message": exc.message, **JSON_OBJECT.validate_json(bytes(response.body))},
         headers={**exc.headers, "x-amzn-errortype": exc.aws_error_type},
     )
 
