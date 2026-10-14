@@ -2,6 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
+import hashlib
 import json
 import re
 import uuid
@@ -117,6 +118,30 @@ NamespaceTool: TypeAlias = Mapping[str, object]
 ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
+# Bedrock Converse and OpenAI Chat Completions reject function names longer than 64 characters.
+MAX_FLATTENED_TOOL_NAME_LENGTH: Final = 64
+FLATTENED_TOOL_NAME_DIGEST_LENGTH: Final = 8
+
+
+def flatten_namespace_tool_name(namespace: str, tool_name: str) -> str:
+    """Join a Responses namespace and tool name into one chat function name.
+
+    A name over the provider limit keeps the tool name and shortens the
+    namespace to a prefix plus a digest of the full name, so the model can
+    still tell the tools apart. A tool name too long on its own is truncated
+    before the digest instead. The result depends only on the inputs, so
+    outbound tools, replayed history, and the reverse map always agree.
+    """
+    flattened: Final = f"{namespace}__{tool_name}"
+    if len(flattened) <= MAX_FLATTENED_TOOL_NAME_LENGTH:
+        return flattened
+    digest: Final = hashlib.sha256(flattened.encode()).hexdigest()[:FLATTENED_TOOL_NAME_DIGEST_LENGTH]
+    namespace_budget: Final = MAX_FLATTENED_TOOL_NAME_LENGTH - len(f"_{digest}__{tool_name}")
+    if namespace_budget > 0:
+        return f"{namespace[:namespace_budget]}_{digest}__{tool_name}"
+    return f"{tool_name[: MAX_FLATTENED_TOOL_NAME_LENGTH - FLATTENED_TOOL_NAME_DIGEST_LENGTH - 1]}_{digest}"
+
+
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
 _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
     MappingProxyType({"length": "max_output_tokens", "content_filter": "content_filter", "refusal": "content_filter"})
@@ -1754,7 +1779,7 @@ class LiteLLMCompletionResponsesConfig:
             id=function_call.get("call_id") or function_call.get("id") or "",
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
-                name=f"{namespace}__{raw_name}" if qualify else raw_name,
+                name=flatten_namespace_tool_name(namespace, raw_name) if qualify else raw_name,
                 arguments=serialize_tool_call_arguments(raw_arguments),
             ),
             index=0,
@@ -1945,7 +1970,7 @@ class LiteLLMCompletionResponsesConfig:
             parameters if parameters and "type" in parameters else MappingProxyType({**parameters, "type": "object"})
         )
         tool_name: Final = str(namespace_tool.get("name") or "")
-        chat_tool_name: Final = f"{namespace}__{tool_name}" if nested else tool_name
+        chat_tool_name: Final = flatten_namespace_tool_name(namespace, tool_name) if nested else tool_name
         function: Final = ChatCompletionToolParamFunctionChunk(
             name=chat_tool_name,
             description=description,
@@ -1988,7 +2013,7 @@ class LiteLLMCompletionResponsesConfig:
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
         flattened_namespace_names: Final = frozenset(
-            f"{(tool.get('name') or '')!s}__{(namespace_tool.get('name') or '')!s}"
+            flatten_namespace_tool_name(f"{tool.get('name') or ''!s}", f"{namespace_tool.get('name') or ''!s}")
             for tool in tools or ()
             if tool.get("type") == "namespace"
             for namespace_tools in (tool.get("tools"),)
@@ -2156,7 +2181,8 @@ class LiteLLMCompletionResponsesConfig:
             if tool_name not in top_level_function_names and unqualified_counts[tool_name] == 1
         )
         qualified_entries: Final = tuple(
-            (f"{namespace}__{tool_name}", (namespace, tool_name)) for namespace, tool_name in namespace_entries
+            (flatten_namespace_tool_name(namespace, tool_name), (namespace, tool_name))
+            for namespace, tool_name in namespace_entries
         )
         return MappingProxyType(dict(qualified_entries + unambiguous_entries))
 

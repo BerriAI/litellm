@@ -2352,6 +2352,58 @@ class TestToolTransformation:
 
         assert messages[0]["tool_calls"][0]["function"]["name"] == "mcp__everything__get_sum"
 
+    def test_long_namespace_tool_names_fit_limit_and_round_trip(self):
+        """Codex app connector tools flatten to names past the 64-character
+        function name limit, which Bedrock Converse rejects with a 400. Each
+        flattened name must fit, stay unique, keep the tool name the model reads
+        when it fits, match on history echo, and restore to its namespace."""
+        namespace: Final = "mcp__codex_apps__atlassian_rovo__legacy"
+        tool_names: Final = (
+            "atlassian_rovo_legacy_addcommenttojiraissue",
+            "atlassian_rovo_legacy_addworklogtojiraissue",
+            "x" * 60,
+        )
+        request_tools: Final = [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "description": "Atlassian tools",
+                "tools": [
+                    {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+                    for name in tool_names
+                ],
+            }
+        ]
+
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=request_tools
+        )
+        chat_names: Final = [tool["function"]["name"] for tool in chat_tools]
+
+        assert all(len(name) <= 64 for name in chat_names), chat_names
+        assert len(set(chat_names)) == len(tool_names), chat_names
+        assert chat_names[0].endswith("__" + tool_names[0]), chat_names[0]
+        assert chat_names[1].endswith("__" + tool_names[1]), chat_names[1]
+
+        echoed: Final = (
+            LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+                function_call={
+                    "type": "function_call",
+                    "name": tool_names[0],
+                    "namespace": namespace,
+                    "call_id": "call_long",
+                    "arguments": "{}",
+                }
+            )
+        )
+        assert echoed[0]["tool_calls"][0]["function"]["name"] == chat_names[0]
+
+        names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
+        restored: Final = [
+            LiteLLMCompletionResponsesConfig._restore_namespace_tool_name(name, names) for name in chat_names
+        ]
+        assert restored == [(name, namespace) for name in tool_names]
+
     def test_custom_tool_call_echo_keeps_short_name(self):
         """Custom tools stay advertised under their short name, so a namespace on
         a custom_tool_call echo is routing metadata and must not be prefixed."""
