@@ -136,7 +136,7 @@ _PROVIDERS: Final = (
     ),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
-_OPENROUTER: Final = _PROVIDERS[2]
+_OPENROUTER: Final = next(provider for provider in _PROVIDERS if provider.name == "openrouter")
 _OPENROUTER_CHAT_MODEL: Final = "openrouter/openai/gpt-5-mini"
 _UNSUPPORTED_PROVIDER_MODEL: Final = "anthropic/claude-opus-5-5"
 _CONNECTION_ERROR: Final = "litellm.APIConnectionError"
@@ -588,14 +588,17 @@ async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gatew
             api_base=dead_api_base,
             api_key=_API_KEY,
         )
-    with pytest.raises(litellm.APIConnectionError):
+    with pytest.raises(litellm.APIConnectionError) as decisions_error:
         litellm.decisions(
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
-    with pytest.raises(litellm.APIConnectionError):
+    assert decisions_error.value.llm_provider == "openrouter"
+    with pytest.raises(litellm.APIConnectionError) as systemone_error:
         await litellm.asystemone(
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
+
+    assert systemone_error.value.llm_provider == "openrouter"
 
 
 def test_a_deployment_whose_provider_has_no_decisions_support_is_refused_naming_every_supported_provider(
