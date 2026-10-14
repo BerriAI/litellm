@@ -1407,7 +1407,7 @@ def test_user_aggregate_fails_closed_when_owned_key_lookup_errors(
 ) -> None:
     from litellm.proxy.management_endpoints import daily_activity_routes
 
-    async def fail_key_lookup(*args: object, **kwargs: object) -> list[str]:
+    async def fail_key_lookup(_prisma_client: object, _user_id: str, _api_key: str | None) -> Sequence[str]:
         raise RuntimeError("key lookup failed")
 
     client, repository = daily_activity_client

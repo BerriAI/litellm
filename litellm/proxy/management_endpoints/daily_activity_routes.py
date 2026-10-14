@@ -99,6 +99,21 @@ async def _resolved_scope(
     return result
 
 
+async def _user_aggregate_scope_by_owned_keys(
+    resolved: ResolvedScope, query: EntityQuery, prisma_client: PrismaClient
+) -> ResolvedScope:
+    scope: Final = resolved.scope
+    if scope.entity_ids is None:
+        return resolved
+    user_ids: Final = scope.entity_ids
+    api_keys: Final = (
+        await get_user_api_key_filter(prisma_client, user_ids[0], query.api_key)
+        if len(user_ids) == 1
+        else ()
+    )
+    return replace(resolved, scope=replace(scope, entity_ids=None, api_keys=tuple(api_keys)))
+
+
 def _sum_metrics(metrics: Sequence[SpendMetrics]) -> SpendMetrics:
     return SpendMetrics(
         spend=sum(metric.spend for metric in metrics),
@@ -287,21 +302,15 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 prisma_client,
                 user_aggregated=resolver.entity == "user",
             )
-            if resolver.entity == "user" and resolved.scope.entity_ids is not None:
-                user_ids: Final = resolved.scope.entity_ids
-                api_keys: Final = (
-                    await get_user_api_key_filter(prisma_client, user_ids[0], entity_query.api_key)
-                    if len(user_ids) == 1
-                    else ()
-                )
-                resolved = replace(
-                    resolved,
-                    scope=replace(resolved.scope, entity_ids=None, api_keys=tuple(api_keys)),
-                )
+            user_aggregate: Final = (
+                await _user_aggregate_scope_by_owned_keys(resolved, entity_query, prisma_client)
+                if resolver.entity == "user"
+                else resolved
+            )
             return await get_daily_activity_aggregated(
                 repository,
-                resolved.scope,
-                entity_metadata_field=resolved.entity_metadata,
+                user_aggregate.scope,
+                entity_metadata_field=user_aggregate.entity_metadata,
                 include_entity_breakdown=resolver.include_entity_breakdown,
                 api_key_limit=api_key_limit,
             )
