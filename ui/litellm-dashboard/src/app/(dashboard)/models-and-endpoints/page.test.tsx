@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
+import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import ModelsAndEndpointsPage from "./page";
+
+vi.mock("@/lib/telemetry/uiEvents", () => ({ recordUiEvent: vi.fn(() => Promise.resolve()) }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/ui/models-and-endpoints" }));
 
 vi.mock("./panels/AllModelsPanel", () => ({ default: () => <div data-testid="panel-all-models" /> }));
 vi.mock("./panels/AddModelPanel", () => ({ default: () => <div data-testid="panel-add" /> }));
@@ -248,6 +252,19 @@ describe("ModelsAndEndpointsPage", () => {
 
       expect(screen.getByRole("tab", { name: "Deployed Models" })).toHaveAttribute("aria-selected", "true");
       expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
+    });
+
+    it("records a UI event for each tab the user clicks", async () => {
+      const user = userEvent.setup();
+      renderPage();
+
+      await user.click(screen.getByRole("tab", { name: "Health Status" }));
+
+      expect(recordUiEvent).toHaveBeenCalledWith({
+        page: "models-and-endpoints",
+        action: "click",
+        target: "tab=health",
+      });
     });
 
     it("writes the clicked tab to the URL and clears it for Deployed Models", async () => {

@@ -40,6 +40,13 @@ const GARDEN_COST_MAP = {
 const ADDABLE_PROVIDER_FIELDS = [
   { provider: "TypeSafe", provider_display_name: "TypeSafe", litellm_provider: "typesafe", credential_fields: [] },
   { provider: "Laya", provider_display_name: "Laya", litellm_provider: "laya", credential_fields: [] },
+  { provider: "OpenAI", provider_display_name: "OpenAI", litellm_provider: "openai", credential_fields: [] },
+  {
+    provider: "Azure_AI_Studio",
+    provider_display_name: "Azure AI Foundry (Studio)",
+    litellm_provider: "azure_ai",
+    credential_fields: [],
+  },
 ];
 
 vi.mock("next/navigation", () => ({
@@ -324,10 +331,16 @@ describe("ModelHubTable", () => {
         userRole = "Admin",
         canAddModels = true,
         loadProxySettings = async () => ({ decision_model_providers: ["typesafe", "cloudflare"] }),
-      }: { userRole?: string; canAddModels?: boolean; loadProxySettings?: () => Promise<unknown> } = {},
+        costMap = GARDEN_COST_MAP,
+      }: {
+        userRole?: string;
+        canAddModels?: boolean;
+        loadProxySettings?: () => Promise<unknown>;
+        costMap?: Record<string, unknown>;
+      } = {},
     ) => {
       vi.mocked(networking.modelHubCall).mockResolvedValue({ data: models });
-      vi.mocked(networking.modelCostMap).mockResolvedValue(GARDEN_COST_MAP);
+      vi.mocked(networking.modelCostMap).mockResolvedValue(costMap);
       vi.mocked(networking.getProviderCreateMetadata).mockResolvedValue([
         ...ADDABLE_PROVIDER_FIELDS,
         {
@@ -414,6 +427,49 @@ describe("ModelHubTable", () => {
       );
       expect(await within(garden).findAllByRole("link", { name: "Add model" })).toHaveLength(1);
       expect(within(newCard).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+    });
+
+    it("lists OpenAI's chat model that answers on /v1/decisions, with Add Model prefilled", async () => {
+      await renderHub(chatOnly, {
+        loadProxySettings: async () => ({ decision_model_providers: ["openai"] }),
+        costMap: {
+          "gpt-6-luna": {
+            litellm_provider: "openai",
+            mode: "chat",
+            supported_endpoints: ["/v1/chat/completions", "/v1/decisions"],
+          },
+          "gpt-5.5": { litellm_provider: "openai", mode: "chat", supported_endpoints: ["/v1/chat/completions"] },
+        },
+      });
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("1 decision models across 1 providers answer on /v1/decisions");
+      const card = within(garden).getByTestId("decision-model-card-gpt-6-luna");
+      expect(await within(card).findByRole("link", { name: "Add model" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?tab=add&provider=openai&litellm_model=gpt-6-luna$/),
+      );
+      expect(within(garden).queryByTestId("decision-model-card-gpt-5.5")).not.toBeInTheDocument();
+    });
+
+    it("sends a Foundry decision model to the docs for its deployment name instead of prefilling one Azure refuses", async () => {
+      await renderHub(chatOnly, {
+        loadProxySettings: async () => ({ decision_model_providers: ["typesafe", "azure_ai"] }),
+        costMap: {
+          "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+          "azure_ai/Microsoft-Decision-1": { litellm_provider: "azure_ai", mode: "evaluation" },
+        },
+      });
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("2 decision models across 2 providers answer on /v1/decisions");
+      const foundryCard = within(garden).getByTestId("decision-model-card-azure_ai/Microsoft-Decision-1");
+      expect(within(foundryCard).getByRole("link", { name: "Deploy under your own name" })).toHaveAttribute(
+        "href",
+        "https://docs.litellm.ai/docs/decisions#supported-providers",
+      );
+      expect(await within(garden).findAllByRole("link", { name: "Add model" })).toHaveLength(1);
+      expect(within(foundryCard).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
     });
 
     it("falls back to the cost map alone when this proxy's decision provider list cannot be read", async () => {

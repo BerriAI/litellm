@@ -26,6 +26,16 @@ const ROUTE_LINKS: Readonly<Record<DecisionRoute, { readonly href: string; reado
   "needs-upgrade": { href: DECISIONS_PROVIDERS_DOCS_URL, label: "Needs a newer LiteLLM" },
 };
 
+const DEPLOYMENT_NAMED_PROVIDERS: ReadonlySet<string> = new Set(["azure", "azure_ai"]);
+
+const OWN_DEPLOYMENT_LINK = { href: DECISIONS_PROVIDERS_DOCS_URL, label: "Deploy under your own name" } as const;
+
+const needsOwnDeploymentName = (row: DecisionGardenModel): boolean =>
+  row.route === "decisions" && DEPLOYMENT_NAMED_PROVIDERS.has(row.provider);
+
+const cardLink = (row: DecisionGardenModel) =>
+  needsOwnDeploymentName(row) ? OWN_DEPLOYMENT_LINK : ROUTE_LINKS[row.route];
+
 export const addModelHref = (row: DecisionGardenModel): string => {
   const params = new URLSearchParams({ tab: "add", provider: row.provider, litellm_model: row.model });
   return `${uiHref("models-and-endpoints")}?${params.toString()}`;
@@ -38,6 +48,7 @@ interface DecisionModelCardProps {
 
 function DecisionModelCard({ row, canAddModels }: DecisionModelCardProps) {
   const { displayName } = getProviderLogoAndName(row.provider);
+  const link = cardLink(row);
   return (
     <div
       className="flex flex-col gap-3 rounded-lg border bg-background p-4"
@@ -52,12 +63,12 @@ function DecisionModelCard({ row, canAddModels }: DecisionModelCardProps) {
       </code>
       <div className="mt-auto flex items-center justify-between gap-2">
         <a
-          href={ROUTE_LINKS[row.route].href}
+          href={link.href}
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs text-muted-foreground underline"
         >
-          {ROUTE_LINKS[row.route].label}
+          {link.label}
         </a>
         {canAddModels && (
           <Button size="xs" variant="outline" nativeButton={false} role="link" render={<a href={addModelHref(row)} />}>
@@ -85,6 +96,8 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ accessToken, 
     [providerFields],
   );
   const [showAll, setShowAll] = useState(false);
+  const isAddable = (row: DecisionGardenModel): boolean =>
+    row.route === "decisions" && !needsOwnDeploymentName(row) && addableProviders.has(row.provider);
 
   if (proxyProvidersLoading || rows.length === 0) {
     return null;
@@ -126,11 +139,7 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ accessToken, 
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {visibleRows.map((row) => (
-          <DecisionModelCard
-            key={row.model}
-            row={row}
-            canAddModels={canAddModels && row.route === "decisions" && addableProviders.has(row.provider)}
-          />
+          <DecisionModelCard key={row.model} row={row} canAddModels={canAddModels && isAddable(row)} />
         ))}
       </div>
       {rows.length > PREVIEW_COUNT && (

@@ -83,10 +83,13 @@ export interface DecisionGardenModel {
 }
 
 const decisionRoute = (entry: CostMapEntry, proxyProviders: ReadonlySet<string> | null): DecisionRoute => {
+  if (proxyProviders?.has(entry.litellm_provider)) {
+    return "decisions";
+  }
   if (!(entry.supported_endpoints ?? ["/v1/decisions"]).includes("/v1/decisions")) {
     return "self-hosted";
   }
-  return proxyProviders === null || proxyProviders.has(entry.litellm_provider) ? "decisions" : "needs-upgrade";
+  return proxyProviders === null ? "decisions" : "needs-upgrade";
 };
 
 const shortestNameFirst = (a: DecisionGardenModel, b: DecisionGardenModel): number =>
@@ -103,7 +106,7 @@ export const buildDecisionGarden = (
   proxyProviders: ReadonlySet<string> | null,
 ): readonly DecisionGardenModel[] =>
   parsedEntries(costMap)
-    .filter(([, entry]) => isDecisionMode(entry.mode))
+    .filter(([, entry]) => isDecisionEntry(entry))
     .map(([key, entry]) => ({
       model: key,
       provider: entry.litellm_provider,

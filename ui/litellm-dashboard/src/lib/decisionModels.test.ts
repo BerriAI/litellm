@@ -58,12 +58,14 @@ describe("expandModeFilterValues", () => {
 describe("buildDecisionGarden", () => {
   const garden = buildDecisionGarden(COST_MAP, null);
 
-  it("lists each decision-mode model once, one per provider before any provider's second", () => {
+  it("lists each decision model once, one per provider before any provider's second", () => {
     expect(garden).toEqual([
       { model: "cloudflare/clef", provider: "cloudflare", route: "decisions" },
+      { model: "gpt-6-luna", provider: "openai", route: "decisions" },
       { model: "perplexity/pplx-decider-v1-27b", provider: "perplexity", route: "decisions" },
       { model: "typesafe/jev-latest", provider: "typesafe", route: "decisions" },
       { model: "typesafe/jev-preview", provider: "typesafe", route: "decisions" },
+      { model: "systemone-only", provider: "somevendor", route: "self-hosted" },
     ]);
   });
 
@@ -101,9 +103,29 @@ describe("buildDecisionGarden", () => {
     ]);
   });
 
-  it("leaves chat models out even when they serve a decision endpoint", () => {
-    expect(garden.map((row) => row.model)).not.toContain("gpt-6-luna");
-    expect(garden.map((row) => row.model)).not.toContain("systemone-only");
+  it("lists a chat model that answers on /v1/decisions and leaves other chat models out", () => {
+    const models = garden.map((row) => row.model);
+    expect(models).toContain("gpt-6-luna");
+    expect(models).not.toContain("gpt-5.5");
+    expect(models).not.toContain("perplexity/sonar-pro");
+  });
+
+  it("reads a model as answering on /v1/decisions when this proxy serves its provider, whatever endpoints its row lists", () => {
+    const rows = buildDecisionGarden(
+      {
+        "aaa/self-hosted": { litellm_provider: "aaa", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
+        "typesafe/jev-systemone": {
+          litellm_provider: "typesafe",
+          mode: "evaluation",
+          supported_endpoints: ["/v1/systemone"],
+        },
+      },
+      new Set(["typesafe"]),
+    );
+    expect(rows.map((row) => [row.model, row.route])).toEqual([
+      ["typesafe/jev-systemone", "decisions"],
+      ["aaa/self-hosted", "self-hosted"],
+    ]);
   });
 
   it("marks a model from a provider this proxy cannot serve on /v1/decisions as needing a newer LiteLLM, last", () => {
