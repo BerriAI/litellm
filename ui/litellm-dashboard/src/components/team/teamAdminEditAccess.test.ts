@@ -15,6 +15,7 @@ describe("teamAdminFieldLabel", () => {
     ["max_budget", "Max Budget (USD)"],
     ["raise_max_budget", "Raise the team's max budget"],
     ["projects", "Create and update projects"],
+    ["create_member_keys", "Create keys for team members"],
   ])("names %s the way the team settings form does", (field, label) => {
     expect(teamAdminFieldLabel(field)).toBe(label);
   });

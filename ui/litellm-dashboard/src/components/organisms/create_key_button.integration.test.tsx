@@ -649,6 +649,59 @@ describe("CreateKey", () => {
       expect(screen.queryByRole("radio", { name: "Another User" })).not.toBeInTheDocument();
     });
 
+    describe("for a team admin", () => {
+      const administeredTeam = {
+        team_id: "team-admin-of",
+        team_alias: "Administered Team",
+        models: [],
+        members_with_roles: [
+          { user_id: "test-user-id", role: "admin" },
+          { user_id: "member-1", role: "user", user_email: "member@example.com" },
+        ],
+      };
+      const joinedTeam = {
+        team_id: "team-member-of",
+        team_alias: "Joined Team",
+        models: [],
+        members_with_roles: [
+          { user_id: "test-user-id", role: "user" },
+          { user_id: "outsider-1", role: "admin", user_email: "outsider@example.com" },
+        ],
+      };
+
+      beforeEach(() => {
+        state.authorized = { ...state.authorized, userRole: "Internal User" };
+        state.teams = [joinedTeam, administeredTeam];
+      });
+
+      it("hides the Another User option until the proxy enables create_member_keys", async () => {
+        state.uiSettings = { team_admin_editable_team_fields: ["max_budget"] };
+        await openModal({ teams: state.teams as unknown as Team[] });
+
+        expect(screen.queryByRole("radio", { name: "Another User" })).not.toBeInTheDocument();
+      });
+
+      it("creates a key for a member of an administered team without the proxy-wide user search", async () => {
+        state.uiSettings = { team_admin_editable_team_fields: ["create_member_keys"] };
+        await openModal({ teams: state.teams as unknown as Team[] });
+        await nameTheKey();
+        await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
+
+        await userEvent.click(await screen.findByLabelText(/^Team/));
+        expect(await screen.findByRole("option", { name: /Administered Team/ })).toBeInTheDocument();
+        expect(screen.queryByRole("option", { name: /Joined Team/ })).not.toBeInTheDocument();
+        await userEvent.click(screen.getByRole("option", { name: /Administered Team/ }));
+
+        await userEvent.click(await screen.findByLabelText(/^User ID/));
+        expect(await screen.findAllByRole("option")).toHaveLength(1);
+        await userEvent.click(screen.getByRole("option", { name: "member@example.com (member-1)" }));
+        await submit();
+
+        expect(await createdPayload()).toMatchObject({ user_id: "member-1", team_id: "team-admin-of" });
+        expect(userFilterUICall).not.toHaveBeenCalled();
+      });
+    });
+
     it("routes a service account through the service account endpoint and stamps the alias into metadata", async () => {
       state.teams = [{ team_id: "team-1", team_alias: "Team One", models: [] }];
       await openModal({ teams: state.teams as unknown as Team[] });
