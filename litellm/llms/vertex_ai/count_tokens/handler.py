@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
@@ -5,6 +6,19 @@ from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
 class VertexAITokenCounter(GoogleAIStudioTokenCounter, VertexBase):
+    def _build_count_tokens_request_body(
+        self,
+        model: str,
+        contents: object,
+        system_instruction: Mapping[str, object] | None,
+        tools: Sequence[Mapping[str, object]] | None,
+    ) -> dict[str, object]:
+        return {
+            "contents": contents,
+            **({"systemInstruction": dict(system_instruction)} if system_instruction else {}),
+            **({"tools": tools} if tools else {}),
+        }
+
     async def validate_environment(
         self,
         api_base: str | None = None,

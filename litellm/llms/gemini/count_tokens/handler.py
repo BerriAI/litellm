@@ -71,6 +71,28 @@ class GoogleAIStudioTokenCounter:
         super().__init__()
         self._client: Final = client
 
+    def _build_count_tokens_request_body(
+        self,
+        model: str,
+        contents: object,
+        system_instruction: Mapping[str, object] | None,
+        tools: Sequence[Mapping[str, object]] | None,
+    ) -> dict[str, object]:
+        if system_instruction is None and not tools:
+            return {"contents": contents}
+
+        generate_content_request: Final = {
+            "model": model if model.startswith("models/") else f"models/{model}",
+            "contents": contents,
+            **(
+                {"systemInstruction": dict(system_instruction)}
+                if system_instruction is not None
+                else {}
+            ),
+            **({"tools": [dict(tool) for tool in tools]} if tools else {}),
+        }
+        return {"generateContentRequest": generate_content_request}
+
     async def validate_environment(
         self,
         api_base: str | None = None,
@@ -149,11 +171,12 @@ class GoogleAIStudioTokenCounter:
 
         # Prepare request body - clean up contents to remove unsupported fields
         cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = {
-            "contents": cleaned_contents,
-            **({"systemInstruction": dict(system_instruction)} if system_instruction else {}),
-            **({"tools": tools} if tools else {}),
-        }
+        request_body: Final = self._build_count_tokens_request_body(
+            model=model,
+            contents=cleaned_contents,
+            system_instruction=system_instruction,
+            tools=tools,
+        )
 
         async_httpx_client: Final = (
             self._client if self._client is not None else get_async_httpx_client(llm_provider=LlmProviders.GEMINI)

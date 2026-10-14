@@ -183,6 +183,7 @@ class OpenAICountTokensConfig:
                         "name": tool["name"],
                         "description": tool.get("description", ""),
                         "parameters": tool["input_schema"],
+                        "strict": bool(tool.get("strict")),
                     }
                 )
             else:

@@ -499,6 +499,11 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        from litellm.llms.vertex_ai.count_tokens.context import (
+            VertexGeminiCountContext,
+            VertexGeminiCountContextError,
+            vertex_gemini_count_context,
+        )
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
@@ -507,8 +512,30 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             "contents": contents,
         }
         count_tokens_params_request.update(count_tokens_params)
+        count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
+        match count_context:
+            case VertexGeminiCountContextError(error_message=context_error):
+                return TokenCountResponse(
+                    total_tokens=0,
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type="gemini",
+                    error=True,
+                    error_message=context_error,
+                    status_code=400,
+                )
+            case VertexGeminiCountContext():
+                pass
+
+        google_ai_studio_litellm_params: Final = {
+            key: value
+            for key, value in count_tokens_params_request.items()
+            if key not in {"system_instruction", "tools"}
+        }
         result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-            **count_tokens_params_request,
+            **google_ai_studio_litellm_params,
+            system_instruction=count_context.system_instruction,
+            tools=[dict(tool) for tool in count_context.tools] if count_context.tools is not None else None,
         )
 
         if result is not None:

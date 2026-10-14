@@ -96,6 +96,33 @@ def test_transform_anthropic_tool_shape():
             "name": "lookup",
             "description": "",
             "parameters": {"type": "object", "properties": {}},
+            "strict": False,
+        }
+    ]
+
+
+def test_transform_anthropic_tool_shape_strict_true():
+    config: Final = OpenAICountTokensConfig()
+
+    result: Final = config.transform_request_to_count_tokens(
+        model="gpt-4o",
+        input="Find a record",
+        tools=[
+            {
+                "name": "lookup",
+                "input_schema": {"type": "object", "properties": {}},
+                "strict": True,
+            }
+        ],
+    )
+
+    assert result["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "description": "",
+            "parameters": {"type": "object", "properties": {}},
+            "strict": True,
         }
     ]
 
@@ -122,6 +149,7 @@ def test_transform_custom_tool_shape():
             "name": "lookup",
             "description": "Find a record",
             "parameters": {"type": "object", "properties": {}},
+            "strict": False,
         }
     ]
 

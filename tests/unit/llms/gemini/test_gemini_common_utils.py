@@ -7,6 +7,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
+from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter as GeminiCountTokensHandler
 
 _JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
@@ -22,24 +23,110 @@ class _GeminiCountTokensPeer:
 
 
 @pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_forwards_system_and_tools() -> None:
+    peer: Final = _GeminiCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=[{"role": "user", "parts": [{"text": "hello"}]}],
+            deployment={
+                "litellm_params": {
+                    "api_key": "test-key",
+                    "api_base": "https://count-tokens.test",
+                    "system_instruction": {"parts": [{"text": "deployment-level"}]},
+                }
+            },
+            request_model="gemini/gemini-2.5-flash",
+            tools=[
+                {
+                    "name": "lookup",
+                    "description": "Find a record",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
+            system="You are terse.",
+        )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == 11
+    assert peer.request_body == {
+        "generateContentRequest": {
+            "model": "models/gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+            "systemInstruction": {"parts": [{"text": "You are terse."}]},
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": "lookup",
+                            "description": "Find a record",
+                            "parameters": {"type": "object"},
+                        }
+                    ]
+                }
+            ],
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_rejects_image_system_without_request() -> None:
+    peer: Final = _GeminiCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=[{"role": "user", "parts": [{"text": "hello"}]}],
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            system=[
+                {"type": "text", "text": "You are terse."},
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},
+                },
+            ],
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert peer.request_body is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("system_instruction", "tools", "expected_extras"),
+    ("system_instruction", "tools", "expected_body"),
     (
         (
             {"parts": [{"text": "Follow the system rule."}]},
             [{"functionDeclarations": [{"name": "lookup", "parameters": {"type": "OBJECT"}}]}],
             {
-                "systemInstruction": {"parts": [{"text": "Follow the system rule."}]},
-                "tools": [{"functionDeclarations": [{"name": "lookup", "parameters": {"type": "OBJECT"}}]}],
+                "generateContentRequest": {
+                    "model": "models/gemini-4-argon",
+                    "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+                    "systemInstruction": {"parts": [{"text": "Follow the system rule."}]},
+                    "tools": [{"functionDeclarations": [{"name": "lookup", "parameters": {"type": "OBJECT"}}]}],
+                }
             },
         ),
-        (None, [], {}),
+        (
+            None,
+            [],
+            {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
+        ),
     ),
 )
 async def test_gemini_count_tokens_sends_optional_request_fields(
     system_instruction: dict[str, JsonValue] | None,
     tools: list[dict[str, JsonValue]],
-    expected_extras: dict[str, JsonValue],
+    expected_body: dict[str, JsonValue],
 ) -> None:
     peer: Final = _GeminiCountTokensPeer()
     token_counter: Final = GeminiCountTokensHandler(
@@ -47,7 +134,7 @@ async def test_gemini_count_tokens_sends_optional_request_fields(
     )
 
     result: Final = await token_counter.acount_tokens(
-        contents=[],
+        contents=[{"role": "user", "parts": [{"text": "hello"}]}],
         model="gemini-4-argon",
         api_key="test-key",
         api_base="https://count-tokens.test",
@@ -56,10 +143,7 @@ async def test_gemini_count_tokens_sends_optional_request_fields(
     )
 
     assert result == {"totalTokens": 11}
-    assert peer.request_body == {
-        "contents": [],
-        **expected_extras,
-    }
+    assert peer.request_body == expected_body
 
 
 class TestGeminiModelInfo:
@@ -215,7 +299,10 @@ class TestGoogleAIStudioTokenCounter:
 
             # Verify the mock was called correctly
             mock_acount_tokens.assert_called_once_with(
-                model=model_to_use, contents=contents
+                model=model_to_use,
+                contents=contents,
+                system_instruction=None,
+                tools=None,
             )
 
     def test_clean_contents_for_gemini_api_removes_id_field(self):
