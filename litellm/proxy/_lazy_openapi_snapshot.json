@@ -35452,6 +35452,50 @@
           ]
         }
       },
+      "/.well-known/oauth-protected-resource/toolset/{toolset_name}/mcp": {
+        "get": {
+          "operationId": "oauth_protected_resource_toolset__well_known_oauth_protected_resource_toolset__toolset_name__mcp_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "toolset_name",
+              "required": true,
+              "schema": {
+                "title": "Toolset Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "title": "Response Oauth Protected Resource Toolset  Well Known Oauth Protected Resource Toolset  Toolset Name  Mcp Get",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Protected Resource Toolset",
+          "tags": [
+            "mcp_byok_oauth"
+          ]
+        }
+      },
       "/.well-known/oauth-protected-resource/{mcp_server_name}/mcp": {
         "get": {
           "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
@@ -37805,6 +37849,50 @@
             }
           },
           "summary": "Oauth Protected Resource Mcp Standard",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/.well-known/oauth-protected-resource/toolset/{toolset_name}/mcp": {
+        "get": {
+          "operationId": "oauth_protected_resource_toolset__well_known_oauth_protected_resource_toolset__toolset_name__mcp_get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "toolset_name",
+              "required": true,
+              "schema": {
+                "title": "Toolset Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": true,
+                    "title": "Response Oauth Protected Resource Toolset  Well Known Oauth Protected Resource Toolset  Toolset Name  Mcp Get",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Oauth Protected Resource Toolset",
           "tags": [
             "mcp_discoverable"
           ]

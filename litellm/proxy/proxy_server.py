@@ -20637,8 +20637,7 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
                 detail=f"Toolset '{toolset_name}' not found",
             )
 
-        scope: Final = dict(request.scope)
-        scope["path"] = "/mcp"
+        scope: Final = {**request.scope, "_original_path": request.scope.get("path", ""), "path": "/mcp"}
 
         token: Final = mcp_active_toolset_id.set(toolset.toolset_id)
         try:

@@ -810,6 +810,38 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
         _assert_upstream_call(calls[0], "add", {"a": 20, "b": 22})
 
 
+def test_toolset_sign_in_challenge_points_at_metadata_whose_resource_is_the_toolset_url(gateway: Gateway) -> None:
+    base: Final = _base(gateway)
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        server_id: Final = register_mcp(scenario, peer, "tsprm" + uuid.uuid4().hex[:8])
+        name: Final = "tsprm" + uuid.uuid4().hex[:8]
+        create_toolset(scenario, ((server_id, "add"),), toolset_name=name)
+        anonymous: Final = gateway.client.post(
+            f"/toolset/{name}/mcp",
+            headers=ACCEPT,
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": dict(INITIALIZE)},
+        )
+        metadata_url: Final = f"{base}/.well-known/oauth-protected-resource/toolset/{name}/mcp"
+        assert anonymous.status_code == 401, anonymous.text
+        assert anonymous.headers["www-authenticate"] == f'Bearer resource_metadata="{metadata_url}"', (
+            "a strict RFC 9728 client rejects metadata for a different resource than the toolset URL it dialed"
+        )
+        metadata: Final = gateway.client.get(metadata_url)
+        assert metadata.status_code == 200, metadata.text
+        assert _response_object(metadata) == {
+            "authorization_servers": [f"{base}/mcp"],
+            "resource": f"{base}/toolset/{name}/mcp",
+            "scopes_supported": [],
+        }, metadata.text
+
+
+def test_toolset_protected_resource_metadata_for_an_unknown_toolset_is_not_found(gateway: Gateway) -> None:
+    name: Final = "tsmissing" + uuid.uuid4().hex[:8]
+    response: Final = gateway.client.get(f"/.well-known/oauth-protected-resource/toolset/{name}/mcp")
+    assert response.status_code == 404, response.text
+    assert _response_object(response) == {"detail": f"Toolset '{name}' not found"}, response.text
+
+
 def test_per_server_resource_scopes_the_session_bearer_to_the_named_server(gateway: Gateway) -> None:
     base: Final = _base(gateway)
     with mcp_peer() as peer_a, mcp_peer() as peer_b, gateway.scenario() as scenario:
