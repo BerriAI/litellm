@@ -301,7 +301,7 @@ OPENAI_TO_ANTHROPIC_SERVICE_TIER: Final = MappingProxyType(
 )
 
 DROP_UNSUPPORTED_SERVICE_TIER_WARNING: Final = (
-    "Dropping unsupported `service_tier=%s` for model=%s (drop_params=True). "
+    "Dropping unsupported `service_tier` for model=%s (drop_params=True). "
     "Anthropic only accepts 'auto' and 'standard_only'."
 )
 
@@ -525,7 +525,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
                 status_code=400,
             )
-        litellm.verbose_logger.warning(DROP_UNSUPPORTED_SERVICE_TIER_WARNING, value, model)
+        litellm.verbose_logger.warning(DROP_UNSUPPORTED_SERVICE_TIER_WARNING, model)
         return None
 
     @classmethod
