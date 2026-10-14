@@ -1991,6 +1991,81 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert "name" not in done.item.model_dump()
 
     @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_a_native_tool_search_call_that_has_no_call_id(self):
+        def search_call(arguments: dict, status: str) -> dict:
+            return {
+                "type": "tool_search_call",
+                "id": "tsc_1",
+                "call_id": None,
+                "arguments": arguments,
+                "execution": "server",
+                "status": status,
+            }
+
+        def function_call(arguments: str, status: str) -> dict:
+            return {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "lookup_fruit",
+                "arguments": arguments,
+                "status": status,
+            }
+
+        handler = OpenAIResponsesHandler()
+        events = [
+            {"type": "response.output_item.added", "output_index": 0, "item": search_call({}, "in_progress")},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": search_call({"paths": ["persimmon"]}, "completed"),
+            },
+            {"type": "response.output_item.added", "output_index": 1, "item": function_call("", "in_progress")},
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "delta": '{"fruit": "persimmon"}',
+            },
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "arguments": '{"fruit": "persimmon"}',
+            },
+            {
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": function_call('{"fruit": "persimmon"}', "completed"),
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "gpt-5.6",
+                    "output": [
+                        search_call({"paths": ["persimmon"]}, "completed"),
+                        function_call('{"fruit": "persimmon"}', "completed"),
+                    ],
+                },
+            },
+        ]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=PersimmonMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert events[1]["item"]["arguments"] == {"paths": ["[MASKED]"]}
+        assert events[3]["delta"] == '{"fruit": "[MASKED]"}'
+        assert events[4]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[5]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[6]["response"]["output"][0]["arguments"] == {"paths": ["[MASKED]"]}
+        assert events[6]["response"]["output"][1]["arguments"] == '{"fruit": "[MASKED]"}'
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_custom_tool_call_rewrite_without_matching_events_fails_closed(self):
         from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
