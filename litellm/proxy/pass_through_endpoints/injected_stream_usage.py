@@ -1,7 +1,7 @@
 import json
 import re
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import Final
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -9,11 +9,13 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from litellm.proxy.common_request_processing import stream_usage_tracking_updates
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.utils import CallTypes
 
-_STREAM_USAGE_ROUTE_TYPES: Final = (("chat/completions", "acompletion"), ("completions", "atext_completion"))
+_USAGE_FRAME_ENDPOINTS: Final = ("chat/completions", "completions")
+_CALLER_ONLY_STREAM_OPTIONS: Final = frozenset({"continuous_usage_stats"})
 _SSE_FRAME_END: Final = re.compile(rb"\r\n\r\n|\n\n|\r\r")
 _SSE_DATA_FIELD: Final = b"data:"
-_FRAME_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class _RelayedChoice(LiteLLMBaseModel):
@@ -36,16 +38,38 @@ class StreamUsageRelay:
     strips_usage: bool
 
 
-def _stream_usage_route_type(endpoint: str) -> str | None:
+@dataclass(frozen=True, slots=True)
+class _HeldFrame:
+    frame: bytes
+    earlier: "_HeldFrame | None"
+
+
+@dataclass(frozen=True, slots=True)
+class _RelayState:
+    newest_held: _HeldFrame | None = None
+    passes_usage_through: bool = False
+
+
+def _newest_first(held: _HeldFrame | None) -> Iterator[bytes]:
+    while held is not None:
+        yield held.frame
+        held = held.earlier  # rebind-ok: walks the held frames back from the newest
+
+
+def _held_frames(state: _RelayState) -> tuple[bytes, ...]:
+    return tuple(reversed(tuple(_newest_first(state.newest_held))))
+
+
+def _relays_usage_frames(endpoint: str) -> bool:
     path: Final = endpoint.strip("/")
-    return next(
-        (
-            route_type
-            for suffix, route_type in _STREAM_USAGE_ROUTE_TYPES
-            if path == suffix or path.endswith(f"/{suffix}")
-        ),
-        None,
-    )
+    return any(path == suffix or path.endswith(f"/{suffix}") for suffix in _USAGE_FRAME_ENDPOINTS)
+
+
+def _forwarded_stream_options(stream_options: object, strips_usage: bool) -> object:
+    if not strips_usage or not isinstance(stream_options, Mapping):
+        return stream_options
+    caller_options: Final = _JSON_OBJECT_ADAPTER.validate_python(stream_options)
+    return {key: value for key, value in caller_options.items() if key not in _CALLER_ONLY_STREAM_OPTIONS}
 
 
 def stream_usage_relay(
@@ -54,19 +78,23 @@ def stream_usage_relay(
     general_settings: Mapping[str, object],
     supports_stream_options: Callable[[], bool],
 ) -> StreamUsageRelay:
-    route_type: Final = _stream_usage_route_type(endpoint)
-    if route_type is None:
+    if not _relays_usage_frames(endpoint):
         return StreamUsageRelay(body=request_body, strips_usage=False)
     updates: Final = stream_usage_tracking_updates(
         data=request_body,
         general_settings=general_settings,
-        route_type=route_type,
+        route_type=CallTypes.acompletion.value,
         supports_stream_options=supports_stream_options,
     )
+    strips_usage: Final = updates.get("_litellm_strip_stream_usage") is True
     stream_options: Final = updates.get("stream_options")
     return StreamUsageRelay(
-        body=request_body if stream_options is None else {**request_body, "stream_options": stream_options},
-        strips_usage=updates.get("_litellm_strip_stream_usage") is True,
+        body=(
+            request_body
+            if stream_options is None
+            else {**request_body, "stream_options": _forwarded_stream_options(stream_options, strips_usage)}
+        ),
+        strips_usage=strips_usage,
     )
 
 
@@ -86,7 +114,7 @@ def _relayed_chunk(frame: bytes) -> _RelayedChunk | None:
 def _with_fingerprint(frame: bytes, fingerprint: str | None) -> bytes:
     if fingerprint is None:
         return frame
-    payload: Final = _FRAME_ADAPTER.validate_json(_frame_payload(frame))
+    payload: Final = _JSON_OBJECT_ADAPTER.validate_json(_frame_payload(frame))
     terminator: Final = frame[len(frame.rstrip(b"\r\n")) :]
     restamped: Final = json.dumps(
         {**payload, "system_fingerprint": fingerprint}, separators=(",", ":"), ensure_ascii=False
@@ -98,14 +126,22 @@ def _awaits_fingerprint(chunk: _RelayedChunk) -> bool:
     return chunk.system_fingerprint is None and any(choice.finish_reason is not None for choice in chunk.choices)
 
 
-def _relayed_frame(frame: bytes, held: bytes | None) -> tuple[bytes, bytes | None]:
+def _relayed_frame(frame: bytes, state: _RelayState) -> tuple[bytes, _RelayState]:
+    if state.passes_usage_through:
+        return frame, state
     chunk: Final = _relayed_chunk(frame)
-    if chunk is not None and not chunk.choices and chunk.usage is not None:
-        return (b"" if held is None else _with_fingerprint(held, chunk.system_fingerprint)), None
-    released: Final = held or b""
-    if chunk is not None and _awaits_fingerprint(chunk):
-        return released, frame
-    return released + frame, None
+    if chunk is None:
+        return b"".join((*_held_frames(state), frame)), _RelayState()
+    if chunk.usage is not None and chunk.choices:
+        return b"".join((*_held_frames(state), frame)), _RelayState(passes_usage_through=True)
+    if chunk.usage is not None:
+        return (
+            b"".join(_with_fingerprint(held, chunk.system_fingerprint) for held in _held_frames(state)),
+            _RelayState(),
+        )
+    if _awaits_fingerprint(chunk):
+        return b"", replace(state, newest_held=_HeldFrame(frame, state.newest_held))
+    return frame, state
 
 
 def _sse_frames(complete: bytes) -> tuple[bytes, ...]:
@@ -113,16 +149,17 @@ def _sse_frames(complete: bytes) -> tuple[bytes, ...]:
     return tuple(complete[start:end] for start, end in zip((0, *ends[:-1]), ends))
 
 
-async def without_injected_usage_frames(stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+async def without_injected_usage_frames(stream: AsyncGenerator[bytes, None]) -> AsyncIterator[bytes]:
     pending = b""  # rebind-ok: carries an unterminated SSE frame across upstream reads
-    held: bytes | None = None  # rebind-ok: a finish frame waits for the fingerprint vLLM moves onto the usage frame
-    async for piece in stream:
-        complete, pending = split_complete_sse_frames(pending + piece)
-        for frame in _sse_frames(complete):
-            outgoing, held = _relayed_frame(frame, held)
-            if outgoing:
-                yield outgoing
-    if held is not None:
-        yield held
-    if pending:
-        yield pending
+    state = _RelayState()  # rebind-ok: finish frames wait for the fingerprint vLLM moves onto the usage frame
+    try:
+        async for piece in stream:
+            complete, pending = split_complete_sse_frames(pending + piece)
+            for frame in _sse_frames(complete):
+                outgoing, state = _relayed_frame(frame, state)
+                if outgoing:
+                    yield outgoing
+        if state.newest_held is not None or pending:
+            yield b"".join((*_held_frames(state), pending))
+    finally:
+        await stream.aclose()

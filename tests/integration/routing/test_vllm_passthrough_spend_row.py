@@ -44,7 +44,13 @@ _CASES: Final = {
         True,
     ),
     "completions_non_stream": Case("/v1/completions", {}, None, True),
-    "completions_stream": Case("/v1/completions", {"stream": True}, None, True),
+    "chat_stream_continuous_usage_only": Case(
+        "/v1/chat/completions",
+        {"stream": True, "stream_options": {"continuous_usage_stats": True}},
+        {"include_usage": True},
+        False,
+    ),
+    "completions_stream": Case("/v1/completions", {"stream": True}, {"include_usage": True}, False),
 }
 
 

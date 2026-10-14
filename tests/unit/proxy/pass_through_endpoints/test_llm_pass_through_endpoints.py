@@ -2349,6 +2349,56 @@ class TestVLLMProxyRoute:
         assert body.endswith(b"data: [DONE]\n\n")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream_options", [None, {"include_usage": True}])
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch(
+        "litellm.proxy.proxy_server.general_settings", {}
+    )  # test-quality-ok: the proxy config surface for always_include_stream_usage
+    @patch(
+        "litellm.proxy.proxy_server.llm_router"
+    )  # test-quality-ok: patching litellm internal for unit test isolation
+    async def test_vllm_proxy_route_closes_the_upstream_stream_when_the_client_disconnects(
+        self, mock_llm_router, mock_is_router, stream_options
+    ):
+        closed = []
+
+        class UpstreamStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"id":"chatcmpl-1","choices":[]}\n\n'
+                yield b"data: [DONE]\n\n"
+
+            async def aclose(self) -> None:
+                closed.append(True)
+
+        body = {"model": "router-model", "messages": [{"role": "user", "content": "Hi"}], "stream": True}
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_llm_router.resolved_litellm_models = MagicMock(return_value=("hosted_vllm/Qwen/Qwen2.5-0.5B-Instruct",))
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, stream=UpstreamStream(), headers={"content-type": "text/event-stream"})
+        )
+
+        with patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+            return_value={**body, **({"stream_options": stream_options} if stream_options else {})},
+        ):
+            result = await vllm_proxy_route(
+                endpoint="/chat/completions",
+                request=mock_request,
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+        await anext(result.body_iterator)
+        await result.body_iterator.aclose()
+
+        assert closed == [True]
+
+    @pytest.mark.asyncio
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
         return_value={"model": "other-model"},

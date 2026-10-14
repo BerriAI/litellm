@@ -545,11 +545,12 @@ async def vllm_proxy_route(
         )
 
         if is_streaming_request:
+            upstream_bytes: Final = _relay_response_bytes(result)
             return StreamingResponse(
                 content=(
-                    without_injected_usage_frames(result.aiter_bytes())
+                    without_injected_usage_frames(upstream_bytes)
                     if relay.strips_usage and is_json_request
-                    else result.aiter_bytes()
+                    else upstream_bytes
                 ),
                 status_code=result.status_code,
                 headers=HttpPassThroughEndpointHelpers.get_response_headers(
@@ -2072,6 +2073,14 @@ def is_azure_ai_search_service_level_index_create(method: str, endpoint: str) ->
 async def _relay_upstream_bytes(upstream: AsyncGenerator[bytes, bytes]) -> AsyncGenerator[bytes, None]:
     try:
         async for chunk in upstream:
+            yield chunk
+    finally:
+        await upstream.aclose()
+
+
+async def _relay_response_bytes(upstream: httpx.Response) -> AsyncGenerator[bytes, None]:
+    try:
+        async for chunk in upstream.aiter_bytes():
             yield chunk
     finally:
         await upstream.aclose()

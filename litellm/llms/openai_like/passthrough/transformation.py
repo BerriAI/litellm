@@ -117,13 +117,16 @@ def _relayed_text_chunk(line: str) -> RelayedTextCompletionChunk | None:
         return None
 
 
-def _assembled_text_choice(deltas: Sequence[RelayedTextChoice], index: int) -> RelayedTextChoice:
-    own: Final = tuple(delta for delta in deltas if delta.index == index)
+def _assembled_text_choice(index: int, own: Sequence[RelayedTextChoice]) -> RelayedTextChoice:
     return RelayedTextChoice(
         index=index,
         text="".join(delta.text for delta in own),
         finish_reason=next((delta.finish_reason for delta in reversed(own) if delta.finish_reason), None),
     )
+
+
+def _delta_index(delta: RelayedTextChoice) -> int:
+    return delta.index
 
 
 def _prompt_part_tokens(model: str, part: str | int | Sequence[int]) -> int:
@@ -171,7 +174,8 @@ def logged_text_completion_stream(
         return None
     deltas: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
     choices: Final = tuple(
-        _assembled_text_choice(deltas, index) for index in sorted(frozenset(delta.index for delta in deltas))
+        _assembled_text_choice(index, tuple(own))
+        for index, own in itertools.groupby(sorted(deltas, key=_delta_index), key=_delta_index)
     )
     reported_usage: Final = next((chunk.usage for chunk in reversed(chunks) if chunk.usage is not None), None)
     request: Final = _relayed_request(logging_obj)

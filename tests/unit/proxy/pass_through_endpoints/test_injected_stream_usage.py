@@ -20,16 +20,20 @@ def _chunk(identity: str, **fields) -> dict:
     return {"id": identity, "object": "chat.completion.chunk", "created": 1, "model": MODEL, **fields}
 
 
-CONTENT = _frame(_chunk("chatcmpl-1", choices=[{"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}]))
-FINISH = _frame(_chunk("chatcmpl-1", choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]))
-USAGE = _frame(
-    _chunk(
-        "chatcmpl-1",
-        choices=[],
-        usage={"prompt_tokens": 34, "completion_tokens": 4, "total_tokens": 38},
-        system_fingerprint=FINGERPRINT,
+def _content(index: int, **fields) -> bytes:
+    return _frame(
+        _chunk("chatcmpl-1", choices=[{"index": index, "delta": {"content": "Hi"}, "finish_reason": None}], **fields)
     )
-)
+
+
+def _finish(index: int, **fields) -> bytes:
+    return _frame(_chunk("chatcmpl-1", choices=[{"index": index, "delta": {}, "finish_reason": "stop"}], **fields))
+
+
+USAGE_COUNTS = {"prompt_tokens": 34, "completion_tokens": 4, "total_tokens": 38}
+CONTENT = _content(0)
+FINISH = _finish(0)
+USAGE = _frame(_chunk("chatcmpl-1", choices=[], usage=USAGE_COUNTS, system_fingerprint=FINGERPRINT))
 DONE = b"data: [DONE]\n\n"
 
 
@@ -78,7 +82,7 @@ class TestStreamUsageRelay:
         assert relay.body == body
         assert relay.strips_usage is False
 
-    def test_a_text_completion_stream_is_injected_only_when_usage_is_always_included(self):
+    def test_a_text_completion_stream_gets_usage_injected_and_stripped_like_a_chat_stream(self):
         body = {"model": MODEL, "prompt": "Hi", "stream": True}
 
         by_default = stream_usage_relay(
@@ -91,9 +95,18 @@ class TestStreamUsageRelay:
             supports_stream_options=lambda: True,
         )
 
-        assert by_default.body == body
-        assert always.body == {**body, "stream_options": {"include_usage": True}}
-        assert (by_default.strips_usage, always.strips_usage) == (False, False)
+        assert by_default.body == always.body == {**body, "stream_options": {"include_usage": True}}
+        assert (by_default.strips_usage, always.strips_usage) == (True, False)
+
+    def test_continuous_usage_stats_alone_is_not_turned_into_per_chunk_usage(self):
+        body = {"model": MODEL, "messages": [], "stream": True, "stream_options": {"continuous_usage_stats": True}}
+
+        relay = stream_usage_relay(
+            endpoint="chat/completions", request_body=body, general_settings={}, supports_stream_options=lambda: True
+        )
+
+        assert relay.body == {**body, "stream_options": {"include_usage": True}}
+        assert relay.strips_usage is True
 
     def test_a_non_completion_endpoint_is_relayed_untouched(self):
         body = {"model": MODEL, "input": "Hi", "stream": True}
@@ -141,6 +154,47 @@ class TestWithoutInjectedUsageFrames:
         relayed = await _relayed([CONTENT, stamped_finish, USAGE, DONE])
 
         assert relayed == CONTENT + stamped_finish + DONE
+
+    @pytest.mark.asyncio
+    async def test_every_finish_frame_gets_the_fingerprint_when_the_stream_has_several_choices(self):
+        relayed = await _relayed([_content(0), _content(1), _finish(0), _finish(1), USAGE, DONE])
+
+        payloads = _payloads(relayed)
+        finishes = {
+            payload["choices"][0]["index"]: payload.get("system_fingerprint")
+            for payload in payloads
+            if payload["choices"][0]["finish_reason"]
+        }
+        assert finishes == {0: FINGERPRINT, 1: FINGERPRINT}
+        assert "usage" not in relayed.decode()
+
+    @pytest.mark.asyncio
+    async def test_a_server_that_forces_usage_onto_every_chunk_is_relayed_untouched(self):
+        forced = [
+            _content(0, usage=USAGE_COUNTS),
+            _finish(0, usage=USAGE_COUNTS),
+            USAGE,
+            DONE,
+        ]
+
+        assert await _relayed(forced) == b"".join(forced)
+
+    @pytest.mark.asyncio
+    async def test_closing_the_relay_early_closes_the_upstream(self):
+        closed = []
+
+        async def upstream() -> AsyncIterator[bytes]:
+            try:
+                yield CONTENT
+                yield FINISH
+            finally:
+                closed.append(True)
+
+        relay = without_injected_usage_frames(upstream())
+        assert await anext(relay) == CONTENT
+        await relay.aclose()
+
+        assert closed == [True]
 
     @pytest.mark.asyncio
     async def test_an_unterminated_tail_is_flushed_when_the_upstream_closes(self):
