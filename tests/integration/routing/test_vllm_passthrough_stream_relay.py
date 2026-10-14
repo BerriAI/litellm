@@ -683,15 +683,14 @@ def _timed_relay(gateway: Gateway, call: _Call, content: Sequence[bytes]) -> _Re
             return _Relay(response, seconds, polled.result())
 
 
-def test_frame_terminated_only_at_its_end_relays_as_fast_as_the_same_bytes_in_small_frames(
-    gateway: Gateway, record_property: Callable[[str, object], None]
+def _assert_large_frame_relays_like_small_frames(
+    gateway: Gateway, record_property: Callable[[str, object], None], large_call: _Call, large: bytes
 ) -> None:
-    small_call, large_call = _call(), _call()
+    small_call: Final = _call()
     small: Final = tuple(
         _frame(_chunk(small_call.identity, [_delta(0, "x" * _PIECE_BYTES)]))
         for _ in range(_LARGE_FRAME_BYTES // _PIECE_BYTES)
     )
-    large: Final = _frame(_chunk(large_call.identity, [_delta(0, "x" * _LARGE_FRAME_BYTES)]))
     pieces: Final = tuple(large[start : start + _PIECE_BYTES] for start in range(0, len(large), _PIECE_BYTES))
     small_relay: Final = _timed_relay(gateway, small_call, small)
     large_relay: Final = _timed_relay(gateway, large_call, pieces)
@@ -708,6 +707,24 @@ def test_frame_terminated_only_at_its_end_relays_as_fast_as_the_same_bytes_in_sm
         large_relay.seconds,
         small_relay.seconds,
     )
+
+
+def test_frame_terminated_only_at_its_end_relays_as_fast_as_the_same_bytes_in_small_frames(
+    gateway: Gateway, record_property: Callable[[str, object], None]
+) -> None:
+    large_call: Final = _call()
+    large: Final = _frame(_chunk(large_call.identity, [_delta(0, "x" * _LARGE_FRAME_BYTES)]))
+    _assert_large_frame_relays_like_small_frames(gateway, record_property, large_call, large)
+
+
+def test_frame_of_usage_and_finish_reason_near_misses_relays_as_fast_as_the_same_bytes_in_small_frames(
+    gateway: Gateway, record_property: Callable[[str, object], None]
+) -> None:
+    near_miss: Final[dict[str, JsonValue]] = {"usage": 0, "finish_reason": None}
+    count: Final = _LARGE_FRAME_BYTES // len(json.dumps(near_miss) + ", ")
+    large_call: Final = _call()
+    large: Final = _frame(_chunk(large_call.identity, [_delta(0, "")], pad=[near_miss] * count))
+    _assert_large_frame_relays_like_small_frames(gateway, record_property, large_call, large)
 
 
 @dataclass(frozen=True, slots=True)
