@@ -462,6 +462,27 @@ async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(us
     ]
 
 
+@pytest.mark.parametrize("data", ["", "  "])
+def test_bedrock_converse_drops_redacted_thinking_with_blank_data(data: str):
+    """Bedrock 400s on a blank redactedContent, so a redacted block with no payload is dropped, not sent."""
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "redacted_thinking", "data": data}, {"type": "text", "text": "hello"}],
+            "thinking_blocks": [{"type": "redacted_thinking", "data": data}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = _bedrock_converse_messages_pt(
+        messages=messages, model="us.anthropic.claude-sonnet-4-6", llm_provider="bedrock"
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [{"text": "hello"}]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [

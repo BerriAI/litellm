@@ -4698,20 +4698,28 @@ class BedrockConverseMessagesProcessor:
         thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
     ) -> BedrockConverseReasoningContentBlock:
         match thinking_block:
-            case {"type": "redacted_thinking", "data": str() as data}:
+            case {"type": "redacted_thinking", "data": str() as data} if data.strip():
                 return BedrockConverseReasoningContentBlock(redactedContent=data)
-            case {"thinking": str() as text, "signature": str() as signature}:
+            case {"signature": signature} if signature is not None:
                 return BedrockConverseReasoningContentBlock(
-                    reasoningText=BedrockConverseReasoningTextBlock(text=text, signature=signature)
+                    reasoningText=BedrockConverseReasoningTextBlock(
+                        text=BedrockConverseMessagesProcessor._thinking_text(thinking_block), signature=signature
+                    )
                 )
-            case {"signature": str() as signature}:
-                return BedrockConverseReasoningContentBlock(
-                    reasoningText=BedrockConverseReasoningTextBlock(text="", signature=signature)
-                )
-            case {"thinking": str() as text}:
-                return BedrockConverseReasoningContentBlock(reasoningText=BedrockConverseReasoningTextBlock(text=text))
             case _:
-                return BedrockConverseReasoningContentBlock(reasoningText=BedrockConverseReasoningTextBlock(text=""))
+                return BedrockConverseReasoningContentBlock(
+                    reasoningText=BedrockConverseReasoningTextBlock(
+                        text=BedrockConverseMessagesProcessor._thinking_text(thinking_block)
+                    )
+                )
+
+    @staticmethod
+    def _thinking_text(thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock) -> str:
+        match thinking_block:
+            case {"thinking": str() as text}:
+                return text
+            case _:
+                return ""
 
     @staticmethod
     def process_file_message(message: ChatCompletionFileObject) -> BedrockContentBlock:
