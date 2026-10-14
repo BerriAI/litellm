@@ -381,14 +381,10 @@ CHAT_SHAPED_ENDPOINT_BY_ROUTE_TYPE: Final[Mapping[str, str]] = MappingProxyType(
 
 CHAT_SHAPED_ENDPOINTS: Final[frozenset[str]] = frozenset(
     {
-        "/v1/chat/completions",
         "/chat/completions",
-        "/v1/completions",
         "/completions",
-        "/v1/messages",
-        "/v1/responses",
         "/responses",
-        "/v1beta/interactions",
+        *CHAT_SHAPED_ENDPOINT_BY_ROUTE_TYPE.values(),
     }
 )
 
@@ -455,8 +451,37 @@ def _declared_non_chat_endpoints(deployment: Mapping[str, object]) -> frozenset[
     return None if _declaration_overruled_by_catalog(model_info) else endpoints
 
 
+def _deployment_by_id(model_id: str, llm_router: LitellmRouter) -> tuple[Mapping[str, object], ...]:
+    try:
+        return (JSON_OBJECT_ADAPTER.validate_python(llm_router.get_model_info(id=model_id)),)
+    except ValidationError:
+        return ()
+
+
 def _group_deployments(model: str, llm_router: LitellmRouter, team_id: str | None) -> tuple[Mapping[str, object], ...]:
-    return tuple(llm_router.get_model_list(model_name=model, team_id=team_id) or ())
+    return tuple(llm_router.get_model_list(model_name=model, team_id=team_id) or ()) or _deployment_by_id(
+        model, llm_router
+    )
+
+
+def _deployments_by_backend_name(model: str, llm_router: LitellmRouter) -> tuple[Mapping[str, object], ...]:
+    if (
+        model not in llm_router.deployment_names
+        or llm_router.router_general_settings.pass_through_all_models
+        or llm_router.pattern_router.patterns
+    ):
+        return ()
+    return tuple(
+        deployment
+        for deployment in llm_router.get_model_list() or ()
+        if deployment["litellm_params"].get("model") == model
+    )
+
+
+def _requested_deployments(
+    model: str, llm_router: LitellmRouter, team_id: str | None
+) -> tuple[Mapping[str, object], ...]:
+    return _group_deployments(model, llm_router, team_id) or _deployments_by_backend_name(model, llm_router)
 
 
 def _any_serves_chat(deployments: Sequence[Mapping[str, object]]) -> bool:
@@ -587,7 +612,7 @@ def endpoint_unsupported_by_model(
     model: Final = data.get("model")
     if endpoint is None or not isinstance(model, str) or not model or llm_router is None:
         return None
-    deployments: Final = _group_deployments(model, llm_router, team_id)
+    deployments: Final = _requested_deployments(model, llm_router, team_id)
     if not deployments or _any_serves_chat(deployments):
         return None
     if _fallback_would_answer(model, data, llm_router, team_id):

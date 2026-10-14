@@ -10,6 +10,7 @@ from fastapi import HTTPException
 import litellm
 from litellm import Router
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.types.router import RouterGeneralSettings
 from litellm.proxy.route_llm_request import (
     CHAT_SHAPED_ENDPOINTS,
     CHAT_SHAPED_MODES,
@@ -1877,6 +1878,9 @@ def test_endpoint_unsupported_needs_a_non_chat_mode_to_reject(route_type, model_
         ["/v1/completions"],
         ["/completions"],
         ["/v1beta/interactions"],
+        ["generateContent"],
+        ["streamGenerateContent"],
+        ["/v1/responses/compact"],
     ],
 )
 def test_endpoint_unsupported_allows_every_chat_route_when_any_chat_endpoint_is_declared(route_type, declared):
@@ -1933,6 +1937,35 @@ def test_endpoint_unsupported_follows_a_model_group_alias():
     assert error.message == "/v1/messages is not supported by model=embed-alias. Supported endpoints: /v1/embeddings"
 
 
+@pytest.mark.parametrize("model", ["embed-1", "sagemaker/openai/embed-endpoint"])
+def test_endpoint_unsupported_rejects_chat_sent_to_the_deployment_id_or_backend_model(model):
+    router: Final = _router_with(
+        _embedding_deployment("embed-only", {**EMBEDDING_ONLY, "id": "embed-1"}), CHAT_FALLBACK_DEPLOYMENT
+    )
+
+    error: Final = _unsupported("acompletion", model, router)
+
+    assert isinstance(error, ProxyUnsupportedEndpointError)
+    assert error.message == (
+        f"/v1/chat/completions is not supported by model={model}. Supported endpoints: /v1/embeddings"
+    )
+
+
+@pytest.mark.parametrize(
+    "extra_deployments, router_kwargs",
+    [
+        ((), {"router_general_settings": RouterGeneralSettings(pass_through_all_models=True)}),
+        (({"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}},), {}),
+    ],
+)
+def test_endpoint_unsupported_leaves_a_backend_model_to_the_route_that_serves_it(extra_deployments, router_kwargs):
+    router: Final = _router_with(
+        _embedding_deployment("embed-only", EMBEDDING_ONLY), *extra_deployments, **router_kwargs
+    )
+
+    assert _unsupported("acompletion", "sagemaker/openai/embed-endpoint", router) is None
+
+
 @pytest.mark.parametrize("model", ["unknown-model", "", None])
 def test_endpoint_unsupported_ignores_models_without_deployments(model):
     router: Final = _router_with(_embedding_deployment("embed-only", EMBEDDING_ONLY))
@@ -1947,9 +1980,12 @@ def test_endpoint_unsupported_skips_the_check_without_a_router():
 CHAT_FALLBACK_DEPLOYMENT: Final = {
     "model_name": "chat-fallback",
     "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+    "model_info": {"id": "chat-fallback-id"},
 }
 
-EMBEDDING_FALLBACK_DEPLOYMENT: Final = _embedding_deployment("embed-fallback", EMBEDDING_ONLY)
+EMBEDDING_FALLBACK_DEPLOYMENT: Final = _embedding_deployment(
+    "embed-fallback", {**EMBEDDING_ONLY, "id": "embed-fallback-id"}
+)
 
 
 @pytest.mark.parametrize(
@@ -1966,6 +2002,7 @@ EMBEDDING_FALLBACK_DEPLOYMENT: Final = _embedding_deployment("embed-fallback", E
         ({"fallbacks": [{"embed-only": ["embed-fallback"]}, {"embed-fallback": ["chat-fallback"]}]}, {}),
         ({"fallbacks": [{"embed-only": ["chat-fallback"]}]}, {"metadata": {"_disable_fallbacks": True}}),
         ({}, {"fallbacks": {"chat-fallback": ["embed-fallback"]}}),
+        ({}, {"fallbacks": ["chat-fallback-id"]}),
     ],
 )
 def test_endpoint_unsupported_lets_a_configured_fallback_answer(router_kwargs, request_kwargs):
@@ -1995,6 +2032,7 @@ def test_endpoint_unsupported_lets_a_configured_fallback_answer(router_kwargs, r
         ({"fallbacks": [{"embed-only": ["missing-group"]}]}, {}),
         ({"default_fallbacks": ["embed-fallback"]}, {}),
         ({}, {"fallbacks": ["embed-fallback", "missing-group"]}),
+        ({}, {"fallbacks": ["embed-fallback-id"]}),
         ({}, {"fallbacks": [{"model": "embed-fallback", "temperature": 0.2}]}),
         ({"fallbacks": [{"embed-only": ["embed-alias"]}], "model_group_alias": {"embed-alias": "embed-fallback"}}, {}),
         ({"fallbacks": [{"embed-only": ["embed-fallback"]}, {"embed-fallback": ["embed-only"]}]}, {}),
