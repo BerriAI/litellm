@@ -459,6 +459,41 @@ def test_an_azure_ai_search_query_carrying_a_vendor_response_id_is_refused(gatew
         assert _forwarded(search) == ()
 
 
+def test_the_model_list_relay_passes_error_and_non_object_bodies_through_unchanged(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    vendor_id: Final = _vendor_id()
+    refused: Final = json.dumps(
+        {"error": {"message": "invalid input", "type": "invalid_request_error"}, "id": vendor_id}
+    )
+    listed: Final = json.dumps([{"id": vendor_id, "object": "response"}])
+    replies: Final = MappingProxyType(
+        {"refused": Reply(status=400, body=refused.encode()), "listed": Reply(body=listed.encode())}
+    )
+    with (
+        wire_server(lambda request: replies[_JSON_OBJECT.validate_json(request.body)["input"]]) as azure,
+        wire_server(_respond) as openai_upstream,
+        _proxy(gateway, tmp_path, openai_upstream) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        group: Final = scenario.model(model=f"azure/{_MODEL}", api_base=azure.url, api_key=_UPSTREAM_KEY)
+        wait_for_worker_readiness(candidate, group, 1, 1)
+        key: Final = _user_key(scenario)
+        answers: Final = tuple(
+            _send(
+                candidate,
+                key,
+                "POST",
+                f"/azure/{group}/openai/v1/responses",
+                json.dumps({"model": _MODEL, "input": kind}).encode(),
+            )
+            for kind in ("refused", "listed")
+        )
+        assert [(answer.status_code, answer.text) for answer in answers] == [(400, refused), (200, listed)]
+        assert _forwarded(azure) == (("POST", "/openai/v1/responses"), ("POST", "/openai/v1/responses"))
+        assert _forwarded(openai_upstream) == ()
+
+
 def test_every_verdict_holds_through_a_burst_after_a_worker_is_replaced(gateway: Gateway, tmp_path: Path) -> None:
     vendor_ids: Final = tuple(_vendor_id() for _ in range(10))
     config: Final = tmp_path / "passthrough-burst.yaml"
