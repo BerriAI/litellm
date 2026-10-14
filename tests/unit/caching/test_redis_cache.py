@@ -1700,16 +1700,3 @@ def test_publish_exports_breakers_built_before_the_prometheus_logger():
     metrics.record_state_change("closed", "open")
     assert _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_state", {"state": "closed"}) == 0
     assert _breaker_registry_sample(registry, "litellm_redis_circuit_breaker_state", {"state": "open"}) == 1
-
-
-def test_disable_setting_keeps_breaker_metrics_off_the_registry(monkeypatch):
-    from prometheus_client import CollectorRegistry
-
-    from litellm.caching.redis_cache import RedisBreakerMetrics
-
-    monkeypatch.setattr(litellm, "disable_redis_circuit_breaker_metrics", True)
-    registry: Final = CollectorRegistry()
-    metrics: Final = RedisBreakerMetrics(lambda: True, registry)
-    metrics.record_state_change(None, "closed")
-    metrics.publish()
-    assert tuple(registry.collect()) == ()

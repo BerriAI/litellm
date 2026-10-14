@@ -15,7 +15,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
-Scenario: TypeAlias = Literal["callbacks_before_cache", "callbacks_after_cache", "no_callbacks", "opted_out"]
+Scenario: TypeAlias = Literal["callbacks_before_cache", "callbacks_after_cache", "no_callbacks"]
 
 STATE_GAUGE: Final = "litellm_redis_circuit_breaker_state"
 WORKER_TIMEOUT_SECONDS: Final = 120
@@ -64,10 +64,8 @@ def main(scenario: str, api_base: str, redis_host: str, redis_port: str) -> None
     import litellm
     from litellm.caching.caching import Cache
 
-    if scenario in ("callbacks_before_cache", "opted_out"):
+    if scenario == "callbacks_before_cache":
         litellm.callbacks = ["prometheus"]  # test-quality-ok: this worker process exits right after the report
-    if scenario == "opted_out":
-        litellm.disable_redis_circuit_breaker_metrics = True  # test-quality-ok: throwaway worker process
     litellm.cache = Cache(type="redis", host=redis_host, port=redis_port)  # test-quality-ok: throwaway worker process
     if scenario == "callbacks_after_cache":
         litellm.callbacks = ["prometheus"]  # test-quality-ok: throwaway worker process

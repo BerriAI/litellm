@@ -72,10 +72,3 @@ def test_app_without_litellm_prometheus_logging_gets_no_breaker_series(tmp_path:
         report: Final = _worked(run_breaker_worker("no_callbacks", wire.url, tmp_path))
     assert report.state_series == (), report
     assert _collected_state_series(tmp_path) == (), report
-
-
-def test_opt_out_keeps_breaker_series_off_with_prometheus_logging_on(tmp_path: Path) -> None:
-    with wire_server(_reply) as wire:
-        report: Final = _worked(run_breaker_worker("opted_out", wire.url, tmp_path))
-    assert report.state_series == (), report
-    assert _collected_state_series(tmp_path) == (), report

@@ -506,7 +506,6 @@ prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
 prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 prometheus_metrics_max_series_per_metric: Optional[int] = None
 prometheus_metrics_ttl_seconds: Optional[float] = None
-disable_redis_circuit_breaker_metrics: bool = False
 prometheus_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = False  # used by anthropic, to disable adding prefix to prompt
 disable_copilot_system_to_assistant: bool = False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.

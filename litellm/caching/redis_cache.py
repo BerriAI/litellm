@@ -495,7 +495,6 @@ class RedisBreakerMetrics:
     Prometheus logging is in use: a configured ``prometheus`` / ``prometheus_system`` callback, or a
     Prometheus logger calling ``publish``. Until then every breaker event is tallied here and seeds the
     collectors when they appear, so a cache built before the callback still reports its closed breaker.
-    ``litellm.disable_redis_circuit_breaker_metrics`` keeps them off for apps exporting their own metrics.
     """
 
     def __init__(self, logging_configured: Callable[[], bool], registry: "_PromRegistry | None" = None) -> None:
@@ -541,7 +540,7 @@ class RedisBreakerMetrics:
     def _exported_collectors(self, logger_started: bool = False) -> _BreakerCollectors | None:
         if self._collectors is not None:
             return self._collectors
-        if self._client_missing or litellm.disable_redis_circuit_breaker_metrics:
+        if self._client_missing:
             return None
         if not (logger_started or self._logging_configured()):
             return None
