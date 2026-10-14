@@ -32,7 +32,7 @@ const DEBUG: DeploymentWarning = { id: "detailed_debug", severity: "warning", ig
 const snoozedBy = (user: string, until: string): DeploymentWarning["ignore"] => ({
   source: "admin",
   ignored_by: user,
-  ignored_at: "2026-10-13T09:30:00Z",
+  ignored_at: "2026-09-30T09:30:00Z",
   ignored_until: until,
 });
 
@@ -197,7 +197,15 @@ describe("deployment health panel", () => {
     renderHealth();
     const panel = await openPanel(user);
 
+    expect(
+      within(panel)
+        .getAllByRole("region")
+        .map((region) => region.getAttribute("aria-label")),
+    ).toEqual(["Critical", "Warnings"]);
     const critical = within(panel).getByRole("region", { name: "Critical" });
+    expect(within(critical).getByRole("article")).toHaveTextContent(
+      "general_settings.disable_env_credential_login: true",
+    );
     const warnings = within(panel).getByRole("region", { name: "Warnings" });
     expect(
       within(critical)
@@ -213,13 +221,18 @@ describe("deployment health panel", () => {
       "href",
       "https://docs.litellm.ai/docs/proxy/redis_requirements",
     );
+    expect(within(warnings).getByRole("link", { name: "Read the docs" })).toHaveAttribute("target", "_blank");
+    expect(within(warnings).getByRole("link", { name: "Read the docs" })).toHaveAttribute(
+      "rel",
+      expect.stringContaining("noopener"),
+    );
     expect(within(panel).queryByRole("article", { name: "Detailed debug logging is on" })).not.toBeInTheDocument();
 
     await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed (2)" }));
 
     const debug = within(panel).getByRole("article", { name: "Detailed debug logging is on" });
-    expect(debug).toHaveTextContent(/Snoozed until .*2026/);
-    expect(debug).toHaveTextContent(/by admin-2 on .*2026/);
+    expect(within(debug).getByText(/^Snoozed until/)).toHaveTextContent(/^Snoozed until Oct 2[12], 2026/);
+    expect(debug).toHaveTextContent(/by admin-2 on Sep (29|30), 2026/);
     const expired = within(panel).getByRole("article", {
       name: "Your LiteLLM Enterprise license expired on Oct 1, 2026",
     });
@@ -262,7 +275,7 @@ describe("deployment health panel", () => {
     proxy.warnings = [{ ...ENV_CREDENTIAL, ignore: snoozedBy("admin-2", "2026-10-21T17:04:12Z") }];
     renderHealth();
     const panel = await openPanel(user);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(panel).getByText("No active deployment warnings")).toBeVisible();
 
     await user.click(within(panel).getByRole("button", { name: "Ignored and snoozed (1)" }));
     await user.click(within(panel).getByRole("button", { name: "Restore Environment-credential login is enabled" }));
