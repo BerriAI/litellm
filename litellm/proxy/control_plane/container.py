@@ -30,7 +30,10 @@ from litellm.proxy.control_plane.audit.s3 import (
     SigV4Signer,
     audit_session_policy,
 )
+from litellm.proxy.control_plane.audit.sentinel import ClientCredentials, SentinelSink
 from litellm.proxy.control_plane.audit.sinks import LogSink, OtlpLogSink
+from litellm.proxy.control_plane.audit.splunk import SplunkHecSink
+from litellm.proxy.control_plane.audit.transport import HttpxPoster
 from litellm.proxy.control_plane.auth.jwt import JwksKeyLookup, SessionTokenCodec, TokenVerifier, build_token_verifier
 from litellm.proxy.control_plane.auth.login import LoginService, LoginThrottle
 from litellm.proxy.control_plane.auth.rbac import (
@@ -154,6 +157,23 @@ def _environment_region(aws: BaseAWSLLM) -> str:
     return configured or _REGION.validate_python(aws.get_aws_region_name_for_non_llm_api_calls())
 
 
+def _splunk_sink(settings: ControlPlaneSettings) -> AuditSink:
+    splunk: Final = settings.audit_splunk
+    if splunk is None:
+        raise ValueError("CONTROL_PLANE_AUDIT_SINKS names splunk_hec but its url and token are not both set.")
+    return SplunkHecSink(splunk, HttpxPoster(_shared_http_handler(settings)))
+
+
+def _sentinel_sink(settings: ControlPlaneSettings) -> AuditSink:
+    sentinel: Final = settings.audit_sentinel
+    if sentinel is None:
+        raise ValueError(
+            "CONTROL_PLANE_AUDIT_SINKS names sentinel but its endpoint, rule, tenant and app are not all set."
+        )
+    poster: Final = HttpxPoster(_shared_http_handler(settings))
+    return SentinelSink(sentinel, poster, ClientCredentials(sentinel, poster))
+
+
 def _sink(kind: str, settings: ControlPlaneSettings) -> AuditSink:
     match kind:
         case "otlp":
@@ -169,6 +189,10 @@ def _sink(kind: str, settings: ControlPlaneSettings) -> AuditSink:
             return OtlpLogSink(exporter, build_resource(settings))
         case "s3":
             return _s3_sink(settings)
+        case "splunk_hec":
+            return _splunk_sink(settings)
+        case "sentinel":
+            return _sentinel_sink(settings)
         case _:
             return LogSink()
 
