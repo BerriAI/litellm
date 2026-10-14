@@ -5,8 +5,9 @@ import httpx
 import pytest
 from pydantic import TypeAdapter
 
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy.control_plane.container import HandlerTransport, _shared_http_handler
+from litellm.proxy.control_plane.container import HandlerTransport, _environment_region, _shared_http_handler
 from litellm.proxy.control_plane.settings import ControlPlaneSettings
 
 _JSON_COUNT: Final = TypeAdapter(dict[str, int])
@@ -67,3 +68,14 @@ async def test_transport_never_follows_a_dataplane_redirect_even_on_a_following_
     async with transport.stream("GET", "https://dp.test/v1/mcp/server/oauth/x/authorize", timeout=1.0) as response:
         status: Final = response.status_code
     assert status == 302 and handler.hops == ["https://dp.test/v1/mcp/server/oauth/x/authorize"]
+
+
+def test_the_s3_region_follows_the_aws_sdk_order_aws_region_then_default_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    assert _environment_region(BaseAWSLLM()) == "us-east-1"
+    monkeypatch.delenv("AWS_REGION")
+    assert _environment_region(BaseAWSLLM()) == "eu-west-1"
