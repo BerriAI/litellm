@@ -2030,9 +2030,8 @@ def client(original_function):
                 kwargs = modified_kwargs
 
             # Sync logging_obj.stream after deployment hooks (they may convert it).
-            _hook_stream: Final = kwargs.get("stream")
-            if _hook_stream is not None and logging_obj.stream != _hook_stream:
-                logging_obj.stream = _hook_stream
+            if kwargs.get("stream") is not None:
+                logging_obj.stream = _is_streaming_request(kwargs=kwargs, call_type=call_type)
 
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS

@@ -3650,6 +3650,47 @@ class TestIsStreamingRequest:
         assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True
 
 
+class _SpeechSuccessLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_payloads: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        await self.logged_payloads.put(kwargs["standard_logging_object"])
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_logs_streamed_audio_like_buffered_audio(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api_base: Final = "http://localhost:12348"
+    respx_mock.post(url__regex=rf"{api_base}/v1/text-to-speech/.*").mock(
+        return_value=httpx.Response(status_code=200, content=b"audio", headers={"content-type": "audio/mpeg"})
+    )
+    speech_logger: Final = _SpeechSuccessLogger()
+    monkeypatch.setattr(litellm, "callbacks", [speech_logger])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    async def logged_speech(stream: bool) -> dict[str, object]:
+        response: Final = await litellm.aspeech(
+            model="elevenlabs/eleven_multilingual_v2",
+            input="hello there",
+            voice="21m00Tcm4TlvDq8ikWAM",
+            api_base=api_base,
+            api_key="fake_elevenlabs_api_key",
+            stream=stream,
+        )
+        assert await response.aread() == b"audio"
+        return await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+
+    buffered: Final = await logged_speech(stream=False)
+    streamed: Final = await logged_speech(stream=True)
+
+    assert streamed["status"] == "success"
+    assert streamed["call_type"] == buffered["call_type"]
+    assert streamed["response_cost"] == buffered["response_cost"]
+
+
 class TestCallbackAsyncSyncSeparation:
     """Test that LoggingCallbackManager auto-routes async callbacks to async lists."""
 
