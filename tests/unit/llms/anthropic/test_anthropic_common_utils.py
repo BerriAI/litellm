@@ -4267,3 +4267,18 @@ def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal
     error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
 
     assert type(error) is litellm.InternalServerError
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": {"mode": "explicit"}}]}],
+        [{"role": "user", "content": "hi", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}],
+        [{"role": "system", "content": [{"type": "text", "text": "rules", "prompt_cache_breakpoint": {"mode": "explicit"}}]}],
+    ],
+    ids=["content-part", "message-level-on-string", "system-part"],
+)
+def test_is_cache_control_set_counts_a_prompt_cache_breakpoint_like_a_cache_control(messages: list) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    assert AnthropicModelInfo().is_cache_control_set(messages) is True

@@ -1351,6 +1351,92 @@ class TestBedrockAnthropicPromptCachingRegression:
             has_cache_control = any(isinstance(c, dict) and "cache_control" in c for c in user_msg["content"])
             assert has_cache_control, "cache_control should be present in invoke messages"
 
+    @staticmethod
+    def _claude_config(model_prefix: str):
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+
+        return AmazonConverseConfig() if "converse" in model_prefix else AmazonAnthropicClaudeConfig()
+
+    @pytest.mark.parametrize("model_prefix", ["bedrock/invoke/", "bedrock/converse/"])
+    def test_prompt_cache_breakpoint_lands_on_the_same_block_for_both_routes(self, model_prefix: str) -> None:
+        messages: Final = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": LARGE_DOCUMENT_FOR_CACHING,
+                        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
+                    },
+                    {"type": "text", "text": "What are the payment terms?"},
+                ],
+            }
+        ]
+
+        result: Final = self._claude_config(model_prefix).transform_request(
+            model="anthropic.claude-opus-5-5", messages=messages, optional_params={}, litellm_params={}, headers={}
+        )
+
+        assert "prompt_cache_breakpoint" not in json.dumps(result)
+        if "converse" in model_prefix:
+            assert result["messages"][0]["content"] == [
+                {"text": LARGE_DOCUMENT_FOR_CACHING},
+                {"cachePoint": {"type": "default"}},
+                {"text": "What are the payment terms?"},
+            ]
+        else:
+            assert result["messages"][0]["content"] == [
+                {"type": "text", "text": LARGE_DOCUMENT_FOR_CACHING, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "What are the payment terms?"},
+            ]
+
+    @pytest.mark.parametrize("model_prefix", ["bedrock/invoke/", "bedrock/converse/"])
+    def test_five_breakpoints_are_cut_to_four_only_under_drop_params_for_both_routes(
+        self, model_prefix: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        marked: Final = [
+            {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+            for index in range(5)
+        ]
+        config: Final = self._claude_config(model_prefix)
+
+        with pytest.raises(litellm.BadRequestError, match=r"Claude accepts at most 4 cache breakpoints, found 5"):
+            config.transform_request(
+                model="anthropic.claude-opus-5-5",
+                messages=[{"role": "user", "content": marked}],
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+        result: Final = config.transform_request(
+            model="anthropic.claude-opus-5-5",
+            messages=[{"role": "user", "content": marked}],
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )
+        if "converse" in model_prefix:
+            assert result["messages"][0]["content"] == [
+                {"text": "part 0"},
+                *(
+                    block
+                    for index in range(1, 5)
+                    for block in ({"text": f"part {index}"}, {"cachePoint": {"type": "default"}})
+                ),
+            ]
+        else:
+            assert result["messages"][0]["content"] == [
+                {"type": "text", "text": "part 0"},
+                *({"type": "text", "text": f"part {index}", "cache_control": {"type": "ephemeral"}} for index in range(1, 5)),
+            ]
+
     @pytest.mark.parametrize(
         "model_prefix",
         [

@@ -7,6 +7,8 @@ sys.path.insert(
 
 from unittest.mock import MagicMock, patch
 
+import json
+
 import pytest
 
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
@@ -484,3 +486,23 @@ def test_chat_flagged_model_keeps_mid_conversation_system_role_in_place(local_mo
         "role": "system",
         "content": [{"type": "text", "text": "<system-reminder>Answer with exactly one word.</system-reminder>"}],
     }
+
+
+def test_prompt_cache_breakpoint_becomes_cache_control_on_the_same_block():
+    result = AzureAnthropicConfig().transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "prompt_cache_breakpoint" not in json.dumps(result)
+    assert result["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}
+    ]

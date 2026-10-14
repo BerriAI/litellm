@@ -10145,3 +10145,162 @@ async def test_bedrock_user_file_element_becomes_document_block(sync_mode: bool)
     assert content[0] == {"text": "Summarize this report"}
     assert content[1]["document"]["source"] == {"bytes": base64.b64encode(pdf_bytes).decode()}
     assert content[1]["document"]["format"] == "pdf"
+
+
+_BREAKPOINT_MODEL: Final = "bedrock/anthropic.claude-opus-5-5"
+_EXPLICIT: Final = {"mode": "explicit"}
+_EXPLICIT_30M: Final = {"mode": "explicit", "ttl": "30m"}
+_CACHE_POINT: Final = {"cachePoint": {"type": "default"}}
+_LOOKUP_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "lookup",
+        "description": "lookup",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
+_LOOKUP_TOOL_SPEC: Final = {
+    "toolSpec": {
+        "name": "lookup",
+        "description": "lookup",
+        "inputSchema": {"json": {"type": "object", "properties": {}, "required": []}},
+    }
+}
+
+
+def _breakpoint_conversation() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": "rules", "prompt_cache_breakpoint": _EXPLICIT}]},
+        {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _EXPLICIT_30M}]},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "prompt_cache_breakpoint": _EXPLICIT,
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": "sunny", "prompt_cache_breakpoint": _EXPLICIT}]},
+        {"role": "user", "content": "done", "prompt_cache_breakpoint": _EXPLICIT},
+    ]
+
+
+def _expected_latest_four() -> dict[str, object]:
+    return {
+        "system": [{"text": "rules"}],
+        "toolConfig": {"tools": [_LOOKUP_TOOL_SPEC]},
+        "messages": [
+            {"role": "user", "content": [{"text": "hi"}, _CACHE_POINT]},
+            {
+                "role": "assistant",
+                "content": [{"toolUse": {"toolUseId": "call_1", "name": "lookup", "input": {}}}, _CACHE_POINT],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"content": [{"text": "sunny"}], "toolUseId": "call_1"}},
+                    _CACHE_POINT,
+                    {"text": "done"},
+                    _CACHE_POINT,
+                ],
+            },
+        ],
+    }
+
+
+async def _breakpoint_request(
+    sync_mode: bool, optional_params: dict[str, object], litellm_params: dict[str, object]
+) -> dict[str, object]:
+    config: Final = AmazonConverseConfig()
+    if sync_mode:
+        return config._transform_request(
+            model=_BREAKPOINT_MODEL,
+            messages=_breakpoint_conversation(),
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers={},
+        )
+    return await config._async_transform_request(
+        model=_BREAKPOINT_MODEL,
+        messages=_breakpoint_conversation(),
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_prompt_cache_breakpoints_become_cache_points_after_the_same_blocks(sync_mode: bool) -> None:
+    conversation: Final = _breakpoint_conversation()
+    config: Final = AmazonConverseConfig()
+    optional_params: Final[dict[str, object]] = {"tools": [{**_LOOKUP_TOOL, "prompt_cache_breakpoint": _EXPLICIT}]}
+    if sync_mode:
+        result = config._transform_request(
+            model=_BREAKPOINT_MODEL, messages=conversation[2:], optional_params=optional_params, litellm_params={}, headers={}
+        )
+    else:
+        result = await config._async_transform_request(
+            model=_BREAKPOINT_MODEL, messages=conversation[2:], optional_params=optional_params, litellm_params={}, headers={}
+        )
+
+    assert "prompt_cache_breakpoint" not in json.dumps(result)
+    assert result["toolConfig"]["tools"] == [_LOOKUP_TOOL_SPEC, _CACHE_POINT]
+    assert result["messages"] == _expected_latest_four()["messages"][1:]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_six_breakpoints_keep_the_latest_four_cache_points_under_drop_params(sync_mode: bool) -> None:
+    result: Final = await _breakpoint_request(
+        sync_mode,
+        {"tools": [{**_LOOKUP_TOOL, "prompt_cache_breakpoint": _EXPLICIT}]},
+        {"drop_params": True},
+    )
+
+    assert json.dumps(result).count("cachePoint") == 4
+    assert {key: result[key] for key in ("system", "toolConfig", "messages")} == _expected_latest_four()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_six_breakpoints_are_a_bad_request_without_drop_params(sync_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match=r"Claude accepts at most 4 cache breakpoints, found 6"):
+        await _breakpoint_request(sync_mode, {"tools": [{**_LOOKUP_TOOL, "prompt_cache_breakpoint": _EXPLICIT}]}, {})
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_prompt_cache_options_are_rejected_unless_drop_params(sync_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
+        await _breakpoint_request(sync_mode, {"prompt_cache_options": {"mode": "explicit"}}, {})
+
+    dropped: Final = await _breakpoint_request(sync_mode, {"prompt_cache_options": {"mode": "explicit"}}, {"drop_params": True})
+    assert "prompt_cache_options" not in json.dumps(dropped)
+
+
+def test_five_native_cache_control_marks_are_forwarded_as_written_past_the_cap() -> None:
+    marked: Final = [{"type": "text", "text": f"part {index}", "cache_control": {"type": "ephemeral"}} for index in range(5)]
+
+    result: Final = AmazonConverseConfig()._transform_request(
+        model=_BREAKPOINT_MODEL,
+        messages=[{"role": "user", "content": marked}],
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {
+            "role": "user",
+            "content": [block for index in range(5) for block in ({"text": f"part {index}"}, _CACHE_POINT)],
+        }
+    ]

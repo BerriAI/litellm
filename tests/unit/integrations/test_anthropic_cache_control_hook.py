@@ -1161,7 +1161,7 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
         },
     }
 
-    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
 
 
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])
@@ -4279,3 +4279,24 @@ class TestMalformedInjectionPointsAreIgnored:
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
         _stamp_injection_points_with_dialect(kwargs, "gpt-5.6", "openai")
         assert kwargs == {"cache_control_injection_points": value}
+
+
+def test_cache_control_hook_counts_tool_call_prompt_cache_breakpoints():
+    message: Final[AllMessageValues] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": cast(
+            list[ChatCompletionAssistantToolCall],
+            [
+                {
+                    "id": f"call_{index}",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                }
+                for index in range(3)
+            ],
+        ),
+    }
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
