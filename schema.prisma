@@ -1588,6 +1588,7 @@ model LiteLLM_AccessGroupTable {
   // Resource memberships - explicit arrays per type
   access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
+  mcp_tool_permissions    Json?
   access_agent_ids        String[] @default([])
 
   assigned_team_ids         String[] @default([])

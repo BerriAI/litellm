@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { fetchClient } from "@/lib/http/api";
 
+import { AccessGroupMCPToolPermissions } from "../AccessGroupsModal/AccessGroupBaseForm";
 import { buildAccessGroupCreateBody, emptyAccessGroupFormValues, type AccessGroupCreateBody } from "./mapper";
 import { accessGroupCreateSchema } from "./schema";
 
@@ -156,6 +157,11 @@ export const AccessGroupCreateDialog = ({
                   />
                 )}
               </FormField>
+              <AccessGroupMCPToolPermissions
+                selectedServers={form.watch("mcpServerIds")}
+                toolPermissions={form.watch("mcpToolPermissions")}
+                onChange={(next) => form.setValue("mcpToolPermissions", next, { shouldDirty: true })}
+              />
             </TabsContent>
 
             <TabsContent value="agents" className="pt-4">
