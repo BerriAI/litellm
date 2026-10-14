@@ -5955,7 +5955,9 @@ class ProxyConfig:
 
         to_set: Final = {k: v for k, v in updates.items() if v is not None}
         encrypted: Final = (
-            self.encrypt_env_variables_for_db(environment_variables=to_set, stored_environment_variables=existing)
+            self.encrypt_env_variables_for_db(
+                environment_variables=to_set, stored_environment_variables=cast("Mapping[str, object]", existing)
+            )
             if to_set
             else {}
         )
@@ -7918,9 +7920,9 @@ class ProxyConfig:
         require_legacy_reader_for(
             (
                 value
-                for key, value in environment_variables.items()
+                for key, value in cast("Mapping[object, object]", environment_variables).items()
                 if stored_environment_variables is not None
-                and needs_legacy_reader(stored_environment_variables.get(key))
+                and needs_legacy_reader(stored_environment_variables.get(cast("str", key)))
             ),
             "re-encrypt environment variables for the config save",
         )
@@ -18542,7 +18544,8 @@ async def update_config(
             before_environment_variables: Final = copy.deepcopy(existing)
             existing.update(
                 proxy_config.encrypt_env_variables_for_db(
-                    environment_variables=config_info.environment_variables, stored_environment_variables=existing
+                    environment_variables=config_info.environment_variables,
+                    stored_environment_variables=cast("Mapping[str, object]", existing),
                 )
             )
             await _upsert_section("environment_variables", existing)
