@@ -1731,3 +1731,36 @@ async def test_merge_user_env_vars_succeeds_when_blake2b_is_unavailable(
     assert list(prisma.db._store.locks) == [
         int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True)
     ]
+
+
+def test_mcp_identifier_lock_keys_drop_the_legacy_key_in_fips_mode(monkeypatch: pytest.MonkeyPatch):
+    """A FIPS deployment (LITELLM_FIPS_MODE=true) must never run the
+    non-approved blake2b digest: the legacy key is skipped there too."""
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+
+    keys: Final = _mcp_identifier_lock_keys("Name")
+
+    assert keys == (int.from_bytes(hashlib.sha256(b"mcp_identifier:name").digest()[:8], "big", signed=True),)
+
+
+def test_mcp_user_env_var_lock_keys_drop_the_legacy_key_in_fips_mode(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy._experimental.mcp_server.db import _mcp_user_env_var_lock_keys
+
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+
+    keys: Final = _mcp_user_env_var_lock_keys("alice", "srv-1")
+
+    assert keys == (int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True),)
+
+
+@pytest.mark.asyncio
+async def test_merge_user_env_vars_succeeds_in_fips_mode(env_vars_salt_key, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
+    prisma: Final = _transactional_env_vars_prisma()
+
+    merged: Final = await merge_user_env_vars(prisma, "alice", "srv-1", {"TOKEN": "x"}, allowed_names=["TOKEN"])
+
+    assert merged == {"TOKEN": "x"}
+    assert list(prisma.db._store.locks) == [
+        int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True)
+    ]

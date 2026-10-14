@@ -41,6 +41,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_secret_map,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.fips import is_fips_mode
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -669,20 +670,25 @@ _legacy_lock_key_unavailable_logged: bool = False
 def _legacy_blake2b_lock_key(digest: bytes) -> int | None:
     """Legacy blake2b advisory-lock key for mixed-version rolling upgrades.
 
-    Returns ``None`` when the runtime has no blake2b (FIPS-enforcing builds),
-    where writes must not fail: the sha256 key alone still serialises
-    new-worker writes there."""
+    Returns ``None`` when FIPS mode is on (a FIPS deployment must not run the
+    non-approved blake2b digest) or when the runtime has no blake2b, where
+    writes must not fail: the sha256 key alone still serialises new-worker
+    writes there."""
     global _legacy_lock_key_unavailable_logged
-    try:
-        return int.from_bytes(hashlib.blake2b(digest, digest_size=8).digest(), "big", signed=True)
-    except (AttributeError, ValueError):
-        if not _legacy_lock_key_unavailable_logged:
-            _legacy_lock_key_unavailable_logged = True
-            verbose_proxy_logger.warning(
-                "blake2b is unavailable on this runtime; MCP locks skip the legacy "
-                "mixed-version key and use the sha256 key only"
-            )
-        return None
+    unavailable: str | None = None
+    if is_fips_mode():
+        unavailable = "FIPS mode is enabled"
+    else:
+        try:
+            return int.from_bytes(hashlib.blake2b(digest, digest_size=8).digest(), "big", signed=True)
+        except (AttributeError, TypeError, ValueError):
+            unavailable = "blake2b is unavailable on this runtime"
+    if not _legacy_lock_key_unavailable_logged:
+        _legacy_lock_key_unavailable_logged = True
+        verbose_proxy_logger.warning(
+            "%s; MCP locks skip the legacy mixed-version key and use the sha256 key only", unavailable
+        )
+    return None
 
 
 def _mcp_identifier_lock_keys(*identifiers: str | None) -> tuple[int, ...]:
