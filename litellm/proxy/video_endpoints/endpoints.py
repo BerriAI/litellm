@@ -23,7 +23,6 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
-    resolve_video_model_name,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -273,12 +272,12 @@ async def video_status(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = resolve_video_model_name(llm_router, decoded)
+        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
     try:
         status: Final[object] = await processor.base_process_llm_request(
             request=request,
@@ -373,11 +372,11 @@ async def video_content(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = resolve_video_model_name(llm_router, decoded)
+        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
     try:
         # Call the video content function directly to get raw bytes
         video_bytes: Final = await processor.base_process_llm_request(
@@ -481,12 +480,12 @@ async def video_remix(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = resolve_video_model_name(llm_router, decoded)
+        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 
     # Process request using ProxyBaseLLMRequestProcessing
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
     try:
         remixed: Final[object] = await processor.base_process_llm_request(
             request=request,
@@ -795,11 +794,11 @@ async def video_edit(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = resolve_video_model_name(llm_router, decoded)
+        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
     try:
         edited: Final[object] = await processor.base_process_llm_request(
             request=request,
@@ -892,11 +891,11 @@ async def video_extension(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = resolve_video_model_name(llm_router, decoded)
+        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
 
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
     try:
         extended: Final[object] = await processor.base_process_llm_request(
             request=request,

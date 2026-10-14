@@ -27,7 +27,6 @@ from litellm.llms.dashscope.videos.transformation import (
 )
 from litellm.proxy.auth.auth_checks import _can_object_call_model
 from litellm.proxy.auth.auth_utils import _resolve_model_id_with_router
-from litellm.proxy.video_endpoints.utils import resolve_video_model_name
 from litellm.router import Router
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.utils import (
@@ -560,6 +559,13 @@ BEIJING_HOST = "https://wan3-beijing.example"
 SINGAPORE_HOST = "https://wan3-singapore.example"
 
 
+def _proxy_poll_model(router: Router, video_id: str) -> str | None:
+    decoded: Final = decode_video_id_with_provider(video_id)
+    requested: Final = router.resolve_model_name_from_model_id(decoded.get("model_id"))
+    served: Final = decoded.get("served_model")
+    return router.resolve_served_model_name(requested, served) if requested and served else requested
+
+
 def _two_region_router(
     singapore_model: str,
     routing_groups: list[dict[str, object]] | None = None,
@@ -601,7 +607,7 @@ def test_created_video_id_resolves_back_to_the_region_that_created_the_task(
 
     created = router.video_generation(model="wan3-beijing", prompt="a cat on a roof", metadata=caller_metadata)
 
-    resolved = resolve_video_model_name(router, decode_video_id_with_provider(created.id))
+    resolved = _proxy_poll_model(router, created.id)
     assert resolved == "wan3-beijing"
 
     router.video_status(model=resolved, video_id=created.id)
@@ -638,7 +644,7 @@ def test_a_video_created_through_a_routing_group_is_polled_in_the_region_that_cr
         decoded = decode_video_id_with_provider(created.id)
         checked = _resolve_model_id_with_router(decoded["model_id"], router)
         assert _can_object_call_model(model=checked, llm_router=router, models=[requested], object_type="key")
-        polled = router.video_status(model=resolve_video_model_name(router, decoded), video_id=created.id)
+        polled = router.video_status(model=_proxy_poll_model(router, created.id), video_id=created.id)
         assert polled.id == created.id
 
     hosts = [call.request.url.host for call in respx.calls]
@@ -655,7 +661,7 @@ def test_an_id_naming_a_served_model_its_requested_name_does_not_route_to_is_pol
     )
     edited = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3-beijing", served_model="wan3-singapore")
 
-    router.video_status(model=resolve_video_model_name(router, decode_video_id_with_provider(edited)), video_id=edited)
+    router.video_status(model=_proxy_poll_model(router, edited), video_id=edited)
 
     assert [call.request.headers["authorization"] for call in task_get.calls] == ["Bearer cn-key"]
 
@@ -697,7 +703,7 @@ def test_a_key_scoped_to_the_requested_alias_or_wildcard_name_can_poll_its_video
     assert _can_object_call_model(model=checked, llm_router=router, models=[requested], object_type="key")
 
     router.video_status(
-        model=resolve_video_model_name(router, decode_video_id_with_provider(created.id)), video_id=created.id
+        model=_proxy_poll_model(router, created.id), video_id=created.id
     )
 
     assert [call.request.headers["authorization"] for call in task_get.calls] == [f"Bearer {api_key}"]

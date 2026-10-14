@@ -8783,6 +8783,71 @@ class TestPerRequestModelGroupAlias:
         assert merged_for == ["group-b"]
 
 
+class TestVideoServedModelPin:
+    """A video id names the group a poll asked for and the group that served the task. The served group may only
+    be pinned when the name left after every alias rewrite routes to it, so an edited id cannot undo a key's alias."""
+
+    @staticmethod
+    def _router() -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": "openai/sora-2", "api_key": "sk-fake"}}
+                for name in ("allowed", "restricted")
+            ],
+            routing_groups=[
+                {"group_name": "videos", "models": ["allowed", "restricted"], "routing_strategy": "simple-shuffle"}
+            ],
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_aliases", "router_settings", "expected"),
+        [
+            ({}, None, "restricted"),
+            ({"videos": "allowed"}, None, "allowed"),
+            ({}, {"model_group_alias": {"videos": "allowed"}}, "allowed"),
+        ],
+        ids=["no-alias-pins-the-served-group", "key-alias-wins", "key-or-team-router-alias-wins"],
+    )
+    async def test_served_group_is_pinned_only_when_the_aliased_name_routes_to_it(
+        self, monkeypatch, key_aliases, router_settings, expected
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": "videos", "video_id": "video_abc"}, served_model="restricted"
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=router_settings)
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[], aliases=key_aliases),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="avideo_status",
+            llm_router=self._router(),
+        )
+
+        assert returned_data["model"] == expected
+
+
 class TestInjectCostIntoUsageDict:
     @staticmethod
     def _expected_cost(model, prompt_tokens, completion_tokens):

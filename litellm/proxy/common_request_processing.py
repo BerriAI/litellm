@@ -1808,8 +1808,9 @@ async def _team_member_within_fallback_model_budget(
 
 
 class ProxyBaseLLMRequestProcessing:
-    def __init__(self, data: dict):
+    def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
+        self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
 
     @property
@@ -2262,6 +2263,10 @@ class ProxyBaseLLMRequestProcessing:
                 )
                 if alias_target is not None:
                     self.data["model"] = alias_target
+
+        aliased_model: Final = self.data.get("model")
+        if self.served_model is not None and llm_router is not None and isinstance(aliased_model, str):
+            self.data["model"] = llm_router.resolve_served_model_name(aliased_model, self.served_model)
 
         litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
         self.data["litellm_call_id"] = litellm_call_id

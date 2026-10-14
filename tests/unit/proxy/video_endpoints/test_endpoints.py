@@ -367,9 +367,9 @@ async def test_content__model_encoded_id(harness):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", [call_status, call_content])
-async def test_status_and_content__route_to_the_routing_group_member_that_served_the_video(harness, call):
+async def test_status_and_content__hand_the_served_member_to_the_request_processor(harness, call):
     """The id names the routing group a key may be scoped to, and the member that served the task, which is
-    the only one holding it, so a poll routed by the group's name could land on the other member."""
+    the only one holding it. The processor pins the member once key and team aliases have been applied."""
     router = Router(
         model_list=[
             {"model_name": name, "litellm_params": {"model": "dashscope/wan3.0-video", "api_key": "k"}}
@@ -383,7 +383,8 @@ async def test_status_and_content__route_to_the_routing_group_member_that_served
     with patch.object(proxy_server, "llm_router", router):
         await call(harness, video_id)
 
-    assert harness.processor_data()["model"] == "wan3-b"
+    assert harness.processor_data()["model"] == "wan3"
+    assert harness.base_process.call_args.args[0].served_model == "wan3-b"
 
 
 # =========================================================================== #

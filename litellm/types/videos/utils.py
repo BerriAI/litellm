@@ -109,6 +109,8 @@ def decode_video_id_with_provider(encoded_video_id: str) -> DecodedVideoId:
             else None
         )
 
+        if served_model is None:
+            return DecodedVideoId(custom_llm_provider=custom_llm_provider, model_id=model_id, video_id=decoded_video_id)
         return DecodedVideoId(
             custom_llm_provider=custom_llm_provider,
             model_id=model_id,
