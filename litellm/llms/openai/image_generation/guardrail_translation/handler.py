@@ -64,7 +64,16 @@ class OpenAIImageGenerationHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-            data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
+            redacted_prompt: Final = guardrailed_texts[0] if guardrailed_texts else prompt
+            data["prompt"] = redacted_prompt
+            # Keep temporary chat messages in sync with the redacted prompt so
+            # proxy endpoints that rebuild prompt from messages do not restore PII.
+            messages = data.get("messages")
+            if isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, dict) and message.get("role") == "user":
+                        message["content"] = redacted_prompt
+                        break
 
             verbose_proxy_logger.debug(
                 "OpenAI Image Generation: Applied guardrail to prompt. Original length: %d, New length: %d",
