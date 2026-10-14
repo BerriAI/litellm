@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type * as vscode from "vscode";
-import { ESTIMATED_TOKENS_PER_IMAGE, buildChatCompletionParams, estimateMessageTokens, toChatCompletionMessages, type ChatRequestInput } from "../src/messages";
+import { ESTIMATED_TOKENS_PER_IMAGE, buildChatCompletionParams, buildResponsesCompletionParams, estimateMessageTokens, toChatCompletionMessages, type ChatRequestInput } from "../src/messages";
 
 const USER = 1 as vscode.LanguageModelChatMessageRole;
 const ASSISTANT = 2 as vscode.LanguageModelChatMessageRole;
@@ -164,5 +164,70 @@ describe("buildChatCompletionParams", () => {
     expect(params).toMatchObject({ temperature: 0.2, max_tokens: 500, top_p: 0.9 });
     expect(params).not.toHaveProperty("seed");
     expect(params).not.toHaveProperty("foo");
+  });
+});
+
+describe("buildResponsesCompletionParams", () => {
+  it("sends the conversation as input items, never as chat messages", () => {
+    const params = buildResponsesCompletionParams(
+      request({
+        messages: [
+          message(SYSTEM, [text("be terse")]),
+          message(USER, [text("read a"), image([1, 2, 3])]),
+          message(ASSISTANT, [text("checking"), toolCall("call_1", "read_file", { path: "a.ts" })]),
+          message(USER, [toolResult("call_1", [text("export const a = 1;")]), text("thanks")]),
+        ],
+      }),
+    );
+    expect(params).not.toHaveProperty("messages");
+    expect(params).toMatchObject({ model: "gpt-5.6", stream: true });
+    expect(params.input).toEqual([
+      { type: "message", role: "system", content: "be terse" },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "read a" },
+          { type: "input_image", image_url: "data:image/png;base64,AQID", detail: "auto" },
+        ],
+      },
+      { type: "message", role: "assistant", content: "checking" },
+      { type: "function_call", call_id: "call_1", name: "read_file", arguments: '{"path":"a.ts"}' },
+      { type: "function_call_output", call_id: "call_1", output: "export const a = 1;" },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "thanks" }] },
+    ]);
+  });
+
+  it("declares flat function tools and requires a call only when VS Code does", () => {
+    const tools: readonly vscode.LanguageModelChatTool[] = [
+      { name: "read_file", description: "Read a file", inputSchema: { type: "object", properties: { path: { type: "string" } } } },
+      { name: "noop", description: "No input" },
+    ];
+    const auto = buildResponsesCompletionParams(request({ tools }));
+    expect(auto.tools).toEqual([
+      {
+        type: "function",
+        name: "read_file",
+        description: "Read a file",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+        strict: false,
+      },
+      { type: "function", name: "noop", description: "No input", parameters: { type: "object", properties: {} }, strict: false },
+    ]);
+    expect(auto.tool_choice).toBeUndefined();
+    expect(buildResponsesCompletionParams(request({ tools, requireToolCall: true })).tool_choice).toBe("required");
+    expect(buildResponsesCompletionParams(request({ requireToolCall: true })).tool_choice).toBeUndefined();
+  });
+
+  it("nests the picked reasoning effort and maps max_tokens to max_output_tokens", () => {
+    expect(buildResponsesCompletionParams(request({ reasoningEffort: "high" })).reasoning).toEqual({ effort: "high" });
+    expect(buildResponsesCompletionParams(request()).reasoning).toBeUndefined();
+    const params = buildResponsesCompletionParams(
+      request({ modelOptions: { temperature: 0.2, max_tokens: 500, seed: 7, top_p: 0.9, presence_penalty: 1 } }),
+    );
+    expect(params).toMatchObject({ temperature: 0.2, top_p: 0.9, max_output_tokens: 500 });
+    expect(params).not.toHaveProperty("max_tokens");
+    expect(params).not.toHaveProperty("seed");
+    expect(params).not.toHaveProperty("presence_penalty");
   });
 });

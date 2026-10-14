@@ -1,4 +1,5 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions";
+import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 
 export type ResponsePart =
   | { readonly kind: "text"; readonly value: string }
@@ -9,6 +10,7 @@ export type ResponsePart =
 interface PendingToolCall {
   readonly index: number;
   readonly callId: string;
+  readonly itemId: string;
   readonly name: string;
   readonly arguments: string;
 }
@@ -22,11 +24,11 @@ export interface ChunkOutcome {
 
 export const NO_PENDING_TOOL_CALLS: PendingToolCalls = [];
 
-type ToolCallDelta = NonNullable<ChatCompletionChunk.Choice.Delta["tool_calls"]>[number];
+type ChatToolCallDelta = NonNullable<ChatCompletionChunk.Choice.Delta["tool_calls"]>[number];
 
 const nonEmpty = (value: string | undefined): string | undefined => (value === undefined || value === "" ? undefined : value);
 
-const targetOf = (pending: PendingToolCalls, delta: ToolCallDelta): PendingToolCall | undefined => {
+const targetOfChat = (pending: PendingToolCalls, delta: ChatToolCallDelta): PendingToolCall | undefined => {
   const id = nonEmpty(delta.id);
   if (id !== undefined) {
     return pending.find((call) => call.callId === id);
@@ -35,9 +37,9 @@ const targetOf = (pending: PendingToolCalls, delta: ToolCallDelta): PendingToolC
   return sameIndex.at(-1) ?? (delta.index === undefined ? pending.at(-1) : undefined);
 };
 
-const mergeToolCallDelta = (pending: PendingToolCalls, delta: ToolCallDelta): PendingToolCalls => {
-  const target = targetOf(pending, delta);
-  const base: PendingToolCall = target ?? { index: delta.index ?? pending.length, callId: nonEmpty(delta.id) ?? "", name: "", arguments: "" };
+const mergeChatToolCallDelta = (pending: PendingToolCalls, delta: ChatToolCallDelta): PendingToolCalls => {
+  const target = targetOfChat(pending, delta);
+  const base: PendingToolCall = target ?? { index: delta.index ?? pending.length, callId: nonEmpty(delta.id) ?? "", itemId: "", name: "", arguments: "" };
   const merged: PendingToolCall = {
     ...base,
     name: nonEmpty(delta.function?.name) ?? base.name,
@@ -46,15 +48,21 @@ const mergeToolCallDelta = (pending: PendingToolCalls, delta: ToolCallDelta): Pe
   return target === undefined ? [...pending, merged] : pending.map((call) => (call === target ? merged : call));
 };
 
-export const applyChunk = (pending: PendingToolCalls, chunk: ChatCompletionChunk): ChunkOutcome => {
-  const choice = chunk.choices[0];
-  if (choice === undefined) {
-    return { pending, parts: [] };
-  }
-  const text = typeof choice.delta.content === "string" && choice.delta.content !== "" ? [{ kind: "text", value: choice.delta.content } as const] : [];
-  const truncated = choice.finish_reason === "length" ? [{ kind: "truncated" } as const] : [];
-  const nextPending = (choice.delta.tool_calls ?? []).reduce(mergeToolCallDelta, pending);
-  return { pending: nextPending, parts: [...text, ...truncated] };
+const targetOfResponses = (pending: PendingToolCalls, itemId: string): PendingToolCall | undefined =>
+  pending.find((call) => call.itemId === itemId);
+
+const startResponsesToolCall = (pending: PendingToolCalls, item: { id?: string; call_id: string; name: string }, index: number): PendingToolCalls => [
+  ...pending.filter((call) => call.itemId !== (item.id ?? item.call_id)),
+  { index, callId: item.call_id, itemId: item.id ?? item.call_id, name: item.name, arguments: "" },
+];
+
+const updateResponsesToolCallArguments = (
+  pending: PendingToolCalls,
+  itemId: string,
+  update: (current: string) => string,
+): PendingToolCalls => {
+  const target = targetOfResponses(pending, itemId);
+  return target === undefined ? pending : pending.map((call) => (call === target ? { ...call, arguments: update(call.arguments) } : call));
 };
 
 const parseArguments = (raw: string): object | undefined => {
@@ -79,7 +87,7 @@ const finishToolCall = (call: PendingToolCall): ResponsePart => {
 export const flushToolCalls = (pending: PendingToolCalls): readonly ResponsePart[] =>
   [...pending].sort((left, right) => left.index - right.index).map(finishToolCall);
 
-export async function* responseParts(chunks: AsyncIterable<ChatCompletionChunk>): AsyncGenerator<ResponsePart> {
+export async function* responseParts(chunks: AsyncIterable<ChatCompletionChunk | ResponseStreamEvent>): AsyncGenerator<ResponsePart> {
   let pending: PendingToolCalls = NO_PENDING_TOOL_CALLS;
   for await (const chunk of chunks) {
     const outcome = applyChunk(pending, chunk);
@@ -88,3 +96,59 @@ export async function* responseParts(chunks: AsyncIterable<ChatCompletionChunk>)
   }
   yield* flushToolCalls(pending);
 }
+
+const applyChatChunk = (pending: PendingToolCalls, chunk: ChatCompletionChunk): ChunkOutcome => {
+  const choice = chunk.choices?.[0];
+  if (choice === undefined) {
+    return { pending, parts: [] as const };
+  }
+  const text = typeof choice.delta.content === "string" && choice.delta.content !== "" ? [{ kind: "text" as const, value: choice.delta.content }] : [];
+  const truncated = choice.finish_reason === "length" ? [{ kind: "truncated" as const }] : [];
+  const nextPending = (choice.delta.tool_calls ?? []).reduce(mergeChatToolCallDelta, pending);
+  return { pending: nextPending, parts: [...text, ...truncated] as const };
+};
+
+const applyResponsesEvent = (pending: PendingToolCalls, event: ResponseStreamEvent): ChunkOutcome => {
+  const eventType = event.type;
+
+  if (eventType === "response.output_text.delta") {
+    const text = nonEmpty(event.delta);
+    if (text !== undefined) {
+      return { pending, parts: [{ kind: "text", value: text }] as const };
+    }
+    return { pending, parts: [] as const };
+  }
+
+  if (eventType === "response.output_text.done") {
+    return { pending, parts: [] as const };
+  }
+
+  if (eventType === "response.function_call_arguments.delta") {
+    return { pending: updateResponsesToolCallArguments(pending, event.item_id, (current) => current + event.delta), parts: [] as const };
+  }
+
+  if (eventType === "response.function_call_arguments.done") {
+    return { pending: updateResponsesToolCallArguments(pending, event.item_id, () => event.arguments), parts: [] as const };
+  }
+
+  if (eventType === "response.output_item.added") {
+    if (event.item.type === "function_call") {
+      return { pending: startResponsesToolCall(pending, event.item, event.output_index), parts: [] as const };
+    }
+    return { pending, parts: [] as const };
+  }
+
+  if (eventType === "response.incomplete") {
+    const truncated = event.response.incomplete_details?.reason === "max_output_tokens";
+    return { pending, parts: truncated ? ([{ kind: "truncated" }] as const) : ([] as const) };
+  }
+
+  return { pending, parts: [] as const };
+};
+
+export const applyChunk = (pending: PendingToolCalls, chunk: ChatCompletionChunk | ResponseStreamEvent): ChunkOutcome => {
+  if ("type" in chunk) {
+    return applyResponsesEvent(pending, chunk as ResponseStreamEvent);
+  }
+  return applyChatChunk(pending, chunk as ChatCompletionChunk);
+};

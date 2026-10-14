@@ -1,9 +1,10 @@
 import type { ChatCompletionChunk, ChatCompletionCreateParamsStreaming } from "openai/resources/chat/completions";
+import { APIError } from "openai";
 import { describe, expect, it } from "vitest";
 import type * as vscode from "vscode";
 import type { GatewayClient, GatewayConfig, ModelGroupsResult } from "../src/gateway";
-import { ESTIMATED_TOKENS_PER_IMAGE } from "../src/messages";
-import { LiteLLMChatProvider, TRUNCATED_MESSAGE, type LiteLLMModel } from "../src/provider";
+import { ESTIMATED_TOKENS_PER_IMAGE, MODE_RESPONSES } from "../src/messages";
+import { GATEWAY_TIMEOUT_MESSAGE, LiteLLMChatProvider, TRUNCATED_MESSAGE, type LiteLLMModel } from "../src/provider";
 import { CancellationTokenSource, LanguageModelTextPart, LanguageModelToolCallPart } from "./vscode-mock";
 
 interface StreamRequest {
@@ -14,6 +15,7 @@ interface StreamRequest {
 interface FakeGateway extends GatewayClient {
   readonly listCalls: readonly GatewayConfig[];
   readonly streamRequests: readonly StreamRequest[];
+  readonly responsesRequests: readonly any[];
 }
 
 const chunk = (delta: ChatCompletionChunk.Choice.Delta, finishReason: ChatCompletionChunk.Choice["finish_reason"] = null): ChatCompletionChunk => ({
@@ -22,6 +24,14 @@ const chunk = (delta: ChatCompletionChunk.Choice.Delta, finishReason: ChatComple
   created: 0,
   model: "gpt-5.6",
   choices: [{ index: 0, delta, finish_reason: finishReason }],
+});
+
+const responsesEvent = (type: string, overrides?: Record<string, unknown>): any => ({
+  type,
+  object: "response",
+  id: "resp_test",
+  created_at: 1234567890,
+  ...overrides,
 });
 
 const modelGroups: ModelGroupsResult = {
@@ -45,12 +55,15 @@ const modelGroups: ModelGroupsResult = {
 const fakeGateway = (
   listResult: ModelGroupsResult = modelGroups,
   stream: (signal: AbortSignal) => AsyncIterable<ChatCompletionChunk> = () => (async function* () {})(),
+  responsesStream?: (signal: AbortSignal) => AsyncIterable<any>,
 ): FakeGateway => {
   const listCalls: GatewayConfig[] = [];
   const streamRequests: StreamRequest[] = [];
+  const responsesRequests: any[] = [];
   return {
     listCalls,
     streamRequests,
+    responsesRequests,
     async listModelGroups(config) {
       listCalls.push(config);
       return listResult;
@@ -58,6 +71,10 @@ const fakeGateway = (
     async streamChatCompletion(config, params, signal) {
       streamRequests.push({ config, params });
       return stream(signal);
+    },
+    async streamResponsesCompletion(config, params, signal) {
+      responsesRequests.push({ config, params });
+      return responsesStream ? responsesStream(signal) : (async function* () {})();
     },
   };
 };
@@ -78,6 +95,7 @@ const model = (overrides: Partial<LiteLLMModel> = {}): LiteLLMModel => ({
   maxOutputTokens: 128000,
   capabilities: { imageInput: true, toolCalling: true },
   gateway,
+  mode: "chat",
   ...overrides,
 });
 
@@ -134,10 +152,15 @@ describe("provideLanguageModelChatInformation", () => {
       expect.objectContaining({
         id: "gpt-5.6",
         detail: "$4.00 in / $20.00 out per 1M tokens",
+        inputCost: 4,
+        outputCost: 20,
+        pricing: "$4.00 in / $20.00 out per 1M tokens",
+        priceCategory: "high",
         maxInputTokens: 922000,
         capabilities: { imageInput: true, toolCalling: true },
         configurationSchema: expect.objectContaining({ properties: expect.objectContaining({ reasoningEffort: expect.anything() }) }),
         gateway,
+        mode: "chat",
       }),
     ]);
   });
@@ -152,6 +175,33 @@ describe("provideLanguageModelChatInformation", () => {
         token(),
       ),
     ).rejects.toThrow("LiteLLM gateway at http://127.0.0.1:4000 answered 401 for /model_group/info: Authentication Error, Invalid proxy server token passed");
+  });
+
+  it("lists responses mode models preserved from gateway data", async () => {
+    const responsesGroups: ModelGroupsResult = {
+      kind: "ok",
+      groups: [
+        {
+          modelGroup: "responses-model",
+          providers: ["openai"],
+          mode: MODE_RESPONSES,
+          maxInputTokens: 128000,
+          maxOutputTokens: 16000,
+          inputCostPerToken: 5e-6,
+          outputCostPerToken: 2.5e-5,
+          supportsVision: false,
+          supportsFunctionCalling: false,
+          supportedReasoningEfforts: ["default", "low", "high"],
+        },
+      ],
+    };
+    const client = fakeGateway(responsesGroups);
+    const models = await new LiteLLMChatProvider(client).provideLanguageModelChatInformation(
+      prepare({ baseUrl: "http://127.0.0.1:4000/v1/", apiKey: "sk-test" }),
+      token(),
+    );
+    expect(models.length).toBe(1);
+    expect(models[0]).toMatchObject({ id: "responses-model", mode: MODE_RESPONSES });
   });
 });
 
@@ -210,6 +260,18 @@ describe("provideLanguageModelChatResponse", () => {
     expect(cancellation.disposedListeners).toBe(1);
   });
 
+  it("explains a gateway 504 and suggests checking upstream health", async () => {
+    const timeout = new APIError(504, undefined, "Gateway Time-out", new Headers());
+    const client = fakeGateway(modelGroups, () => {
+      throw timeout;
+    });
+    const { run } = collect(new LiteLLMChatProvider(client));
+
+    await expect(run).rejects.toThrow(
+      GATEWAY_TIMEOUT_MESSAGE,
+    );
+  });
+
   it("reports the text it got and then fails when the model hits its output limit", async () => {
     const client = fakeGateway(modelGroups, () =>
       (async function* () {
@@ -230,6 +292,35 @@ describe("provideLanguageModelChatResponse", () => {
     );
     const { run } = collect(new LiteLLMChatProvider(client));
     await expect(run).rejects.toThrow("invalid JSON arguments for tool grep");
+  });
+
+  it("calls responses API for mode='responses' models and preserves mode", async () => {
+    const responsesEvents = (signal: AbortSignal): AsyncIterable<any> => ({
+      [Symbol.asyncIterator]: async function* () {
+        yield responsesEvent("response.created", { output: [] });
+        yield responsesEvent("response.output_text.delta", { content_index: 0, delta: "Hello" });
+        yield responsesEvent("response.output_text.delta", { content_index: 0, delta: " world" });
+        yield responsesEvent("response.output_text.done", { content_index: 0, text: "Hello world" });
+        yield responsesEvent("response.completed", { status: "completed" });
+      },
+    });
+    const client = fakeGateway(modelGroups, () => (async function* () {})(), responsesEvents);
+    const parts: vscode.LanguageModelResponsePart[] = [];
+    await new LiteLLMChatProvider(client).provideLanguageModelChatResponse(
+      model({ mode: MODE_RESPONSES }),
+      [userMessage([{ value: "hi" }])],
+      responseOptions(),
+      { report: (part) => parts.push(part) },
+      token(),
+    );
+    expect(client.responsesRequests).toHaveLength(1);
+    expect(client.responsesRequests[0].params).toMatchObject({
+      model: "gpt-5.6",
+      stream: true,
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    });
+    expect(client.responsesRequests[0].params).not.toHaveProperty("messages");
+    expect(parts).toEqual([new LanguageModelTextPart("Hello"), new LanguageModelTextPart(" world")]);
   });
 });
 

@@ -202,4 +202,87 @@ describe("streamChatCompletion", () => {
     ).rejects.toThrow(/upstream unavailable/);
     expect(gateway.requests).toHaveLength(1);
   });
+
+  it("retries one initial 504 before returning the response stream", async () => {
+    const gateway = await startGateway((_request, response) => {
+      if (gateway.requests.length === 1) {
+        response.writeHead(504, { "content-type": "text/html" });
+        response.end("Gateway Time-out");
+        return;
+      }
+      sse(response, [
+        { id: "c", object: "chat.completion.chunk", created: 0, model: "gpt-5.6", choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: null }] },
+        { id: "c", object: "chat.completion.chunk", created: 0, model: "gpt-5.6", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+      ]);
+    });
+    const params = buildChatCompletionParams({
+      model: "gpt-5.6",
+      messages: [{ role: 1, content: [{ value: "hello" }], name: undefined }],
+      tools: [],
+      requireToolCall: false,
+      reasoningEffort: undefined,
+      modelOptions: {},
+    });
+
+    const chunks = await createGatewayClient().streamChatCompletion(
+      { baseUrl: gateway.url, apiKey: "sk-test" },
+      params,
+      new AbortController().signal,
+    );
+    const contents: string[] = [];
+    for await (const chunk of chunks) {
+      contents.push(chunk.choices[0]?.delta.content ?? "");
+    }
+
+    expect(contents.join("")).toBe("Hi");
+    expect(gateway.requests).toHaveLength(2);
+  });
+
+  it("stops after one retry when the gateway keeps returning 504", async () => {
+    const gateway = await startGateway((_request, response) => {
+      response.writeHead(504, { "content-type": "text/html" });
+      response.end("Gateway Time-out");
+    });
+    const params = buildChatCompletionParams({
+      model: "gpt-5.6",
+      messages: [{ role: 1, content: [{ value: "hello" }], name: undefined }],
+      tools: [],
+      requireToolCall: false,
+      reasoningEffort: undefined,
+      modelOptions: {},
+    });
+
+    await expect(
+      createGatewayClient().streamChatCompletion(
+        { baseUrl: gateway.url, apiKey: "sk-test" },
+        params,
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ status: 504 });
+    expect(gateway.requests).toHaveLength(2);
+  });
+
+  it("does not retry a 504 after cancellation", async () => {
+    const controller = new AbortController();
+    const fetchImpl: typeof fetch = async () => {
+      controller.abort();
+      return new Response("Gateway Time-out", { status: 504 });
+    };
+    const params = buildChatCompletionParams({
+      model: "gpt-5.6",
+      messages: [{ role: 1, content: [{ value: "hello" }], name: undefined }],
+      tools: [],
+      requireToolCall: false,
+      reasoningEffort: undefined,
+      modelOptions: {},
+    });
+
+    await expect(
+      createGatewayClient(fetchImpl).streamChatCompletion(
+        { baseUrl: "http://127.0.0.1:4000", apiKey: "sk-test" },
+        params,
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ status: 504 });
+  });
 });
