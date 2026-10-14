@@ -8,7 +8,7 @@ from typing_extensions import Never
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, AsyncVariant, PublicRoute
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
 from litellm.rust_bridge.public_call import NativeCall, native_call, optional_str, signature
 
@@ -56,21 +56,21 @@ def _context(request: NativeCall) -> RouteContext:
     return RouteContext(Route.OCR, provider=provider, model=str(request.resolved["model"]))
 
 
-OCR: Final[PublicRoute[NativeCall, OCRResponse, Never]] = PublicRoute(
-    route=Route.OCR,
-    request=lambda args, kwargs: _public_request("ocr", args, kwargs),
-    context=_context,
-    binding=NATIVE_OCR,
-    python=runtime.NO_PYTHON,
-    bypass=lambda request: request.kwargs.get("aocr") is True,
-)
-
 AOCR: Final[AsyncPublicRoute[NativeCall, OCRResponse, Never]] = AsyncPublicRoute(
     route=Route.OCR,
     request=lambda args, kwargs: _public_request("aocr", args, kwargs),
     context=_context,
     binding=NATIVE_AOCR,
     python=runtime.NO_PYTHON,
+)
+
+OCR: Final[PublicRoute[NativeCall, OCRResponse, Never, OCRResponse]] = PublicRoute(
+    route=Route.OCR,
+    request=lambda args, kwargs: _public_request("ocr", args, kwargs),
+    context=_context,
+    binding=NATIVE_OCR,
+    python=runtime.NO_PYTHON,
+    asynchronous=AsyncVariant("aocr", AOCR),
 )
 
 

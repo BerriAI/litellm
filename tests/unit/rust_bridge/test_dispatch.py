@@ -1,3 +1,5 @@
+import asyncio
+import dataclasses
 from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -5,11 +7,11 @@ from typing import Final, TypeVar
 
 import pytest
 
-from litellm.rust_bridge import configuration
+from litellm.rust_bridge import catalog, configuration
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, AsyncVariant, PublicRoute
 from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementationError
 
 NativeT: Final = TypeVar("NativeT")
@@ -46,7 +48,6 @@ PYTHON: Final = ServedByPython(ARGS, KWARGS)
 class Case:
     rules: Rules
     projected: Request | None = ANTHROPIC
-    bypassed: bool = False
     native_available: bool = True
     has_python: bool = True
     switch: bool | None = None
@@ -86,7 +87,6 @@ def run_sync(case: Case, projector: Projector) -> object:
         context=context,
         binding=binding(case, ServedByRust),
         python=(lambda *args, **kwargs: ServedByPython(args, kwargs)) if case.has_python else NO_PYTHON,
-        bypass=lambda _: case.bypassed,
     ).run(ARGS, KWARGS, rules=case.rules)
 
 
@@ -103,7 +103,6 @@ async def run_async(case: Case, projector: Projector) -> object:
         context=context,
         binding=binding(case, native),
         python=python if case.has_python else NO_PYTHON,
-        bypass=lambda _: case.bypassed,
     ).arun(ARGS, KWARGS, rules=case.rules)
 
 
@@ -213,11 +212,6 @@ SYNC_AND_ASYNC: Final = pytest.mark.parametrize("asynchronous", (False, True), i
             id="unprojectable-call-stays-on-python",
         ),
         pytest.param(
-            Case(rules=(rule(Rollout.RUST_REQUIRED),), bypassed=True),
-            Outcome(PYTHON, projected=True),
-            id="bypassed-call-stays-on-python",
-        ),
-        pytest.param(
             Case(rules=(rule(Rollout.RUST_REQUIRED),), has_python=False),
             Outcome(ServedByRust(ANTHROPIC), projected=True),
             id="no-python-rust-required",
@@ -269,12 +263,6 @@ async def test_public_route_serves_each_call_from_the_backend_its_rules_select(
             NoPythonImplementationError,
             "must project to a native request",
             id="no-python-unprojectable-call",
-        ),
-        pytest.param(
-            Case(rules=(rule(Rollout.RUST_REQUIRED),), bypassed=True, has_python=False),
-            NoPythonImplementationError,
-            "bypass predicate matches",
-            id="no-python-bypassed-call",
         ),
     ),
 )
@@ -331,3 +319,133 @@ async def test_async_public_route_returns_the_backend_result_untouched(
         python=python,
     )
     assert await route.arun(ARGS, KWARGS, rules=rules) is result
+
+
+ASYNC_FLAG: Final = "is_async"
+
+
+def sync_python_must_not_run(*args: object, **kwargs: object) -> object:  # kwargs-ok: public pass-through shape
+    pytest.fail("a call carrying the async flag must not run the sync implementation")
+
+
+def flagged_route() -> PublicRoute[Request, object, object, object]:
+    async def native(request: Request) -> ServedByRust:
+        return ServedByRust(request)
+
+    async def python(*args: object, **kwargs: object) -> ServedByPython:  # kwargs-ok: public pass-through shape
+        return ServedByPython(args, kwargs)
+
+    asynchronous: Final[AsyncPublicRoute[Request, object, object]] = AsyncPublicRoute(
+        route=ROUTE,
+        request=lambda args, kwargs: ANTHROPIC,
+        context=context,
+        binding=binding(Case(rules=()), native),
+        python=python,
+    )
+    return PublicRoute(
+        route=ROUTE,
+        request=lambda args, kwargs: ANTHROPIC,
+        context=context,
+        binding=binding(Case(rules=()), lambda _: pytest.fail("a flagged call must not use the sync binding")),
+        python=sync_python_must_not_run,
+        asynchronous=AsyncVariant(ASYNC_FLAG, asynchronous),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rules", "expected"),
+    (
+        pytest.param((), PYTHON, id="python"),
+        pytest.param((rule(Rollout.RUST_REQUIRED),), ServedByRust(ANTHROPIC), id="rust"),
+    ),
+)
+async def test_sync_call_with_the_async_flag_returns_the_async_route_coroutine_without_the_flag(
+    rules: Rules, expected: ServedByPython | ServedByRust
+) -> None:
+    pending: Final = flagged_route().run(ARGS, {**KWARGS, ASYNC_FLAG: True}, rules=rules)
+
+    assert asyncio.iscoroutine(pending)
+    assert await pending == expected
+
+
+def served_by_python(*args: object, **kwargs: object) -> ServedByPython:  # kwargs-ok: public pass-through shape
+    return ServedByPython(args, kwargs)
+
+
+@pytest.mark.parametrize("flag", (False, None))
+def test_sync_call_without_a_true_async_flag_stays_synchronous(flag: bool | None) -> None:
+    route: Final = dataclasses.replace(flagged_route(), python=served_by_python)
+
+    assert route.run(ARGS, {**KWARGS, ASYNC_FLAG: flag}, rules=()) == ServedByPython(ARGS, {**KWARGS, ASYNC_FLAG: flag})
+
+
+OUTER: Final = Route.OCR
+NESTED_RUST: Final = (RouteRule(OUTER, Rollout.PYTHON_ONLY), rule(Rollout.RUST_REQUIRED))
+
+
+def nested_routes() -> tuple[PublicRoute[Request, object, object], AsyncPublicRoute[Request, object, object]]:
+    async def anative(request: Request) -> ServedByRust:
+        return ServedByRust(request)
+
+    async def apython(*args: object, **kwargs: object) -> ServedByPython:  # kwargs-ok: public pass-through shape
+        return ServedByPython(args, kwargs)
+
+    inner: Final[PublicRoute[Request, object, object]] = PublicRoute(
+        route=ROUTE,
+        request=lambda args, kwargs: ANTHROPIC,
+        context=context,
+        binding=binding(Case(rules=()), ServedByRust),
+        python=lambda *args, **kwargs: ServedByPython(args, kwargs),
+    )
+    ainner: Final[AsyncPublicRoute[Request, object, object]] = AsyncPublicRoute(
+        route=ROUTE,
+        request=lambda args, kwargs: ANTHROPIC,
+        context=context,
+        binding=binding(Case(rules=()), anative),
+        python=apython,
+    )
+    return inner, ainner
+
+
+def outer_context(request: Request) -> RouteContext:
+    return RouteContext(OUTER, provider=request.provider)
+
+
+def serve_nested_sync() -> object:
+    inner: Final = nested_routes()[0]
+
+    def outer_python(*args: object, **kwargs: object) -> object:  # kwargs-ok: public pass-through shape
+        return inner.run(args, kwargs)
+
+    return PublicRoute(
+        route=OUTER,
+        request=lambda args, kwargs: ANTHROPIC,
+        context=outer_context,
+        binding=binding(Case(rules=()), ServedByRust),
+        python=outer_python,
+    ).run(ARGS, KWARGS, rules=NESTED_RUST)
+
+
+async def serve_nested_async() -> object:
+    ainner: Final = nested_routes()[1]
+
+    async def outer_python(*args: object, **kwargs: object) -> object:  # kwargs-ok: public pass-through shape
+        return await ainner.arun(args, kwargs)
+
+    return await AsyncPublicRoute(
+        route=OUTER,
+        request=lambda args, kwargs: ANTHROPIC,
+        context=outer_context,
+        binding=binding(Case(rules=()), outer_python),
+        python=outer_python,
+    ).arun(ARGS, KWARGS, rules=NESTED_RUST)
+
+
+@pytest.mark.asyncio
+@SYNC_AND_ASYNC
+async def test_a_call_made_while_serving_another_follows_the_outer_rules(asynchronous: bool) -> None:
+    served: Final = await serve_nested_async() if asynchronous else serve_nested_sync()
+
+    assert served == ServedByRust(ANTHROPIC)
+    assert catalog.active_rules() is catalog.RULES

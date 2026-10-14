@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from collections.abc import Callable, Iterator, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
@@ -12,7 +13,7 @@ from litellm.rust_bridge.configuration import Rollout
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_RESPONSE, RESPONSES_TEXT
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
-from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.support.served import assert_served_natively
 
 pytest.importorskip("litellm.rust_bridge._native")
 
@@ -38,7 +39,7 @@ def server() -> Iterator[RecordingServer]:
 def assert_served_natively_with_text(server: RecordingServer, response: object) -> None:
     assert isinstance(response, ResponsesAPIResponse)
     assert response.output_text == RESPONSES_TEXT
-    assert_served_natively(server)
+    assert_served_natively(server, response)
 
 
 @CALLS
@@ -58,6 +59,24 @@ async def test_aresponses_reaches_native_from_positional_and_keyword_calls(
         args, {**kwargs, "api_key": "test-key", "api_base": server.base_url}, rules=RUST
     )
     assert_served_natively_with_text(server, response)
+
+
+@pytest.mark.asyncio
+async def test_responses_with_the_aresponses_flag_returns_a_coroutine_native_serves(server: RecordingServer) -> None:
+    pending: Final = RESPONSES.run(
+        (),
+        {
+            "input": "Hello",
+            "model": RESPONSES_MODEL,
+            "api_key": "test-key",
+            "api_base": server.base_url,
+            "aresponses": True,
+        },
+        rules=RUST,
+    )
+
+    assert asyncio.iscoroutine(pending)
+    assert_served_natively_with_text(server, await pending)
 
 
 def test_public_signature_is_the_legacy_signature() -> None:

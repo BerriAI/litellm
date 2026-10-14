@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Iterator, Mapping
 from typing import Final
 
@@ -9,7 +10,7 @@ from litellm.rust_bridge.configuration import Rollout
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE, MESSAGES_TEXT
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
-from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.support.served import assert_served_natively
 
 pytest.importorskip("litellm.rust_bridge._native")
 
@@ -35,7 +36,7 @@ def server() -> Iterator[RecordingServer]:
 def assert_served_natively_with_text(server: RecordingServer, response: object) -> None:
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == MESSAGES_TEXT
-    assert_served_natively(server)
+    assert_served_natively(server, response)
 
 
 @CALLS
@@ -55,3 +56,22 @@ async def test_acompletion_reaches_native_from_positional_and_keyword_calls(
         args, {**kwargs, "api_key": "test-key", "api_base": server.base_url}, rules=RUST
     )
     assert_served_natively_with_text(server, response)
+
+
+@pytest.mark.asyncio
+async def test_completion_with_the_acompletion_flag_returns_a_coroutine_native_serves(server: RecordingServer) -> None:
+    pending: Final = COMPLETION.run(
+        (),
+        {
+            "model": MESSAGES_MODEL,
+            "messages": list(MESSAGES),
+            "max_tokens": 16,
+            "api_key": "test-key",
+            "api_base": server.base_url,
+            "acompletion": True,
+        },
+        rules=RUST,
+    )
+
+    assert asyncio.iscoroutine(pending)
+    assert_served_natively_with_text(server, await pending)

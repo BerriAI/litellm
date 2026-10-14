@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Iterator, Mapping
 from typing import Final
 
@@ -10,7 +11,7 @@ from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.runtime import NoPythonImplementationError
 from tests.test_litellm_rust.ocr.data import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE, OCR_TEXT
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
-from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.support.served import assert_served_natively
 
 pytest.importorskip("litellm.rust_bridge._native")
 
@@ -55,7 +56,7 @@ def upstream(server: RecordingServer, kwargs: Mapping[str, object]) -> Mapping[s
 def assert_served_natively_with_text(server: RecordingServer, response: object) -> None:
     assert isinstance(response, OCRResponse)
     assert response.pages[0].markdown == OCR_TEXT
-    assert_served_natively(server)
+    assert_served_natively(server, response)
 
 
 @CALLS
@@ -102,7 +103,9 @@ async def test_aocr_rejects_calls_before_reaching_the_provider(
         await AOCR.arun(args, upstream(server, kwargs), rules=rules)
 
 
-def test_inner_ocr_call_of_aocr_cannot_reach_native(server: RecordingServer) -> None:
-    server.expected_requests = 0
-    with pytest.raises(NoPythonImplementationError, match="bypass"):
-        OCR.run((OCR_MODEL, dict(OCR_DOCUMENT)), upstream(server, {"aocr": True}), rules=RUST)
+@pytest.mark.asyncio
+async def test_ocr_with_the_aocr_flag_returns_a_coroutine_native_serves(server: RecordingServer) -> None:
+    pending: Final = OCR.run((OCR_MODEL, dict(OCR_DOCUMENT)), upstream(server, {"aocr": True}), rules=RUST)
+
+    assert asyncio.iscoroutine(pending)
+    assert_served_natively_with_text(server, await pending)

@@ -7,7 +7,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, AsyncVariant, PublicRoute
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -60,7 +60,8 @@ def _public_request(
     max_tokens: Final = fields.get("max_tokens")
     if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
         return None
-    return native_call(legacy, args, kwargs)
+    request: Final = native_call(legacy, args, kwargs)
+    return None if _python_serves(request) else request
 
 
 def _resolved_provider(request: NativeCall) -> str | None:
@@ -90,22 +91,21 @@ def _context(request: NativeCall) -> RouteContext:
     )
 
 
-ANTHROPIC_MESSAGES_HANDLER: Final = PublicRoute(
-    route=Route.MESSAGES,
-    request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
-    context=_context,
-    binding=NATIVE_MESSAGES,
-    python=_PYTHON_MESSAGES,
-    bypass=lambda request: request.kwargs.get("is_async") is True or _python_serves(request),
-)
-
 ANTHROPIC_MESSAGES: Final = AsyncPublicRoute(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
     context=_context,
     binding=NATIVE_AMESSAGES,
     python=_PYTHON_AMESSAGES,
-    bypass=_python_serves,
+)
+
+ANTHROPIC_MESSAGES_HANDLER: Final = PublicRoute(
+    route=Route.MESSAGES,
+    request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
+    context=_context,
+    binding=NATIVE_MESSAGES,
+    python=_PYTHON_MESSAGES,
+    asynchronous=AsyncVariant("is_async", ANTHROPIC_MESSAGES),
 )
 
 

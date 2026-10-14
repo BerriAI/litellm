@@ -5,7 +5,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, AsyncVariant, PublicRoute
 from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
@@ -66,21 +66,21 @@ def _context(request: NativeCall) -> RouteContext:
     )
 
 
-RESPONSES: Final = PublicRoute(
-    route=Route.RESPONSES,
-    request=lambda args, kwargs: _public_request(_RESPONSES, args, kwargs),
-    context=_context,
-    binding=NATIVE_RESPONSES,
-    python=_PYTHON_RESPONSES,
-    bypass=lambda request: request.kwargs.get("aresponses") is True,
-)
-
 ARESPONSES: Final = AsyncPublicRoute(
     route=Route.RESPONSES,
     request=lambda args, kwargs: _public_request(_ARESPONSES, args, kwargs),
     context=_context,
     binding=NATIVE_ARESPONSES,
     python=_PYTHON_ARESPONSES,
+)
+
+RESPONSES: Final = PublicRoute(
+    route=Route.RESPONSES,
+    request=lambda args, kwargs: _public_request(_RESPONSES, args, kwargs),
+    context=_context,
+    binding=NATIVE_RESPONSES,
+    python=_PYTHON_RESPONSES,
+    asynchronous=AsyncVariant("aresponses", ARESPONSES),
 )
 
 

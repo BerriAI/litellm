@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from collections.abc import Callable, Iterator, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
@@ -12,7 +13,7 @@ from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, MESSAGES_TEXT
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
-from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.support.served import assert_served_natively
 
 pytest.importorskip("litellm.rust_bridge._native")
 
@@ -52,7 +53,7 @@ def assert_served_by(server: RecordingServer, response: object, *, python: bool)
         assert served_text(response) == PYTHON_TEXT
         return
     assert served_text(response) == MESSAGES_TEXT
-    assert_served_natively(server)
+    assert_served_natively(server, response)
 
 
 SERVED: Final = pytest.mark.parametrize(
@@ -85,11 +86,12 @@ async def test_messages_serves_each_call_from_the_expected_backend(
     assert_served_by(server, response, python=python)
 
 
-def test_inner_handler_call_of_async_messages_stays_on_python(server: RecordingServer) -> None:
-    response: Final = ANTHROPIC_MESSAGES_HANDLER.run(
-        (), upstream(server, **call(CLAUDE), is_async=True, mock_response=PYTHON_TEXT), rules=RUST
-    )
-    assert_served_by(server, response, python=True)
+@pytest.mark.asyncio
+async def test_handler_with_the_is_async_flag_returns_a_coroutine_native_serves(server: RecordingServer) -> None:
+    pending: Final = ANTHROPIC_MESSAGES_HANDLER.run((), upstream(server, **call(CLAUDE), is_async=True), rules=RUST)
+
+    assert asyncio.iscoroutine(pending)
+    assert_served_by(server, await pending, python=False)
 
 
 @pytest.mark.asyncio

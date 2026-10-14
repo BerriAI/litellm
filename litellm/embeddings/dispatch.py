@@ -4,7 +4,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm import main
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, AsyncVariant, PublicRoute
 from litellm.rust_bridge.embeddings.entrypoints import (
     NATIVE_AEMBEDDING,
     NATIVE_EMBEDDING,
@@ -46,21 +46,21 @@ def _context(request: NativeCall) -> RouteContext:
     )
 
 
-EMBEDDING: Final = PublicRoute(
-    route=Route.EMBEDDINGS,
-    request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
-    context=_context,
-    binding=NATIVE_EMBEDDING,
-    python=_PYTHON_EMBEDDING,
-    bypass=lambda request: request.kwargs.get("aembedding") is True,
-)
-
 AEMBEDDING: Final = AsyncPublicRoute(
     route=Route.EMBEDDINGS,
     request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
     context=_context,
     binding=NATIVE_AEMBEDDING,
     python=_PYTHON_AEMBEDDING,
+)
+
+EMBEDDING: Final = PublicRoute(
+    route=Route.EMBEDDINGS,
+    request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
+    context=_context,
+    binding=NATIVE_EMBEDDING,
+    python=_PYTHON_EMBEDDING,
+    asynchronous=AsyncVariant("aembedding", AEMBEDDING),
 )
 
 
