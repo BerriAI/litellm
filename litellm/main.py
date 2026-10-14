@@ -8518,6 +8518,8 @@ def speech(
             litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY] = query_params
 
         litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY] = voice_id
+        if stream:
+            litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_STREAM_KEY] = True
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
