@@ -52,6 +52,7 @@ from litellm.router import (
     _anthropic_stream_forwards_ping_live,
     _anthropic_stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
+    _fallback_responses_stream_wrapper_class,
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
     _without_line_breaks,
@@ -4764,11 +4765,7 @@ async def test_aresponses_streaming_iterator_releases_source_without_gc():
     wrapped = await router._aresponses_streaming_iterator(
         response=src, initial_kwargs={"model": "gpt-4", "stream": True}
     )
-    other = await router._aresponses_streaming_iterator(
-        response=_make_responses_iterator(), initial_kwargs={"model": "gpt-4", "stream": True}
-    )
-    assert type(wrapped) is type(other)
-    await other.aclose()
+    assert type(wrapped) is _fallback_responses_stream_wrapper_class()
 
     gc.disable()
     try:

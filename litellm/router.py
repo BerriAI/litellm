@@ -976,7 +976,7 @@ def _fallback_responses_stream_wrapper_class() -> type:
             self._hidden_params = dict(getattr(source_iterator, "_hidden_params", None) or {})
 
         def adopt_fallback_headers(self, fallback_response: object) -> tuple[dict[str, object], dict[str, object]]:
-            prepared: Final = Router._prepare_fallback_hidden_params(fallback_response)
+            prepared: Final = Router._prepare_fallback_hidden_params(fallback_response)  # pyright: ignore[reportPrivateUsage]  # this wrapper is the Router's own stream type
             self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}
             self.fallback_headers_adopted = True
             return prepared
