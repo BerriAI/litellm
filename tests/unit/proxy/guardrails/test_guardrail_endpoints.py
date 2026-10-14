@@ -1671,6 +1671,31 @@ async def test_patch_guardrail_clears_scope_when_logging_only_mode_is_removed(
 
 
 @pytest.mark.asyncio
+async def test_patch_guardrail_with_blank_value_clears_the_stored_value(mocker, monkeypatch, mock_guardrail_registry):
+    """
+    Regression: blank litellm_params were dropped before validation, so a PATCH that cleared
+    api_base with "" returned 200 but kept the stored value.
+    """
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeSupportedGuardrail,
+        "patch_blank_value_test",
+        {"mode": "pre_call", "api_base": "https://old.example.com"},
+    )
+    request = PatchGuardrailRequest.model_validate({"litellm_params": {"api_base": ""}})
+
+    try:
+        await patch_guardrail(stored_guardrail["guardrail_id"], request, user_api_key_dict=MOCK_ADMIN_USER)
+
+        persisted_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"]
+        assert persisted_guardrail["litellm_params"].api_base is None
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
 async def test_patch_guardrail_tolerates_stored_unsupported_scope_on_unrelated_update(
     mocker, monkeypatch, mock_guardrail_registry, caplog
 ):
