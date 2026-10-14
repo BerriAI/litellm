@@ -205,7 +205,7 @@ class _AnthropicSSEUnmasker:
         return out + (self._event(tail).rstrip(b"\n") if tail.strip() else tail)
 
     def _unmask(self, text: str) -> str:
-        return _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, self.pii_tokens)
+        return _OPTIONAL_PresidioPIIMasking._unmask_pii_text(text, self.pii_tokens)  # pyright: ignore[reportPrivateUsage]  # same-module helper
 
     @staticmethod
     def _delta_event(index: object, text: str) -> bytes:
@@ -213,24 +213,25 @@ class _AnthropicSSEUnmasker:
         return f"event: content_block_delta\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
 
     @staticmethod
-    def _parse(line: str) -> dict | None:  # mutable-ok: the event is rewritten in place and re-serialized
+    def _parse(line: str) -> Mapping[str, object] | None:
         if not line.startswith("data: "):
             return None
         try:
-            event: Final = json.loads(line[6:])
+            event: Final[object] = json.loads(line[6:])
         except json.JSONDecodeError:
             return None
-        return event if isinstance(event, dict) else None
+        if not isinstance(event, dict):
+            return None
+        return cast("Mapping[str, object]", event)  # cast-ok: JSON object keys are str
 
     @staticmethod
-    def _is_text_delta(event: Mapping[str, object]) -> bool:
+    def _text_delta(event: Mapping[str, object]) -> dict[str, object] | None:  # mutable-ok: rewritten in place
+        """The event's ``delta`` dict when it is a ``text_delta`` with string text."""
         delta: Final = event.get("delta")
-        return (
-            event.get("type") == "content_block_delta"
-            and isinstance(delta, dict)
-            and delta.get("type") == "text_delta"
-            and isinstance(delta.get("text"), str)
-        )
+        if event.get("type") != "content_block_delta" or not isinstance(delta, dict):
+            return None
+        d: Final = cast("dict[str, object]", delta)  # cast-ok: JSON object keys are str
+        return d if d.get("type") == "text_delta" and isinstance(d.get("text"), str) else None
 
     def _release(self, index: object, delta_text: str) -> str:
         """Unmasked text safe to emit now; a trailing token prefix is held for the next delta."""
@@ -246,12 +247,13 @@ class _AnthropicSSEUnmasker:
             lines: Final = raw.decode("utf-8").split("\n")
         except UnicodeDecodeError:
             return raw + b"\n\n"
-        prefixes: Final = []
+        prefixes: Final[list[bytes]] = []  # mutable-ok: flushed text emitted before the event
         for i, event in enumerate(map(self._parse, lines)):
             if event is None:
                 continue
-            if self._is_text_delta(event):
-                event["delta"]["text"] = self._release(event.get("index"), event["delta"]["text"])
+            delta = self._text_delta(event)
+            if delta is not None:
+                delta["text"] = self._release(event.get("index"), str(delta["text"]))
                 lines[i] = "data: " + json.dumps(event, ensure_ascii=False)
             elif event.get("type") == "content_block_stop" and event.get("index") in self.held:
                 prefixes.append(self._delta_event(event.get("index"), self._unmask(self.held.pop(event.get("index")))))
