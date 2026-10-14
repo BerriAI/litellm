@@ -1586,3 +1586,211 @@ def test_tag_info_and_tag_list_return_the_stored_model_info_decoded(
     assert info_response.json()["routed-tag"]["model_info"] == returned_model_info
     assert list_response.status_code == 200
     assert [tag["model_info"] for tag in list_response.json()] == [returned_model_info]
+
+
+def test_tag_info_returns_404_when_tag_not_found(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_db = Mock()
+    mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        SimpleNamespace(db=mock_db),
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.post("/tag/info", json={"names": ["nonexistent-tag"]})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Tags not found: ['nonexistent-tag']"
+
+
+def test_tag_update_returns_404_when_tag_not_found(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_db = Mock()
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        SimpleNamespace(db=mock_db),
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.post("/tag/update", json={"name": "nonexistent-tag", "description": "new"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+def test_tag_delete_returns_404_when_tag_not_found(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_db = Mock()
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        SimpleNamespace(db=mock_db),
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.post("/tag/delete", json={"name": "nonexistent-tag"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+def test_tag_partial_update_does_not_wipe_description_or_models(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    existing_tag = SimpleNamespace(
+        tag_name="test-tag",
+        description="existing description",
+        models=["model-1"],
+        model_info='{"model-1": "gpt-4"}',
+        budget_id=None,
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 2),
+        created_by="user-123",
+    )
+    updated_tag = SimpleNamespace(
+        tag_name="test-tag",
+        description="existing description",
+        models=["model-1"],
+        model_info='{"model-1": "gpt-4"}',
+        budget_id="budget-1",
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 3),
+        created_by="user-123",
+    )
+
+    mock_db = Mock()
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+    captured_update_kwargs: dict[str, object] = {}
+
+    async def fake_update(**kwargs):
+        captured_update_kwargs.update(kwargs)
+        return updated_tag
+
+    mock_db.litellm_tagtable.update = fake_update
+
+    budget_record = SimpleNamespace(budget_id="budget-1", max_budget=10.0)
+    mock_db.litellm_budgettable.create = AsyncMock(return_value=budget_record)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        SimpleNamespace(db=mock_db, jsonify_object=lambda data: dict(data)),
+    )
+    monkeypatch.setattr(proxy_server, "litellm_proxy_admin_name", "admin")
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.post("/tag/update", json={"name": "test-tag", "max_budget": 10.0})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    res_data = response.json()
+    assert res_data["tag"]["description"] == "existing description"
+    assert res_data["tag"]["models"] == ["model-1"]
+    assert res_data["tag"]["model_info"] == {"model-1": "gpt-4"}
+    data_sent = captured_update_kwargs.get("data", {})
+    assert "description" not in data_sent
+    assert "models" not in data_sent
+    assert "model_info" not in data_sent
+
+
+def test_new_tag_duplicate_returns_400(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_db = Mock()
+    existing_tag = SimpleNamespace(tag_name="existing-tag")
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        SimpleNamespace(db=mock_db),
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", Mock())
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.post("/tag/new", json={"name": "existing-tag"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "already exists" in response.json()["detail"]
+
+
+def test_tag_update_with_invalid_model_info_returns_empty_dict(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    existing_tag = SimpleNamespace(
+        tag_name="test-tag",
+        description="existing",
+        models=["model-1"],
+        model_info="invalid-json-data",
+        budget_id=None,
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 2),
+        created_by="user-123",
+    )
+    updated_tag = SimpleNamespace(
+        tag_name="test-tag",
+        description="existing",
+        models=["model-1"],
+        model_info="invalid-json-data",
+        budget_id=None,
+        created_at=datetime(2025, 1, 1),
+        updated_at=datetime(2025, 1, 3),
+        created_by="user-123",
+    )
+
+    mock_db = Mock()
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+    mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        SimpleNamespace(db=mock_db, jsonify_object=lambda data: dict(data)),
+    )
+    monkeypatch.setattr(proxy_server, "litellm_proxy_admin_name", "admin")
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.post("/tag/update", json={"name": "test-tag", "description": "new-desc"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["tag"]["model_info"] == {}

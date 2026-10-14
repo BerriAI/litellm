@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
@@ -60,6 +60,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(dict[str, str])
 
 
 class _TagRecord(Protocol):
@@ -221,6 +222,18 @@ async def _get_model_names(prisma_client: "PrismaClient", model_ids: Sequence[st
         return {}
 
 
+def _parse_model_info(raw_model_info: object) -> dict[str, str]:  # mutable-ok: TagConfig model_info requires dict
+    """Helper function to parse stored model_info into a dict[str, str]."""
+    if not raw_model_info:
+        return {}
+    try:
+        if isinstance(raw_model_info, str):
+            return _MODEL_INFO_ADAPTER.validate_json(raw_model_info)
+        return _MODEL_INFO_ADAPTER.validate_python(raw_model_info)
+    except (ValidationError, ValueError):
+        return {}
+
+
 async def get_deployments_by_model(model: str, llm_router: "Router") -> list["Deployment"]:
     """
     Get all deployments by model
@@ -348,6 +361,8 @@ async def new_tag(
             "message": f"Tag {tag.name} created successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error creating tag: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -444,15 +459,20 @@ async def update_tag(
             cleared_budget_fields=frozenset(field for field in tag.model_fields_set if getattr(tag, field) is None),
         )
 
-        # Get model names for model_info
-        model_info: Final = await _get_model_names(prisma_client, tag.models or [])
-
         # Prepare update data
-        update_data: Final = {
-            "description": tag.description,
-            "models": tag.models or [],
-            "model_info": json.dumps(model_info),
-        }
+        update_data: Final[dict[str, object]] = {}  # mutable-ok: prisma update input payload built conditionally
+
+        if "description" in tag.model_fields_set:
+            update_data["description"] = tag.description
+
+        model_info: Final = (
+            await _get_model_names(prisma_client, tag.models or [])
+            if "models" in tag.model_fields_set
+            else _parse_model_info(getattr(existing_tag, "model_info", None))
+        )
+        if "models" in tag.model_fields_set:
+            update_data["models"] = tag.models or []
+            update_data["model_info"] = json.dumps(model_info)
 
         # Add budget_id if it changed
         if budget_id != existing_tag.budget_id:
@@ -481,6 +501,8 @@ async def update_tag(
             "message": f"Tag {tag.name} updated successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error updating tag: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -547,6 +569,8 @@ async def info_tag(
             requested_tags[tag_record.tag_name] = tag_dict
 
         return requested_tags
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -718,6 +742,8 @@ async def delete_tag(
         await _evict_tag_cache_keys((tag_cache_key(data.name), tag_registry_cache_key()))
 
         return {"message": f"Tag {data.name} deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
