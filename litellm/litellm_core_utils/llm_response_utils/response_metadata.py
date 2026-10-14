@@ -101,6 +101,18 @@ def response_timing_metrics(
     return {"_response_ms": total_response_time_ms, "litellm_overhead_time_ms": overhead_ms}
 
 
+def _is_live_stream_wrapper(result: object) -> bool:
+    """True for wrappers returned before the stream has usage / final cost.
+
+    Imports are local to avoid the utils <-> streaming_handler cycle this
+    module sits inside (same pattern as ``utils._is_converted_stream_result``).
+    """
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator))
+
+
 class ResponseMetadata:
     """
     Handles setting and managing `_hidden_params`, `response_time_ms`, and `litellm_overhead_time_ms` for LiteLLM responses
@@ -132,16 +144,25 @@ class ResponseMetadata:
         ## ADD OTHER HIDDEN PARAMS
         model_info: Final = kwargs.get("model_info", {}) or {}
         model_id: Final = model_info.get("id", None)
-        new_params: Final = {
-            "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
-            "api_base": get_api_base(model=model or "", optional_params=kwargs),
-            "model_id": model_id,
-            "response_cost": logging_obj.response_cost_calculator(
+        # Live stream wrappers have no usage yet. Pricing them here applies a
+        # fixed cost_margin to a zero base and the proxy then advertises that
+        # provisional value as x-litellm-response-cost (#46364). Leave cost
+        # unset until the stream is assembled for spend logging.
+        response_cost: Final = (
+            None
+            if _is_live_stream_wrapper(self.result)
+            else logging_obj.response_cost_calculator(
                 result=self.result,
                 litellm_model_name=model,
                 router_model_id=model_id,
                 cache_hit=cache_hit,
-            ),
+            )
+        )
+        new_params: Final = {
+            "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
+            "api_base": get_api_base(model=model or "", optional_params=kwargs),
+            "model_id": model_id,
+            "response_cost": response_cost,
             "additional_headers": process_response_headers(
                 self._get_additional_headers_from_hidden_params() or {},
                 preserve_litellm_internal_headers=True,

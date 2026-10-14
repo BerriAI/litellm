@@ -649,3 +649,86 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
 
     assert result._response_ms == pytest.approx(2000)
     assert result._hidden_params["response_cost"] == pytest.approx(0.02 * 2)
+
+
+class TestLiveStreamSkipsProvisionalResponseCost:
+    """Regression for #46364: a fixed cost_margin must not price a live stream
+    before usage exists, or the proxy advertises only fixed_amount as
+    x-litellm-response-cost while spend logs bill the full margined cost."""
+
+    def _stream_like_result(self):
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "litellm_params": {"model_info": {"id": "deployment-1"}, "metadata": {}},
+            "custom_llm_provider": "openai",
+        }
+        logging_obj.stream_options = None
+        logging_obj.messages = [{"role": "user", "content": "hi"}]
+        return CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gpt-4o-mini",
+            logging_obj=logging_obj,
+            custom_llm_provider="openai",
+        )
+
+    def test_update_response_metadata_leaves_stream_response_cost_unset(self):
+        result = self._stream_like_result()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"llm_api_duration_ms": 50.0}
+        logging_obj.caching_details = None
+        logging_obj.litellm_call_id = "call-stream-margin"
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4o-mini",
+            kwargs={"model_info": {"id": "deployment-1"}},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 0, 100000),
+        )
+
+        logging_obj.response_cost_calculator.assert_not_called()
+        assert result._hidden_params.get("response_cost") is None
+
+    def test_stream_headers_omit_provisional_fixed_margin_cost(self, monkeypatch):
+        """After the fix, streaming headers must not advertise fixed_amount alone."""
+        monkeypatch.setattr(
+            litellm,
+            "cost_margin_config",
+            {"openai": {"percentage": 0.1, "fixed_amount": 0.001}},
+        )
+        result = self._stream_like_result()
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {
+            "llm_api_duration_ms": 50.0,
+            "litellm_params": {},
+            "custom_llm_provider": "openai",
+        }
+        logging_obj.caching_details = None
+        logging_obj.litellm_call_id = "call-stream-margin"
+        logging_obj.cost_breakdown = None
+        logging_obj.call_type = "acompletion"
+        # Pre-fix behavior: calculator prices a zero-usage stream as fixed_amount.
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4o-mini",
+            kwargs={"model_info": {"id": "deployment-1"}},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 0, 100000),
+        )
+
+        processing = ProxyBaseLLMRequestProcessing(data={})
+        headers = processing._stream_response_headers(
+            hidden_params=result._hidden_params,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            logging_obj=logging_obj,
+            version="test",
+            callback_headers={},
+        )
+        assert "x-litellm-response-cost" not in headers
