@@ -123,13 +123,22 @@ fn native_stream(py: Python<'_>, chunks: usize) -> PyResult<Py<PyAny>> {
 }
 
 pub fn install(py: Python<'_>, namespace: &Bound<'_, PyDict>) -> PyResult<()> {
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item(LIFECYCLE_MODULE, compile_lifecycle(py)?)?;
     let module = PyModule::new(py, "streaming_test")?;
     module.add_function(pyo3::wrap_pyfunction!(native_stream, &module)?)?;
     namespace.set_item("native_stream", module.getattr("native_stream")?)?;
     Ok(())
 }
 
+const LIFECYCLE_MODULE: &str = "streaming_test_lifecycle";
+
 fn lifecycle_binding(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+    py.import(LIFECYCLE_MODULE)
+}
+
+fn compile_lifecycle(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let source = std::ffi::CString::new(include_str!(
         "../../../../../litellm/rust_bridge/lifecycle.py"
     ))
