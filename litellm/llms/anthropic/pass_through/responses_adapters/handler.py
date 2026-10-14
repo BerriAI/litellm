@@ -60,10 +60,19 @@ def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, ob
     )
 
 
+def _block_with_prompt_cache_breakpoints(block: Mapping[str, object]) -> Mapping[str, object]:
+    marked: Final = cache_control_as_prompt_cache_breakpoint(block)
+    if marked.get("type") != "tool_result":
+        return marked
+    inner_blocks: Final = _blocks_with_prompt_cache_breakpoints(marked.get("content"))
+    return {**marked, "content": list(inner_blocks)} if inner_blocks else marked
+
+
 def _blocks_with_prompt_cache_breakpoints(content: object) -> Sequence[Mapping[str, object]]:
-    """The content's blocks with each ``cache_control`` mark rewritten, empty when it is not a list of blocks."""
+    """The content's blocks with each ``cache_control`` mark rewritten, a tool_result's inner blocks included, empty
+    when it is not a list of blocks."""
     try:
-        return [cache_control_as_prompt_cache_breakpoint(block) for block in _BLOCK_LIST.validate_python(content)]
+        return [_block_with_prompt_cache_breakpoints(block) for block in _BLOCK_LIST.validate_python(content)]
     except ValidationError:
         return ()
 

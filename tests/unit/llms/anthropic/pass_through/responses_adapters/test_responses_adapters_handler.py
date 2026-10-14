@@ -11,6 +11,10 @@ import respx
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    TOOL_RESULT_IMAGE_BOUNDARY,
+    TOOL_RESULT_IMAGE_PLACEHOLDER,
+)
 from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
     _build_responses_kwargs,
@@ -250,6 +254,48 @@ def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_th
             "content": [
                 {"type": "input_text", "text": "look", "prompt_cache_breakpoint": {"mode": "explicit"}},
                 {"type": "input_text", "text": "now"},
+            ],
+        },
+    ]
+
+
+def test_client_cache_control_on_a_screenshot_inside_a_tool_result_reaches_gpt_5_6_on_that_screenshot() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs=OPENAI_API,
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_shot",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {"type": "base64", "media_type": "image/png", "data": "c2hvdA=="},
+                                "cache_control": EPHEMERAL,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert responses_kwargs["input"] == [
+        {"type": "function_call_output", "call_id": "toolu_shot", "output": TOOL_RESULT_IMAGE_PLACEHOLDER},
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,c2hvdA==",
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
+                },
             ],
         },
     ]

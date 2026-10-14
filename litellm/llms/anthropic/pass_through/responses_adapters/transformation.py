@@ -6,7 +6,7 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from typing import Any, Final, cast
 
@@ -126,6 +126,63 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 return None
             return {"type": "input_file", "file_url": url}
         return None
+
+    @staticmethod
+    def _content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
+        if not isinstance(content, list):
+            return ()
+        return tuple(
+            cast(Mapping[str, object], block)  # cast-ok: untrusted client payload
+            for block in cast(Sequence[object], content)  # cast-ok: untyped client content list
+            if isinstance(block, dict)
+        )
+
+    @classmethod
+    def _tool_result_image_parts(cls, content: object) -> tuple[dict[str, object], ...]:  # mutable-ok: json parts
+        """Each image in a tool_result's content as an input_image part, keeping a breakpoint the image carries."""
+        sources: Final = tuple(
+            (cls._translate_anthropic_image_source_to_url(block.get("source")), block.get("prompt_cache_breakpoint"))
+            for block in cls._content_blocks(content)
+            if block.get("type") == "image"
+        )
+        return tuple(
+            with_prompt_cache_breakpoint({"type": "input_image", "image_url": url}, breakpoint)
+            for url, breakpoint in sources
+            if url
+        )
+
+    @classmethod
+    def _tool_result_breakpoint(cls, block: Mapping[str, object]) -> object:
+        """The tool_result's own breakpoint, else one on a text or document block inside it."""
+        inner_breakpoints: Final = tuple(
+            inner.get("prompt_cache_breakpoint")
+            for inner in cls._content_blocks(block.get("content"))
+            if inner.get("type") != "image"
+        )
+        return next(
+            (mark for mark in (block.get("prompt_cache_breakpoint"), *inner_breakpoints) if mark is not None), None
+        )
+
+    @staticmethod
+    def _tool_result_images_message(
+        image_parts: Sequence[Mapping[str, object]],
+        prompt_cache_breakpoint: object,
+    ) -> dict[str, object]:  # mutable-ok: API message payload
+        """Tool result images as one user message, the tool_result's breakpoint on the last image.
+
+        OpenAI caches only up to a breakpoint, so a marked result's images go right after its output and ahead of any
+        later output, the same prefix Anthropic caches for that mark.
+        """
+        *earlier_images, last_image = image_parts
+        return {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+                *earlier_images,
+                with_prompt_cache_breakpoint(last_image, prompt_cache_breakpoint),
+            ],
+        }
 
     @staticmethod
     def _tool_result_output_value(
@@ -291,8 +348,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
-                            tool_breakpoint = cast(Mapping[str, object], block).get(  # cast-ok: TypedDict upcast
-                                "prompt_cache_breakpoint"
+                            tool_breakpoint = self._tool_result_breakpoint(
+                                cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
                             )
                             document_candidates = (
                                 tuple(
@@ -304,16 +361,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 else ()
                             )
                             tool_file_parts = tuple(part for part in document_candidates if part is not None)
-                            image_candidates = (
-                                tuple(
-                                    self._translate_anthropic_image_source_to_url(c.get("source"))
-                                    for c in inner
-                                    if isinstance(c, dict) and c.get("type") == "image"
-                                )
-                                if isinstance(inner, list)
-                                else ()
-                            )
-                            image_urls = tuple(url for url in image_candidates if url)
+                            result_image_parts = self._tool_result_image_parts(inner)
                             if inner is None:
                                 output_text = ""
                             elif isinstance(inner, str):
@@ -323,7 +371,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
                                 ]
                                 output_text = "\n".join(parts)
-                                if image_urls:
+                                if result_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
                                         if output_text
@@ -331,36 +379,25 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     )
                             else:
                                 output_text = str(inner)
-                            # OpenAI caches only up to the breakpoint, so it moves to the last image hoisted below
-                            tool_image_parts.extend(
-                                with_prompt_cache_breakpoint(
-                                    {"type": "input_image", "image_url": url},
-                                    tool_breakpoint if index == len(image_urls) - 1 else None,
-                                )
-                                for index, url in enumerate(image_urls)
-                            )
+                            tool_image_parts.extend(result_image_parts)
                             # tool_result is a top-level item, not inside the message
                             input_items.append(
                                 {
                                     "type": "function_call_output",
                                     "call_id": tool_use_id,
                                     "output": self._tool_result_output_value(
-                                        output_text, tool_file_parts, None if image_urls else tool_breakpoint
+                                        output_text, tool_file_parts, None if tool_image_parts else tool_breakpoint
                                     ),
                                 }
                             )
+                            if tool_image_parts and (
+                                tool_breakpoint is not None
+                                or any(part.get("prompt_cache_breakpoint") is not None for part in result_image_parts)
+                            ):
+                                input_items.append(self._tool_result_images_message(tool_image_parts, tool_breakpoint))
+                                tool_image_parts.clear()
                     if tool_image_parts:
-                        boundary_part = {
-                            "type": "input_text",
-                            "text": TOOL_RESULT_IMAGE_BOUNDARY,
-                        }
-                        input_items.append(
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": [boundary_part, *tool_image_parts],
-                            }
-                        )
+                        input_items.append(self._tool_result_images_message(tool_image_parts, None))
                     if user_parts:
                         input_items.append(
                             {

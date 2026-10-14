@@ -2231,6 +2231,83 @@ class TestPromptCacheBreakpointToResponses:
             "prompt_cache_breakpoint": self.EXPLICIT,
         }
 
+    SCREENSHOT: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "c2hvdA=="}}
+    MARKED_SCREENSHOT_PART: Final = {
+        "type": "input_image",
+        "image_url": "data:image/png;base64,c2hvdA==",
+        "prompt_cache_breakpoint": EXPLICIT,
+    }
+    LOG_OUTPUT: Final = {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok"}
+
+    def test_an_unmarked_screenshot_before_a_marked_tool_result_lands_inside_that_breakpoint(self):
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_shot", "content": [self.SCREENSHOT]},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_log",
+                            "content": "build ok",
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        },
+                    ],
+                }
+            ]
+        )
+        _, log_output, screenshots = items
+        assert log_output == self.LOG_OUTPUT
+        assert screenshots["content"][-1] == self.MARKED_SCREENSHOT_PART
+
+    @pytest.mark.parametrize("mark_on_the_screenshot", [False, True], ids=["mark-on-tool-result", "mark-on-screenshot"])
+    def test_a_tool_result_after_a_marked_screenshot_stays_after_its_breakpoint(self, mark_on_the_screenshot: bool):
+        mark: Final = {"prompt_cache_breakpoint": self.EXPLICIT}
+        marked_result: Final = (
+            {"type": "tool_result", "tool_use_id": "toolu_shot", "content": [{**self.SCREENSHOT, **mark}]}
+            if mark_on_the_screenshot
+            else {"type": "tool_result", "tool_use_id": "toolu_shot", "content": [self.SCREENSHOT], **mark}
+        )
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        marked_result,
+                        {"type": "tool_result", "tool_use_id": "toolu_log", "content": "build ok"},
+                    ],
+                }
+            ]
+        )
+        _, screenshots, log_output = items
+        assert screenshots["content"][-1] == self.MARKED_SCREENSHOT_PART
+        assert log_output == self.LOG_OUTPUT
+
+    def test_a_breakpoint_on_text_inside_a_tool_result_marks_its_output(self):
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_log",
+                            "content": [
+                                {"type": "text", "text": "build ok", "prompt_cache_breakpoint": self.EXPLICIT}
+                            ],
+                        }
+                    ],
+                }
+            ]
+        )
+        assert items == [
+            {
+                "type": "function_call_output",
+                "call_id": "toolu_log",
+                "output": [{"type": "input_text", "text": "build ok", "prompt_cache_breakpoint": self.EXPLICIT}],
+            }
+        ]
+
     def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
         from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
             _build_responses_kwargs,
