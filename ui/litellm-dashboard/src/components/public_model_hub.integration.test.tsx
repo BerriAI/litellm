@@ -368,7 +368,7 @@ describe("PublicModelHub", () => {
     respondWith([model({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" })]);
     renderHub();
 
-    fireEvent.click(await screen.findByRole("button", { name: "jev-latest" }));
+    fireEvent.click(await screen.findByRole("row", { name: "Open model jev-latest" }));
 
     const example = (await screen.findByText(/\/v1\/systemone/)).closest("pre");
     expect(example).toHaveTextContent('"model": "jev-latest"');
@@ -378,7 +378,7 @@ describe("PublicModelHub", () => {
   it("keeps the chat completions usage example for a chat model", async () => {
     renderHub();
 
-    fireEvent.click(await screen.findByRole("button", { name: "gpt-4" }));
+    fireEvent.click(await screen.findByRole("row", { name: "Open model gpt-4" }));
 
     const example = (await screen.findByText(/chat\.completions\.create/)).closest("pre");
     expect(example).toHaveTextContent('model="gpt-4"');
