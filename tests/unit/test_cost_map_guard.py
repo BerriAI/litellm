@@ -272,7 +272,10 @@ def _run_guard(repo: Path, base: str, head: str, head_ref: str) -> subprocess.Co
     ("head_ref", "expected_code", "expected_line"),
     [
         (BOT_REF, 1, "- bot PRs may not remove models: openrouter/b"),
+        ("litellm-providers/price-sync-openrouter", 1, "- bot PRs may not remove models: openrouter/b"),
+        ("litellm-providers/price-sync", 1, "- bot PRs may not remove models: openrouter/b"),
         ("litellm_fix_pricing", 0, "cost map guard passed (human PR, file checks only)"),
+        ("fix-openrouter-price-sync", 0, "cost map guard passed (human PR, file checks only)"),
     ],
 )
 def test_main_reads_both_revisions_from_git(
