@@ -298,6 +298,7 @@ jobs:
               tests/unit/llms/modelscope
               tests/unit/llms/mongodb
               tests/unit/llms/moonshot
+              tests/unit/llms/nace
               tests/unit/llms/nadir
               tests/unit/llms/nebius
               tests/unit/llms/neosantara
