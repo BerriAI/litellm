@@ -21,6 +21,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
 )
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
@@ -2231,27 +2232,29 @@ class TestFailOnError:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "error",
+        ("error", "error_type"),
         [
-            Timeout(message="guardrail took too long", model="gpt-5", llm_provider="openai"),
-            httpx.ConnectError("connection refused", request=MagicMock()),
-            httpx.HTTPStatusError("bad gateway", request=MagicMock(), response=MagicMock(status_code=502)),
+            (Timeout(message="guardrail took too long", model="gpt-5", llm_provider="openai"), "Timeout"),
+            (httpx.ConnectError("connection refused", request=MagicMock()), "ConnectError"),
+            (
+                MaskedHTTPStatusError(
+                    httpx.HTTPStatusError(
+                        "bad gateway",
+                        request=httpx.Request("POST", "http://guardrail.invalid/scan"),
+                        response=httpx.Response(502, request=httpx.Request("POST", "http://guardrail.invalid/scan")),
+                    )
+                ),
+                "HTTPStatusError",
+            ),
         ],
         ids=["timeout", "connect_error", "http_status"],
     )
-    async def test_fail_open_log_line_names_the_error_type(self, fail_open_guardrail, error):
+    async def test_fail_open_log_line_names_the_error_type(self, fail_open_guardrail, caplog, error, error_type):
         """An operator grepping the fail-open line must be able to tell a timeout
         from a refused connection from an upstream status without the traceback."""
         from litellm._logging import verbose_proxy_logger
 
-        captured: list[logging.LogRecord] = []
-
-        class _RecordingHandler(logging.Handler):
-            def emit(self, record: logging.LogRecord) -> None:
-                captured.append(record)
-
-        handler = _RecordingHandler(level=logging.CRITICAL)
-        verbose_proxy_logger.addHandler(handler)
+        verbose_proxy_logger.addHandler(caplog.handler)
         try:
             with patch.object(fail_open_guardrail.async_handler, "post", side_effect=error):
                 await fail_open_guardrail.apply_guardrail(
@@ -2260,11 +2263,13 @@ class TestFailOnError:
                     input_type="request",
                 )
         finally:
-            verbose_proxy_logger.removeHandler(handler)
+            verbose_proxy_logger.removeHandler(caplog.handler)
 
-        fail_open_lines = [record.getMessage() for record in captured if "fail-open" in record.getMessage()]
+        fail_open_lines: Final = [
+            record.getMessage() for record in caplog.records if record.levelno == logging.CRITICAL
+        ]
         assert fail_open_lines
-        assert all(f"error_type={type(error).__name__}" in line for line in fail_open_lines)
+        assert all(f"error_type={error_type} " in line for line in fail_open_lines)
 
     @pytest.mark.asyncio
     async def test_response_path_valid_block_still_blocks(self, fail_open_guardrail):
