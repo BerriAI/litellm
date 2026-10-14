@@ -479,6 +479,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
+    responses_api_version: str | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
@@ -686,6 +687,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     api_key: str | None
     api_base: str | None
     api_version: str | None
+    responses_api_version: ReadOnly[str | None]
     timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
     max_retries: int | None

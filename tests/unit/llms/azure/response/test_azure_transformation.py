@@ -3,7 +3,9 @@ from copy import deepcopy
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
@@ -319,6 +321,21 @@ class TestAzureResponsesAPIConfig:
             litellm_params={"api_version": None},
         )
         assert result_none_version == expected_url
+
+    def test_responses_api_version_wins_over_the_dated_chat_api_version(self):
+        base_url: Final = "https://litellm8397336933.openai.azure.com"
+
+        with_override: Final = self.config.get_complete_url(
+            api_base=base_url,
+            litellm_params={"api_version": "2024-10-21", "responses_api_version": "preview"},
+        )
+        without_override: Final = self.config.get_complete_url(
+            api_base=base_url,
+            litellm_params={"api_version": "2024-10-21"},
+        )
+
+        assert with_override == f"{base_url}/openai/v1/responses?api-version=preview"
+        assert without_override == f"{base_url}/openai/responses?api-version=2024-10-21"
 
     def test_azure_cancel_response_api_request(self):
         """Test Azure cancel response API request transformation"""
@@ -682,6 +699,66 @@ def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_mo
             model="gpt-6-astra",
             drop_params=False,
         )
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_responses_api_version_routes_a_dated_chat_deployment_to_the_v1_responses_route(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://example-resource.openai.azure.com/openai/v1/responses", params={"api-version": "preview"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_dated_chat_deployment",
+                "object": "response",
+                "created_at": 1734366691,
+                "status": "completed",
+                "model": "gpt-5.4-nano",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+                    }
+                ],
+                "parallel_tool_calls": True,
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                "error": None,
+                "incomplete_details": None,
+                "instructions": None,
+                "metadata": None,
+                "temperature": None,
+                "tool_choice": "auto",
+                "tools": [],
+                "top_p": None,
+                "max_output_tokens": None,
+                "previous_response_id": None,
+                "reasoning": None,
+                "truncation": None,
+                "user": None,
+            },
+        )
+    )
+
+    response: Final = litellm.responses(
+        model="azure/gpt-5.4-nano",
+        input="hi",
+        api_base="https://example-resource.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="2024-10-21",
+        responses_api_version="preview",
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert route.call_count == 1
+    assert response.output[0].content[0].text == "Done."
+    assert request_body["model"] == "gpt-5.4-nano"
+    assert "responses_api_version" not in request_body
+    assert "api_version" not in request_body
 
 
 def test_azure_responses_sends_the_deployment_name_when_azure_ai_prefix_survives_provider_remap():

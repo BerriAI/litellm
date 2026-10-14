@@ -1,4 +1,6 @@
+from collections.abc import Mapping
 from copy import deepcopy
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -20,6 +22,13 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _with_responses_api_version(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    responses_api_version: Final = litellm_params.get("responses_api_version")
+    if not responses_api_version:
+        return litellm_params
+    return MappingProxyType({**litellm_params, "api_version": responses_api_version})
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -171,7 +180,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return BaseAzureLLM.get_base_azure_url(
             api_base=api_base,
-            litellm_params=litellm_params,
+            litellm_params=_with_responses_api_version(litellm_params),
             route="/openai/responses",
             default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
