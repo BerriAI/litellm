@@ -775,7 +775,7 @@
         "key": "api_base",
         "label": "API Base",
         "placeholder": null,
-        "tooltip": null,
+        "tooltip": "On Ollama, pick bespoke/nimble as the model",
         "required": true,
         "field_type": "text",
         "options": null,

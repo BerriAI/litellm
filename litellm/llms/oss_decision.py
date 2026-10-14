@@ -50,7 +50,7 @@ def _is_env_server(provider: OssDecisionProvider, server: str, env_base: str | N
     if not env_base:
         return False
     try:
-        return validate_oss_api_base(provider, env_base) == server
+        return validate_oss_api_base(provider, env_base).removesuffix("/v1") == server.removesuffix("/v1")
     except ValueError:
         return False
 
