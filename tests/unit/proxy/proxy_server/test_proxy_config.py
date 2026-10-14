@@ -4040,6 +4040,82 @@ async def test_ProxyConfig_sso_key_removed_from_the_env_row_takes_its_sso_table_
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_sso_key_removed_from_the_env_row_leaves_the_other_sso_fields_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("MICROSOFT_CLIENT_ID", "pod-own-microsoft-id")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    prisma_client: Final = _prisma_with_sso_table(
+        _encrypted_sso_table({"google_client_id": "sso-table-id", "microsoft_client_id": "sso-table-microsoft-id"})
+    )
+    pc: Final = ProxyConfig()
+
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {}, prisma_client)
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "sso-table-id"
+    assert os.environ.get("MICROSOFT_CLIENT_ID") == "pod-own-microsoft-id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("saved_logo", "expected"),
+    [("https://example.com/saved.png", "https://example.com/saved.png"), (None, None)],
+    ids=["logo-set", "logo-reset"],
+)
+async def test_ProxyConfig_db_env_var_saved_while_the_env_row_is_read_keeps_the_saved_value_until_the_next_sync(
+    monkeypatch: pytest.MonkeyPatch, saved_logo: str | None, expected: str | None
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    pc: Final = ProxyConfig()
+    saved_during_the_read: Final = asyncio.Event()
+
+    async def env_row_read_before_a_save_finished(_, param_name: str) -> SimpleNamespace | None:
+        if param_name != "environment_variables":
+            return None
+        if not saved_during_the_read.is_set():
+            pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": saved_logo})
+            saved_during_the_read.set()
+        return SimpleNamespace(param_name=param_name, param_value={"UI_LOGO_PATH": "https://example.com/older.png"})
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", env_row_read_before_a_save_finished)
+    await pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
+    assert os.environ.get("UI_LOGO_PATH") == expected
+
+    await pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
+    assert os.environ.get("UI_LOGO_PATH") == "https://example.com/older.png"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("saved_client_id", "expected"), [("saved-id", "saved-id"), ("", None)], ids=["set", "cleared"])
+async def test_ProxyConfig_sso_field_saved_while_the_sso_table_is_read_keeps_the_saved_value_until_the_next_read(
+    monkeypatch: pytest.MonkeyPatch, saved_client_id: str, expected: str | None
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    pc: Final = ProxyConfig()
+    saved_during_the_read: Final = asyncio.Event()
+
+    async def sso_row_read_before_a_save_finished(**_: object) -> SimpleNamespace:
+        if not saved_during_the_read.is_set():
+            pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": saved_client_id})
+            saved_during_the_read.set()
+        return SimpleNamespace(sso_settings={"google_client_id": encrypt_value_helper("older-id")})
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(side_effect=sso_row_read_before_a_save_finished)
+    await pc._init_sso_settings_in_db(prisma_client)
+    assert os.environ.get("GOOGLE_CLIENT_ID") == expected
+
+    await pc._init_sso_settings_in_db(prisma_client)
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "older-id"
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_sso_key_moved_to_the_sso_table_stays_set_while_the_table_is_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

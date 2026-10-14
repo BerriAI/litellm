@@ -2162,6 +2162,12 @@ _SSO_SETTINGS_KEPT_OUT_OF_ENVIRONMENT: Final = frozenset({"role_mappings", "team
 _SSO_ENVIRONMENT_VARIABLES: Final = frozenset(SSO_FIELD_ENV_VARS.values())
 
 
+@dataclass(frozen=True, slots=True)
+class _SSOEnvironmentValues:
+    applied: Mapping[str, str]
+    still_stored: frozenset[str]
+
+
 class _InvitationLinkRow(Protocol):
     user_id: str
     expires_at: datetime
@@ -5639,6 +5645,8 @@ class ProxyConfig:
         self._environment_before_db: Mapping[str, str] = MappingProxyType(dict(os.environ))
         self._db_environment_keys: frozenset[str] = frozenset()
         self._sso_environment_keys: frozenset[str] = frozenset()
+        self._environment_saves: int = 0
+        self._environment_key_saves: Mapping[str, int] = MappingProxyType({})
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -7903,16 +7911,21 @@ class ProxyConfig:
             return None
         return decrypted
 
-    def _apply_db_environment_variables(self, row: Mapping[str, SettingsJsonValue]) -> Mapping[str, SettingsJsonValue]:
+    def _apply_db_environment_variables(
+        self, row: Mapping[str, SettingsJsonValue], saved_during_read: frozenset[str]
+    ) -> Mapping[str, SettingsJsonValue]:
         decrypted: Final = self._decrypted_db_env_variables(row, return_original_value=True)
-        applied: Final = {
+        row_values: Final = {
             **decrypted,
             **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
         }
-        self._restore_environment_without_db(self._db_environment_keys - applied.keys() - _SSO_ENVIRONMENT_VARIABLES)
-        self._db_environment_keys = frozenset(applied)
+        applied: Final = {key: value for key, value in row_values.items() if key not in saved_during_read}
+        self._restore_environment_without_db(
+            self._db_environment_keys - row_values.keys() - _SSO_ENVIRONMENT_VARIABLES - saved_during_read
+        )
+        self._db_environment_keys = frozenset(applied) | (self._db_environment_keys & saved_during_read)
         os.environ.update(applied)
-        return _as_settings_mapping(applied)
+        return _as_settings_mapping(row_values)
 
     def capture_environment_before_db(self) -> None:
         self._environment_before_db = MappingProxyType(dict(os.environ))
@@ -7933,10 +7946,22 @@ class ProxyConfig:
     def _applied_saved_environment_keys(
         self, tracked_keys: frozenset[str], updates: Mapping[str, str | None]
     ) -> frozenset[str]:
+        self._environment_saves += 1
+        self._environment_key_saves = MappingProxyType(
+            {**self._environment_key_saves, **dict.fromkeys(updates, self._environment_saves)}
+        )
+        return self._applied_environment_keys(tracked_keys, updates)
+
+    def _applied_environment_keys(
+        self, tracked_keys: frozenset[str], updates: Mapping[str, str | None]
+    ) -> frozenset[str]:
         saved: Final = {key: value for key, value in updates.items() if value}
         self._restore_environment_without_db(frozenset(updates) - saved.keys())
         os.environ.update(saved)
         return tracked_keys | frozenset(saved)
+
+    def _environment_keys_saved_since(self, saves_seen: int) -> frozenset[str]:
+        return frozenset(key for key, save in self._environment_key_saves.items() if save > saves_seen)
 
     def decrypt_db_variables(self, variables_dict: dict) -> dict:
         """
@@ -8340,8 +8365,10 @@ class ProxyConfig:
             verbose_proxy_logger.info("'store_model_in_db' is not True, skipping db updates")
             return config
 
+        saves_seen: Final = self._environment_saves
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
+        saved_during_read: Final = self._environment_keys_saved_since(saves_seen)
         db_environment_keys_before_sync: Final = self._db_environment_keys
         for section, response in zip(sections, responses):
             if response is None or (param_value := getattr(response, "param_value", None)) is None:
@@ -8357,17 +8384,17 @@ class ProxyConfig:
             else:
                 self._settings_stores[section].apply_db_row(
                     section,
-                    self._prepared_db_settings_values(section, param_value),
+                    self._prepared_db_settings_values(section, param_value, saved_during_read),
                 )
 
         await self._reapply_sso_settings_removed_from_db_environment(
-            prisma_client, db_environment_keys_before_sync - self._db_environment_keys
+            prisma_client, db_environment_keys_before_sync - self._db_environment_keys, saves_seen
         )
         self._warn_about_shadowed_db_settings()
         return self._config_with_resolved_settings(config)
 
     async def _reapply_sso_settings_removed_from_db_environment(
-        self, prisma_client: PrismaClient, removed_keys: frozenset[str]
+        self, prisma_client: PrismaClient, removed_keys: frozenset[str], saves_seen: int
     ) -> None:
         removed_sso_keys: Final = removed_keys & _SSO_ENVIRONMENT_VARIABLES
         if not removed_sso_keys:
@@ -8376,8 +8403,11 @@ class ProxyConfig:
         if stored_sso_settings is None:
             self._db_environment_keys = self._db_environment_keys | removed_sso_keys
             return
-        self._restore_environment_without_db(removed_sso_keys)
-        self._apply_sso_settings(stored_sso_settings)
+        stored_values: Final = self._sso_environment_values(stored_sso_settings).applied
+        moved_keys: Final = removed_sso_keys - self._environment_keys_saved_since(saves_seen)
+        self._sso_environment_keys = self._applied_environment_keys(
+            self._sso_environment_keys, {key: stored_values.get(key) for key in moved_keys}
+        )
 
     def _warn_about_shadowed_db_settings(self) -> None:
         shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
@@ -8389,9 +8419,11 @@ class ProxyConfig:
             )
         self._warned_shadowed_keys = shadowed
 
-    def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
+    def _prepared_db_settings_values(
+        self, section: Section, value: object, saved_during_read: frozenset[str] = frozenset()
+    ) -> Mapping[str, SettingsJsonValue]:
         if section == "environment_variables":
-            return self._apply_db_environment_variables(_as_settings_mapping(value))
+            return self._apply_db_environment_variables(_as_settings_mapping(value), saved_during_read)
 
         scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
         return _as_settings_mapping(scrubbed)
@@ -8787,9 +8819,10 @@ class ProxyConfig:
         """
         Initialize SSO settings from database into the router on startup.
         """
+        saves_seen: Final = self._environment_saves
         stored_sso_settings: Final = await self._stored_sso_settings(prisma_client)
         if stored_sso_settings is not None:
-            self._apply_sso_settings(stored_sso_settings)
+            self._apply_sso_settings(stored_sso_settings, self._environment_keys_saved_since(saves_seen))
 
     async def _stored_sso_settings(self, prisma_client: PrismaClient) -> Mapping[str, object] | None:
         try:
@@ -8817,20 +8850,29 @@ class ProxyConfig:
             )
             return None
 
-    def _apply_sso_settings(self, stored_sso_settings: Mapping[str, object]) -> None:
+    def _sso_environment_values(self, stored_sso_settings: Mapping[str, object]) -> _SSOEnvironmentValues:
         sso_environment_variables: Final = {
             key.upper(): value
             for key, value in stored_sso_settings.items()
             if key not in _SSO_SETTINGS_KEPT_OUT_OF_ENVIRONMENT
         }
         decrypted: Final = self._decrypted_db_env_variables(sso_environment_variables, return_original_value=False)
-        applied: Final = {key: value for key, value in decrypted.items() if value}
-        still_stored: Final = frozenset(
-            key for key, value in sso_environment_variables.items() if value is not None and decrypted.get(key) != ""
+        return _SSOEnvironmentValues(
+            applied=MappingProxyType({key: value for key, value in decrypted.items() if value}),
+            still_stored=frozenset(
+                key
+                for key, value in sso_environment_variables.items()
+                if value is not None and decrypted.get(key) != ""
+            ),
         )
+
+    def _apply_sso_settings(self, stored_sso_settings: Mapping[str, object], saved_during_read: frozenset[str]) -> None:
+        values: Final = self._sso_environment_values(stored_sso_settings)
+        applied: Final = {key: value for key, value in values.applied.items() if key not in saved_during_read}
+        kept: Final = values.still_stored | saved_during_read
         os.environ.update(applied)
-        self._restore_environment_without_db(self._sso_environment_keys - still_stored - self._db_environment_keys)
-        self._sso_environment_keys = frozenset(applied) | (self._sso_environment_keys & still_stored)
+        self._restore_environment_without_db(self._sso_environment_keys - kept - self._db_environment_keys)
+        self._sso_environment_keys = frozenset(applied) | (self._sso_environment_keys & kept)
 
     async def _init_hashicorp_vault_config_override(self, prisma_client: PrismaClient):
         """

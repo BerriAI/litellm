@@ -4349,3 +4349,79 @@ class TestMoyaiUrlSetting:
 
         await update_ui_settings({"moyai_url": None}, actor)
         assert persisted["moyai_url"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved_logo", ["https://example.com/saved.png", None], ids=["logo-set", "logo-reset"])
+@pytest.mark.parametrize(
+    "sync_applies_after_the_save", [False, True], ids=["sync-done-during-the-write", "sync-done-after-the-save"]
+)
+async def test_update_ui_theme_settings_keeps_the_saved_logo_when_a_sync_reads_the_row_during_the_save(
+    monkeypatch: pytest.MonkeyPatch, saved_logo: str | None, sync_applies_after_the_save: bool
+) -> None:
+    import asyncio
+    from collections.abc import Mapping
+    from types import MappingProxyType, SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UIThemeConfig, update_ui_theme_settings
+
+    monkeypatch.setenv("UI_LOGO_PATH", "placeholder")
+    monkeypatch.delenv("UI_LOGO_PATH")
+    before_row: Final = MappingProxyType({"UI_LOGO_PATH": "https://example.com/before-the-save.png"})
+    saved_row: Final = MappingProxyType({} if saved_logo is None else {"UI_LOGO_PATH": saved_logo})
+    write_started: Final = asyncio.Event()
+    write_released: Final = asyncio.Event()
+    row_written: Final = asyncio.Event()
+    read_started: Final = asyncio.Event()
+    read_released: Final = asyncio.Event()
+
+    class ProxyConfigWithAPausedWrite(proxy_server.ProxyConfig):
+        async def get_config(self, config_file_path: str | None = None) -> dict:
+            return {}
+
+        async def save_config(self, new_config: Mapping[str, object], include_env_vars: bool = False) -> None:
+            write_started.set()
+            await write_released.wait()
+
+        async def save_environment_variables(self, updates: dict[str, str | None]) -> None:
+            row_written.set()
+
+    async def get_config_param(_, param_name: str) -> SimpleNamespace | None:
+        if param_name != "environment_variables":
+            return None
+        row_at_read: Final = saved_row if row_written.is_set() else before_row
+        read_started.set()
+        await read_released.wait()
+        return SimpleNamespace(param_name=param_name, param_value=dict(row_at_read))
+
+    pc: Final = ProxyConfigWithAPausedWrite()
+    monkeypatch.setattr(proxy_server, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "create_config_audit_log", AsyncMock())
+    monkeypatch.setattr(proxy_server, "get_config_param", get_config_param)
+    read_released.set()
+    await pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
+    assert os.environ.get("UI_LOGO_PATH") == before_row["UI_LOGO_PATH"]
+    if sync_applies_after_the_save:
+        read_released.clear()
+    read_started.clear()
+
+    save: Final = asyncio.create_task(
+        update_ui_theme_settings(
+            UIThemeConfig(logo_url=saved_logo), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
+    )
+    await write_started.wait()
+    sync: Final = asyncio.create_task(pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True))
+    await read_started.wait()
+    if not sync_applies_after_the_save:
+        await sync
+    write_released.set()
+    await save
+    read_released.set()
+    await sync
+
+    assert os.environ.get("UI_LOGO_PATH") == saved_logo

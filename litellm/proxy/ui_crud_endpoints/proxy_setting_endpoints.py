@@ -1281,12 +1281,7 @@ async def update_sso_settings(
     if "general_settings" not in config:
         config["general_settings"] = {}
 
-    # Update environment variables in config and in memory
     sso_data: Final = sso_config.model_dump()
-    proxy_config.apply_saved_sso_environment_variables(
-        {env_var: sso_data.get(field_name) or None for field_name, env_var in SSO_FIELD_ENV_VARS.items()}
-    )
-
     encrypted_sso_data: Final = proxy_config.encrypt_env_variables(environment_variables=sso_data)
 
     # Save to dedicated SSO table
@@ -1301,6 +1296,9 @@ async def update_sso_settings(
                 "sso_settings": json.dumps(encrypted_sso_data),
             },
         },
+    )
+    proxy_config.apply_saved_sso_environment_variables(
+        {env_var: sso_data.get(field_name) or None for field_name, env_var in SSO_FIELD_ENV_VARS.items()}
     )
 
     asyncio.create_task(
@@ -1453,10 +1451,10 @@ async def update_ui_theme_settings(
 
     # The vars below are the only environment variables this endpoint owns, and
     # they must stay in step with _UI_THEME_FIELD_ENV_VARS. A non-empty value
-    # sets the var; an empty or missing one clears it back to the default. Apply
-    # to the live process immediately, then persist only those keys so an
-    # unrelated env var (a YAML/OS value merged in by get_config) is never
-    # snapshotted into the DB.
+    # sets the var; an empty or missing one clears it back to the pod's startup
+    # value. Persist only those keys so an unrelated env var (a YAML/OS value
+    # merged in by get_config) is never snapshotted into the DB, then apply them
+    # to the live process.
     def _clean(url: str | None) -> str | None:
         return url if url is not None and url.strip() else None
 
@@ -1465,13 +1463,13 @@ async def update_ui_theme_settings(
         "UI_LOGO_PATH_DARK": _clean(theme_config.logo_url_dark),
         "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
     }
-    proxy_config.apply_saved_db_environment_variables(env_updates)
 
     # Persist the theme config (litellm_settings). save_config defaults to
     # include_env_vars=False, so it does not snapshot environment_variables.
     await proxy_config.save_config(new_config=config)
     # Persist only the two owned env vars, merged against the existing DB row.
     await proxy_config.save_environment_variables(env_updates)
+    proxy_config.apply_saved_db_environment_variables(env_updates)
 
     asyncio.create_task(
         create_config_audit_log(
