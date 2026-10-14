@@ -701,48 +701,46 @@ def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_mo
         )
 
 
+_COMPLETED_RESPONSE: Final = {
+    "id": "resp_dated_chat_deployment",
+    "object": "response",
+    "created_at": 1734366691,
+    "status": "completed",
+    "model": "gpt-5.4-nano",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    "error": None,
+    "incomplete_details": None,
+    "instructions": None,
+    "metadata": None,
+    "temperature": None,
+    "tool_choice": "auto",
+    "tools": [],
+    "top_p": None,
+    "max_output_tokens": None,
+    "previous_response_id": None,
+    "reasoning": None,
+    "truncation": None,
+    "user": None,
+}
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_responses_api_version_routes_a_dated_chat_deployment_to_the_v1_responses_route(
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(
         "https://example-resource.openai.azure.com/openai/v1/responses", params={"api-version": "preview"}
-    ).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "resp_dated_chat_deployment",
-                "object": "response",
-                "created_at": 1734366691,
-                "status": "completed",
-                "model": "gpt-5.4-nano",
-                "output": [
-                    {
-                        "type": "message",
-                        "id": "msg_1",
-                        "status": "completed",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
-                    }
-                ],
-                "parallel_tool_calls": True,
-                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
-                "error": None,
-                "incomplete_details": None,
-                "instructions": None,
-                "metadata": None,
-                "temperature": None,
-                "tool_choice": "auto",
-                "tools": [],
-                "top_p": None,
-                "max_output_tokens": None,
-                "previous_response_id": None,
-                "reasoning": None,
-                "truncation": None,
-                "user": None,
-            },
-        )
-    )
+    ).mock(return_value=httpx.Response(200, json=_COMPLETED_RESPONSE))
 
     response: Final = litellm.responses(
         model="azure/gpt-5.4-nano",
@@ -759,6 +757,29 @@ def test_responses_api_version_routes_a_dated_chat_deployment_to_the_v1_response
     assert request_body["model"] == "gpt-5.4-nano"
     assert "responses_api_version" not in request_body
     assert "api_version" not in request_body
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_responses_api_version_reaches_the_url_when_chat_completion_bridges_to_responses(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://example-resource.openai.azure.com/openai/v1/responses", params={"api-version": "v1"}
+    ).mock(return_value=httpx.Response(200, json=_COMPLETED_RESPONSE))
+
+    response: Final = litellm.completion(
+        model="azure/responses/gpt-5.4-nano",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://example-resource.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="2024-10-21",
+        responses_api_version="v1",
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert route.call_count == 1
+    assert response.choices[0].message.content == "Done."
+    assert "responses_api_version" not in request_body
 
 
 def test_azure_responses_sends_the_deployment_name_when_azure_ai_prefix_survives_provider_remap():
