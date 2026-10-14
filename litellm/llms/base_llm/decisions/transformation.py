@@ -470,6 +470,9 @@ class BaseDecisionsConfig(ABC):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or self._first_secret(self.api_key_env)
 
+    def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
+        return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
+
     @staticmethod
     def _first_secret(names: tuple[str, ...]) -> str | None:
         return next((value for value in (get_secret_str(name) for name in names) if value), None)

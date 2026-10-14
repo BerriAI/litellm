@@ -4841,6 +4841,21 @@ class TestNoRedisWarning:
         prisma.db.query_raw.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("coordination_redis, router_redis", [(MagicMock(), None), (None, MagicMock())])
+    async def test_redis_answers_before_the_env_var_is_looked_up(self, monkeypatch, coordination_redis, router_redis):
+        monkeypatch.setattr(
+            _health_endpoints_module,
+            "get_secret_bool",
+            MagicMock(side_effect=AssertionError("env var looked up although Redis is configured")),
+        )
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(router_redis)),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(5)),
+        ):
+            assert await _show_no_redis_warning() is False
+
+    @pytest.mark.asyncio
     async def test_stays_quiet_when_only_the_router_has_redis(self, monkeypatch):
         """router_settings.redis_host alone backs cooldowns and usage-based routing."""
         monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
