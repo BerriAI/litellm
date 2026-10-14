@@ -85,6 +85,7 @@ def test_gpt_image_generation_forwards_every_sdk_field_once_with_integer_n(gatew
             "background": "transparent",
             "output_format": "webp",
             "moderation": "low",
+            "partial_images": 0,
         }
         return Reply(
             body=json.dumps(
@@ -121,6 +122,7 @@ def test_gpt_image_generation_forwards_every_sdk_field_once_with_integer_n(gatew
             background="transparent",
             output_format="webp",
             moderation="low",
+            extra_body={"partial_images": 0},
         )
         assert [image.b64_json for image in result.data] == ["aW1nLTE=", "aW1nLTI="]
         assert result.usage is not None

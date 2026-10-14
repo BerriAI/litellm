@@ -334,7 +334,26 @@ def test_image_edit_repeated_plain_image_parts_reach_openai_as_two_file_parts(ga
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/images/edits")]
 
 
-def test_openai_sdk_image_edit_with_image_list_and_mask_reaches_openai_as_file_parts(gateway: Gateway) -> None:
+def _sdk_client(gateway: Gateway, model: str, alias: str) -> openai.OpenAI:
+    base: Final = str(gateway.client.base_url)
+    match alias:
+        case "v1":
+            return openai.OpenAI(base_url=f"{base}/v1", api_key=gateway.key, max_retries=0)
+        case "azure_deployment":
+            return openai.AzureOpenAI(
+                azure_endpoint=base,
+                azure_deployment=model,
+                api_version="2025-04-01-preview",
+                api_key=gateway.key,
+                max_retries=0,
+            )
+    raise AssertionError(alias)
+
+
+@pytest.mark.parametrize("alias", ("v1", "azure_deployment"))
+def test_openai_sdk_image_edit_with_image_list_and_mask_reaches_openai_as_file_parts(
+    gateway: Gateway, alias: str
+) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/images/edits"
@@ -353,11 +372,7 @@ def test_openai_sdk_image_edit_with_image_list_and_mask_reaches_openai_as_file_p
         model: Final = scenario.model(
             model="openai/gpt-image-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        client: Final = openai.OpenAI(
-            base_url=str(gateway.client.base_url) + "/v1",
-            api_key=gateway.key,
-            max_retries=0,
-        )
+        client: Final = _sdk_client(gateway, model, alias)
         result: Final = client.images.edit(
             model=model,
             image=[
