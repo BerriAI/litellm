@@ -252,7 +252,7 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (inFlight.current) return;
-    const payload = buildBulkCustomerPayload(customers, edits);
+    const payload = buildBulkCustomerPayload(customers, edits, servers.data ?? []);
     if (!payload.ok) {
       setError(payload.error);
       return;
@@ -397,7 +397,7 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
               value: server.server_id,
               label: server.alias || server.server_name || server.server_id,
             }))}
-            description="An empty selection clears direct server grants. Other MCP permissions stay unchanged. Clearing all customer MCP grants removes the customer restriction."
+            description="An empty selection clears direct server grants. Tool grants for servers outside this selection are removed. Clearing all customer MCP grants removes the customer restriction."
             onChange={(edit) => update("mcpServers", edit)}
           />
           <ArrayEditField

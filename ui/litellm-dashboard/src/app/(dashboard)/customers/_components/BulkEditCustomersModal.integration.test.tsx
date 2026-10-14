@@ -136,8 +136,58 @@ describe("Bulk customer editor", () => {
           models: ["model-new"],
           allowed_model_region: "eu",
           default_model: "model-new",
-          object_permission: { mcp_servers: ["server-new"], mcp_access_groups: ["research-group"] },
+          object_permission: {
+            mcp_servers: ["server-new"],
+            mcp_access_groups: ["research-group"],
+            mcp_tool_permissions: {},
+          },
         })),
+      },
+    });
+  });
+
+  it("removes deselected server tool grants and retries only the failed customer's own permissions", async () => {
+    const rows = customers.map((customer, index) => ({
+      ...customer,
+      object_permission: {
+        mcp_servers: ["server-new", "server-removed"],
+        mcp_tool_permissions: { "Research server": [`read-${index}`], "server-removed": ["delete"] },
+      },
+    }));
+    fetchServers.mockResolvedValue([
+      { server_id: "server-new", server_name: "Research server" },
+      { server_id: "server-removed", server_name: "Removed server" },
+    ]);
+    post.mockResolvedValueOnce(response(["customer-b"], rows)).mockResolvedValueOnce(response([], [rows[1]]));
+    const user = userEvent.setup();
+    const { onCancel } = mountModal(rows);
+    const checkbox = screen.getByRole("checkbox", { name: "Update MCP servers" });
+    await waitFor(() => expect(checkbox).not.toHaveAttribute("aria-disabled", "true"));
+    await user.click(checkbox);
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "MCP servers" }), "Research server");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+    expect(await screen.findByRole("alert", { name: "Bulk update results" })).toHaveTextContent("customer-b");
+    expect(post).toHaveBeenNthCalledWith(1, "/customer/bulk_update", {
+      accessToken: "sk-test",
+      body: {
+        customers: rows.map((customer, index) => ({
+          user_id: customer.user_id,
+          object_permission: { mcp_servers: ["server-new"], mcp_tool_permissions: { "server-new": [`read-${index}`] } },
+        })),
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Retry failed customers" }));
+    await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+    expect(post).toHaveBeenNthCalledWith(2, "/customer/bulk_update", {
+      accessToken: "sk-test",
+      body: {
+        customers: [
+          {
+            user_id: "customer-b",
+            object_permission: { mcp_servers: ["server-new"], mcp_tool_permissions: { "server-new": ["read-1"] } },
+          },
+        ],
       },
     });
   });
@@ -150,7 +200,7 @@ describe("Bulk customer editor", () => {
     await user.click(checkbox);
     expect(
       screen.getByText(
-        "An empty selection clears direct server grants. Other MCP permissions stay unchanged. Clearing all customer MCP grants removes the customer restriction.",
+        "An empty selection clears direct server grants. Tool grants for servers outside this selection are removed. Clearing all customer MCP grants removes the customer restriction.",
       ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Apply changes" }));
@@ -158,7 +208,10 @@ describe("Bulk customer editor", () => {
     expect(post).toHaveBeenCalledExactlyOnceWith("/customer/bulk_update", {
       accessToken: "sk-test",
       body: {
-        customers: customers.map((customer) => ({ user_id: customer.user_id, object_permission: { mcp_servers: [] } })),
+        customers: customers.map((customer) => ({
+          user_id: customer.user_id,
+          object_permission: { mcp_servers: [], mcp_tool_permissions: {} },
+        })),
       },
     });
   });

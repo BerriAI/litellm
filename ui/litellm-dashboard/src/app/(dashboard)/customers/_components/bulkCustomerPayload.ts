@@ -1,6 +1,9 @@
 import type { BulkUpdateCustomersRequest, UpdateCustomerRequest } from "@/app/(dashboard)/hooks/customers/customerApi";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 
+import type { MCPServer } from "@/components/mcp_tools/types";
+import { mcpAllowedToolsFor, mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
+
 export const MAX_BULK_CUSTOMERS = 500;
 
 type OptIn<Value> = { enabled: boolean; value: Value };
@@ -56,7 +59,34 @@ const validateBulkCustomerEdits = (customers: EndUser[], edits: BulkCustomerEdit
   return null;
 };
 
-export const buildBulkCustomerPayload = (customers: EndUser[], edits: BulkCustomerEdits): BulkCustomerPayloadResult => {
+const retainedToolPermissions = (
+  customer: EndUser,
+  selectedServers: readonly string[],
+  servers: readonly MCPServer[],
+): Record<string, string[]> => {
+  const permissions = customer.object_permission?.mcp_tool_permissions ?? {};
+  const selectedIds = new Set(
+    selectedServers.flatMap((identifier) =>
+      mcpServersForIdentifier(servers, identifier).map((server) => server.server_id),
+    ),
+  );
+  const knownEntries = servers
+    .filter((server) => selectedIds.has(server.server_id))
+    .flatMap((server) => {
+      const tools = mcpAllowedToolsFor(server, permissions, servers);
+      return tools === undefined ? [] : [[server.server_id, [...tools]]];
+    });
+  const unresolvedEntries = Object.entries(permissions).filter(
+    ([identifier]) => selectedServers.includes(identifier) && mcpServersForIdentifier(servers, identifier).length === 0,
+  );
+  return Object.fromEntries([...knownEntries, ...unresolvedEntries]);
+};
+
+export const buildBulkCustomerPayload = (
+  customers: EndUser[],
+  edits: BulkCustomerEdits,
+  servers: readonly MCPServer[],
+): BulkCustomerPayloadResult => {
   const error = validateBulkCustomerEdits(customers, edits);
   if (error) return { ok: false, error };
 
@@ -71,7 +101,24 @@ export const buildBulkCustomerPayload = (customers: EndUser[], edits: BulkCustom
     ...(edits.models.enabled ? { models: edits.models.value } : {}),
     ...(edits.region.enabled && edits.region.value ? { allowed_model_region: edits.region.value } : {}),
     ...(edits.defaultModel.enabled ? { default_model: edits.defaultModel.value.trim() } : {}),
-    ...(Object.keys(objectPermission).length > 0 ? { object_permission: objectPermission } : {}),
   };
-  return { ok: true, payload: { customers: customers.map((customer) => ({ user_id: customer.user_id, ...updates })) } };
+  return {
+    ok: true,
+    payload: {
+      customers: customers.map((customer) => ({
+        user_id: customer.user_id,
+        ...updates,
+        ...(Object.keys(objectPermission).length > 0
+          ? {
+              object_permission: {
+                ...objectPermission,
+                ...(edits.mcpServers.enabled
+                  ? { mcp_tool_permissions: retainedToolPermissions(customer, edits.mcpServers.value, servers) }
+                  : {}),
+              },
+            }
+          : {}),
+      })),
+    },
+  };
 };
