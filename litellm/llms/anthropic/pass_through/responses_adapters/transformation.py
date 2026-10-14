@@ -159,8 +159,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     ) -> tuple[object, tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:  # mutable-ok: json parts
         """The breakpoint covering a tool_result, its images at or before that breakpoint, and its images after it.
 
-        A mark on the tool_result covers all of it, and a mark on a block inside it covers the result up to that block,
-        the same prefix Anthropic caches for the mark.
+        A mark on the tool_result covers all its images, and a mark on a block inside it covers the images up to that
+        block, the images Anthropic caches for the mark. The result's text and documents join into one output, which
+        the mark covers whole.
         """
         inner: Final = cls._content_blocks(block.get("content"))
         own_breakpoint: Final = block.get("prompt_cache_breakpoint")
@@ -190,7 +191,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """Tool result images as one user message, the tool_result's breakpoint on the last image.
 
         OpenAI caches only up to a breakpoint, so a marked result's images go right after its output and ahead of any
-        later output, the same prefix Anthropic caches for that mark.
+        later output, the images Anthropic caches for that mark.
         """
         *earlier_images, last_image = image_parts
         return {
