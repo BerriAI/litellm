@@ -1533,6 +1533,40 @@ async def test_route_request_read_through_recovers_model_created_on_sibling_repl
 
 
 @pytest.mark.asyncio
+async def test_route_request_checks_the_endpoints_of_a_model_loaded_by_read_through(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_name: Final = "embed-only-on-sibling-replica"
+    row: Final = SimpleNamespace(
+        model_id=f"{model_name}-id",
+        model_name=model_name,
+        litellm_params={"model": "openai/text-embedding-3-small", "api_key": "fake"},
+        model_info={"mode": "embedding", "supported_endpoints": ["/v1/embeddings"]},
+        blocked=False,
+    )
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "some-other-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
+    )
+    fake_prisma, table = _fake_prisma_client_with_models([row])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyUnsupportedEndpointError) as exc_info:
+        await route_request(
+            data={"model": model_name, "messages": [{"role": "user", "content": "hi"}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+
+    assert exc_info.value.message == (
+        f"/v1/chat/completions is not supported by model={model_name}. Supported endpoints: /v1/embeddings"
+    )
+    assert table.find_many_wheres == [{"model_name": model_name}]
+
+
+@pytest.mark.asyncio
 async def test_route_request_unknown_model_raises_and_hits_db_once_within_ttl(monkeypatch):
     import litellm
     import litellm.proxy.proxy_server as proxy_server

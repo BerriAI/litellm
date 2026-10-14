@@ -901,6 +901,14 @@ async def route_request(
 
         if not await model_registry_read_through.attempt(requested_model):
             raise
+        unsupported_endpoint: Final = endpoint_unsupported_by_model(
+            route_type=route_type,
+            data=JSON_OBJECT_ADAPTER.validate_python(data),
+            llm_router=proxy_server.llm_router,
+            team_id=user_api_key_dict.team_id if user_api_key_dict is not None else None,
+        )
+        if unsupported_endpoint is not None:
+            raise unsupported_endpoint
         return await _route_request_single_attempt(
             data=data,
             llm_router=proxy_server.llm_router,
