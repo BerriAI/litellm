@@ -90,6 +90,8 @@ class SearchStreamWrapper:
         self._results: object = []
         self._request_metadata: Mapping[str, object] = {}
         self._finished = False
+        self._logging_started = False
+        self._success_task: asyncio.Task[None] | None = None
         self._iterator = self._iter_events()
         self._async_iterator = self._aiter_events()
         self.final_response: SearchResponse | None = None
@@ -162,7 +164,11 @@ class SearchStreamWrapper:
                 if self._finished:
                     return
             raise self._error("Search stream disconnected before its done event")
+        except GeneratorExit:
+            self._log_success()
+            raise
         except Exception as error:
+            self._logging_started = True
             failure: Final = self._stream_error(error)
             self.logging_obj.failure_handler(
                 failure, str(failure), self.logging_obj.start_time, datetime.now(timezone.utc).replace(tzinfo=None)
@@ -180,18 +186,17 @@ class SearchStreamWrapper:
                     continue
                 event = self._parse(sse.data)
                 if self._finished:
-                    await self.logging_obj.dispatch_success_handlers(
-                        self.final_response,
-                        start_time=self.logging_obj.start_time,
-                        end_time=datetime.now(timezone.utc).replace(tzinfo=None),
-                        prefer_async_handlers=True,
-                    )
+                    await self._alog_success()
                     await self.response.aclose()
                 yield event
                 if self._finished:
                     return
             raise self._error("Search stream disconnected before its done event")
+        except (GeneratorExit, asyncio.CancelledError):
+            await self._alog_success()
+            raise
         except Exception as error:
+            self._logging_started = True
             failure: Final = self._stream_error(error)
             await self.logging_obj.async_failure_handler(
                 failure, str(failure), self.logging_obj.start_time, datetime.now(timezone.utc).replace(tzinfo=None)
@@ -202,12 +207,38 @@ class SearchStreamWrapper:
         finally:
             await self.response.aclose()
 
+    def _billing_response(self) -> SearchResponse:
+        if self.final_response is not None:
+            return self.final_response
+        return self.provider_config.transform_search_response(
+            httpx.Response(200, json={**self._request_metadata, "results": self._results}),
+            self._transform_logging_obj,
+        )
+
+    async def _alog_success(self) -> None:
+        if self._success_task is None:
+            if self._logging_started:
+                return
+            self._logging_started = True
+            self._success_task = asyncio.create_task(
+                self.logging_obj.dispatch_success_handlers(
+                    self._billing_response(),
+                    start_time=self.logging_obj.start_time,
+                    end_time=datetime.now(timezone.utc).replace(tzinfo=None),
+                    prefer_async_handlers=True,
+                )
+            )
+        await asyncio.shield(self._success_task)
+
     def _log_success(self) -> None:
+        if self._logging_started:
+            return
+        self._logging_started = True
         end_time: Final = datetime.now(timezone.utc).replace(tzinfo=None)
         executor.submit(
             asyncio.run,
             self.logging_obj.dispatch_success_handlers(
-                self.final_response, start_time=self.logging_obj.start_time, end_time=end_time
+                self._billing_response(), start_time=self.logging_obj.start_time, end_time=end_time
             ),
         )
 
@@ -228,10 +259,12 @@ class SearchStreamWrapper:
     def close(self) -> None:
         self._iterator.close()
         self.response.close()
+        self._log_success()
 
     async def aclose(self) -> None:
         await self._async_iterator.aclose()
         await self.response.aclose()
+        await self._alog_success()
 
     def __enter__(self) -> SearchStreamWrapper:
         return self

@@ -10979,3 +10979,60 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         assert logging_obj.cost_breakdown is not None
         assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
         assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+@pytest.mark.parametrize("cancel_logging", [False, True])
+@pytest.mark.asyncio
+async def test_search_disconnect_billing_owns_slot_release(respx_mock, monkeypatch, cancel_logging):
+    import asyncio
+
+    import httpx
+
+    from litellm.integrations.custom_logger import CustomLogger
+
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    if not cancel_logging:
+        release.set()
+
+    class Recorder(CustomLogger):
+        def __init__(self):
+            self.costs = ()
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            started.set()
+            await release.wait()
+            self.costs = (*self.costs, kwargs["response_cost"])
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = Recorder()
+    respx_mock.post("https://api.exa.ai/search").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b'data: {"type":"results","results":[{"url":"https://example.com","title":"Source"}]}\n\n',
+        )
+    )
+    stream: Final = await litellm.asearch(
+        query="question",
+        search_provider="exa_ai",
+        api_key="test",
+        stream=True,
+        outputSchema={"type": "text"},
+        success_callback=[recorder.async_log_success_event],
+    )
+    assert (await anext(stream)).type == "results"
+    if cancel_logging:
+        closing: Final = asyncio.create_task(stream.aclose())
+        await started.wait()
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        release.set()
+    request_data: Final = {"litellm_logging_obj": stream.logging_obj}
+    assert await _bill_partial_streamed_spend_on_disconnect(request_data, stream)
+    assert await _bill_partial_streamed_spend_on_disconnect(request_data, stream)
+    assert len(recorder.costs) == 1
+    assert recorder.costs[0] > 0
+    assert stream.response.is_closed
+    assert stream.final_response is None

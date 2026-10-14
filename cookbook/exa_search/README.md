@@ -86,7 +86,7 @@ async with stream:
 print(stream.final_response.model_dump())
 ```
 
-The synchronous equivalent uses `with litellm.search(..., stream=True) as stream` and `for event in stream`. Use the context manager or call `close()` / `await aclose()` when abandoning a stream early.
+The synchronous equivalent uses `with litellm.search(..., stream=True) as stream` and `for event in stream`. Use the context manager or call `close()` / `await aclose()` when abandoning a stream early. Early close and cancellation record LiteLLM's per-query charge once, using the results received so far; they do not populate `final_response` without a `done` event.
 
 Events preserve their native `type` and payload. The documented types are `text-delta`, `grounding`, `results`, `stream-reset`, `done`, and `error`. On `stream-reset`, discard previously accumulated synthesized text. `done.output` is authoritative. `final_response` becomes available after `done`, combining the most recent results with the terminal output and metadata. Provider error events, malformed events, and premature disconnects raise an exception and close the response. Heartbeats are ignored. SSE framing is decoded incrementally, including fragmented UTF-8 and multiline data.
 

@@ -446,6 +446,11 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if not isinstance(logging_obj, LiteLLMLoggingObj):
         return False
+    from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
+
+    if isinstance(response, SearchStreamWrapper):
+        await response.aclose()
+        return bool(logging_obj.model_call_details.get("has_dispatched_final_stream_success"))
     if logging_obj.model_call_details.get("has_dispatched_final_stream_success"):
         # A natural end-of-stream success event already fired and released the
         # slot; do not bill again, and let the caller skip the slot release.

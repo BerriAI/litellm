@@ -56,7 +56,8 @@ class FragmentedStream(httpx.SyncByteStream, httpx.AsyncByteStream):
 
 def wire(*events: object) -> bytes:
     return (
-        ": heartbeat\r\n\r\n" + "".join("event: message\r\ndata: " + json.dumps(event) + "\r\n\r\n" for event in events)
+        ": heartbeat\r\n\r\nevent: ping\r\ndata:\r\n\r\n"
+        + "".join("event: message\r\ndata: " + json.dumps(event) + "\r\n\r\n" for event in events)
     ).encode()
 
 
@@ -92,6 +93,36 @@ async def test_search_stream_preserves_events_and_final_response(respx_mock: res
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_abandoned_stream_cannot_return_incomplete_final_response(
+    respx_mock: respx.MockRouter, asynchronous: bool
+):
+    body: Final = FragmentedStream(wire(*EVENTS))
+    respx_mock.post(URL).mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=body)
+    )
+    params: Final = {
+        "query": "question",
+        "search_provider": "exa_ai",
+        "api_key": "test",
+        "stream": True,
+        "outputSchema": SCHEMA,
+    }
+    stream: Final = await litellm.asearch(**params) if asynchronous else litellm.search(**params)
+    if asynchronous:
+        await anext(stream)
+        await stream.aclose()
+        with pytest.raises(litellm.APIError, match="no final response"):
+            await stream.aget_final_response()
+    else:
+        next(stream)
+        stream.close()
+        with pytest.raises(litellm.APIError, match="no final response"):
+            stream.get_final_response()
+    assert body.closed
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
     "body",
     [
@@ -123,6 +154,10 @@ async def test_stream_failure_is_not_silent_and_closes_connection(
     else:
         with pytest.raises(litellm.APIError):
             list(stream)
+    if asynchronous:
+        await stream.aclose()
+    else:
+        stream.close()
     assert transport.closed
 
 

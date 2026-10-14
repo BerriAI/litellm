@@ -1735,10 +1735,6 @@ def client(original_function):
                 result=result,
             ):
                 if kwargs.get("complete_response") is True and not isinstance(result, Coroutine):
-                    from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
-
-                    if isinstance(result, SearchStreamWrapper):
-                        return result.get_final_response()
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)

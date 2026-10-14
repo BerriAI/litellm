@@ -145,3 +145,91 @@ async def test_search_logs_one_completed_response_and_cost(asynchronous: bool, s
         assert isinstance(details["standard_logging_object"], Mapping)
         assert isinstance(details["response_cost"], (int, float))
         assert details["stream"] is sse
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("asynchronous", "consume"),
+    [
+        (False, "none"),
+        (True, "none"),
+        (False, "results"),
+        (True, "results"),
+        (False, "done"),
+        (True, "done"),
+        (True, "cancel"),
+    ],
+)
+async def test_search_disconnect_bills_once(asynchronous: bool, consume: str) -> None:
+    import asyncio
+
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class Recorder(CustomLogger):
+        def __init__(self) -> None:
+            self.finished = threading.Event()
+            self.records = ()
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.records = (*self.records, (kwargs, response_obj))
+            self.finished.set()
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.log_success_event(kwargs, response_obj, start_time, end_time)
+
+    recorder: Final = Recorder()
+    release: Final = threading.Event()
+    events: Final = (
+        {"type": "results", "results": PAYLOAD["results"], "requestId": "disconnect"},
+        {"type": "done", "output": PAYLOAD["output"], "searchTime": 14},
+    )
+
+    def respond(request: Request) -> Reply:
+        assert json.loads(request.body)["stream"] is True
+        return Reply(
+            content_type="text/event-stream",
+            chunks=tuple(("data: " + json.dumps(event) + "\n\n").encode() for event in events),
+            gate_after_first=release if consume == "cancel" else None,
+        )
+
+    with wire_server(respond) as server:
+        params: Final = {
+            "query": "question",
+            "search_provider": "exa_ai",
+            "api_base": server.url,
+            "api_key": "test-key",
+            "stream": True,
+            "success_callback": [recorder.async_log_success_event if asynchronous else recorder],
+            **PARAMS,
+        }
+        stream: Final = await litellm.asearch(**params) if asynchronous else litellm.search(**params)
+        try:
+            if consume != "none":
+                first: Final = await anext(stream) if asynchronous else next(stream)
+                assert first.type == "results"
+            if consume == "done":
+                if asynchronous:
+                    await stream.aget_final_response()
+                else:
+                    stream.get_final_response()
+            if consume == "cancel":
+                pending: Final = asyncio.create_task(anext(stream))
+                await asyncio.sleep(0)
+                pending.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+            if asynchronous:
+                await stream.aclose()
+                await stream.aclose()
+            else:
+                stream.close()
+                stream.close()
+            assert await asyncio.to_thread(recorder.finished.wait, 5)
+            assert len(recorder.records) == 1
+            details, logged = recorder.records[0]
+            assert details["response_cost"] > 0
+            assert details["standard_logging_object"]["response_cost"] == details["response_cost"]
+            assert len(logged.results) == (0 if consume == "none" else 1)
+            assert (stream.final_response is not None) is (consume == "done")
+        finally:
+            release.set()
