@@ -1972,6 +1972,21 @@ class TestAnthropicThinkingSignatureSelfHeal:
         sig = "CiIBDDnWx+/a=="
         assert normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}") == base
 
+    def test_format_anthropic_tool_use_id_with_signature_round_trips(self):
+        import re
+
+        from litellm.llms.anthropic.common_utils import (
+            format_anthropic_tool_use_id_with_signature,
+            split_anthropic_tool_use_id_signature,
+        )
+
+        base = "functions.Bash:0"
+        sig = "CiIBDDnWx+/a=="
+        formatted = format_anthropic_tool_use_id_with_signature(base, sig)
+        assert re.fullmatch(r"[a-zA-Z0-9_-]+", formatted)
+        assert split_anthropic_tool_use_id_signature(formatted) == ("functions_Bash_0", sig)
+        assert format_anthropic_tool_use_id_with_signature(base, None) == "functions_Bash_0"
+
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
 

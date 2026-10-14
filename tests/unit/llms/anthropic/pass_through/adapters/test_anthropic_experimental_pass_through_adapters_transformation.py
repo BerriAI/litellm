@@ -16,6 +16,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
 )
+from litellm.llms.anthropic.common_utils import (
+    format_anthropic_tool_use_id_with_signature,
+    split_anthropic_tool_use_id_signature,
+)
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
@@ -201,8 +205,24 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     }
 
 
-def test_translate_streaming_openai_chunk_strips_gemini_thought_from_tool_call_id():
-    """Gemini embeds thought signatures in OpenAI tool ids; Anthropic SSE should expose a clean id."""
+def test_format_anthropic_tool_use_id_with_signature_stays_in_anthropic_charset():
+    import re
+
+    base = "functions.Bash:0"
+    sig = "CiIBDDnWx+/a=="
+    formatted = format_anthropic_tool_use_id_with_signature(base, sig)
+    assert re.fullmatch(r"[a-zA-Z0-9_-]+", formatted)
+    assert split_anthropic_tool_use_id_signature(formatted) == ("functions_Bash_0", sig)
+    assert format_anthropic_tool_use_id_with_signature(base, None) == "functions_Bash_0"
+
+
+def test_translate_streaming_openai_chunk_embeds_gemini_thought_in_anthropic_tool_use_id():
+    """Gemini embeds thought signatures in OpenAI tool ids; Anthropic SSE must keep a round-trippable id.
+
+    Raw Base64 uses ``+ / =``, which violate Anthropic's ``^[a-zA-Z0-9_-]+$``
+    pattern, so the adapter URL-safe-encodes the signature into ``tool_use.id``
+    (and still sets provider_specific_fields for clients that preserve extras).
+    """
     base = "call_3e9417b7925e49aca9a71dc1885e"
     sig = "CiIBDDnWx"
     combined = f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}"
@@ -237,10 +257,12 @@ def test_translate_streaming_openai_chunk_strips_gemini_thought_from_tool_call_i
     ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "tool_use"
-    assert content_block_start["id"] == base
+    assert content_block_start["id"] == format_anthropic_tool_use_id_with_signature(base, sig)
+    assert THOUGHT_SIGNATURE_SEPARATOR in content_block_start["id"]
     assert content_block_start["name"] == "add_numbers"
     assert content_block_start["input"] == {}
     assert content_block_start["provider_specific_fields"]["signature"] == sig
+    assert split_anthropic_tool_use_id_signature(content_block_start["id"]) == (base, sig)
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
@@ -1169,12 +1191,14 @@ def test_translate_openai_content_to_anthropic_text_and_tool_calls():
     assert result[1]["input"] == {"location": "Boston"}
 
 
-def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_call_id():
+def test_translate_openai_content_to_anthropic_embeds_gemini_thought_in_tool_use_id():
     """
-    Non-streaming path must strip the Gemini thought-signature suffix from
-    tool_call.id, same as the streaming path. The base64 signature contains
-    `+ / =` which violate Anthropic's `^[a-zA-Z0-9_-]+$` tool_use.id pattern
-    and 400 when the history is replayed to an Anthropic-native provider.
+    Non-streaming path must re-embed the Gemini thought signature into
+    ``tool_use.id`` with a URL-safe encoding. Spec-compliant Anthropic clients
+    drop ``provider_specific_fields``, so a clean id alone loses the signature
+    and every later turn falls back to the dummy (#46369). Raw Base64 still
+    cannot sit in the id verbatim (``+ / =``), and native Anthropic sanitization
+    continues to strip ``__thought__`` suffixes before Anthropic-native replay.
     """
     base = "call_3e9417b7925e49aca9a71dc1885e"
     sig = "CiIBDDnWx+/a=="
@@ -1205,11 +1229,12 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
 
     assert len(result) == 1
     assert result[0]["type"] == "tool_use"
-    assert result[0]["id"] == base
-    assert THOUGHT_SIGNATURE_SEPARATOR not in result[0]["id"]
+    assert result[0]["id"] == format_anthropic_tool_use_id_with_signature(base, sig)
+    assert THOUGHT_SIGNATURE_SEPARATOR in result[0]["id"]
     assert result[0]["name"] == "get_weather"
     assert result[0]["input"] == {"location": "Boston"}
     assert result[0]["provider_specific_fields"] == {"signature": sig}
+    assert split_anthropic_tool_use_id_signature(result[0]["id"]) == (base, sig)
 
 
 def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():
@@ -1838,6 +1863,95 @@ def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
         tool_call["function"]["provider_specific_fields"]["thought_signature"]
         == test_signature
     )
+
+
+def test_translate_anthropic_messages_to_openai_recovers_signature_from_tool_use_id():
+    """Claude Code drops provider_specific_fields; the signature must ride in tool_use.id (#46369)."""
+    test_signature = "CiIBDDnWx+/a=="
+    anthropic_id = format_anthropic_tool_use_id_with_signature(
+        "call_386f67af31f9415781bc35071405", test_signature
+    )
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "What's the weather like in London?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": anthropic_id,
+                    "name": "get_weather",
+                    "input": {"location": "London"},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": anthropic_id,
+                    "content": "rainy",
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert result[1]["tool_calls"][0]["id"] == "call_386f67af31f9415781bc35071405"
+    assert (
+        result[1]["tool_calls"][0]["function"]["provider_specific_fields"]["thought_signature"]
+        == test_signature
+    )
+    assert result[2]["tool_call_id"] == "call_386f67af31f9415781bc35071405"
+
+
+def test_messages_adapter_thought_signature_round_trip_without_provider_fields():
+    """OpenAI→Anthropic→OpenAI keeps the real signature when clients only echo id/name/input."""
+    base = "call_roundtrip_abc"
+    sig = "EpYECpMEAdHtim9iBECdK1l5uVIIXoZZ+/=="
+    function = Function(name="Bash", arguments='{"command": "ls"}')
+    function.provider_specific_fields = {"thought_signature": sig}
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id=f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}",
+                        type="function",
+                        function=function,
+                    )
+                ],
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_content = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+    # Simulate a spec-compliant client: keep only standard Anthropic fields.
+    echoed = {
+        "type": anthropic_content[0]["type"],
+        "id": anthropic_content[0]["id"],
+        "name": anthropic_content[0]["name"],
+        "input": anthropic_content[0]["input"],
+    }
+    assert "provider_specific_fields" not in echoed
+    assert split_anthropic_tool_use_id_signature(echoed["id"]) == (base, sig)
+
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=[
+            AnthopicMessagesAssistantMessageParam(role="assistant", content=[echoed]),
+        ]
+    )
+    assert result[0]["tool_calls"][0]["function"]["provider_specific_fields"]["thought_signature"] == sig
+    assert result[0]["tool_calls"][0]["id"] == base
 
 
 def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_content_items():

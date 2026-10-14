@@ -131,8 +131,10 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
 )
 from litellm.llms.anthropic.common_utils import (
     eager_input_streaming_flag,
+    format_anthropic_tool_use_id_with_signature,
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
+    split_anthropic_tool_use_id_signature,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from litellm.llms.anthropic.pass_through.context_management import (
@@ -357,27 +359,52 @@ class LiteLLMAnthropicMessagesAdapter:
 
     def _extract_signature_from_tool_call(self, tool_call: object) -> str | None:
         """
-        Extract signature from a tool call's provider_specific_fields.
-        Only checks provider_specific_fields, not thinking blocks.
+        Extract a Gemini thought signature from an OpenAI-shaped tool call.
+
+        Prefer ``provider_specific_fields``, then a raw signature embedded in
+        ``tool_call.id`` after ``__thought__`` (OpenAI-compatible clients echo
+        the id verbatim). Do not URL-decode here — that encoding is only used
+        on Anthropic ``tool_use.id`` values.
         """
         fields: Final = _optional_attr(tool_call, "provider_specific_fields")
         if fields:
-            return _thought_signature(fields)
+            signature = _thought_signature(fields)
+            if signature:
+                return signature
 
         function_fields: Final = _optional_attr(_optional_attr(tool_call, "function"), "provider_specific_fields")
         if function_fields:
-            return _thought_signature(function_fields)
+            signature = _thought_signature(function_fields)
+            if signature:
+                return signature
+
+        raw_id: Final = _optional_attr(tool_call, "id")
+        if isinstance(raw_id, str) and THOUGHT_SIGNATURE_SEPARATOR in raw_id:
+            parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+            if len(parts) == 2 and parts[1]:
+                return parts[1]
 
         return None
 
     def _extract_signature_from_tool_use_content(self, content: Mapping[str, object]) -> str | None:
         """
-        Extract signature from a tool_use content block's provider_specific_fields.
+        Extract a Gemini thought signature from a tool_use content block.
+
+        Prefer the non-standard ``provider_specific_fields.signature`` when a
+        client preserved it, then recover a signature embedded in ``id``
+        (URL-safe encoded so the id stays inside Anthropic's charset). Clients
+        that drop unknown fields, such as Claude Code, only echo ``id``.
         """
         provider_specific_fields: Final = _as_string_mapping(content.get("provider_specific_fields", {}))
         if provider_specific_fields:
             signature: Final = provider_specific_fields.get("signature")
-            return signature if isinstance(signature, str) else None
+            if isinstance(signature, str) and signature:
+                return signature
+        raw_id: Final = content.get("id")
+        if isinstance(raw_id, str):
+            _, embedded = split_anthropic_tool_use_id_signature(raw_id)
+            if embedded:
+                return embedded
         return None
 
     def _add_cache_control_if_applicable(
@@ -525,9 +552,15 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
+                            raw_tool_result_id = content.get("tool_use_id", "")
+                            tool_result_id = (
+                                split_anthropic_tool_use_id_signature(raw_tool_result_id)[0]
+                                if isinstance(raw_tool_result_id, str)
+                                else raw_tool_result_id
+                            )
                             tool_result = ChatCompletionToolMessage(
                                 role="tool",
-                                tool_call_id=content.get("tool_use_id", ""),
+                                tool_call_id=tool_result_id,
                                 content=self._tool_result_content(content.get("content")),
                             )
                             self._add_cache_control_if_applicable(content, tool_result, model)
@@ -583,8 +616,14 @@ class LiteLLMAnthropicMessagesAdapter:
                                     provider_specific_fields["thought_signature"] = signature
                                     function_chunk["provider_specific_fields"] = provider_specific_fields
 
+                                raw_tool_use_id = content.get("id", "")
+                                tool_call_id = (
+                                    split_anthropic_tool_use_id_signature(raw_tool_use_id)[0]
+                                    if isinstance(raw_tool_use_id, str)
+                                    else raw_tool_use_id
+                                )
                                 tool_call = ChatCompletionAssistantToolCall(
-                                    id=content.get("id", ""),
+                                    id=tool_call_id,
                                     type="function",
                                     function=function_chunk,
                                 )
@@ -1410,12 +1449,14 @@ class LiteLLMAnthropicMessagesAdapter:
                         tool_name_mapping.get(truncated_name, truncated_name) if tool_name_mapping else truncated_name
                     )
 
-                    # Strip Gemini thought-signature suffix and normalize id chars
-                    # (e.g. ``functions.Bash:0`` from cross-provider clients).
+                    # Anthropic ids cannot carry raw Base64 (``+ / =``). Re-embed
+                    # the signature as URL-safe Base64 after ``__thought__`` so
+                    # spec-compliant clients that drop provider_specific_fields
+                    # still echo it back on the next turn (#46369).
                     raw_id = tool_call.id or ""
                     tool_use_block = AnthropicResponseContentBlockToolUse(
                         type="tool_use",
-                        id=normalize_anthropic_tool_use_id(raw_id),
+                        id=format_anthropic_tool_use_id_with_signature(raw_id, signature),
                         name=original_name,
                         input=parse_tool_call_arguments(
                             tool_call.function.arguments,
@@ -1635,15 +1676,13 @@ class LiteLLMAnthropicMessagesAdapter:
                 and len(choice.delta.tool_calls) > 0
                 and choice.delta.tool_calls[0].function is not None
             ):
-                raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
-                tool_name = choice.delta.tool_calls[0].function.name or ""
-                thought_sig: str | None = None
-                if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
-                    parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
-                    thought_sig = parts[1] if len(parts) > 1 else None
+                delta_tool_call = choice.delta.tool_calls[0]
+                raw_id = delta_tool_call.id or str(uuid.uuid4())
+                tool_name = delta_tool_call.function.name or ""
+                thought_sig = self._extract_signature_from_tool_call(delta_tool_call)
                 tool_block: dict[str, object] = {
                     "type": "tool_use",
-                    "id": normalize_anthropic_tool_use_id(raw_id),
+                    "id": format_anthropic_tool_use_id_with_signature(raw_id, thought_sig),
                     "name": tool_name,
                     "input": {},
                 }
