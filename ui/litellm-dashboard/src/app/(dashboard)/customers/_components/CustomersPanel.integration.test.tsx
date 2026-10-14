@@ -1,10 +1,11 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Toaster, toast as sonner } from "sonner";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/http/client";
 
+import type { BulkUpdateCustomersResponse } from "@/app/(dashboard)/hooks/customers/customerApi";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
 import CustomersPanel from "./CustomersPanel";
@@ -64,6 +65,8 @@ const blockedCustomer: EndUser = {
 };
 
 const customers = [activeCustomer, blockedCustomer];
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("Customers management", () => {
   beforeEach(() => {
@@ -146,6 +149,92 @@ describe("Customers management", () => {
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByRole("checkbox", { name: "Select customer customer-25" })).not.toBeChecked();
+    expect(screen.queryByRole("button", { name: "Edit selected" })).not.toBeInTheDocument();
+  });
+
+  it("keeps only failed customers selected after cancellation and list refresh before reopening", async () => {
+    const { $api } = await vi.importActual<typeof import("@/lib/http/api")>("@/lib/http/api");
+    useQuery.mockImplementation($api.useQuery);
+    const extraCustomer: EndUser = { ...activeCustomer, user_id: "new@example.test", alias: "New customer" };
+    const refreshedCustomers: EndUser[] = [
+      { ...activeCustomer, alias: "Updated customer", spend: 25 },
+      { ...blockedCustomer, alias: "Refreshed failed customer" },
+      extraCustomer,
+    ];
+    const network = vi.fn((request: Request) => {
+      expect(new URL(request.url).pathname).toBe("/customer/list");
+      return Promise.resolve(Response.json(refreshedCustomers));
+    });
+    network.mockImplementationOnce(() => Promise.resolve(Response.json(customers)));
+    vi.stubGlobal("fetch", network);
+    fetchToolsets.mockResolvedValue([{ toolset_id: "toolset-new", toolset_name: "Research tools", tools: [] }]);
+    const mixedResponse: BulkUpdateCustomersResponse = {
+      total_requested: 2,
+      successful_updates: 1,
+      failed_updates: 1,
+      results: [
+        { user_id: activeCustomer.user_id, success: true, updated_customer: refreshedCustomers[0], error: null },
+        { user_id: blockedCustomer.user_id, success: false, updated_customer: null, error: "Customer update failed" },
+      ],
+    };
+    const retryResponse: BulkUpdateCustomersResponse = {
+      total_requested: 1,
+      successful_updates: 1,
+      failed_updates: 0,
+      results: [
+        { user_id: blockedCustomer.user_id, success: true, updated_customer: refreshedCustomers[1], error: null },
+      ],
+    };
+    post.mockResolvedValueOnce(mixedResponse).mockResolvedValueOnce(retryResponse);
+    const user = userEvent.setup();
+    const selectToolset = async () => {
+      await user.click(screen.getByRole("checkbox", { name: "Update MCP toolsets" }));
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: "MCP toolsets" }), "Research tools");
+      await user.keyboard("{Escape}");
+    };
+    renderWithProviders(<CustomersPanel />);
+    await screen.findByRole("checkbox", { name: `Select customer ${activeCustomer.user_id}` });
+    await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
+    await user.click(screen.getByRole("button", { name: "Edit selected" }));
+    await selectToolset();
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+
+    expect(await screen.findByRole("alert", { name: "Bulk update results" })).toHaveTextContent(
+      "1 succeeded, 1 failed out of 2",
+    );
+    expect(screen.getByRole("region", { name: "Customers to update" })).toHaveTextContent(/^bob@example\.test$/);
+    expect(network).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(
+      await screen.findByRole("checkbox", { name: `Select customer ${activeCustomer.user_id}` }),
+    ).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: `Select customer ${extraCustomer.user_id}` })).not.toBeChecked();
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    expect(screen.getByText("Updated customer")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(network).toHaveBeenCalledTimes(3));
+    await user.click(screen.getByRole("button", { name: "Edit selected" }));
+    expect(screen.getByRole("region", { name: "Customers to update" })).toHaveTextContent(/^bob@example\.test$/);
+    await selectToolset();
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    expect(post).toHaveBeenNthCalledWith(1, "/customer/bulk_update", {
+      accessToken: "sk-test",
+      body: {
+        customers: customers.map((customer) => ({
+          user_id: customer.user_id,
+          object_permission: { mcp_toolsets: ["toolset-new"] },
+        })),
+      },
+    });
+    expect(post).toHaveBeenNthCalledWith(2, "/customer/bulk_update", {
+      accessToken: "sk-test",
+      body: { customers: [{ user_id: blockedCustomer.user_id, object_permission: { mcp_toolsets: ["toolset-new"] } }] },
+    });
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` })).not.toBeChecked();
     expect(screen.queryByRole("button", { name: "Edit selected" })).not.toBeInTheDocument();
   });
 

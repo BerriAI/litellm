@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BulkUpdateCustomersResponse } from "@/app/(dashboard)/hooks/customers/customerApi";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { ApiError } from "@/lib/http/client";
+import { toast } from "@/lib/toast";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
 import { BulkEditCustomersModal } from "./BulkEditCustomersModal";
 
@@ -147,6 +148,11 @@ describe("Bulk customer editor", () => {
     const checkbox = screen.getByRole("checkbox", { name: "Update MCP servers" });
     await waitFor(() => expect(checkbox).not.toHaveAttribute("aria-disabled", "true"));
     await user.click(checkbox);
+    expect(
+      screen.getByText(
+        "An empty selection clears direct server grants. Other MCP permissions stay unchanged. Clearing all customer MCP grants removes the customer restriction.",
+      ),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Apply changes" }));
     await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
     expect(post).toHaveBeenCalledExactlyOnceWith("/customer/bulk_update", {
@@ -157,38 +163,39 @@ describe("Bulk customer editor", () => {
     });
   });
 
-  it.each([{ failedIds: ["customer-b"] }, { failedIds: ["customer-a", "customer-b"] }])(
-    "keeps failure IDs and errors for retry: %j",
-    async ({ failedIds }) => {
-      post.mockResolvedValueOnce(response(failedIds));
-      const user = userEvent.setup();
-      const { onCancel, onCompleted } = mountModal();
-      await optIntoToolsets(user);
-      await user.click(screen.getByRole("button", { name: "Apply changes" }));
-      const summary = await screen.findByRole("alert", { name: "Bulk update results" });
-      expect(summary).toHaveTextContent(`${2 - failedIds.length} succeeded, ${failedIds.length} failed out of 2`);
-      for (const id of failedIds) expect(summary).toHaveTextContent(`Cannot update ${id}`);
-      const targets = screen.getByRole("region", { name: "Customers to update" });
-      expect(within(targets).getAllByRole("listitem")).toHaveLength(failedIds.length);
-      expect(onCancel).not.toHaveBeenCalled();
-      if (failedIds.length === 1) expect(onCompleted).toHaveBeenCalledExactlyOnceWith(["customer-a"]);
-      else expect(onCompleted).not.toHaveBeenCalled();
-      const retryRows = customers.filter((customer) => failedIds.includes(customer.user_id));
-      post.mockResolvedValueOnce(response([], retryRows));
-      await user.click(screen.getByRole("button", { name: "Retry failed customers" }));
-      await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
-      expect(post).toHaveBeenLastCalledWith("/customer/bulk_update", {
-        accessToken: "sk-test",
-        body: {
-          customers: retryRows.map((customer) => ({
-            user_id: customer.user_id,
-            object_permission: { mcp_toolsets: ["toolset-new"] },
-          })),
-        },
-      });
-      expect(onCompleted).toHaveBeenLastCalledWith(failedIds);
-    },
-  );
+  it.each([
+    { failedIds: ["customer-b"], successToast: "1 customer updated" },
+    { failedIds: ["customer-a", "customer-b"], successToast: "2 customers updated" },
+  ])("keeps failure IDs and errors for retry: %j", async ({ failedIds, successToast }) => {
+    post.mockResolvedValueOnce(response(failedIds));
+    const user = userEvent.setup();
+    const { onCancel, onCompleted } = mountModal();
+    await optIntoToolsets(user);
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+    const summary = await screen.findByRole("alert", { name: "Bulk update results" });
+    expect(summary).toHaveTextContent(`${2 - failedIds.length} succeeded, ${failedIds.length} failed out of 2`);
+    for (const id of failedIds) expect(summary).toHaveTextContent(`Cannot update ${id}`);
+    const targets = screen.getByRole("region", { name: "Customers to update" });
+    expect(within(targets).getAllByRole("listitem")).toHaveLength(failedIds.length);
+    expect(onCancel).not.toHaveBeenCalled();
+    if (failedIds.length === 1) expect(onCompleted).toHaveBeenCalledExactlyOnceWith(["customer-a"]);
+    else expect(onCompleted).not.toHaveBeenCalled();
+    const retryRows = customers.filter((customer) => failedIds.includes(customer.user_id));
+    post.mockResolvedValueOnce(response([], retryRows));
+    await user.click(screen.getByRole("button", { name: "Retry failed customers" }));
+    await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+    expect(post).toHaveBeenLastCalledWith("/customer/bulk_update", {
+      accessToken: "sk-test",
+      body: {
+        customers: retryRows.map((customer) => ({
+          user_id: customer.user_id,
+          object_permission: { mcp_toolsets: ["toolset-new"] },
+        })),
+      },
+    });
+    expect(onCompleted).toHaveBeenLastCalledWith(failedIds);
+    expect(toast.success).toHaveBeenCalledExactlyOnceWith(successToast);
+  });
 
   it("keeps all targets after an HTTP error and allows the same request to be retried", async () => {
     post.mockRejectedValueOnce(new ApiError("Proxy is unavailable", 503, { error: "Proxy is unavailable" }));
@@ -204,6 +211,45 @@ describe("Bulk customer editor", () => {
     await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
     expect(post).toHaveBeenCalledTimes(2);
     expect(post.mock.calls[1]).toEqual(post.mock.calls[0]);
+  });
+
+  it.each([
+    "{'error': 'Proxy is unavailable'}",
+    JSON.stringify({ error: { message: "{'error': 'Proxy is unavailable'}" } }),
+  ])("shows the readable transport error from a wrapped proxy response: %s", async (message) => {
+    post.mockRejectedValueOnce(new ApiError(message, 503, { error: message }));
+    const user = userEvent.setup();
+    const { onCancel, onCompleted } = mountModal();
+    await optIntoToolsets(user);
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+
+    expect(await screen.findByRole("alert", { name: "Bulk update error" })).toHaveTextContent(/^Proxy is unavailable$/);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onCompleted).not.toHaveBeenCalled();
+    expect(within(screen.getByRole("region", { name: "Customers to update" })).getAllByRole("listitem")).toHaveLength(
+      2,
+    );
+  });
+
+  it.each([
+    "{'error': 'Cannot update this customer'}",
+    JSON.stringify({ error: { message: "{'error': 'Cannot update this customer'}" } }),
+  ])("shows a readable per-customer error and keeps the failed target: %s", async (message) => {
+    const failedResponse = response(["customer-b"]);
+    post.mockResolvedValueOnce({
+      ...failedResponse,
+      results: failedResponse.results.map((result) => (result.success ? result : { ...result, error: message })),
+    });
+    const user = userEvent.setup();
+    const { onCancel, onCompleted } = mountModal();
+    await optIntoToolsets(user);
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+
+    const summary = await screen.findByRole("alert", { name: "Bulk update results" });
+    expect(within(summary).getByRole("listitem")).toHaveTextContent(/^customer-b: Cannot update this customer$/);
+    expect(screen.getByRole("region", { name: "Customers to update" })).toHaveTextContent(/^customer-b$/);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onCompleted).toHaveBeenCalledExactlyOnceWith(["customer-a"]);
   });
 
   it("prevents duplicate submissions and closing while the request is pending", async () => {

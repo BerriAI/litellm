@@ -26,6 +26,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { extractProxyErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
 import { buildBulkCustomerPayload, emptyBulkCustomerEdits, type BulkCustomerEdits } from "./bulkCustomerPayload";
 
@@ -278,11 +279,11 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
       setResults(response);
       if (successfulIds.length > 0) onCompleted(successfulIds);
       if (remaining.length === 0) {
-        toast.success(`${response.successful_updates} customers updated`);
+        toast.success(`${response.successful_updates} customer${response.successful_updates === 1 ? "" : "s"} updated`);
         onCancel();
       }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Customers could not be updated");
+      setError(extractProxyErrorMessage(failure));
     } finally {
       inFlight.current = false;
       setSubmitting(false);
@@ -396,7 +397,7 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
               value: server.server_id,
               label: server.alias || server.server_name || server.server_id,
             }))}
-            description="An empty selection clears direct server grants. Other MCP permissions stay unchanged."
+            description="An empty selection clears direct server grants. Other MCP permissions stay unchanged. Clearing all customer MCP grants removes the customer restriction."
             onChange={(edit) => update("mcpServers", edit)}
           />
           <ArrayEditField
@@ -406,7 +407,7 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
             catalog={groups}
             disabled={pending}
             options={(groups.data ?? []).map((group) => ({ value: group, label: group }))}
-            description="An empty selection clears access group grants. Other MCP permissions stay unchanged."
+            description="An empty selection clears access group grants. Other MCP permissions stay unchanged. Clearing all customer MCP grants removes the customer restriction."
             onChange={(edit) => update("mcpAccessGroups", edit)}
           />
           <ArrayEditField
@@ -419,7 +420,7 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
               value: toolset.toolset_id,
               label: toolset.toolset_name,
             }))}
-            description="An empty selection clears toolset grants. Other MCP permissions stay unchanged."
+            description="An empty selection removes the customer toolset restriction. Other MCP permissions stay unchanged."
             onChange={(edit) => update("mcpToolsets", edit)}
           />
           {results && (
@@ -434,7 +435,7 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
                     .filter((result) => !result.success)
                     .map((result) => (
                       <li key={result.user_id}>
-                        <strong>{result.user_id}</strong>: {result.error ?? "Update failed"}
+                        <strong>{result.user_id}</strong>: {unwrapProxyErrorMessage(result.error ?? "Update failed")}
                       </li>
                     ))}
                 </ul>
