@@ -412,12 +412,19 @@ def _redis_timeout_error_types() -> tuple[type, ...]:
     ``builtins.TimeoutError`` covers ``socket.timeout`` (an alias since py3.10) and, from
     py3.11, ``asyncio.TimeoutError``; on py3.10 ``asyncio.TimeoutError`` is still its own
     class, so it is listed explicitly. ``redis.exceptions.TimeoutError`` subclasses neither.
+    ``MaxConnectionsError`` is the async cluster client's pool-exhausted signal (its nodes have
+    no blocking pool, so it is raised instantly instead of after a wait): a busy pool, not a
+    dead Redis, like the standalone pool's chained wait timeout.
     """
     try:
-        from redis.exceptions import TimeoutError as RedisTimeoutError
+        from redis import exceptions as redis_exceptions
     except ImportError:
         return (TimeoutError, asyncio.TimeoutError)
-    return (RedisTimeoutError, TimeoutError, asyncio.TimeoutError)
+    max_connections_error: Final = cast(  # cast-ok: types-redis 4.6 stubs predate MaxConnectionsError
+        "type[Exception]",
+        redis_exceptions.MaxConnectionsError,  # pyright: ignore[reportAttributeAccessIssue]  # types-redis 4.6 stubs predate it
+    )
+    return (redis_exceptions.TimeoutError, TimeoutError, asyncio.TimeoutError, max_connections_error)
 
 
 _MAX_EXCEPTION_CAUSE_DEPTH: Final = 20
@@ -604,9 +611,14 @@ def _redis_circuit_breaker_guard(method):
     """
 
     @functools.wraps(method)
-    async def wrapper(self, *args, **kwargs):
+    async def wrapper(self: "RedisCache", *args, **kwargs):
+        async def guarded() -> object:
+            return await method(self, *args, **kwargs)
+
         return await _run_under_circuit_breaker(
-            self._circuit_breaker, method.__name__, lambda: method(self, *args, **kwargs)
+            self._circuit_breaker,  # pyright: ignore[reportPrivateUsage]  # the guard is RedisCache's own decorator
+            wrapper.__name__,
+            lambda: self._admit_async_call(guarded),  # pyright: ignore[reportPrivateUsage]  # same decorator
         )
 
     return wrapper
@@ -689,6 +701,9 @@ class RedisCache(BaseCache):
             super().__init__(default_ttl=int(litellm.default_redis_ttl))
         else:
             super().__init__()  # defaults to 60s
+
+    def _admit_async_call(self, call: Callable[[], Awaitable[_RedisCallResult]]) -> Awaitable[_RedisCallResult]:
+        return call()
 
     def _setup_health_pings(self):
         """Setup async and sync health pings for Redis."""
@@ -1070,7 +1085,9 @@ class RedisCache(BaseCache):
                     litellm.in_memory_llm_clients_cache.set_cache(key=script_cache_key, value=executor)
                 return await executor(keys=keys, args=args, client=client)
 
-            return await _run_under_circuit_breaker(self._circuit_breaker, "run_script", execute)
+            return await _run_under_circuit_breaker(
+                self._circuit_breaker, "run_script", lambda: self._admit_async_call(execute)
+            )
 
         return run_script
 

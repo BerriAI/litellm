@@ -11386,6 +11386,7 @@ class TestResolveTeamAccessGroupResources:
         row1.access_model_names = ["gpt-4", "claude-3"]
         row1.access_mcp_server_ids = ["mcp-1"]
         row1.access_agent_ids = []
+        row1.access_skill_names = ["private-plugin", "shared-plugin"]
 
         row2 = MagicMock()
         row2.access_group_id = "ag-2"
@@ -11393,6 +11394,7 @@ class TestResolveTeamAccessGroupResources:
         row2.access_model_names = ["claude-3", "gemini"]
         row2.access_mcp_server_ids = []
         row2.access_agent_ids = ["agent-1"]
+        row2.access_skill_names = ["shared-plugin"]
 
         fake_prisma = MagicMock()
         fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
@@ -11413,13 +11415,43 @@ class TestResolveTeamAccessGroupResources:
         ]
         assert resolved.access_group_mcp_server_ids == ["mcp-1"]
         assert resolved.access_group_agent_ids == ["agent-1"]
+        assert resolved.access_group_skill_names == ()
+        assert resolved.unresolved_access_group_ids == ("ag-missing",)
         assert [
-            (d.access_group_id, d.access_group_name, d.models, d.mcp_server_ids, d.agent_ids)
+            (d.access_group_id, d.access_group_name, d.models, d.mcp_server_ids, d.agent_ids, d.skill_names)
             for d in (resolved.access_group_details or [])
         ] == [
-            ("ag-1", "shared-models", ("gpt-4", "claude-3"), ("mcp-1",), ()),
-            ("ag-2", "extra-models", ("claude-3", "gemini"), (), ("agent-1",)),
+            ("ag-1", "shared-models", ("gpt-4", "claude-3"), ("mcp-1",), (), ("private-plugin", "shared-plugin")),
+            ("ag-2", "extra-models", ("claude-3", "gemini"), (), ("agent-1",), ("shared-plugin",)),
         ]
+
+    @pytest.mark.asyncio
+    async def test_skill_names_resolve_when_every_listed_group_exists(self):
+        """The flat skill list is the effective grant: names from every group when all rows
+        exist, nothing while any listed id has no row, since the skill check then clamps
+        the team's keys to public plugins."""
+        from litellm.proxy._types import TeamInfoResponseObjectTeamTable
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _resolve_team_access_group_resources,
+        )
+
+        row = MagicMock()
+        row.access_group_id = "ag-1"
+        row.access_group_name = "skills-group"
+        row.access_model_names = []
+        row.access_mcp_server_ids = []
+        row.access_agent_ids = []
+        row.access_skill_names = ["private-plugin"]
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[row])
+
+        with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+            resolved = await _resolve_team_access_group_resources(
+                TeamInfoResponseObjectTeamTable(team_id="team-1", access_group_ids=["ag-1"])
+            )
+
+        assert resolved.access_group_skill_names == ("private-plugin",)
+        assert resolved.unresolved_access_group_ids == ()
 
     @pytest.mark.asyncio
     async def test_no_access_groups_leaves_details_unset(self):

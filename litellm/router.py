@@ -219,6 +219,7 @@ from litellm.router_utils.cooldown_handlers import (
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
+    attempted_fallback_targets_from,
     attempted_retries_for_request,
     carry_over_pre_routing_selection,
     carry_over_routed_deployment,
@@ -230,6 +231,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
     has_unattempted_fallback_target,
+    is_bad_request_without_fallback,
     mid_stream_fallback_hop_kwargs,
     mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
@@ -1022,6 +1024,7 @@ class Router:
         allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
         cooldown_time: float | None = None,  # (seconds) time to cooldown a deployment after failure
         disable_cooldowns: bool | None = None,
+        fallback_on_unsupported_params: bool = True,
         routing_strategy: RoutingStrategyName = "simple-shuffle",
         optional_pre_call_checks: OptionalPreCallChecks | None = None,
         routing_strategy_args: dict = {},  # just for latency-based
@@ -1264,6 +1267,7 @@ class Router:
         self.cooldown_time = cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
         self.cooldown_cache = CooldownCache(cache=self.cache, default_cooldown_time=self.cooldown_time)
         self.disable_cooldowns = disable_cooldowns
+        self.fallback_on_unsupported_params = fallback_on_unsupported_params
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
@@ -3270,7 +3274,7 @@ class Router:
         wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
         # weak, so the generator closing over it does not keep the wrapper out of
         # refcount teardown and delay the `finally` that releases the deployment slot
-        wrapper_ref: Final = weakref.ref(wrapped_response)
+        wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
         return wrapped_response
 
     @staticmethod
@@ -3875,7 +3879,7 @@ class Router:
 
         wrapped_response: Final = SyncFallbackStreamWrapper(stream_with_fallbacks())
         # weak, for the same reason as the async twin
-        wrapper_ref: Final = weakref.ref(wrapped_response)
+        wrapper_ref: Final[weakref.ref[FallbackAwareStreamWrapper]] = weakref.ref(wrapped_response)
         return wrapped_response
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
@@ -7720,6 +7724,7 @@ class Router:
         original_exception: Final = e
         fallback_model_group = None
         original_model_group: Final[str | None] = kwargs.get("model")
+        fallback_walk: Final = attempted_fallback_targets_from(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # keep legacy kwargs untyped
         # A pre-routing hook (complexity / auto / adaptive / quality routers) picks a tier
         # behind the router name, and fallbacks are configured per tier, not per router.
         lookup_groups: Final[tuple[str, ...]] = fallback_lookup_groups(kwargs, model_group)
@@ -7728,13 +7733,22 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        if disable_fallbacks is True or original_model_group is None or is_guardrail_intervention(e):
+        unsupported_params_without_fallback: Final = is_bad_request_without_fallback(
+            e, self.fallback_on_unsupported_params
+        )
+        if (
+            disable_fallbacks is True
+            or original_model_group is None
+            or is_guardrail_intervention(e)
+            or unsupported_params_without_fallback
+        ):
             raise e
 
         input_kwargs: Final = {
             "litellm_router": self,
             "original_exception": original_exception,
             **kwargs,
+            "attempted_targets": fallback_walk,
         }
 
         if "max_fallbacks" not in input_kwargs:
@@ -7964,7 +7978,10 @@ class Router:
             and not nested_fallback_hop
         ):
             original_exception.message += format_fallback_outcome_message(
-                model_group, attempted_fallback_group, fallback_failure_exception_str
+                model_group,
+                attempted_fallback_group,
+                fallback_failure_exception_str,
+                skipped=fallback_walk.skipped,
             )
 
         raise original_exception
@@ -12802,6 +12819,7 @@ class Router:
             "enable_weighted_failover",
             "enable_tag_filtering",
             "tag_routing_prefix",
+            "fallback_on_unsupported_params",
         ]
 
         for var in vars_to_include:

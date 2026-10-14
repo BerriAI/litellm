@@ -280,6 +280,7 @@ class CustomStreamWrapper:
 
         self._response_headers = _response_headers
         self.response_id: str | None = None
+        self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
         self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
@@ -838,6 +839,7 @@ class CustomStreamWrapper:
             self.response_id = id
 
         if id and isinstance(id, str) and id.strip():
+            self.received_model_id = id
             model_response.hidden_params["received_model_id"] = id
 
         if self.response_id is not None and isinstance(self.response_id, str):
@@ -1756,7 +1758,9 @@ class CustomStreamWrapper:
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
     def finish_reason_handler(self):
-        model_response: Final = self.model_response_creator()
+        model_response: Final = self.model_response_creator(
+            hidden_params=None if self.received_model_id is None else {"received_model_id": self.received_model_id}
+        )
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason

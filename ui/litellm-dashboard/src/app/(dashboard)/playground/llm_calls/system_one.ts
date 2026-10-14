@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { createApiClient } from "@/lib/http/client";
 import { isDecisionMode } from "@/lib/decisionModels";
@@ -29,8 +29,8 @@ const modelGroupInfoSchema = z.object({
   data: z.array(z.object({ model_group: z.string(), mode: z.string().nullish() })),
 });
 
-function proxyClient(customBaseUrl?: string) {
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+function proxyClient(customBaseUrl?: string, getDefaultBaseUrl: () => string = getProxyBaseUrl) {
+  const proxyBaseUrl = customBaseUrl || getDefaultBaseUrl();
   const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
   return createApiClient({ getBaseUrl: () => normalizedBaseUrl });
 }
@@ -68,7 +68,7 @@ async function sendDecisionRequest<T>(
   signal?: AbortSignal,
 ): Promise<DecisionResult<T>> {
   const startedAt = performance.now();
-  const body = await proxyClient(customBaseUrl).post<unknown>(request.endpoint, {
+  const body = await proxyClient(customBaseUrl, getGatewayBaseUrl).post<unknown>(request.endpoint, {
     body: request.payload,
     headers: authHeaders(accessToken),
     signal,
