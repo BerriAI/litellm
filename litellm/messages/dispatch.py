@@ -7,7 +7,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicDispatch, PublicRoute
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -16,7 +16,6 @@ from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
     native_call,
-    native_call_hook,
     optional_sequence,
     optional_str,
     signature,
@@ -91,32 +90,22 @@ def _context(request: NativeCall) -> RouteContext:
     )
 
 
-_DISPATCH: Final = PublicDispatch(
+ANTHROPIC_MESSAGES_HANDLER: Final = PublicRoute(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
     context=_context,
+    binding=NATIVE_MESSAGES,
+    python=_PYTHON_MESSAGES,
     bypass=lambda request: request.kwargs.get("is_async") is True or _python_serves(request),
 )
 
-_ADISPATCH: Final = PublicDispatch(
+ANTHROPIC_MESSAGES: Final = AsyncPublicRoute(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
     context=_context,
-    bypass=_python_serves,
-)
-
-ANTHROPIC_MESSAGES_HANDLER: Final = PublicRoute(
-    dispatch=_DISPATCH,
-    binding=NATIVE_MESSAGES,
-    native=native_call_hook,
-    python=_PYTHON_MESSAGES,
-)
-
-ANTHROPIC_MESSAGES: Final = AsyncPublicRoute(
-    dispatch=_ADISPATCH,
     binding=NATIVE_AMESSAGES,
-    native=native_call_hook,
     python=_PYTHON_AMESSAGES,
+    bypass=_python_serves,
 )
 
 

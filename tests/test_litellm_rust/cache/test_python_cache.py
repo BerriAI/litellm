@@ -10,6 +10,7 @@ from litellm.caching.caching import Cache, CacheMode
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the existing background cache writer before the next request
 )
+from litellm.messages.dispatch import ANTHROPIC_MESSAGES, ANTHROPIC_MESSAGES_HANDLER
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
@@ -18,10 +19,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
-from litellm.messages.dispatch import ANTHROPIC_MESSAGES, ANTHROPIC_MESSAGES_HANDLER
-from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
-from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.public_call import NativeCall
+from litellm.rust_bridge.catalog import Route
 from litellm.types.caching import CachingSupportedCallTypes
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.responses.data import RESPONSES_RESPONSE

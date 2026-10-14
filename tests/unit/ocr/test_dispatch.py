@@ -1,4 +1,5 @@
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import httpx
@@ -6,10 +7,7 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.ocr.dispatch import (
-    _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
-    _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
-)
+from litellm.ocr.dispatch import AOCR, OCR
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
@@ -61,12 +59,9 @@ def test_native_receives_normalized_positional_request_and_original_call_shape()
         captured.append((request, args, kwargs))
         return expected
 
-    result: Final = _DISPATCH.run(
+    result: Final = replace(OCR, binding=ocr_binding(native)).run(
         args,
         kwargs,
-        python=runtime.NO_PYTHON,
-        binding=ocr_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
 
@@ -108,12 +103,9 @@ def test_native_preserves_keyword_model_and_document_in_original_call_shape() ->
         captured.append((request, args, kwargs))
         return expected
 
-    result: Final = _DISPATCH.run(
+    result: Final = replace(OCR, binding=ocr_binding(native)).run(
         args,
         kwargs,
-        python=runtime.NO_PYTHON,
-        binding=ocr_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
 
@@ -139,12 +131,9 @@ def test_aocr_marker_cannot_be_served_without_python() -> None:
         pytest.fail("the aocr bypass marker must not reach native")
 
     with pytest.raises(runtime.NoPythonImplementationError, match="bypass"):
-        _DISPATCH.run(
+        replace(OCR, binding=ocr_binding(native)).run(
             args,
             kwargs,
-            python=runtime.NO_PYTHON,
-            binding=ocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 
@@ -153,12 +142,9 @@ def test_missing_native_binding_is_a_required_rust_error() -> None:
     args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", {"type": "file", "file": b"pdf"})
 
     with pytest.raises(RuntimeError, match="Rust ocr bridge"):
-        _DISPATCH.run(
+        replace(OCR, binding=ocr_binding(None)).run(
             args,
             {},
-            python=runtime.NO_PYTHON,
-            binding=ocr_binding(None),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 
@@ -172,12 +158,9 @@ def test_non_required_rule_cannot_be_served_without_python() -> None:
         return response()
 
     with pytest.raises(runtime.NoPythonImplementationError, match="RUST_REQUIRED"):
-        _DISPATCH.run(
+        replace(OCR, binding=ocr_binding(native)).run(
             args,
             {},
-            python=runtime.NO_PYTHON,
-            binding=ocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=(RouteRule(Route.OCR, Rollout.PYTHON_ONLY),),
         )
 
@@ -204,12 +187,9 @@ def test_ocr_parser_errors_before_native(args: tuple[object, ...], kwargs: Mappi
         pytest.fail("OCR parser failures must not call native")
 
     with pytest.raises(TypeError, match=message):
-        _DISPATCH.run(
+        replace(OCR, binding=ocr_binding(native)).run(
             args,
             kwargs,
-            python=runtime.NO_PYTHON,
-            binding=ocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 
@@ -239,12 +219,9 @@ async def test_aocr_parser_errors_before_native(
         pytest.fail("OCR parser failures must not call native")
 
     with pytest.raises(TypeError, match=message):
-        await _ADISPATCH.arun(
+        await replace(AOCR, binding=aocr_binding(native)).arun(
             args,
             kwargs,
-            python=runtime.NO_PYTHON,
-            binding=aocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 

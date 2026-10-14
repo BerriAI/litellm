@@ -1,5 +1,6 @@
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
@@ -7,10 +8,7 @@ import pytest
 import litellm
 from litellm.responses import dispatch as responses_dispatch
 from litellm.responses import main as python_responses
-from litellm.responses.dispatch import (
-    _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
-    _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
-)
+from litellm.responses.dispatch import ARESPONSES, RESPONSES
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule
@@ -73,12 +71,9 @@ def test_python_route_forwards_original_call_shape() -> None:
         pytest.fail("Python-only dispatch must not call native")
 
     assert (
-        _DISPATCH.run(
+        replace(RESPONSES, binding=responses_binding(native), python=python).run(
             args,
             kwargs,
-            python=python,
-            binding=responses_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=PYTHON_RULES,
         )
         is response
@@ -111,12 +106,9 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
     ) -> ResponsesAPIResponse:
         pytest.fail("Python-only dispatch must not call native")
 
-    result: Final = await _ADISPATCH.arun(
+    result: Final = await replace(ARESPONSES, binding=aresponses_binding(native), python=python).arun(
         args,
         kwargs,
-        python=python,
-        binding=aresponses_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=PYTHON_RULES,
     )
     assert result is response
@@ -154,12 +146,9 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         captured.append((request, args, kwargs))
         return response
 
-    result: Final = _DISPATCH.run(
+    result: Final = replace(RESPONSES, binding=responses_binding(native), python=python).run(
         args,
         kwargs,
-        python=python,
-        binding=responses_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
 
@@ -197,12 +186,9 @@ def test_internal_async_marker_bypasses_native() -> None:
         pytest.fail("aresponses' inner responses call must stay on Python")
 
     assert (
-        _DISPATCH.run(
+        replace(RESPONSES, binding=responses_binding(native), python=python).run(
             args,
             kwargs,
-            python=python,
-            binding=responses_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
         is response
@@ -231,12 +217,9 @@ def test_binding_errors_delegate_unchanged_to_python(args: tuple[object, ...], k
         pytest.fail("Binding failures must be delegated to Python")
 
     assert (
-        _DISPATCH.run(
+        replace(RESPONSES, binding=responses_binding(native), python=python).run(
             args,
             kwargs,
-            python=python,
-            binding=responses_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
         is response
@@ -305,7 +288,7 @@ def test_responses_with_retries_uses_the_dispatch_entrypoint(monkeypatch: pytest
 
 def test_positional_parameters_remain_available_to_native_projection() -> None:
     include: Final = ["reasoning.encrypted_content"]
-    request: Final = _DISPATCH.request((INPUT, "openai/test-model", include, "Be brief", 16), {})
+    request: Final = RESPONSES.request((INPUT, "openai/test-model", include, "Be brief", 16), {})
     assert request is not None
     assert request.resolved["include"] is include
     assert request.resolved["instructions"] == "Be brief"

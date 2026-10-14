@@ -4,12 +4,12 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm import main
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicDispatch, PublicRoute
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
 from litellm.rust_bridge.embeddings.entrypoints import (
     NATIVE_AEMBEDDING,
     NATIVE_EMBEDDING,
 )
-from litellm.rust_bridge.public_call import NativeCall, bind, native_call, native_call_hook, optional_str, signature
+from litellm.rust_bridge.public_call import NativeCall, bind, native_call, optional_str, signature
 from litellm.types.utils import EmbeddingResponse
 
 __all__ = ("aembedding", "embedding")
@@ -46,30 +46,20 @@ def _context(request: NativeCall) -> RouteContext:
     )
 
 
-_DISPATCH: Final = PublicDispatch(
+EMBEDDING: Final = PublicRoute(
     route=Route.EMBEDDINGS,
     request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
     context=_context,
+    binding=NATIVE_EMBEDDING,
+    python=_PYTHON_EMBEDDING,
     bypass=lambda request: request.kwargs.get("aembedding") is True,
 )
 
-_ADISPATCH: Final = PublicDispatch(
+AEMBEDDING: Final = AsyncPublicRoute(
     route=Route.EMBEDDINGS,
     request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
     context=_context,
-)
-
-EMBEDDING: Final = PublicRoute(
-    dispatch=_DISPATCH,
-    binding=NATIVE_EMBEDDING,
-    native=native_call_hook,
-    python=_PYTHON_EMBEDDING,
-)
-
-AEMBEDDING: Final = AsyncPublicRoute(
-    dispatch=_ADISPATCH,
     binding=NATIVE_AEMBEDDING,
-    native=native_call_hook,
     python=_PYTHON_AEMBEDDING,
 )
 

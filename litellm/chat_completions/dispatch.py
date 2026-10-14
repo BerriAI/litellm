@@ -8,12 +8,11 @@ from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
 )
-from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicDispatch, PublicRoute
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
 from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
     native_call,
-    native_call_hook,
     optional_sequence,
     optional_str,
     signature,
@@ -69,30 +68,20 @@ def _context(request: NativeCall) -> RouteContext:
     )
 
 
-_DISPATCH: Final = PublicDispatch(
+COMPLETION: Final = PublicRoute(
     route=Route.CHAT_COMPLETIONS,
     request=lambda args, kwargs: _public_request(_COMPLETION, args, kwargs),
     context=_context,
+    binding=NATIVE_COMPLETION,
+    python=_PYTHON_COMPLETION,
     bypass=lambda request: request.kwargs.get("acompletion") is True,
 )
 
-_ADISPATCH: Final = PublicDispatch(
+ACOMPLETION: Final = AsyncPublicRoute(
     route=Route.CHAT_COMPLETIONS,
     request=lambda args, kwargs: _public_request(_ACOMPLETION, args, kwargs),
     context=_context,
-)
-
-COMPLETION: Final = PublicRoute(
-    dispatch=_DISPATCH,
-    binding=NATIVE_COMPLETION,
-    native=native_call_hook,
-    python=_PYTHON_COMPLETION,
-)
-
-ACOMPLETION: Final = AsyncPublicRoute(
-    dispatch=_ADISPATCH,
     binding=NATIVE_ACOMPLETION,
-    native=native_call_hook,
     python=_PYTHON_ACOMPLETION,
 )
 

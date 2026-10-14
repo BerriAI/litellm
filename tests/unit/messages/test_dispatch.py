@@ -1,5 +1,6 @@
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
@@ -7,11 +8,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.pass_through.messages import handler as python_messages
-from litellm.messages import dispatch
-from litellm.messages.dispatch import (
-    _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
-    _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
-)
+from litellm.messages.dispatch import ANTHROPIC_MESSAGES, ANTHROPIC_MESSAGES_HANDLER
 from litellm.proxy import proxy_server
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
@@ -69,12 +66,9 @@ def test_python_route_forwards_original_call_shape() -> None:
     ) -> AnthropicMessagesResponse:
         pytest.fail("Python-only dispatch must not call native")
 
-    result: Final = _DISPATCH.run(
+    result: Final = replace(ANTHROPIC_MESSAGES_HANDLER, binding=messages_binding(native), python=python).run(
         args,
         kwargs,
-        python=python,
-        binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=PYTHON_RULES,
     )
     assert result is expected
@@ -106,12 +100,9 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
     ) -> AnthropicMessagesResponse:
         pytest.fail("Python-only dispatch must not call native")
 
-    result: Final = await _ADISPATCH.arun(
+    result: Final = await replace(ANTHROPIC_MESSAGES, binding=amessages_binding(native), python=python).arun(
         args,
         kwargs,
-        python=python,
-        binding=amessages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=PYTHON_RULES,
     )
     assert result is expected
@@ -147,12 +138,9 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         captured.append((request, args, kwargs))
         return expected
 
-    result: Final = _DISPATCH.run(
+    result: Final = replace(ANTHROPIC_MESSAGES_HANDLER, binding=messages_binding(native), python=python).run(
         args,
         kwargs,
-        python=python,
-        binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
     assert result is expected
@@ -187,12 +175,9 @@ def test_internal_async_marker_bypasses_native() -> None:
     ) -> AnthropicMessagesResponse:
         pytest.fail("The async handler's inner sync call must stay on Python")
 
-    result: Final = _DISPATCH.run(
+    result: Final = replace(ANTHROPIC_MESSAGES_HANDLER, binding=messages_binding(native), python=python).run(
         args,
         kwargs,
-        python=python,
-        binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
     assert result is expected
@@ -217,12 +202,9 @@ def test_vertex_models_other_than_claude_stay_on_python(model: str, custom_llm_p
     def native(request: NativeCall) -> AnthropicMessagesResponse:
         pytest.fail("Rust serves only Claude on Vertex AI")
 
-    result: Final = _DISPATCH.run(
+    result: Final = replace(ANTHROPIC_MESSAGES_HANDLER, binding=messages_binding(native), python=python).run(
         args,
         kwargs,
-        python=python,
-        binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
     assert result is expected
@@ -235,12 +217,11 @@ def test_vertex_claude_reaches_native() -> None:
     def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: records call shape
         pytest.fail("Claude on Vertex AI is served natively")
 
-    result: Final = _DISPATCH.run(
+    result: Final = replace(
+        ANTHROPIC_MESSAGES_HANDLER, binding=messages_binding(lambda request: expected), python=python
+    ).run(
         args,
         {},
-        python=python,
-        binding=messages_binding(lambda request: expected),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
     assert result is expected
@@ -280,12 +261,9 @@ async def test_python_keeps_the_requests_it_answers_with_safeguard_results(
     async def native(request: NativeCall) -> AnthropicMessagesResponse:
         return native_result
 
-    result: Final = await _ADISPATCH.arun(
+    result: Final = await replace(ANTHROPIC_MESSAGES, binding=amessages_binding(native), python=python).arun(
         (16, MESSAGES, model),
         kwargs,
-        python=python,
-        binding=amessages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
     assert result is (python_result if serves_python else native_result)
@@ -311,12 +289,9 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
     ) -> AnthropicMessagesResponse:
         pytest.fail("Binding failures must be delegated to Python")
 
-    result: Final = _DISPATCH.run(
+    result: Final = replace(ANTHROPIC_MESSAGES_HANDLER, binding=messages_binding(native), python=python).run(
         args,
         kwargs,
-        python=python,
-        binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
     assert result is expected
@@ -388,9 +363,12 @@ def test_sync_messages_request_projects_public_arguments() -> None:
         assert request.resolved["custom_llm_provider"] == "anthropic"
         return expected
 
+    def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("required native route must handle this call")
+
     binding: Final[NativeBinding[NativeMessages]] = NativeBinding("messages", validate=lambda _: None)
     binding.override(native)
-    response: Final = dispatch._DISPATCH.run(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
+    response: Final = replace(ANTHROPIC_MESSAGES_HANDLER, binding=binding, python=python).run(
         (),
         {
             "model": "claude-test",
@@ -398,9 +376,6 @@ def test_sync_messages_request_projects_public_arguments() -> None:
             "max_tokens": 10,
             "custom_llm_provider": "anthropic",
         },
-        python=lambda *args, **kwargs: pytest.fail("required native route must handle this call"),
-        binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request),
         rules=rules,
     )
 
@@ -419,12 +394,9 @@ def test_messages_binding_error_delegates_unchanged_to_python() -> None:
 
     binding: Final[NativeBinding[NativeMessages]] = NativeBinding("messages", validate=lambda _: None)
     binding.override(native)
-    response: Final = dispatch._DISPATCH.run(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
+    response: Final = replace(ANTHROPIC_MESSAGES_HANDLER, binding=binding, python=python).run(
         (),
         {"model": "claude-test", "messages": MESSAGES, "custom_llm_provider": "anthropic"},
-        python=python,
-        binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request),
         rules=rules,
     )
 
@@ -450,12 +422,9 @@ async def test_async_messages_falls_back_after_native_declines() -> None:
 
     binding: Final[NativeBinding[NativeAmessages]] = NativeBinding("amessages", validate=lambda _: None)
     binding.override(native)
-    response: Final = await dispatch._ADISPATCH.arun(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
+    response: Final = await replace(ANTHROPIC_MESSAGES, binding=binding, python=python).arun(
         (),
         {"model": "claude-test", "messages": MESSAGES, "max_tokens": 10},
-        python=python,
-        binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request),
         rules=rules,
     )
 
@@ -474,7 +443,7 @@ def test_internal_is_async_marker_bypasses_native() -> None:
 
     binding: Final[NativeBinding[NativeMessages]] = NativeBinding("messages", validate=lambda _: None)
     binding.override(native)
-    response: Final = dispatch._DISPATCH.run(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
+    response: Final = replace(ANTHROPIC_MESSAGES_HANDLER, binding=binding, python=python).run(
         (),
         {
             "model": "claude-test",
@@ -483,9 +452,6 @@ def test_internal_is_async_marker_bypasses_native() -> None:
             "custom_llm_provider": "anthropic",
             "is_async": True,
         },
-        python=python,
-        binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request),
         rules=rules,
     )
 
