@@ -28,7 +28,7 @@ from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
 from collections import defaultdict
 from litellm._logging import verbose_logger
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -603,17 +603,20 @@ def _generation(request: httpx.Request) -> tuple[str, str]:
 
 
 @asynccontextmanager
-async def _s3_logger_on_production_handler(profile: str, statuses: list[int]):
+async def _s3_logger_on_production_handler(profile: str, statuses: list[int | type[httpx.TransportError]]):
     """
     S3Logger wired to the real AsyncHTTPHandler over an httpx MockTransport that answers with the given
-    statuses in order, so the handler's own raise_for_status behaviour is exercised end to end.
+    statuses (or raises the given transport errors) in order, so the handler's own error mapping is exercised.
     """
     requests: list[httpx.Request] = []
     replies = iter(statuses)
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(next(replies), request=request, text="<Error><Code>SignatureDoesNotMatch</Code></Error>")
+        reply = next(replies)
+        if not isinstance(reply, int):
+            raise reply("S3 attempt failed", request=request)
+        return httpx.Response(reply, request=request, text="<Error><Code>SignatureDoesNotMatch</Code></Error>")
 
     handler = AsyncHTTPHandler()
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
@@ -783,26 +786,12 @@ async def test_async_upload_retries_429_through_production_http_handler(rotating
 @pytest.mark.asyncio
 async def test_async_upload_retries_a_timed_out_attempt_through_production_http_handler(rotating_profile: str, caplog):
     """AsyncHTTPHandler.put turns an httpx timeout into litellm.Timeout, which must count as a retryable attempt."""
-    requests: list[httpx.Request] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if len(requests) == 1:
-            raise httpx.ReadTimeout("S3 never answered", request=request)
-        return httpx.Response(200, request=request)
-
-    handler = AsyncHTTPHandler()
-    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
-    logger = S3Logger(
-        s3_bucket_name="test-bucket",
-        s3_region_name="us-east-1",
-        s3_aws_profile_name=rotating_profile,
-        s3_flush_interval=3600,
-    )
-    logger.async_httpx_client = handler
-    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+    async with _s3_logger_on_production_handler(rotating_profile, [httpx.ReadTimeout, 200]) as (
+        logger,
+        requests,
+        mock_sleep,
+    ):
         uploaded = await logger.async_upload_data_to_s3(_element({"test": "timeout"}, "timeout"))
-    await handler.client.aclose()
 
     assert uploaded is True
     assert len(requests) == 2
@@ -905,14 +894,14 @@ async def test_dropped_uploads_are_logged_once_per_flush_naming_each_reason(capl
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
     )
-    terminal = _element({"i": "terminal"}, "terminal")
+    terminal = (_element({"i": "terminal-0"}, "terminal-0"), _element({"i": "terminal-1"}, "terminal-1"))
     expired = _element({"i": "expired"}, "expired").model_copy(update={"retrying_since": _NOW - 7200})
     fresh = _element({"i": "fresh"}, "fresh")
 
     async def put(
         url: str, data: str | None = None, headers: dict[str, str] | None = None, timeout: httpx.Timeout | None = None
     ) -> MagicMock:
-        if url.endswith("test-terminal.json"):
+        if "test-terminal-" in url:
             return _terminal_failure_response()
         if url.endswith("test-expired.json"):
             return _transient_failure_response()
@@ -920,7 +909,7 @@ async def test_dropped_uploads_are_logged_once_per_flush_naming_each_reason(capl
 
     logger.async_httpx_client = AsyncMock()
     logger.async_httpx_client.put = put
-    logger.log_queue = [terminal, expired, fresh]
+    logger.log_queue = [*terminal, expired, fresh]
 
     with (
         patch("asyncio.sleep", new_callable=AsyncMock),
@@ -931,8 +920,8 @@ async def test_dropped_uploads_are_logged_once_per_flush_naming_each_reason(capl
     assert logger.log_queue == []
     drop_lines = [record.getMessage() for record in caplog.records if "uploads dropped" in record.getMessage()]
     assert len(drop_lines) == 1, drop_lines
-    assert "2 uploads dropped" in drop_lines[0]
-    assert "1 rejected as terminal" in drop_lines[0]
+    assert "3 uploads dropped" in drop_lines[0]
+    assert "2 rejected as terminal" in drop_lines[0]
     assert "1 retrying longer than s3_max_retry_age_seconds=3600" in drop_lines[0]
 
 
@@ -4013,25 +4002,47 @@ def test_sync_upload_retry_set(status: int, expected_puts: int, expected_retries
     _assert_jittered_backoff(mock_sleep, expected_retries)
 
 
-def test_sync_upload_retries_a_connection_error_then_succeeds() -> None:
-    logger = S3Logger(
+@pytest.mark.parametrize(
+    "failure",
+    [pytest.param(httpx.ConnectError, id="connect-error"), pytest.param(httpx.ReadTimeout, id="read-timeout")],
+)
+def test_sync_upload_retries_a_failed_attempt_through_production_http_handler(
+    failure: type[httpx.TransportError], caplog: pytest.LogCaptureFixture
+) -> None:
+    """HTTPHandler.put turns an httpx timeout into litellm.Timeout, and each attempt carries its own deadline."""
+    requests: Final[list[httpx.Request]] = []  # mutable-ok: the transport records every attempt
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            raise failure("S3 attempt failed", request=request)
+        return httpx.Response(200, request=request)
+
+    handler: Final = HTTPHandler()
+    handler.client = httpx.Client(transport=httpx.MockTransport(respond), timeout=None)
+    logger: Final = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
         s3_aws_secret_access_key="test-secret",
         s3_region_name="us-east-1",
     )
-
-    mock_sync_client = MagicMock()
-    mock_sync_client.put = MagicMock(side_effect=[httpx.ConnectError("connection refused"), _ok_response()])
-
     with (
-        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
+        patch(  # test-quality-ok: sync upload builds its HTTPHandler per call, there is no injection seam for it
+            "litellm.integrations.s3_v2.get_httpx_client", return_value=handler
+        ),
         patch("time.sleep") as mock_sleep,
     ):
-        logger.upload_data_to_s3(_element({"id": "sync-down"}, "sync-down"))
+        logger.upload_data_to_s3(_element({"id": "sync-transient"}, "sync-transient"))
+    handler.client.close()
 
-    assert mock_sync_client.put.call_count == 2
+    assert len(requests) == 2
+    assert requests[0].content == requests[1].content
+    assert all(
+        request.extensions["timeout"] == httpx.Timeout(S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS).as_dict()
+        for request in requests
+    )
     _assert_jittered_backoff(mock_sleep, 1)
+    assert "Error uploading to s3" not in caplog.text
 
 
 @pytest.mark.asyncio

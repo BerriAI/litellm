@@ -129,6 +129,13 @@ def _log_retry(level: int, attempt: int, reason: str, wait: float, s3_object_key
     )
 
 
+def _response_or_raise(outcome: PutOutcome) -> httpx.Response:
+    if isinstance(outcome, Exception):
+        raise outcome
+    outcome.raise_for_status()
+    return outcome
+
+
 def _throttled(outcome: PutOutcome) -> bool:
     if isinstance(outcome, Exception):
         return True
@@ -761,35 +768,29 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         return str(outcome.status_code)
 
     async def _put_with_retries(
-        self, signed_put: Callable[[], Awaitable[PutOutcome]], s3_object_key: str, attempt: int = 0
+        self, signed_put: Callable[[], Awaitable[PutOutcome]], s3_object_key: str
     ) -> httpx.Response:
-        outcome: Final = await self._recorded_put(signed_put)
-        reason: Final = self._retry_reason(outcome)
-        if reason is not None and attempt < _UPLOAD_ATTEMPTS - 1:
-            wait: Final = _backoff_seconds(attempt)
+        for attempt in range(_UPLOAD_ATTEMPTS - 1):
+            outcome = await self._recorded_put(signed_put)
+            reason = self._retry_reason(outcome)
+            if reason is None:
+                return _response_or_raise(outcome)
+            wait = _backoff_seconds(attempt)
             _log_retry(logging.DEBUG if _in_flush.get() else logging.WARNING, attempt, reason, wait, s3_object_key)
             self._flush_retries += 1
             await asyncio.sleep(wait)
-            return await self._put_with_retries(signed_put, s3_object_key, attempt + 1)
-        if isinstance(outcome, Exception):
-            raise outcome
-        outcome.raise_for_status()
-        return outcome
+        return _response_or_raise(await self._recorded_put(signed_put))
 
-    def _sync_put_with_retries(
-        self, signed_put: Callable[[], PutOutcome], s3_object_key: str, attempt: int = 0
-    ) -> httpx.Response:
-        outcome: Final = signed_put()
-        reason: Final = self._retry_reason(outcome)
-        if reason is not None and attempt < _UPLOAD_ATTEMPTS - 1:
-            wait: Final = _backoff_seconds(attempt)
+    def _sync_put_with_retries(self, signed_put: Callable[[], PutOutcome], s3_object_key: str) -> httpx.Response:
+        for attempt in range(_UPLOAD_ATTEMPTS - 1):
+            outcome = signed_put()
+            reason = self._retry_reason(outcome)
+            if reason is None:
+                return _response_or_raise(outcome)
+            wait = _backoff_seconds(attempt)
             _log_retry(logging.WARNING, attempt, reason, wait, s3_object_key)
             time.sleep(wait)
-            return self._sync_put_with_retries(signed_put, s3_object_key, attempt + 1)
-        if isinstance(outcome, Exception):
-            raise outcome
-        outcome.raise_for_status()
-        return outcome
+        return _response_or_raise(signed_put())
 
     def _batch_file_elements(self, batch: tuple[s3BatchLoggingElement, ...]) -> tuple[s3BatchLoggingElement, ...]:
         now: Final = datetime.now(timezone.utc)
