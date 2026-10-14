@@ -422,9 +422,12 @@ def _two_region_router(singapore_model: str) -> Router:
     )
 
 
+@pytest.mark.parametrize("caller_metadata", [None, {"tags": ["proxy-request"]}])
 @pytest.mark.parametrize("singapore_model", ["qwencloud/wan3.0-video", "dashscope/wan3.0-video"])
 @respx.mock
-def test_created_video_id_resolves_back_to_the_region_that_created_the_task(singapore_model: str):
+def test_created_video_id_resolves_back_to_the_region_that_created_the_task(
+    singapore_model: str, caller_metadata: dict[str, object] | None
+):
     """Both regions serve the same upstream model name, under a different prefix or under the same
     one, so neither that name nor the prefixed model string tells the two deployments apart. An id
     carrying either resolves to whichever deployment is listed first, and the poll then leaves for
@@ -437,7 +440,7 @@ def test_created_video_id_resolves_back_to_the_region_that_created_the_task(sing
         return_value=httpx.Response(200, json=_succeeded_task_payload())
     )
 
-    created = router.video_generation(model="wan3-beijing", prompt="a cat on a roof")
+    created = router.video_generation(model="wan3-beijing", prompt="a cat on a roof", metadata=caller_metadata)
 
     resolved = router.resolve_model_name_from_model_id(decode_video_id_with_provider(created.id)["model_id"])
     assert resolved == "wan3-beijing"

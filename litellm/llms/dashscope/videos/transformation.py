@@ -416,9 +416,15 @@ def _routed_model_group(logging_obj: object) -> str | None:
     DashScope serves the same model name from several regional hosts, so a proxy with one deployment per
     region has several deployments the router can only tell apart by the group each one is under. The
     group the router picked is stamped onto the call, and a later status or content request resolves the
-    model encoded in the id to that group.
+    model encoded in the id to that group. The router stamps it into litellm_metadata, and metadata carries a
+    copy only when the caller sent none.
     """
-    metadata: Final[object] = _logged_litellm_params(logging_obj).get("metadata")
+    params: Final = _logged_litellm_params(logging_obj)
+    groups: Final = (_stamped_model_group(params.get(key)) for key in ("litellm_metadata", "metadata"))
+    return next((group for group in groups if group), None)
+
+
+def _stamped_model_group(metadata: object) -> str | None:
     try:
         fields: Final = _PARAMETERS_ADAPTER.validate_python(metadata)
     except ValidationError:
