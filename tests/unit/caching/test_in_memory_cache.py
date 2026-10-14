@@ -232,6 +232,18 @@ def test_in_memory_cache_heap_size_staus_bounded():
     assert len(in_memory_cache.expiration_heap) == 1
 
 
+def test_in_memory_cache_heap_stays_bounded_when_a_live_key_is_rewritten_with_a_new_ttl() -> None:
+    in_memory_cache = InMemoryCache(max_size_in_memory=10)
+    in_memory_cache.set_cache(key="expires_first", value="pin", ttl=300)
+
+    for i in range(1_000):
+        in_memory_cache.delete_cache("hot_key")
+        in_memory_cache.set_cache(key="hot_key", value=f"value_{i}", ttl=3600)
+
+    assert in_memory_cache.get_cache("hot_key") == "value_999"
+    assert len(in_memory_cache.expiration_heap) <= 2 * in_memory_cache.max_size_in_memory + 1
+
+
 def test_in_memory_cache_prunes_expired_heap_entries_below_capacity():
     """
     Re-inserting expired keys below capacity should not grow expiration_heap

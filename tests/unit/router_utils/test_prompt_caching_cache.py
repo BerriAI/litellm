@@ -433,7 +433,7 @@ async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
         enable_prompt_caching=None,
         request_kwargs={},
     )
-    cache: Final = PromptCachingCache(cache=router._prompt_caching_pin_cache)
+    cache: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
     cached_2: Final = await asyncio.wait_for(
         _first_non_none(lambda: cache.async_get_model_id(affinity_messages, None)),
         timeout=10,

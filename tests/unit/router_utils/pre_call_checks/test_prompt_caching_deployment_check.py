@@ -434,7 +434,7 @@ async def test_repeated_auto_cached_prefix_pins_to_one_deployment(monkeypatch, l
     served_by = first._hidden_params["model_id"]
 
     affinity_key = PromptCachingCache.get_prompt_caching_cache_key(_affinity_messages(messages), None)
-    assert await _eventually(lambda: router._prompt_caching_pin_cache.get_cache(key=affinity_key)) is not None
+    assert await _eventually(lambda: router.prompt_caching_pin_cache.get_cache(key=affinity_key)) is not None
 
     subsequent = [
         (await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok"))._hidden_params[
@@ -1071,7 +1071,7 @@ async def test_claude_code_style_session_stays_on_one_deployment_across_turns(lo
         response = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=request, mock_response="ok")
         served.append(response._hidden_params["model_id"])
         pin_key = PromptCachingCache.get_prompt_caching_cache_key(request, None)
-        assert await _eventually(functools.partial(router._prompt_caching_pin_cache.get_cache, key=pin_key)) is not None
+        assert await _eventually(functools.partial(router.prompt_caching_pin_cache.get_cache, key=pin_key)) is not None
         history = [*history, {"role": "user", "content": [_text(text)]}, {"role": "assistant", "content": "ok"}]
 
     assert served == [served[0]] * len(user_turns)
@@ -1156,7 +1156,7 @@ async def test_router_with_prompt_caching(anthropic_messages):
     initial_model_id = response._hidden_params["model_id"]
 
     cache = PromptCachingCache(
-        cache=router._prompt_caching_pin_cache,
+        cache=router.prompt_caching_pin_cache,
     )
 
     cached_model_id = await _eventually(lambda: cache.get_model_id(messages=anthropic_messages, tools=None))

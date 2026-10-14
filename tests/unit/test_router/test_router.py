@@ -26156,7 +26156,7 @@ async def test_prompt_caching_pins_do_not_evict_router_state():
         optional_pre_call_checks=["prompt_caching"],
     )
     router.cache.set_cache("deployment:dep-a:cooldown", True, ttl=5)
-    pins: Final = PromptCachingCache(cache=router._prompt_caching_pin_cache)
+    pins: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
     for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
         await pins.async_add_model_id(
             model_id="dep-a",
@@ -26192,7 +26192,7 @@ async def test_one_hour_pins_past_the_routers_default_cache_size_keep_fresh_five
         ],
         optional_pre_call_checks=["prompt_caching"],
     )
-    pins: Final = PromptCachingCache(cache=router._prompt_caching_pin_cache)
+    pins: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
 
     def policy(index: int, ttl: str) -> list[AllMessageValues]:
         return [
@@ -26247,7 +26247,7 @@ async def test_flush_cache_drops_prompt_caching_pins():
         },
         {"role": "user", "content": "ok"},
     ]
-    pins: Final = PromptCachingCache(cache=router._prompt_caching_pin_cache)
+    pins: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
     await pins.async_add_model_id(model_id="dep-a", messages=messages, tools=None)
     assert await pins.async_get_model_id(messages=messages, tools=None) == {"model_id": "dep-a"}
 

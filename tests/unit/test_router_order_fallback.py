@@ -502,7 +502,7 @@ async def test_router_order_fallback_ignores_prompt_cache_pin_on_target_order():
         num_retries=0,
         optional_pre_call_checks=["prompt_caching"],
     )
-    await PromptCachingCache(cache=router._prompt_caching_pin_cache).async_add_model_id(
+    await PromptCachingCache(cache=router.prompt_caching_pin_cache).async_add_model_id(
         model_id="1",
         messages=messages,
         tools=None,

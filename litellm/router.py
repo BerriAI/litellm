@@ -1122,7 +1122,7 @@ class Router:
             redis_cache=redis_cache,
             in_memory_cache=InMemoryCache(),
         )
-        self._prompt_caching_pin_cache: DualCache = DualCache(
+        self.prompt_caching_pin_cache: DualCache = DualCache(
             redis_cache=redis_cache,
             in_memory_cache=InMemoryCache(max_size_in_memory=PROMPT_CACHE_PIN_CACHE_MAX_SIZE),
         )
@@ -1454,7 +1454,7 @@ class Router:
         """
         self.cache.attach_redis_cache(cache)
         self._claude_code_session_router_cache.attach_redis_cache(cache)
-        self._prompt_caching_pin_cache.attach_redis_cache(cache)
+        self.prompt_caching_pin_cache.attach_redis_cache(cache)
 
     _update_redis_cache = update_redis_cache
 
@@ -2535,7 +2535,7 @@ class Router:
                 continue
             if pre_call_check == "prompt_caching":
                 _callback = PromptCachingDeploymentCheck(
-                    cache=self._prompt_caching_pin_cache, is_priority_group=self._is_priority_routing_group
+                    cache=self.prompt_caching_pin_cache, is_priority_group=self._is_priority_routing_group
                 )
             elif pre_call_check == "router_budget_limiting":
                 if self.get_router_deployment_budget_limiter() is not None:
@@ -15334,7 +15334,7 @@ class Router:
         session_in_memory_cache: Final = self._claude_code_session_router_cache.in_memory_cache
         if session_in_memory_cache is not None:
             session_in_memory_cache.flush_cache()
-        self._prompt_caching_pin_cache.in_memory_cache.flush_cache()
+        self.prompt_caching_pin_cache.in_memory_cache.flush_cache()
 
     def reset(self):
         ## clean up on close
