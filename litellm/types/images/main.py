@@ -42,5 +42,5 @@ class ImageVariationRequestParams(ImageEditOptionalRequestParams, total=False):
     Params here: https://platform.openai.com/docs/api-reference/images/createVariation
     """
 
-    image: FileTypes
-    model: str | None
+    image: FileTypes  # writable-ok: request params mirror ImageEditRequestParams' mutable wire format
+    model: str | None  # writable-ok: request params mirror ImageEditRequestParams' mutable wire format

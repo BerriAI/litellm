@@ -53,7 +53,7 @@ IMAGE_VARIATION_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"image": None
 # ImageVariationRequestParams carries FileTypes (typing.IO[bytes]) which
 # pydantic cannot turn into a JSON schema, so the documented JSON body
 # schema is spelled out for the shape the multipart form accepts.
-_IMAGE_VARIATION_REQUEST_BODY: Final[dict[str, object]] = {
+_IMAGE_VARIATION_REQUEST_BODY: Final[dict[str, object]] = {  # mutable-ok: OpenAPI JSON fixture, never mutated
     "required": True,
     "content": {
         "application/json": {
@@ -71,7 +71,9 @@ _IMAGE_VARIATION_REQUEST_BODY: Final[dict[str, object]] = {
         }
     },
 }
-_IMAGE_VARIATION_OPENAPI_EXTRA: Final[dict[str, object]] = {"requestBody": _IMAGE_VARIATION_REQUEST_BODY}
+_IMAGE_VARIATION_OPENAPI_EXTRA: Final[dict[str, object]] = {  # mutable-ok: handed to FastAPI which copies openapi_extra
+    "requestBody": _IMAGE_VARIATION_REQUEST_BODY
+}
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"

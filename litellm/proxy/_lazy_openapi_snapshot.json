@@ -22712,6 +22712,9 @@
                     "1536x1024"
                   ],
                   "type": "string"
+                },
+                {
+                  "type": "null"
                 }
               ],
               "title": "Size"
