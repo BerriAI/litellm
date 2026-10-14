@@ -2,17 +2,20 @@
 Cost calculation for search providers.
 """
 
+import math
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.utils import get_model_info
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
+PROVIDER_COST_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 EMPTY_OPTIONAL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -33,22 +36,35 @@ def search_provider_cost_per_query(
     custom_llm_provider: str | None = None,
     number_of_queries: int = 1,
     optional_params: Mapping[str, object] | None = None,
+    response: object = None,
 ) -> tuple[float, float]:
     """
     Calculate cost for search-only providers.
 
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
-    Supports tiered pricing based on max_results parameter.
+    Uses Exa response cost when available, otherwise tiered pricing based on max_results.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
         custom_llm_provider: Provider name (e.g., "exa_ai", "tavily")
         number_of_queries: Number of search queries performed (default: 1)
         optional_params: Optional parameters including max_results for tiered pricing
+        response: Provider response with reported Exa costDollars.total, when available
 
     Returns:
         Tuple of (input_cost, output_cost) where output_cost is always 0.0
     """
+    if custom_llm_provider == "exa_ai":
+        payload: Final = response.model_extra if isinstance(response, SearchResponse) else response
+        reported: Final = (
+            PROVIDER_COST_ADAPTER.validate_python(payload).get("costDollars") if isinstance(payload, Mapping) else None
+        )
+        total: Final = (
+            PROVIDER_COST_ADAPTER.validate_python(reported).get("total") if isinstance(reported, Mapping) else None
+        )
+        if isinstance(total, (int, float)) and not isinstance(total, bool) and math.isfinite(total) and total >= 0:
+            return (float(total), 0.0)
+
     if custom_llm_provider == "parallel_ai":
         from litellm.llms.parallel_ai.search.cost_calculator import (
             PARALLEL_AI_USAGE_PARAM,

@@ -49,6 +49,31 @@ response = await litellm.asearch(
 
 Dynamic Highlights allocates a shared context budget across results. `verbosity` accepts `low`, `medium`, or `high`. Do not combine `dynamic` with `maxCharacters`, or `verbosity` with `maxCharacters` or `numSentences`. Access and behavior remain subject to Exa's preview availability.
 
+## Web-search interception
+
+To use Dynamic Highlights in the [proxy interception flow](https://docs.litellm.ai/docs/integrations/websearch_interception), configure the registered search tool. Add this alongside your existing `model_list`.
+
+```yaml
+search_tools:
+  - search_tool_name: exa-dynamic
+    litellm_params:
+      search_provider: exa_ai
+      api_key: os.environ/EXA_API_KEY
+      contents:
+        highlights:
+          dynamic: true
+          verbosity: low
+      extra_headers:
+        Exa-Beta: dynamic-highlights-2026-08-28
+litellm_settings:
+  callbacks: [websearch_interception]
+  websearch_interception_params:
+    enabled_providers: [openai]
+    search_tool_name: exa-dynamic
+```
+
+The interceptor supplies the returned highlights as search snippets to the model, without requesting full text. Search costs are logged separately from model token costs.
+
 ## Structured output
 
 ```python
@@ -96,7 +121,7 @@ Exa sends ordinary JSON for `stream=True` without an `outputSchema`. In that cas
 
 `response.results` retains LiteLLM's `title`, `url`, `snippet`, `date`, and `last_updated`. Snippets prefer nonempty text, then joined highlights, then summary. Every original Exa result field is also preserved, including text, highlights, scores, author, publication date, images, extras, subpages, and entities. Top-level `requestId`, `output`, `costDollars`, `searchTime`, legacy fields, and unknown extensions survive `model_dump()` and `model_dump_json()`.
 
-`costDollars` is Exa's estimate, not an invoice. Preserving it does not change LiteLLM's separate cost calculation or billing policies.
+`costDollars` is Exa's estimate, not an invoice. LiteLLM uses a finite, nonnegative `costDollars.total` as the base search cost, including zero, for JSON and completed SSE responses. An explicit `input_cost_per_query` overrides the provider total. Existing discounts and billing policies still apply. If the total is missing or invalid, or a stream closes before the final total arrives, LiteLLM falls back to its configured per-query estimate. That fallback may differ from Exa's final charge.
 
 ## Deprecated fields
 

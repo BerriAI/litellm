@@ -56,7 +56,7 @@ async def test_exa_search_request_and_full_response_cross_real_http(asynchronous
 async def test_exa_sse_delivers_first_event_before_server_finishes(asynchronous: bool) -> None:
     release: Final = threading.Event()
     first: Final = {"type": "results", "results": PAYLOAD["results"]}
-    last: Final = {"type": "done", "output": PAYLOAD["output"], "searchTime": 14}
+    last: Final = {"type": "done", "output": PAYLOAD["output"], "searchTime": 14, "costDollars": PAYLOAD["costDollars"]}
 
     def respond(request: Request) -> Reply:
         assert json.loads(request.body)["stream"] is True
@@ -94,7 +94,10 @@ async def test_exa_sse_delivers_first_event_before_server_finishes(asynchronous:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(("sse", "schema"), [(False, False), (False, True), (True, True)])
-async def test_search_logs_one_completed_response_and_cost(asynchronous: bool, sse: bool, schema: bool) -> None:
+@pytest.mark.parametrize("price_override", [None, 0.0, 0.123])
+async def test_search_logs_one_completed_response_and_cost(
+    asynchronous: bool, sse: bool, schema: bool, price_override: float | None
+) -> None:
     import asyncio
     from collections.abc import Mapping
 
@@ -115,11 +118,12 @@ async def test_search_logs_one_completed_response_and_cost(asynchronous: bool, s
     recorder: Final = Recorder()
 
     def respond(request: Request) -> Reply:
+        assert "input_cost_per_query" not in json.loads(request.body)
         if not sse:
             return Reply(body=json.dumps(PAYLOAD).encode())
         events: Final = (
             {"type": "results", "results": PAYLOAD["results"]},
-            {"type": "done", "output": PAYLOAD["output"], "searchTime": 14},
+            {"type": "done", "output": PAYLOAD["output"], "searchTime": 14, "costDollars": PAYLOAD["costDollars"]},
         )
         return Reply(
             content_type="text/event-stream",
@@ -134,6 +138,7 @@ async def test_search_logs_one_completed_response_and_cost(asynchronous: bool, s
             "api_key": "test-key",
             "stream": True,
             "complete_response": True,
+            **({"input_cost_per_query": price_override} if price_override is not None else {}),
             "success_callback": [recorder.async_log_success_event if asynchronous else recorder],
             **{key: value for key, value in PARAMS.items() if schema or key != "outputSchema"},
         }
@@ -143,7 +148,9 @@ async def test_search_logs_one_completed_response_and_cost(asynchronous: bool, s
         details, logged = recorder.records[0]
         assert logged.model_dump()["output"] == response.model_dump()["output"]
         assert isinstance(details["standard_logging_object"], Mapping)
-        assert isinstance(details["response_cost"], (int, float))
+        expected_cost: Final = PAYLOAD["costDollars"]["total"] if price_override is None else price_override
+        assert details["response_cost"] == expected_cost
+        assert details["standard_logging_object"]["response_cost"] == expected_cost
         assert details["stream"] is sse
 
 
@@ -181,7 +188,7 @@ async def test_search_disconnect_bills_once(asynchronous: bool, consume: str) ->
     release: Final = threading.Event()
     events: Final = (
         {"type": "results", "results": PAYLOAD["results"], "requestId": "disconnect"},
-        {"type": "done", "output": PAYLOAD["output"], "searchTime": 14},
+        {"type": "done", "output": PAYLOAD["output"], "searchTime": 14, "costDollars": PAYLOAD["costDollars"]},
     )
 
     def respond(request: Request) -> Reply:
@@ -227,7 +234,17 @@ async def test_search_disconnect_bills_once(asynchronous: bool, consume: str) ->
             assert await asyncio.to_thread(recorder.finished.wait, 5)
             assert len(recorder.records) == 1
             details, logged = recorder.records[0]
-            assert details["response_cost"] > 0
+            expected: Final = (
+                PAYLOAD["costDollars"]["total"]
+                if consume == "done"
+                else litellm.completion_cost(
+                    completion_response={"results": []},
+                    model="exa_ai/search",
+                    custom_llm_provider="exa_ai",
+                    call_type="search",
+                )
+            )
+            assert details["response_cost"] == expected
             assert details["standard_logging_object"]["response_cost"] == details["response_cost"]
             assert len(logged.results) == (0 if consume == "none" else 1)
             assert (stream.final_response is not None) is (consume == "done")

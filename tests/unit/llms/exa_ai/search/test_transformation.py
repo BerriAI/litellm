@@ -382,3 +382,58 @@ def test_legacy_parameters_and_unified_precedence_are_preserved():
         "contents": {"text": True},
     }
     assert json.dumps(legacy, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("total", [0, 0.012, 2])
+@pytest.mark.parametrize("serialized", [False, True])
+def test_exa_reported_total_prices_the_whole_request(total: float, serialized: bool) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    response: Final = SearchResponse.model_validate({"results": [], "costDollars": {"total": total}})
+    payload: Final = response.model_dump() if serialized else response
+    assert search_provider_cost_per_query("exa_ai/search", "exa_ai", number_of_queries=3, response=payload) == (
+        total,
+        0.0,
+    )
+    assert (
+        litellm.completion_cost(
+            completion_response=payload,
+            model="exa_ai/search",
+            custom_llm_provider="exa_ai",
+            call_type="search",
+            optional_params={"query": ["one", "two"], "costDollars": {"total": 999}},
+        )
+        == total
+    )
+    assert litellm.cost_per_token(
+        model="exa_ai/search", custom_llm_provider="exa_ai", call_type="search", response=payload
+    ) == (total, 0.0)
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        None,
+        {},
+        {"total": None},
+        {"total": -1},
+        {"total": True},
+        {"total": "0.01"},
+        {"total": float("nan")},
+        {"total": float("inf")},
+        [],
+    ],
+)
+def test_exa_missing_or_invalid_total_uses_estimate(reported: object) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    estimate: Final = search_provider_cost_per_query("exa_ai/search", "exa_ai")
+    assert (
+        search_provider_cost_per_query(
+            "exa_ai/search",
+            "exa_ai",
+            response={"costDollars": reported},
+            optional_params={"costDollars": {"total": 999}},
+        )
+        == estimate
+    )
