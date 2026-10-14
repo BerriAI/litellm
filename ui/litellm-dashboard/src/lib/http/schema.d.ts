@@ -7869,6 +7869,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/images/variations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Image Variation Api
+         * @description Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/createVariation
+         *
+         *     ```bash
+         *     curl -X POST "http://localhost:4000/v1/images/variations"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=dall-e-2"         -F "image=@image.png"         -F "n=2"
+         *     ```
+         */
+        post: operations["image_variation_api_images_variations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/interactions": {
         parameters: {
             query?: never;
@@ -10836,6 +10860,30 @@ export interface paths {
         put?: never;
         /** Image Generation */
         post: operations["image_generation_openai_deployments__model__images_generations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openai/deployments/{model}/images/variations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Image Variation Api
+         * @description Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/createVariation
+         *
+         *     ```bash
+         *     curl -X POST "http://localhost:4000/v1/images/variations"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=dall-e-2"         -F "image=@image.png"         -F "n=2"
+         *     ```
+         */
+        post: operations["image_variation_api_openai_deployments__model__images_variations_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -20355,6 +20403,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/images/variations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Image Variation Api
+         * @description Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/createVariation
+         *
+         *     ```bash
+         *     curl -X POST "http://localhost:4000/v1/images/variations"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=dall-e-2"         -F "image=@image.png"         -F "n=2"
+         *     ```
+         */
+        post: operations["image_variation_api_v1_images_variations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/indexes": {
         parameters: {
             query?: never;
@@ -27336,6 +27408,21 @@ export interface components {
             mask?: string[] | null;
             /** Mask[] */
             "mask[]"?: string[] | null;
+        };
+        /** Body_image_variation_api_images_variations_post */
+        Body_image_variation_api_images_variations_post: {
+            /** Image */
+            image?: string[] | null;
+        };
+        /** Body_image_variation_api_openai_deployments__model__images_variations_post */
+        Body_image_variation_api_openai_deployments__model__images_variations_post: {
+            /** Image */
+            image?: string[] | null;
+        };
+        /** Body_image_variation_api_v1_images_variations_post */
+        Body_image_variation_api_v1_images_variations_post: {
+            /** Image */
+            image?: string[] | null;
         };
         /** Body_introspect_endpoint_introspect_post */
         Body_introspect_endpoint_introspect_post: {
@@ -61409,6 +61496,41 @@ export interface operations {
             };
         };
     };
+    image_variation_api_images_variations_post: {
+        parameters: {
+            query?: {
+                model?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_image_variation_api_images_variations_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_interaction_interactions_post: {
         parameters: {
             query?: never;
@@ -65643,6 +65765,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    image_variation_api_openai_deployments__model__images_variations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                model: string | null;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_image_variation_api_openai_deployments__model__images_variations_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -77985,6 +78142,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    image_variation_api_v1_images_variations_post: {
+        parameters: {
+            query?: {
+                model?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_image_variation_api_v1_images_variations_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
