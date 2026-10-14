@@ -2101,6 +2101,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if len(tools) > 1:
             optional_params["tools"] = tools
 
+        ## Deployment max output (proxy model_info) beats get_config(), which only sees the provider-stripped
+        ## model name and so falls back to 4096 for custom deployments; a request or class default still wins
+        if "max_tokens" not in optional_params and litellm.AnthropicConfig.max_tokens is None:
+            match litellm_params:
+                case {"model_info": {"max_output_tokens": int(deployment_max_tokens)}} if (
+                    deployment_max_tokens > 0 and not isinstance(deployment_max_tokens, bool)
+                ):
+                    optional_params["max_tokens"] = deployment_max_tokens  # rebind-ok: out-param store
+                case object():
+                    pass  # no deployment limit: get_config() below fills the default
+
         ## Load Config
         config: Final = litellm.AnthropicConfig.get_config(model=model)
         for k, v in config.items():

@@ -2646,6 +2646,76 @@ def test_transform_request_respects_user_max_tokens():
     assert result["max_tokens"] == 1000
 
 
+@pytest.mark.parametrize(
+    ("optional_params", "litellm_params", "expected"),
+    [
+        # custom deployment: the configured output limit replaces the 4096 fallback
+        ({}, {"model_info": {"max_output_tokens": 131072}}, 131072),
+        # an explicit request value still wins over the deployment limit
+        ({"max_tokens": 1000}, {"model_info": {"max_output_tokens": 131072}}, 1000),
+        # no deployment limit: unknown models keep the 4096 fallback
+        ({}, {}, 4096),
+        ({}, {"model_info": {"max_output_tokens": None}}, 4096),
+    ],
+)
+def test_transform_request_default_max_tokens_from_deployment(
+    optional_params: dict[str, object], litellm_params: dict[str, object], expected: int
+) -> None:
+    result = AnthropicConfig().transform_request(
+        model="glm-5.3-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+    assert result["max_tokens"] == expected, f"model_info={litellm_params!r} request={optional_params!r}"
+
+
+async def test_router_sends_deployment_max_output_tokens_when_request_omits_max_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    """A proxy deployment `anthropic/<custom>` with model_info.max_output_tokens must not go upstream capped at 4096."""
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    sent: Final[list[dict]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "glm-5.3-flash",
+                "content": [{"type": "text", "text": "OK"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+        )
+
+    respx_mock.post("https://anthropic-compatible.test/v1/messages").mock(side_effect=respond)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-glm-5.3-flash",
+                "litellm_params": {
+                    "model": "anthropic/glm-5.3-flash",
+                    "api_base": "https://anthropic-compatible.test",
+                    "api_key": "test-key",
+                },
+                "model_info": {"max_output_tokens": 131072},
+            }
+        ]
+    )
+
+    await router.acompletion(model="claude-glm-5.3-flash", messages=[{"role": "user", "content": "hi"}])
+    await router.acompletion(model="claude-glm-5.3-flash", messages=[{"role": "user", "content": "hi"}], max_tokens=512)
+
+    assert [body["max_tokens"] for body in sent] == [131072, 512], "first call omits max_tokens, second sends 512"
+
+
 def test_calculate_usage_completion_tokens_details_always_populated():
     """
     Test that completion_tokens_details is always populated in Usage object,
