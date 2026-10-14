@@ -9452,6 +9452,7 @@ def test_vertex_ai_streaming_response_id():
             messages=[],
             logging_obj=logging_obj,
             request_body={},
+            hop_headers=lambda: {},
         )
         iterator = iter(iterator)
         first_chunk = next(iterator)

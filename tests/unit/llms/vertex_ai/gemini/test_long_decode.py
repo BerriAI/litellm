@@ -1,11 +1,16 @@
 import json
 import sys
-from collections.abc import Callable, Mapping, Sequence
-from itertools import chain, repeat
+import threading
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import chain, count, repeat
 from typing import Final
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -671,6 +676,158 @@ async def test_streaming_failed_continuation_hop_ends_the_stream_with_length_and
     assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "hello"
     assert [c.choices[0].finish_reason for c in chunks if c.choices and c.choices[0].finish_reason] == ["length"]
     assert {"continuation_token": "dG9rLTE="} in _delta_fields(chunks)
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenEndpoint:
+    credentials: str
+    down: threading.Event
+
+
+def _service_account_json(token_uri: str) -> str:
+    private_key: Final = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        .decode()
+    )
+    return json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "p",
+            "private_key_id": "k",
+            "private_key": private_key,
+            "client_email": "sa@p.iam.gserviceaccount.com",
+            "token_uri": token_uri,
+        }
+    )
+
+
+@pytest.fixture
+def token_endpoint() -> Iterator[_TokenEndpoint]:
+    down: Final = threading.Event()
+    minted: Final = count(1)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            refused: Final = down.is_set()
+            payload: Final = json.dumps(
+                {"error": "invalid_grant"} if refused else {"access_token": f"token-{next(minted)}", "expires_in": 0}
+            ).encode()
+            self.send_response(400 if refused else 200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args: object) -> None:
+            return None
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield _TokenEndpoint(_service_account_json(f"http://127.0.0.1:{server.server_port}/token"), down)
+    server.shutdown()
+    server.server_close()
+
+
+def _google_taking_each_access_token_once(
+    hops: Sequence[httpx.Response], used: list[str], on_answer: Callable[[], object]
+) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        token: Final = request.headers["authorization"]
+        if token in used:
+            return httpx.Response(401, json={"error": {"code": 401, "status": "UNAUTHENTICATED"}})
+        used.append(token)
+        on_answer()
+        return hops[len(used) - 1]
+
+    return handler
+
+
+async def _vertex_answer(
+    is_async: bool,
+    stream: bool,
+    handler: Callable[[httpx.Request], httpx.Response],
+    credentials: str,
+    extra_headers: Mapping[str, str] | None = None,
+) -> tuple[str, list[str], list[object]]:
+    kwargs: Final = {
+        "model": "vertex_ai/gemini-3.8-flash",
+        "extra_headers": extra_headers,
+        "messages": list(MESSAGES),
+        "max_tokens": 100_000,
+        "stream": stream,
+        "vertex_project": "p",
+        "vertex_location": "global",
+        "vertex_credentials": credentials,
+    }
+    transport: Final = httpx.MockTransport(handler)
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=transport))
+        if is_async
+        else litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=transport)))
+    )
+    if stream:
+        chunks: Final = [chunk async for chunk in response] if is_async else list(response)
+        return _stream_text(chunks), _stream_finish_reasons(chunks), _client_tokens(chunks)
+    choice: Final = response.choices[0]
+    fields: Final = choice.message.provider_specific_fields or {}
+    return choice.message.content, [choice.finish_reason], [fields["continuation_token"]] if fields else []
+
+
+def _two_hops(stream: bool) -> tuple[httpx.Response, httpx.Response]:
+    return _stream_hops() if stream else (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2))
+
+
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_vertex_long_decode_finishes_when_each_continuation_outlives_the_access_token_before_it(
+    is_async: bool, stream: bool, token_endpoint: _TokenEndpoint
+):
+    used: Final[list[str]] = []
+    google: Final = _google_taking_each_access_token_once(_two_hops(stream), used, lambda: None)
+
+    answer: Final = await _vertex_answer(is_async, stream, google, token_endpoint.credentials)
+
+    assert answer == ("hello world", ["stop"], [])
+    assert len(used) == 2
+
+
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_vertex_long_decode_returns_the_answer_so_far_with_its_token_when_no_new_access_token_can_be_had(
+    is_async: bool, stream: bool, token_endpoint: _TokenEndpoint
+):
+    used: Final[list[str]] = []
+    google: Final = _google_taking_each_access_token_once(_two_hops(stream), used, token_endpoint.down.set)
+
+    answer: Final = await _vertex_answer(is_async, stream, google, token_endpoint.credentials)
+
+    assert answer == ("hello", ["length"], ["dG9rLTE="])
+    assert len(used) == 1
+
+
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_vertex_long_decode_keeps_the_callers_own_authorization_header_on_every_continuation(
+    is_async: bool, stream: bool, token_endpoint: _TokenEndpoint
+):
+    hops: Final = _two_hops(stream)
+    seen: Final[list[str]] = []
+
+    def google(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["authorization"])
+        return hops[len(seen) - 1]
+
+    answer: Final = await _vertex_answer(
+        is_async, stream, google, token_endpoint.credentials, {"Authorization": "Bearer mine"}
+    )
+
+    assert answer == ("hello world", ["stop"], [])
+    assert seen == ["Bearer mine", "Bearer mine"]
 
 
 def test_initial_prompt_tokens_is_absent_on_a_single_hop_and_the_first_hops_count_otherwise():

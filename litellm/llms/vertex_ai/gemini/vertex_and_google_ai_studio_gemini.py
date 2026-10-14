@@ -4,7 +4,7 @@
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
@@ -2762,6 +2762,7 @@ async def make_call(
     messages: list,
     logging_obj: LoggingClass,
     request_body: RequestBody,
+    hop_headers: Callable[[], Awaitable[Mapping[str, str]]],
 ):
     if gemini_client is not None:
         client = gemini_client
@@ -2791,7 +2792,11 @@ async def make_call(
 
     async def open_hop(body: RequestBody) -> httpx.Response:
         return await client.post(
-            url_for(api_base, body), headers=headers, data=json.dumps(body), stream=True, logging_obj=logging_obj
+            url_for(api_base, body),
+            headers=dict(await hop_headers()),
+            data=json.dumps(body),
+            stream=True,
+            logging_obj=logging_obj,
         )
 
     completion_stream: Final = ModelResponseIterator(
@@ -2823,6 +2828,7 @@ def make_sync_call(
     messages: list,
     logging_obj: LoggingClass,
     request_body: RequestBody,
+    hop_headers: Callable[[], Mapping[str, str]],
 ):
     if gemini_client is not None:
         client = gemini_client
@@ -2842,7 +2848,11 @@ def make_sync_call(
 
     def open_hop(body: RequestBody) -> httpx.Response:
         return client.post(
-            url_for(api_base, body), headers=headers, data=json.dumps(body), stream=True, logging_obj=logging_obj
+            url_for(api_base, body),
+            headers=dict(hop_headers()),
+            data=json.dumps(body),
+            stream=True,
+            logging_obj=logging_obj,
         )
 
     completion_stream: Final = ModelResponseIterator(
@@ -2868,6 +2878,42 @@ def make_sync_call(
 class VertexLLM(VertexBase):
     def __init__(self) -> None:
         super().__init__()
+
+    async def _fresh_headers_async(
+        self,
+        headers: Mapping[str, str],
+        extra_headers: Mapping[str, str] | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> Mapping[str, str]:
+        if custom_llm_provider == "gemini":
+            return headers
+        try:
+            token, _ = await self._ensure_access_token_async(
+                credentials=vertex_credentials, project_id=vertex_project, custom_llm_provider=custom_llm_provider
+            )
+        except Exception as e:
+            raise VertexAIError(status_code=401, message=str(e), headers=None) from e
+        return {**headers, "Authorization": f"Bearer {token}", **(extra_headers or {})}
+
+    def _fresh_headers(
+        self,
+        headers: Mapping[str, str],
+        extra_headers: Mapping[str, str] | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> Mapping[str, str]:
+        if custom_llm_provider == "gemini":
+            return headers
+        try:
+            token, _ = self._ensure_access_token(
+                credentials=vertex_credentials, project_id=vertex_project, custom_llm_provider=custom_llm_provider
+            )
+        except Exception as e:
+            raise VertexAIError(status_code=401, message=str(e), headers=None) from e
+        return {**headers, "Authorization": f"Bearer {token}", **(extra_headers or {})}
 
     async def async_streaming(
         self,
@@ -2956,6 +3002,14 @@ class VertexLLM(VertexBase):
                 messages=messages,
                 logging_obj=logging_obj,
                 request_body=request_body,
+                hop_headers=partial(
+                    self._fresh_headers_async,
+                    headers,
+                    extra_headers,
+                    vertex_credentials,
+                    vertex_project,
+                    custom_llm_provider,
+                ),
             ),
             model=model,
             custom_llm_provider="vertex_ai_beta",
@@ -3044,11 +3098,15 @@ class VertexLLM(VertexBase):
             },
         )
 
+        fresh_headers: Final = partial(
+            self._fresh_headers_async, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
+        )
+
         async def post(body: RequestBody) -> httpx.Response:
             try:
                 response: Final = await client.post(
                     url_for(api_base, body),
-                    headers=headers,
+                    headers=dict(await fresh_headers()),
                     json=dict(body),
                     logging_obj=logging_obj,
                 )
@@ -3217,6 +3275,10 @@ class VertexLLM(VertexBase):
             },
         )
 
+        fresh_headers: Final = partial(
+            self._fresh_headers, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
+        )
+
         ## SYNC STREAMING CALL ##
         if stream is True:
             request_data_str: Final = json.dumps(data)
@@ -3232,6 +3294,7 @@ class VertexLLM(VertexBase):
                     logging_obj=logging_obj,
                     headers=headers,
                     request_body=data,
+                    hop_headers=fresh_headers,
                 ),
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
@@ -3254,7 +3317,7 @@ class VertexLLM(VertexBase):
         def post(body: RequestBody) -> httpx.Response:
             try:
                 response: Final = client.post(
-                    url=url_for(url, body), headers=headers, json=dict(body), logging_obj=logging_obj
+                    url=url_for(url, body), headers=dict(fresh_headers()), json=dict(body), logging_obj=logging_obj
                 )
                 response.raise_for_status()
             except httpx.HTTPStatusError as err:

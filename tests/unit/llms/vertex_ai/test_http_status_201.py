@@ -28,6 +28,9 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
         self.mock_logging_obj = MagicMock()
         self.mock_logging_obj.post_call = MagicMock()
 
+    async def _hop_headers(self):
+        return self.mock_headers
+
     @patch(
         "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.get_async_httpx_client"
     )
@@ -52,6 +55,7 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
             headers=self.mock_headers,
             data=self.mock_data,
             request_body=json.loads(self.mock_data),
+            hop_headers=self._hop_headers,
             model=self.mock_model,
             messages=self.messages,
             logging_obj=self.mock_logging_obj,
@@ -84,6 +88,7 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
             headers=self.mock_headers,
             data=self.mock_data,
             request_body=json.loads(self.mock_data),
+            hop_headers=lambda: self.mock_headers,
             model=self.mock_model,
             messages=self.messages,
             logging_obj=self.mock_logging_obj,
@@ -114,6 +119,7 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
                 headers=self.mock_headers,
                 data=self.mock_data,
                 request_body=json.loads(self.mock_data),
+                hop_headers=lambda: self.mock_headers,
                 model=self.mock_model,
                 messages=self.messages,
                 logging_obj=self.mock_logging_obj,
