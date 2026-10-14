@@ -1375,17 +1375,21 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
         for tool in tools:
             # convert function tool from chat completion to responses API format
-            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
-                function_tool = cast(ChatCompletionToolParamFunctionChunk, tool.get("function"))
-                responses_tools.append(
-                    FunctionToolParam(
-                        name=function_tool["name"],
-                        parameters=function_tool.get("parameters"),
-                        strict=function_tool.get("strict"),
-                        type="function",
-                        description=function_tool.get("description"),
-                    )
+            if tool.get("type") == "function" and isinstance(function_payload := tool.get("function"), dict):
+                function_tool = cast(ChatCompletionToolParamFunctionChunk, function_payload)
+                converted_function: Final = FunctionToolParam(
+                    name=function_tool["name"],
+                    parameters=function_tool.get("parameters"),
+                    strict=function_tool.get("strict"),
+                    type="function",
+                    description=function_tool.get("description"),
                 )
+                defer_loading: Final = tool.get(
+                    "defer_loading", cast(dict[str, object], function_payload).get("defer_loading")
+                )
+                if isinstance(defer_loading, bool):
+                    converted_function["defer_loading"] = defer_loading
+                responses_tools.append(converted_function)
             elif tool.get("type") == "custom" and isinstance(custom_payload := tool.get("custom"), dict):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     convert_custom_tool_format_to_responses_shape,

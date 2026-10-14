@@ -832,6 +832,34 @@ def test_convert_tools_to_responses_format_passes_flat_function_tool_through():
     assert converted == [flat_tool]
 
 
+@pytest.mark.parametrize(
+    ("tool", "expected_defer_loading"),
+    [
+        ({"type": "function", "function": {"name": "lookup"}, "defer_loading": True}, True),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}}, True),
+        ({"type": "function", "function": {"name": "lookup", "defer_loading": True}, "defer_loading": False}, False),
+    ],
+    ids=["tool-level", "function-level", "tool-level-wins"],
+)
+def test_convert_tools_to_responses_format_keeps_defer_loading(tool, expected_defer_loading):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    converted = LiteLLMResponsesTransformationHandler()._convert_tools_to_responses_format([tool])
+
+    assert converted == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "parameters": None,
+            "strict": None,
+            "description": None,
+            "defer_loading": expected_defer_loading,
+        }
+    ]
+
+
 def test_extract_extra_body_params_reasoning_effort_override():
     """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
