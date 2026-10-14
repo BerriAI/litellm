@@ -219,12 +219,14 @@ describe("parseTeamEditAccess", () => {
   });
 
   it("hands a team admin the fields the proxy enabled", () => {
-    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["tpm_limit"] })).toEqual({
+    const expected = {
       kind: "team_admin",
       editableFields: new Set(["tpm_limit"]),
       mayRaiseMaxBudget: false,
       proxyControlledMetadataKeys: new Set(),
-    });
+    };
+
+    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["tpm_limit"] })).toEqual(expected);
   });
 
   it.each([
@@ -233,12 +235,14 @@ describe("parseTeamEditAccess", () => {
     ["an older proxy omits the flag", {}, false],
     ["the flag is not a boolean", { may_raise_max_budget: "yes" }, false],
   ])("lets a team admin raise the max budget only when %s", (_label, flag, mayRaiseMaxBudget) => {
-    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["max_budget"], ...flag })).toEqual({
+    const expected = {
       kind: "team_admin",
       editableFields: new Set(["max_budget"]),
       mayRaiseMaxBudget,
       proxyControlledMetadataKeys: new Set(),
-    });
+    };
+
+    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["max_budget"], ...flag })).toEqual(expected);
   });
 
   it("hands a team admin the metadata keys the proxy keeps for proxy admins", () => {
@@ -342,11 +346,8 @@ describe("teamAdminMetadataPairIssue", () => {
 
 describe("teamAdminMetadataPairs", () => {
   it("lists declared fields first in schema order, then the team's own keys, without the proxy's keys", () => {
-    const pairs = teamAdminMetadataPairs(
-      { region: "eu", priority: "high", department: "r&d", cost_center: "eng" },
-      new Set(["priority"]),
-      ["cost_center", "department"],
-    );
+    const metadata = { region: "eu", priority: "high", department: "r&d", cost_center: "eng" };
+    const pairs = teamAdminMetadataPairs(metadata, new Set(["priority"]), ["cost_center", "department"]);
 
     expect(pairs.map((pair) => pair.key)).toStrictEqual(["cost_center", "department", "region"]);
   });
