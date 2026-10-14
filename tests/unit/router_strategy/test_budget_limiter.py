@@ -173,20 +173,28 @@ _MONTHLY_DEPLOYMENT: Final = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("limiter_config", "spend_key", "start_time_key"),
+    ("limiter_config", "tag_budget_config", "spend_key", "start_time_key"),
     [
         (
             {"provider_budget_config": {"openai": {"budget_limit": 10.0, "time_period": "1mo"}}},
+            None,
             "provider_spend:openai:1mo",
             "provider_budget_start_time:openai",
         ),
         (
             {"provider_budget_config": None, "model_list": [_MONTHLY_DEPLOYMENT]},
+            None,
             "deployment_spend:deployment-1:1mo",
             "deployment_budget_start_time:deployment-1",
         ),
+        (
+            {"provider_budget_config": None},
+            {"release": {"budget_limit": 10.0, "time_period": "1mo"}},
+            "tag_spend:release:1mo",
+            "tag_budget_start_time:release",
+        ),
     ],
-    ids=["provider", "deployment"],
+    ids=["provider", "deployment", "tag"],
 )
 @pytest.mark.parametrize(
     ("opened_at", "charged_at", "closes_at"),
@@ -205,19 +213,35 @@ _MONTHLY_DEPLOYMENT: Final = {
     ids=["opened_in_a_long_month", "opened_in_february"],
 )
 async def test_a_monthly_router_budget_ends_a_calendar_month_after_it_opens(
-    disable_budget_sync, limiter_config, spend_key, start_time_key, opened_at, charged_at, closes_at
+    disable_budget_sync,
+    monkeypatch,
+    limiter_config,
+    tag_budget_config,
+    spend_key,
+    start_time_key,
+    opened_at,
+    charged_at,
+    closes_at,
 ):
     """
-    The spend counter's Redis expiry is when the router lets the provider or
-    deployment take traffic again.
+    The spend counter's Redis expiry is when the router lets the provider,
+    deployment or tag take traffic again.
 
     Regression: it was a month counted from the charge, so a window opened on January 15
     and charged on February 1 unblocked on February 12 instead of February 15.
     """
+    monkeypatch.setattr(litellm, "tag_budget_config", tag_budget_config)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     limiter = RouterBudgetLimiting(dual_cache=DualCache(), clock=charged_at.timestamp, **limiter_config)
     await limiter.dual_cache.async_set_cache(key=start_time_key, value=opened_at.timestamp())
 
-    await _log_success(limiter, _success_kwargs(provider_in_litellm_params="openai", provider_in_payload="openai"))
+    await _log_success(
+        limiter,
+        {
+            **_success_kwargs(provider_in_litellm_params="openai", provider_in_payload="openai"),
+            "metadata": {"tags": ["release"]},
+        },
+    )
 
     assert limiter.redis_increment_operation_queue == [
         {"key": spend_key, "increment_value": 0.25, "ttl": int((closes_at - charged_at).total_seconds())}
