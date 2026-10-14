@@ -2,26 +2,26 @@
  "provider": "openai",
  "route": "chat",
  "shape": "short_chat",
- "marker": "perfreq-003450-c",
- "captured_at": "2026-10-14T18:44:16Z",
+ "marker": "perfreq-013343-c",
+ "captured_at": "2026-10-14T19:33:20Z",
  "stream": false,
  "model": "gpt-6-luna",
- "request_bytes": 162911,
- "request_tokens_estimate": 40727,
+ "request_bytes": 163385,
+ "request_tokens_estimate": 40846,
  "status": 200,
- "ttfb_s": 6.0398,
- "total_s": 6.04,
+ "ttfb_s": 3.7706,
+ "total_s": 3.7707,
  "body": {
-  "id": "chatcmpl-EYyFPb0ajwF4a7NphEBSRIuCCwqE8",
+  "id": "chatcmpl-EYz0vrkpeSOnV3AbyyuVYvcLtXxij",
   "object": "chat.completion",
-  "created": 1792003451,
+  "created": 1792006397,
   "model": "gpt-6-luna",
   "choices": [
    {
     "index": 0,
     "message": {
      "role": "assistant",
-     "content": "litellm/llms/anthropic/prompt_cache_pricing.py\nlitellm/vector_stores/vector_store_registry.py",
+     "content": "litellm/integrations/sqs.py",
      "refusal": null,
      "annotations": []
     },
@@ -29,16 +29,16 @@
    }
   ],
   "usage": {
-   "prompt_tokens": 39510,
-   "completion_tokens": 450,
-   "total_tokens": 39960,
+   "prompt_tokens": 39940,
+   "completion_tokens": 228,
+   "total_tokens": 40168,
    "prompt_tokens_details": {
-    "cached_tokens": 2240,
-    "cache_write_tokens": 37267,
+    "cached_tokens": 0,
+    "cache_write_tokens": 39937,
     "audio_tokens": 0
    },
    "completion_tokens_details": {
-    "reasoning_tokens": 415,
+    "reasoning_tokens": 210,
     "audio_tokens": 0,
     "accepted_prediction_tokens": 0,
     "rejected_prediction_tokens": 0

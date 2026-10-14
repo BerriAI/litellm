@@ -2,26 +2,26 @@
  "provider": "openai",
  "route": "chat",
  "shape": "tool_call",
- "marker": "perfreq-003450-c",
- "captured_at": "2026-10-14T18:44:31Z",
+ "marker": "perfreq-861864-c",
+ "captured_at": "2026-10-14T19:33:29Z",
  "stream": false,
  "model": "gpt-6-luna",
- "request_bytes": 271943,
- "request_tokens_estimate": 67985,
+ "request_bytes": 269902,
+ "request_tokens_estimate": 67475,
  "status": 200,
- "ttfb_s": 2.5578,
- "total_s": 2.5579,
+ "ttfb_s": 1.6982,
+ "total_s": 1.6983,
  "body": {
-  "id": "chatcmpl-EYyFiiSOYcHP897Q82Ljmn1wxEFZP",
+  "id": "chatcmpl-EYz16TiWZRLKGByvbpvENAtVT3z5P",
   "object": "chat.completion",
-  "created": 1792003470,
+  "created": 1792006408,
   "model": "gpt-6-luna",
   "choices": [
    {
     "index": 0,
     "message": {
      "role": "assistant",
-     "content": "litellm/llms/anthropic/prompt_cache_pricing.py\nlitellm/llms/gigachat/file_handler.py",
+     "content": "litellm/llms/predibase/chat/transformation.py\nlitellm/proxy/vector_store_files_endpoints/endpoints.py\nlitellm/llms/openai_like/chat/handler.py",
      "refusal": null,
      "annotations": []
     },
@@ -29,12 +29,12 @@
    }
   ],
   "usage": {
-   "prompt_tokens": 65616,
-   "completion_tokens": 31,
-   "total_tokens": 65647,
+   "prompt_tokens": 64129,
+   "completion_tokens": 44,
+   "total_tokens": 64173,
    "prompt_tokens_details": {
     "cached_tokens": 0,
-    "cache_write_tokens": 65613,
+    "cache_write_tokens": 64126,
     "audio_tokens": 0
    },
    "completion_tokens_details": {

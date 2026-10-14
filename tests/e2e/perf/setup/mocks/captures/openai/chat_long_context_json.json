@@ -2,26 +2,26 @@
  "provider": "openai",
  "route": "chat",
  "shape": "long_context",
- "marker": "perfreq-003450-c",
- "captured_at": "2026-10-14T18:44:42Z",
+ "marker": "perfreq-326716-c",
+ "captured_at": "2026-10-14T19:33:35Z",
  "stream": false,
  "model": "gpt-6-luna",
- "request_bytes": 1438267,
- "request_tokens_estimate": 359566,
+ "request_bytes": 1427924,
+ "request_tokens_estimate": 356981,
  "status": 200,
- "ttfb_s": 6.1787,
- "total_s": 6.1788,
+ "ttfb_s": 3.817,
+ "total_s": 3.8171,
  "body": {
-  "id": "chatcmpl-EYyFpT9LCGxshUighROTu1yGdOIch",
+  "id": "chatcmpl-EYz19Tw34G18x7FNQMzpftzBfKqcy",
   "object": "chat.completion",
-  "created": 1792003477,
+  "created": 1792006411,
   "model": "gpt-6-luna",
   "choices": [
    {
     "index": 0,
     "message": {
      "role": "assistant",
-     "content": "litellm/llms/anthropic/prompt_cache_pricing.py\nlitellm/proxy/client/cli/commands/agents.py\nlitellm/proxy/management_helpers/team_metadata_validation.py\nlitellm/llms/gigachat/file_handler.py\nlitellm/proxy/management_endpoints/request_error_endpoints.py\nlitellm/llms/anthropic/completion/transformation.py\nlitellm/llms/langgraph/chat/transformation.py\nlitellm/llms/bedrock/chat/converse_handler.py\nlitellm/proxy/auth/password_policy.py\nlitellm/proxy/openai_files_endpoints/files_endpoints.py\nlitellm/llms/xai/oauth.py\nlitellm/proxy/guardrails/guardrail_hooks/custom_code/primitives.py",
+     "content": "litellm/llms/anthropic/pass_through/adapters/streaming_iterator.py\nlitellm/proxy/hooks/batch_redis_get.py",
      "refusal": null,
      "annotations": []
     },
@@ -29,12 +29,12 @@
    }
   ],
   "usage": {
-   "prompt_tokens": 346364,
-   "completion_tokens": 170,
-   "total_tokens": 346534,
+   "prompt_tokens": 338262,
+   "completion_tokens": 35,
+   "total_tokens": 338297,
    "prompt_tokens_details": {
-    "cached_tokens": 4238,
-    "cache_write_tokens": 342123,
+    "cached_tokens": 0,
+    "cache_write_tokens": 338259,
     "audio_tokens": 0
    },
    "completion_tokens_details": {
