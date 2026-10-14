@@ -212,8 +212,8 @@ def test_apply_guardrail_forwards_messages_to_the_guardrail(gateway: Gateway) ->
 
         requests: Final = akto.drain()
         assert [(request.method, request.target) for request in requests] == [
-            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true"),
-            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true"),
+            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true&ingest_data=true"),
+            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true&ingest_data=true"),
         ]
         assert [request.headers["authorization"] for request in requests] == ["synthetic-akto-apply-key"] * 2
         bodies: Final = tuple(

@@ -204,7 +204,6 @@ def _chat_caller_message(message: dict[str, JsonValue]) -> dict[str, JsonValue]:
     return {
         **{key: value for key, value in message.items() if key != "tool_calls"},
         **({"tool_calls": [_chat_caller_tool_call(call) for call in tool_calls]} if tool_calls else {}),
-        "provider_specific_fields": {"refusal": None},
     }
 
 

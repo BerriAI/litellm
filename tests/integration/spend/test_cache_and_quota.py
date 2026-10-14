@@ -16,7 +16,9 @@ from integration._support.database import read_rows, scratch_database
 from integration._support.database_relay import database_relay
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 from integration._support.process import owned_proxy
+from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, wire_server
+from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse
 
 
 @pytest.mark.covers("quota_management.response_cache.generated_sequences_preserve_content_and_accounting")
@@ -307,7 +309,43 @@ def test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        counting_upstream: Final = register_scenario(
+            f"budget-count-{uuid.uuid4().hex}",
+            RoutedResponse(
+                content_type="application/x-routed",
+                routes={
+                    "POST /v1/responses/input_tokens": JsonResponse(
+                        content_type="application/json", body={"input_tokens": 12}
+                    ),
+                    "POST /v1/chat/completions": JsonResponse(
+                        content_type="application/json",
+                        body={
+                            "id": "chatcmpl-$UNIQUE_ID",
+                            "object": "chat.completion",
+                            "created": 1729380000,
+                            "model": "gpt-4o-mini",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "Hello! This is a mock response from the fake OpenAI endpoint.",
+                                    },
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                            "usage": {"prompt_tokens": 20, "completion_tokens": 20, "total_tokens": 40},
+                        },
+                    ),
+                },
+            ),
+        )
+        scenario.cleanups.callback(delete_scenario, counting_upstream)
+        model: Final = scenario.model(
+            api_base=f"{counting_upstream.api_base()}/v1",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
         key: Final = scenario.key(models=[model], max_budget=0.1)
         digest: Final = sha256(key.encode()).hexdigest()
         upstream.get("/__observations").raise_for_status()
@@ -325,19 +363,30 @@ def test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_
             assert count.status_code == 200, count.text
             assert count.json() == counts[0].json(), count.text
         input_tokens: Final = counts[0].json()["input_tokens"]
-        assert isinstance(input_tokens, int) and input_tokens > 0, counts[0].text
-        assert upstream.get("/__observations").json()["requests"] == []
+        assert input_tokens == 12, counts[0].text
+        counted_requests: Final = upstream.get("/__observations").json()["requests"]
+        assert counted_requests == [
+            {
+                "path": f"/{counting_upstream.scenario_id}/v1/responses/input_tokens",
+                "authorization": "Bearer integration-provider-key",
+                "body": {"model": "gpt-4o-mini", "input": [{"role": "user", "content": "hello!!!"}]},
+                "method": "POST",
+                "api_key": "",
+            }
+        ] * 3, counted_requests
+        completion_prompt: Final = f"after counting {uuid.uuid4().hex}"
         completion: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
-            {"model": model, "messages": [{"role": "user", "content": f"after counting {uuid.uuid4().hex}"}]},
+            {"model": model, "messages": [{"role": "user", "content": completion_prompt}]},
             key=key,
         )
         assert completion.status_code == 200, completion.text
         assert completion.json()["usage"]["total_tokens"] == 40, completion.text
-        assert [request["path"] for request in upstream.get("/__observations").json()["requests"]] == [
-            "/v1/chat/completions"
-        ]
+        completion_requests: Final = upstream.get("/__observations").json()["requests"]
+        assert len(completion_requests) == 1, completion_requests
+        assert completion_requests[0]["path"] == f"/{counting_upstream.scenario_id}/v1/chat/completions"
+        assert completion_requests[0]["body"]["messages"] == [{"role": "user", "content": completion_prompt}]
         spent: Final = eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
             lambda values: len(values) == 1 and float(values[0]["spend"]) > 0,

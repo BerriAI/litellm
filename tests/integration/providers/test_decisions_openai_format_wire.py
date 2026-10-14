@@ -285,9 +285,17 @@ def _expected_spend(provider: _Provider) -> float:
         return 0.0
     cost_map: Final = _JSON_OBJECT.validate_json(Path("model_prices_and_context_window.json").read_bytes())
     prices: Final = object_value(cost_map[provider.cost_map_key])
-    return _INPUT_TOKENS * _number(prices["input_cost_per_token"]) + _OUTPUT_TOKENS * _number(
-        prices["output_cost_per_token"]
+    input_key: Final = (
+        "input_cost_per_token_decisions"
+        if "input_cost_per_token_decisions" in prices
+        else "input_cost_per_token"
     )
+    output_key: Final = (
+        "output_cost_per_token_decisions"
+        if "output_cost_per_token_decisions" in prices
+        else "output_cost_per_token"
+    )
+    return _INPUT_TOKENS * _number(prices[input_key]) + _OUTPUT_TOKENS * _number(prices[output_key])
 
 
 def _register(scenario: Scenario, body: dict[str, JsonValue], *, status: int = 200) -> ScenarioHandle:
