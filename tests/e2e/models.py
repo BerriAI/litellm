@@ -255,11 +255,10 @@ class RichMessage(BaseModel):
 class ThinkingParam(BaseModel):
     """Extended-thinking control shared by Anthropic and DeepSeek reasoner models.
     DeepSeek accepts only ``type`` (enabled/disabled) and ignores budget_tokens;
-    Anthropic also honors budget_tokens, and its 4.6+ models take ``adaptive``
-    with no budget. Sending ``type="disabled"`` is the product-facing way a
-    caller turns reasoning off (LIT-3686 / GH #27453)."""
+    Anthropic also honors budget_tokens. Sending ``type="disabled"`` is the
+    product-facing way a caller turns reasoning off (LIT-3686 / GH #27453)."""
 
-    type: Literal["enabled", "adaptive", "disabled"]
+    type: Literal["enabled", "disabled"]
     budget_tokens: int | None = None
 
 
