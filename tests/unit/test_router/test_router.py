@@ -26175,7 +26175,7 @@ async def test_prompt_caching_pins_do_not_evict_router_state():
 
 
 @pytest.mark.asyncio
-async def test_one_hour_pins_do_not_push_out_fresh_five_minute_pins():
+async def test_one_hour_pins_past_the_routers_default_cache_size_keep_fresh_five_minute_pins():
     router: Final = Router(
         model_list=[
             {

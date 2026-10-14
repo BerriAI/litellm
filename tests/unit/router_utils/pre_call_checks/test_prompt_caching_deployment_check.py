@@ -315,6 +315,7 @@ async def test_replayed_redacted_thinking_block_still_records_and_pins():
         kwargs={
             "standard_logging_object": {
                 "call_type": "anthropic_messages",
+                "custom_llm_provider": "anthropic",
                 "model": model,
                 "messages": messages,
                 "model_id": "dep-2",
@@ -663,6 +664,7 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
     )
     standard_logging_object = {
         "call_type": "acompletion",
+        "custom_llm_provider": "anthropic",
         "model": "anthropic/claude-fable-5",
         "messages": messages,
         "model_id": "dep-1",
@@ -697,27 +699,55 @@ class _ManualClock:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model_map_value", "pinned_past_five_minutes"),
+    ("custom_llm_provider", "model", "model_map_value", "pinned_past_five_minutes"),
     [
-        pytest.param({"cache_creation_input_token_cost_above_1hr": 6e-06}, True, id="one-hour-cache-writes-priced"),
-        pytest.param({"cache_creation_input_token_cost_above_1hr": None}, False, id="no-one-hour-cache-writes"),
-        pytest.param(None, False, id="model-not-in-cost-map"),
+        pytest.param(
+            "anthropic",
+            "claude-sonnet-4-5",
+            {"cache_creation_input_token_cost_above_1hr": 6e-06},
+            True,
+            id="one-hour-cache-writes-priced",
+        ),
+        pytest.param(
+            "anthropic",
+            "claude-sonnet-4-5",
+            {"cache_creation_input_token_cost_above_1hr": None},
+            False,
+            id="no-one-hour-cache-writes",
+        ),
+        pytest.param("anthropic", "claude-sonnet-4-5", None, False, id="model-not-in-cost-map"),
+        pytest.param(
+            "bedrock",
+            "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+            {"cache_creation_input_token_cost_above_1hr": None},
+            True,
+            id="bedrock-forwards-1h-from-the-base-model-entry",
+        ),
+        pytest.param(
+            "bedrock",
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            {"cache_creation_input_token_cost_above_1hr": 6.6e-06},
+            False,
+            id="bedrock-drops-1h-for-a-profile-arn-whatever-its-base-model",
+        ),
     ],
 )
 async def test_one_hour_pin_follows_the_deployments_one_hour_cache_support(
-    model_map_value: dict[str, float | None] | None, pinned_past_five_minutes: bool
+    custom_llm_provider: str,
+    model: str,
+    model_map_value: dict[str, float | None] | None,
+    pinned_past_five_minutes: bool,
 ):
     clock: Final = _ManualClock()
     cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
     check: Final = PromptCachingDeploymentCheck(cache=cache)
-    model: Final = "anthropic/claude-sonnet-4-5"
     messages: Final = cast(
         list[AllMessageValues],
         [
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "word " * 3000, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+                    {"type": "text", "text": "word " * 6000, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
                 ],
             }
         ],
@@ -727,6 +757,7 @@ async def test_one_hour_pin_follows_the_deployments_one_hour_cache_support(
         kwargs={
             "standard_logging_object": {
                 "call_type": "acompletion",
+                "custom_llm_provider": custom_llm_provider,
                 "model": model,
                 "messages": messages,
                 "model_id": "dep-1",
