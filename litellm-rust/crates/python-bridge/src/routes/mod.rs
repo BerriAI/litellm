@@ -13,7 +13,7 @@ use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCal
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{Error as HostError, present};
 use litellm_host_python::{
-    HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+    CallOptions, HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
 };
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -129,6 +129,10 @@ fn call_hooks(
     ))
 }
 
+fn execution_steps(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+    py.import("litellm.rust_bridge.execution")
+}
+
 fn run_public_call<H, M>(
     py: Python<'_>,
     arguments: Py<PyDict>,
@@ -159,7 +163,7 @@ where
             .with(hooks)
             .with(crate::preflight::SdkPolicy),
         arguments,
-        crate::lifecycle::call_options(asynchronous),
+        CallOptions::new(asynchronous, execution_steps),
     )
 }
 

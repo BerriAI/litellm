@@ -6,12 +6,12 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge.lifecycle import (
+from litellm.rust_bridge.execution import (
+    AsyncStream,
     Await,
     Complete,
     Execution,
     Step,
-    Stream,
     StreamChunk,
     StreamOpen,
     SyncStream,
@@ -50,7 +50,7 @@ async def failing() -> object:
 def test_drive_resumes_each_await_with_its_result_or_error_and_returns_the_completed_value() -> None:
     execution: Final = ScriptedExecution([Await(ready(1)), Await(failing()), Complete("done")])
 
-    assert asyncio.run(drive(execution, Stream)) == "done"
+    assert asyncio.run(drive(execution, AsyncStream)) == "done"
 
     assert execution.resumed == [("value", None), ("value", 1), ("error", ValueError)]
     assert execution.closed
@@ -85,7 +85,7 @@ def test_drive_rejects_a_chunk_before_the_stream_opens_and_closes_the_execution(
     execution: Final = ScriptedExecution([StreamChunk("chunk")])
 
     with pytest.raises(RuntimeError, match="chunk before opening a stream"):
-        asyncio.run(drive(execution, Stream))
+        asyncio.run(drive(execution, AsyncStream))
 
     assert execution.closed
 
@@ -95,11 +95,11 @@ def test_stream_read_rejects_a_second_open_and_closes_the_execution(asynchronous
     execution: Final = ScriptedExecution([StreamChunk("first"), StreamOpen("head")])
 
     async def read() -> tuple[object, ...]:
-        stream: Final = Stream(execution)
+        stream: Final = AsyncStream(execution, {})
         return (await anext(stream), await anext(stream))
 
     def read_sync() -> tuple[object, ...]:
-        stream: Final = SyncStream(execution)
+        stream: Final = SyncStream(execution, {})
         return (next(stream), next(stream))
 
     with pytest.raises(RuntimeError, match="opened a stream twice"):
