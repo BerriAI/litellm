@@ -2116,6 +2116,40 @@ class TestConverseRewriteRegressions:
         assert result["data"]["messages"][1]["content"] == [expected, {"text": "card [CARD]"}]
 
     @pytest.mark.asyncio
+    async def test_deeply_nested_tool_result_json_refuses_a_text_mask_the_rows_leave_out(self):
+        nested: object = "card 4111"
+        for _ in range(500):
+            nested = {"k": nested}
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "f", "input": {}}}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"toolResult": {"toolUseId": "t1", "content": [{"json": nested}]}},
+                            {"text": "my card 4111"},
+                        ],
+                    },
+                ]
+            },
+        }
+        guard = _ScriptedGuardrail(
+            lambda inputs: {
+                "texts": _masked_texts(inputs),
+                "structured_messages": [
+                    inputs["structured_messages"][0],
+                    inputs["structured_messages"][1],
+                    {**inputs["structured_messages"][2], "content": [{"type": "text", "text": "my card [CARD]"}]},
+                ],
+            }
+        )
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+    @pytest.mark.asyncio
     async def test_new_text_on_a_tool_call_only_turn_fails_closed(self):
         data = {
             "endpoint": "model/test/converse",
@@ -2848,6 +2882,24 @@ class TestConverseToolDefinitionRewrites:
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
 
         assert result["data"] == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("masked", ["description", "definition"])
+    async def test_masked_tool_string_keeps_the_rest_of_the_client_schema(self, masked):
+        data = _tool_config_data()
+        lookup = data["data"]["toolConfig"]["tools"][0]["toolSpec"]
+        lookup["description"] = "Card 4111 on file" if masked == "description" else "Looks up a card"
+        lookup["inputSchema"]["json"] = {
+            "type": "object",
+            "properties": {"card": {"$ref": "#/$defs/Card"}},
+            "$defs": {"Card": {"type": "string", "description": "use 4111" if masked == "definition" else "a card"}},
+        }
+        expected = json.loads(json.dumps(data["data"]["toolConfig"]).replace("4111", "[CARD]"))
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": _masked_tools(inputs)})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"]["toolConfig"] == expected
 
     @pytest.mark.asyncio
     async def test_tool_the_guardrail_removed_is_dropped_and_the_rest_keep_their_edits(self):
