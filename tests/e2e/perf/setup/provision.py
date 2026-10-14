@@ -160,7 +160,7 @@ def build_setup(
                 headers=proxy.transport.master,
                 json=UserNewBody(
                     user_email=f"{identity.username}@example.com",
-                    user_role=user.role,
+                    user_role="internal_user",
                     user_id=identity.user_id,
                     auto_create_key=False,
                     max_budget=user.max_budget,
