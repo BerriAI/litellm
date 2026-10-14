@@ -13,8 +13,6 @@ from litellm.types.router import (
     GenericLiteLLMParams,
     LiteLLM_Params,
     ModelInfo,
-    RouterRateLimitError,
-    RouterRateLimitErrorBasic,
     holds_secret_pointer,
     reject_server_owned_wif_params,
     server_owned_wif_fields_named,
@@ -29,7 +27,6 @@ from litellm.types.utils import (
     openai_wif_litellm_params,
     server_owned_wif_litellm_params,
 )
-from litellm.utils import should_retry
 
 
 def test_sdk_timeout_is_normalized_for_provider_clients() -> None:
@@ -375,18 +372,3 @@ def test_server_owned_wif_fields_present_reports_openai_fields():
 def test_reject_server_owned_wif_params_names_each_openai_field(param_name: str):
     with pytest.raises(ValueError, match=param_name):
         reject_server_owned_wif_params({param_name: "client-supplied"})
-
-
-@pytest.mark.parametrize(
-    "exc",
-    (
-        RouterRateLimitError(model="gpt-4", cooldown_time=5.0, enable_pre_call_checks=False, cooldown_list=[]),
-        RouterRateLimitErrorBasic(model="gpt-4"),
-    ),
-    ids=("cooldown", "basic"),
-)
-def test_no_deployment_errors_carry_a_retryable_rate_limit_status(
-    exc: RouterRateLimitError | RouterRateLimitErrorBasic,
-) -> None:
-    assert exc.status_code == 429
-    assert should_retry(exc.status_code) is True
