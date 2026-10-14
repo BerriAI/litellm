@@ -5,8 +5,10 @@ from opentelemetry.context import Context
 from opentelemetry.instrumentation.asgi import (  # pyright: ignore[reportMissingTypeStubs]  # the ASGI instrumentation ships no py.typed marker
     asgi_getter,
 )
-from opentelemetry.instrumentation.propagators import TraceResponsePropagator
+from opentelemetry.instrumentation.propagators import ResponsePropagator
 from opentelemetry.propagators.textmap import CarrierT, Setter, default_setter
+from opentelemetry.trace import Span, format_span_id, format_trace_id
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from litellm.integrations.otel.model.semconv import LiteLLM
 
@@ -22,7 +24,15 @@ def _http_response_start(message: object) -> dict[str, object] | None:  # mutabl
     return None
 
 
-class UpstreamFirstTraceResponsePropagator(TraceResponsePropagator):
+def _link_a_restarted_upstream_trace(span: Span, upstream_traceresponse: str) -> None:
+    upstream: Final = trace.get_current_span(
+        TraceContextTextMapPropagator().extract({"traceparent": upstream_traceresponse})
+    ).get_span_context()
+    if upstream.trace_id != span.get_span_context().trace_id:
+        span.add_link(upstream)
+
+
+class UpstreamFirstTraceResponsePropagator(ResponsePropagator):
     def inject(
         self,
         carrier: CarrierT,
@@ -36,9 +46,18 @@ class UpstreamFirstTraceResponsePropagator(TraceResponsePropagator):
         call_id: Final = _response_header(start, "x-litellm-call-id")
         if call_id:
             span.set_attribute(LiteLLM.CALL_ID, call_id)
-        if not span.get_span_context().trace_flags.sampled or _response_header(start, "traceresponse") is not None:
+        upstream_traceresponse: Final = _response_header(start, "traceresponse")
+        if upstream_traceresponse is not None:
+            _link_a_restarted_upstream_trace(span, upstream_traceresponse)
+            return
+        own: Final = span.get_span_context()
+        if not own.trace_flags.sampled:
             return
         sent: Final = start.get("headers")
         if isinstance(sent, tuple):
             start["headers"] = [*sent]
-        super().inject(carrier, context, setter)  # pyright: ignore[reportUnknownMemberType]  # upstream leaves its Setter parameter unparameterized
+        setter.set(
+            carrier,
+            "traceresponse",
+            f"00-{format_trace_id(own.trace_id)}-{format_span_id(own.span_id)}-{own.trace_flags:02x}",
+        )

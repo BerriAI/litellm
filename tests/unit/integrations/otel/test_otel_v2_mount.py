@@ -332,6 +332,12 @@ def _traced_app(monkeypatch, tracer_provider):
 
     app.add_api_route("/relayed", relay_upstream)
     app.add_api_route("/relayed/health", relay_upstream)
+
+    @app.get("/relayed-untraced")
+    async def relay_untraced_upstream():
+        upstream = httpx.Headers({"access-control-expose-headers": "x-upstream-request-id"})
+        return fastapi.Response(headers=HttpPassThroughEndpointHelpers.get_response_headers(upstream, "call-untraced"))
+
     app.router.routes.append(Route("/tuple-headers", _TupleHeadersApp()))
 
     @app.get("/crash")
@@ -383,6 +389,31 @@ def test_a_relayed_upstream_traceresponse_is_returned_once_and_unchanged(monkeyp
     response = TestClient(_traced_app(monkeypatch, provider)).get(path)
 
     assert response.headers.get_list("traceresponse") == [_UPSTREAM_TRACERESPONSE]
+
+
+@pytest.mark.parametrize(
+    ("caller_headers", "linked"),
+    [({}, True), ({"traceparent": f"00-{_UPSTREAM_TRACERESPONSE.split('-')[1]}-00f067aa0ba902b7-01"}, False)],
+)
+def test_a_relayed_traceresponse_from_a_restarted_trace_is_linked(monkeypatch, caller_headers, linked):
+    provider, exporter = _exporting_provider()
+
+    TestClient(_traced_app(monkeypatch, provider)).get("/relayed", headers=caller_headers)
+
+    links = _server_spans_by_route(exporter)["/relayed"].links
+    upstream_ids = [f"00-{link.context.trace_id:032x}-{link.context.span_id:016x}-01" for link in links]
+    assert upstream_ids == ([_UPSTREAM_TRACERESPONSE] if linked else [])
+
+
+def test_traceresponse_leaves_access_control_expose_headers_to_cors(monkeypatch):
+    provider, _ = _exporting_provider()
+    client = TestClient(_traced_app(monkeypatch, provider), raise_server_exceptions=False)
+
+    responses = [client.get(path) for path in ("/success", "/crash", "/relayed-untraced")]
+
+    assert all(response.headers.get_list("traceresponse") for response in responses)
+    exposed = [response.headers.get_list("access-control-expose-headers") for response in responses]
+    assert exposed == [[], [], ["x-upstream-request-id"]]
 
 
 def test_server_span_carries_the_call_id_its_response_returns(monkeypatch):

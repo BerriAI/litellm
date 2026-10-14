@@ -115,10 +115,11 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
     after config load (see ``proxy_startup_event``), and the proxy delegates to it.
     That way server spans and gen-ai spans share one provider and the same trace.
 
-    Once instrumented, every sampled HTTP response carries the W3C ``traceresponse``
+    Once instrumented, every sampled HTTP response carries a ``traceresponse``
     header naming its server span, unless the response already relays an upstream's
-    ``traceresponse`` or another response propagator is already registered. The
-    server span also gets ``litellm.call_id`` from the response's
+    ``traceresponse`` or another response propagator is already registered. A relayed
+    ``traceresponse`` from an upstream that restarted the trace becomes a link on the
+    server span. The server span also gets ``litellm.call_id`` from the response's
     ``x-litellm-call-id`` header. ``tracer_provider`` defaults to the global provider.
     """
     try:
