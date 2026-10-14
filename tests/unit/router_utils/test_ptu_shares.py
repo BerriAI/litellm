@@ -2,6 +2,8 @@
 
 from typing import Final
 
+import pytest
+
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.router_utils.ptu_shares import (
     filter_ptu_shared_deployments,
@@ -60,10 +62,11 @@ def _unaliased_ceiling(deployments: list[dict], team_id: str, requested_model: s
     return team_ptu_ceiling(deployments, deployments, team_id, requested_model, _no_wildcard_route)
 
 
-def test_a_team_holding_a_share_keeps_the_shared_deployment():
+def test_a_team_holding_a_share_is_served_from_its_share_alone():
+    """An open deployment beside the shared one would put the team's pay-as-you-go traffic
+    under its PTU ceiling and into its PTU-hours, so only the teams holding no share get it."""
     result: Final = filter_ptu_shared_deployments([_shared(), _OPEN], "team-a")
-    assert [d["model_info"]["id"] for d in result.deployments] == ["shared", "open"]
-    assert result.withheld is False
+    assert [d["model_info"]["id"] for d in result.deployments] == ["shared"]
 
 
 def test_a_team_without_a_share_only_sees_the_unshared_deployments():
@@ -105,16 +108,15 @@ def test_a_declared_split_is_the_access_rule_even_without_pricing_terms():
     assert ceiling.tpm_limit == 30 * _GPT41.input_tpm_per_ptu
 
 
-def test_a_team_is_served_from_its_shared_deployment_first_and_never_from_another_teams_reservation():
-    """team-b holds a share on the shared deployment and the open one serves everyone, while the
-    deployment reserved for team-a alone is withheld from it the way the router withholds it."""
-    servable: Final = team_servable_deployments([_single_team(), _OPEN, _shared()], "team-b")
-    assert [d["model_info"]["id"] for d in servable] == ["shared", "open"]
+@pytest.mark.parametrize("team_id", ["team-a", "team-b"])
+def test_a_team_holding_a_share_is_served_from_it_and_nothing_else_in_the_group(team_id: str):
+    servable: Final = team_servable_deployments([_single_team(), _OPEN, _shared()], team_id)
+    assert [d["model_info"]["id"] for d in servable] == ["shared"]
 
 
-def test_the_owning_team_keeps_its_reservation_behind_its_share():
-    servable: Final = team_servable_deployments([_single_team(), _OPEN, _shared()], "team-a")
-    assert [d["model_info"]["id"] for d in servable] == ["shared", "single", "open"]
+def test_a_team_holding_no_share_gets_the_open_deployment_and_never_another_teams_reservation():
+    servable: Final = team_servable_deployments([_single_team(), _OPEN, _shared()], "team-c")
+    assert [d["model_info"]["id"] for d in servable] == ["open"]
 
 
 def test_a_share_converts_to_the_models_input_tpm_per_ptu():

@@ -6,6 +6,7 @@ a PTU-hour it consumed, reported next to the raw token counts.
 """
 
 from collections.abc import Callable, Sequence
+from functools import cache
 from types import MappingProxyType
 from typing import Final
 
@@ -123,7 +124,7 @@ def capacity_by_requested_name(llm_router: Router, team_id: str | None) -> Calla
         )
         return model_group_ptu_capacity(routed if team_id is None else team_servable_deployments(routed, team_id))
 
-    return capacity_for
+    return cache(capacity_for)
 
 
 def single_team_id(team_ids: Sequence[str] | None) -> str | None:

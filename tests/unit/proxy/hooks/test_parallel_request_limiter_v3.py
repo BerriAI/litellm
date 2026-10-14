@@ -7792,8 +7792,9 @@ def _two_thirds_of_a_ptu_minute() -> dict:
 
 @pytest.mark.asyncio
 async def test_the_reservation_weighs_output_the_way_the_ceiling_does():
-    """300 output tokens are 1200 normalized tokens at 4:1, over a 1000-token ceiling the raw
-    301-token estimate would clear; the same request at 1:1 is admitted."""
+    """300 output tokens are 1200 normalized tokens at 4:1, more than a 1000-token ceiling the raw
+    301-token estimate would clear, so the request is refused as one no minute can admit; the same
+    request at 1:1 is admitted."""
     key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
     unweighted_cache = DualCache()
     unweighted = _PROXY_MaxParallelRequestsHandler(
@@ -7813,8 +7814,8 @@ async def test_the_reservation_weighs_output_the_way_the_ceiling_does():
         await weighted.async_pre_call_hook(
             user_api_key_dict=key, cache=weighted_cache, data=_ptu_request(), call_type="acompletion"
         )
-    assert rejected.value.status_code == 429
-    assert "model_per_team_ptu" in str(rejected.value.detail)
+    assert rejected.value.status_code == 400
+    assert "needs 1201 normalized tokens" in str(rejected.value.detail)
 
 
 @pytest.mark.asyncio
@@ -7841,6 +7842,29 @@ async def test_a_one_ptu_share_admits_four_uncapped_requests_a_minute_and_reject
     assert fifth.value.status_code == 429
     assert "model_per_team_ptu" in str(fifth.value.detail)
     assert all(data["max_tokens"] * 4 <= 3000 // 4 for data in admitted)
+
+
+@pytest.mark.asyncio
+async def test_a_request_whose_own_cap_outgrows_the_share_is_refused_as_invalid_and_charges_nothing():
+    """A 429 would tell the client to retry a call no empty minute can ever admit."""
+    cache = DualCache()
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=3000, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+    oversized = {**_ptu_request(), "max_tokens": 750}
+
+    with pytest.raises(HTTPException) as refused:
+        await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=oversized, call_type="acompletion")
+    for _ in range(2):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data={**_ptu_request(), "max_tokens": 360}, call_type="acompletion"
+        )
+
+    assert refused.value.status_code == 400
+    assert "max_tokens" in str(refused.value.detail)
+    assert refused.value.headers is None or "retry-after" not in refused.value.headers
 
 
 @pytest.mark.asyncio

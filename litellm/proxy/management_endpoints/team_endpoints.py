@@ -213,6 +213,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.router_utils.ptu_shares import deployments_shared_with
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -4455,6 +4456,27 @@ async def bulk_team_member_add(
         )
 
 
+def _raise_if_teams_hold_ptu_shares(team_ids: Sequence[str], llm_router: Router | None) -> None:
+    """A team still named in a deployment's ``ptu_shares`` would keep being billed for PTUs nobody can use."""
+    if llm_router is None:
+        return
+    held: Final = tuple(
+        (team_id, deployment_ids)
+        for team_id in team_ids
+        if (deployment_ids := deployments_shared_with(llm_router.get_model_list() or (), team_id))
+    )
+    if not held:
+        return
+    team_id, deployment_ids = held[0]
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"Team {team_id} holds a PTU share on deployment {', '.join(deployment_ids)}. "
+            "Move its share to another team in model_info.ptu_shares before deleting the team."
+        },
+    )
+
+
 @router.post("/team/delete", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def delete_team(
@@ -4488,6 +4510,7 @@ async def delete_team(
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
         litellm_proxy_admin_name,
+        llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -4518,6 +4541,8 @@ async def delete_team(
             team_access_denied()
 
         team_rows.append(team_row_pydantic)
+
+    _raise_if_teams_hold_ptu_shares(data.team_ids, llm_router)
 
     await _persist_deleted_team_records(
         teams=team_rows,

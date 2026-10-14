@@ -28,7 +28,7 @@ export const FLAT_COST_TOOLTIP =
   "Reserved provisioned throughput, billed per hour whether or not requests are sent. Reported here only; it does not count toward team, key, user, or organization budgets.";
 
 export const PTU_HOURS_TOOLTIP =
-  "Provisioned throughput consumed, in PTU-hours: the tokens sent to PTU deployments converted through the Azure sizing table for each model. Compare it with the PTU-hours reserved to see how much of the reservation was used.";
+  "Provisioned throughput consumed, in PTU-hours: the tokens sent to PTU deployments converted through the Azure sizing table for each model. Divide it by the PTUs reserved times the hours in the period to see how much of the reservation was used.";
 
 export const hasFlatCost = (metadata: SpendSummaryMetadata): boolean => (metadata.total_flat_cost ?? 0) > 0;
 

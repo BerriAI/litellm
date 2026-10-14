@@ -28,7 +28,7 @@ from typing import (
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
-from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
+from starlette.status import HTTP_400_BAD_REQUEST, HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
@@ -76,7 +76,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     response_has_hidden_params,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.ptu_shares import PTUTeamCeiling, team_ptu_ceiling
+from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -143,13 +143,7 @@ def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -
 
     if llm_router is None or not is_ptu_cost_attribution_enabled():
         return None
-    return team_ptu_ceiling(
-        llm_router.get_model_list() or (),
-        llm_router.model_list,  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # Router.model_list is a bare list
-        team_id,
-        model_group,
-        lambda name: llm_router.wildcard_route_deployments(name, team_id),
-    )
+    return llm_router.team_ptu_ceiling(team_id, model_group)
 
 
 FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING: Final = "fail_closed_rate_limit_enforcement"
@@ -165,6 +159,18 @@ class RateLimitUnverifiableError(HTTPException):
         super().__init__(
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
             detail={"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE},
+        )
+
+
+class PTUShareExceededError(HTTPException):
+    def __init__(self, ceiling: PTUTeamCeiling, needed_tokens: int) -> None:
+        super().__init__(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail={
+                "error": f"This request needs {needed_tokens} normalized tokens, more than your team's PTU share "
+                f"of {ceiling.model_group} allows in a minute ({ceiling.tpm_limit}), so it can never be admitted. "
+                "Lower max_tokens or shorten the prompt."
+            },
         )
 
 
@@ -4325,6 +4331,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     configured_output_tokens=configured_output_tokens,
                     raw_estimate=estimated_tokens,
                 )
+                if stash.ptu_ceiling is not None and ptu_estimated_tokens > stash.ptu_ceiling.tpm_limit:
+                    await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
+                    raise PTUShareExceededError(stash.ptu_ceiling, ptu_estimated_tokens)
                 tpm_response: Final = await self.reserve_tpm_tokens(
                     descriptors=descriptors,
                     estimated_tokens=estimated_tokens,

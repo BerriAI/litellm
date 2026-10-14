@@ -20565,7 +20565,7 @@ def test_ptu_shares_hide_the_shared_deployment_from_teams_holding_no_share(monke
             model="gpt-4.1-ptu",
             request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
         )
-        assert {d["model_info"]["id"] for d in deployments} == {"shared-deployment", "open-deployment"}
+        assert [d["model_info"]["id"] for d in deployments] == ["shared-deployment"]
 
 
 def test_ptu_shares_raise_when_only_shared_deployments_remain(monkeypatch):
@@ -20581,6 +20581,25 @@ def test_ptu_shares_raise_when_only_shared_deployments_remain(monkeypatch):
         request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
     )
     assert [d["model_info"]["id"] for d in deployments] == ["shared-deployment"]
+
+
+def test_team_ptu_ceiling_follows_shares_moved_on_the_live_model_list():
+    router: Final = Router(model_list=_shared_ptu_model_list()[:1])
+    team_a_before: Final = router.team_ptu_ceiling("team-a", "gpt-4.1-ptu")
+    assert router.team_ptu_ceiling("team-c", "gpt-4.1-ptu") is None
+
+    moved: Final = _shared_ptu_model_list()[0]
+    moved["model_info"]["ptu_shares"] = {"team-a": 10, "team-c": 40}
+    router.upsert_deployment(Deployment(**moved))
+
+    team_a_after: Final = router.team_ptu_ceiling("team-a", "gpt-4.1-ptu")
+    team_c_after: Final = router.team_ptu_ceiling("team-c", "gpt-4.1-ptu")
+    assert team_a_before is not None and team_a_after is not None and team_c_after is not None
+    assert team_a_before.tpm_limit == 3 * team_a_after.tpm_limit
+    assert team_c_after.tpm_limit == 4 * team_a_after.tpm_limit
+
+    router.delete_deployment(id="shared-deployment")
+    assert router.team_ptu_ceiling("team-a", "gpt-4.1-ptu") is None
 
 
 def test_ptu_shares_hide_the_shared_deployment_even_while_the_feature_is_off(monkeypatch):

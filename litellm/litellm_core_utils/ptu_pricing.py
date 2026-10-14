@@ -10,16 +10,19 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
+from functools import lru_cache
+from time import monotonic
 from types import MappingProxyType
 from typing import Final
 
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
-from litellm.secret_managers.main import str_to_bool
+from litellm.secret_managers.main import get_secret_bool, secret_manager_would_be_consulted, str_to_bool
 from litellm.types.router import ModelInfo
 from litellm.types.utils import AzureSpillover, CustomPricingLiteLLMParams, MirroredPricingParams
 
 PTU_COST_ATTRIBUTION_ENV_VAR: Final = "LITELLM_ENABLE_PTU_COST_ATTRIBUTION"
+SECRET_MANAGER_FLAG_REFRESH_SECONDS: Final = 60
 AZURE_SPILLOVER_HEADER: Final = "x-ms-is-spilled-over"
 AZURE_SPILLOVER_FROM_HEADER: Final = "x-ms-spillover-from-deployment"
 
@@ -27,10 +30,19 @@ AZURE_SPILLOVER_FROM_HEADER: Final = "x-ms-spillover-from-deployment"
 def is_ptu_cost_attribution_enabled() -> bool:
     """Whether PTU flat-cost attribution is turned on for this process.
 
-    Read from the environment alone: the router and the rate limiter ask on every request,
-    and ``get_secret`` would forward each of those reads to a configured secret manager.
+    The environment decides whenever the variable is set there. Otherwise a configured secret
+    manager holding it decides, read at most once a minute, since the router and the rate
+    limiter ask on every request.
     """
-    return str_to_bool(os.environ.get(PTU_COST_ATTRIBUTION_ENV_VAR)) is True
+    from_env: Final = os.environ.get(PTU_COST_ATTRIBUTION_ENV_VAR)
+    if from_env is not None or not secret_manager_would_be_consulted(PTU_COST_ATTRIBUTION_ENV_VAR):
+        return str_to_bool(from_env) is True
+    return _enabled_in_secret_manager(int(monotonic() // SECRET_MANAGER_FLAG_REFRESH_SECONDS))
+
+
+@lru_cache(maxsize=1)
+def _enabled_in_secret_manager(_refresh_window: int) -> bool:
+    return get_secret_bool(PTU_COST_ATTRIBUTION_ENV_VAR, False) is True
 
 
 PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in MirroredPricingParams.model_fields if f != "tiered_pricing") + (

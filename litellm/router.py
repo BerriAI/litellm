@@ -268,7 +268,13 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
-from litellm.router_utils.ptu_shares import filter_ptu_shared_deployments, ptu_capacity_warning
+from litellm.router_utils.ptu_shares import (
+    PTUTeamCeiling,
+    filter_ptu_shared_deployments,
+    ptu_capacity_warning,
+    ptu_share_teams,
+    team_ptu_ceiling,
+)
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -1170,6 +1176,8 @@ class Router:
         self.cached_deployment_model_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
             self.get_deployment_model_info
         )
+        self._ptu_share_teams = lru_cache(maxsize=1)(self._collect_ptu_share_teams)
+        self._cached_team_ptu_ceiling = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(self._resolve_team_ptu_ceiling)
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=max(len(model_list or ()), 1),
             default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
@@ -12583,6 +12591,25 @@ class Router:
             return proxy_wide
         return team_router.get_deployments_by_pattern(model=model)
 
+    def team_ptu_ceiling(self, team_id: str, model_group: str) -> PTUTeamCeiling | None:
+        """The per-minute ceiling ``team_id``'s PTU shares set on the group serving ``model_group``,
+        else None, kept until the model list next changes."""
+        if team_id not in self._ptu_share_teams():
+            return None
+        return self._cached_team_ptu_ceiling(team_id, model_group)
+
+    def _collect_ptu_share_teams(self) -> frozenset[str]:
+        return ptu_share_teams(self.get_model_list() or ())
+
+    def _resolve_team_ptu_ceiling(self, team_id: str, model_group: str) -> PTUTeamCeiling | None:
+        return team_ptu_ceiling(
+            self.get_model_list() or (),
+            self.model_list,
+            team_id,
+            model_group,
+            lambda name: self.wildcard_route_deployments(name, team_id),
+        )
+
     def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
         """
         The deployments a request the router has already resolved to model_group is
@@ -12630,6 +12657,8 @@ class Router:
         """
         self._cached_get_model_group_info.cache_clear()
         self.cached_deployment_model_info.cache_clear()
+        self._ptu_share_teams.cache_clear()
+        self._cached_team_ptu_ceiling.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
 

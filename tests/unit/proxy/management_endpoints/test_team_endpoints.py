@@ -9027,6 +9027,52 @@ async def test_delete_team_persists_deleted_teams(
 
 
 @pytest.mark.asyncio
+async def test_delete_team_is_refused_while_the_team_holds_a_ptu_share(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    from litellm import Router
+    from litellm.proxy._types import DeleteTeamRequest
+
+    shared_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-azure", "api_base": "https://x"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"team-1": 30, "team-2": 20},
+                },
+            }
+        ]
+    )
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        side_effect=lambda where: LiteLLM_TeamTable(team_id=where["team_id"], members_with_roles=[], metadata={})
+    )
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", shared_router)
+    admin = UserAPIKeyAuth(user_id="admin-user", api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN.value)
+
+    with pytest.raises(HTTPException) as refused:
+        await delete_team(
+            data=DeleteTeamRequest(team_ids=["team-3", "team-2"]),
+            http_request=MagicMock(),
+            user_api_key_dict=admin,
+            litellm_changed_by="admin-user",
+        )
+
+    assert refused.value.status_code == 400
+    assert "team-2" in str(refused.value.detail) and "shared-ptu" in str(refused.value.detail)
+    mock_prisma_client.db.litellm_deletedteamtable.create_many.assert_not_called()
+    mock_prisma_client.delete_data.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_delete_team_sweeps_references_outside_members_with_roles(
     monkeypatch,
     disable_audit_logging_for_mocked_team,

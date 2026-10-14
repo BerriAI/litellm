@@ -56,16 +56,40 @@ def _deployment_shares(deployment: Mapping[str, object]) -> Mapping[str, int] | 
 def filter_ptu_shared_deployments(
     healthy_deployments: Sequence[_DeploymentT], request_team_id: str | None
 ) -> PTUShareFilterResult[_DeploymentT]:
-    """Drop every deployment split into PTU shares that ``request_team_id`` holds none of.
+    """Keep only the deployments ``request_team_id`` holds a share on when it holds one, else only
+    the ones split into no shares, so a team's ceiling and PTU-hours count just the traffic its
+    reservation serves, and an open deployment beside a shared one serves the teams holding none.
 
     A caller with no team, the master key included, holds no share, the same way an access
     window reserves a deployment away from it.
     """
+    team_id: Final = request_team_id or ""
     checks: Final = tuple((deployment, _deployment_shares(deployment)) for deployment in healthy_deployments)
+    holds_share: Final = any(shares is not None and team_id in shares for _, shares in checks)
     kept: Final = tuple(
-        deployment for deployment, shares in checks if shares is None or (request_team_id or "") in shares
+        deployment for deployment, shares in checks if (team_id in shares if shares is not None else not holds_share)
     )
     return PTUShareFilterResult(deployments=kept, withheld=len(kept) < len(checks))
+
+
+def ptu_share_teams(deployments: Sequence[Mapping[str, object]]) -> frozenset[str]:
+    """Every team holding a share on any of ``deployments``."""
+    return frozenset[str]().union(
+        *(shares for deployment in deployments if (shares := _deployment_shares(deployment)) is not None)
+    )
+
+
+def deployments_shared_with(deployments: Sequence[Mapping[str, object]], team_id: str) -> tuple[str, ...]:
+    """The ids of the deployments split into PTU shares ``team_id`` holds one of, each once."""
+    return tuple(
+        sorted(
+            frozenset(
+                str(_deployment_id(deployment))
+                for deployment in deployments
+                if (shares := _deployment_shares(deployment)) is not None and team_id in shares
+            )
+        )
+    )
 
 
 def team_ptu_ceiling(
@@ -177,8 +201,7 @@ def _model_group_of(
     requested_model: str,
     wildcard_route: WildcardRoute,
 ) -> str:
-    """The group of the deployment behind ``requested_model`` this team can be served from, one
-    holding its share first."""
+    """The group of the deployment behind ``requested_model`` this team can be served from."""
     servable: Final = team_servable_deployments(
         routed_deployments(listed_rows, deployments, requested_model, wildcard_route), team_id
     )
@@ -194,13 +217,12 @@ def _deployment_owner(deployment: Mapping[str, object]) -> object:
 
 
 def team_servable_deployments(deployments: Sequence[_DeploymentT], team_id: str) -> tuple[_DeploymentT, ...]:
-    """The deployments ``team_id`` can be served from, the ones it holds a share on first: never one
-    reserved for another team, nor one split into shares it holds none of."""
+    """The deployments ``team_id`` can be served from: never one reserved for another team, and only
+    the ones it holds a share on when it holds any."""
     shareable: Final = filter_ptu_shared_deployments(deployments, team_id).deployments
-    servable: Final = tuple(
+    return tuple(
         deployment for deployment in shareable if team_may_use_deployment(_deployment_owner(deployment), team_id)
     )
-    return tuple(sorted(servable, key=lambda deployment: _deployment_shares(deployment) is None))
 
 
 def model_group_ptu_capacity(deployments: Sequence[Mapping[str, object]]) -> PTUCapacity | None:
