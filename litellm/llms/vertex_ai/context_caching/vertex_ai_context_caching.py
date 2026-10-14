@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Final, Literal
 
 import httpx
@@ -20,6 +21,13 @@ from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
+from .id_cache import (
+    ResolvedCacheId,
+    invalidate_cache_id,
+    lookup_cache_id,
+    make_cache_id_key,
+    store_cache_id,
+)
 from .transformation import (
     cached_messages_end_on_supported_turn,
     separate_cached_messages,
@@ -35,6 +43,7 @@ MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
 class _CachedContentItem(TypedDict):
     displayName: ReadOnly[NotRequired[object]]
     name: ReadOnly[NotRequired[str | None]]
+    expireTime: ReadOnly[NotRequired[str | None]]
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -51,6 +60,7 @@ class _CachedContentUsageMetadata(TypedDict):
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _CreatedCachedContent(TypedDict):
     name: ReadOnly[NotRequired[str | None]]
+    expireTime: ReadOnly[NotRequired[str | None]]
     usageMetadata: ReadOnly[NotRequired[_CachedContentUsageMetadata | None]]
 
 
@@ -60,6 +70,56 @@ class _CachedContentListBodyRoot(RootModel[_CachedContentListBody]):
 
 class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _PageMatch:
+    resolved: ResolvedCacheId | None
+
+
+def _find_matching_cache(cached_items: Sequence[_CachedContentItem], cache_key: str) -> _PageMatch | None:
+    for cached_item in cached_items:
+        display_name = cached_item.get("displayName")
+        if display_name is not None and display_name == cache_key:
+            name = cached_item.get("name")
+            resolved = None if name is None else ResolvedCacheId(name=name, expire_time=cached_item.get("expireTime"))
+            return _PageMatch(resolved=resolved)
+    return None
+
+
+_CONTEXT_CACHE_ID_KEY_FIELD: Final = "_vertex_context_cache_id_key"
+
+
+def _stash_context_cache_id_key(logging_obj: Logging, key: str) -> None:
+    """Record the resolving id-cache key on the logging object so a downstream NOT_FOUND
+    (server-side deleted/revoked cachedContent) can invalidate it via
+    `maybe_invalidate_stale_context_cache`. No-op when the feature is off."""
+    if not litellm.enable_vertex_context_cache_id_caching:
+        return
+    model_call_details: Final = logging_obj.model_call_details
+    model_call_details[_CONTEXT_CACHE_ID_KEY_FIELD] = key
+
+
+def maybe_invalidate_stale_context_cache(logging_obj: Logging, status_code: int, response_text: str) -> None:
+    """If a request's resolved cachedContent is rejected downstream because it was
+    deleted/revoked server-side, drop the cached id so the next request re-resolves it.
+
+    Vertex reports a deleted cache as HTTP 400 INVALID_ARGUMENT ("Invalid resource state
+    for cache content <id>"), not 404, so we key off the *served id* appearing in the error
+    body rather than the status text: it names our exact id, so unrelated 4xx never evict a
+    live entry, and it doesn't matter which 4xx wording Vertex uses."""
+    if status_code not in (400, 403, 404):
+        return
+    key: Final = logging_obj.model_call_details.get(_CONTEXT_CACHE_ID_KEY_FIELD)
+    if not isinstance(key, str):
+        return
+    served_name: Final = lookup_cache_id(key)
+    if served_name is None:
+        return
+    served_id: Final = served_name.rsplit("/", 1)[-1]
+    if served_id not in response_text and served_name not in response_text:
+        return
+    invalidate_cache_id(key)
 
 
 def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
@@ -138,7 +198,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_location: str | None,
         vertex_auth_header: str | None,
         model: str | None = None,
-    ) -> str | None:
+    ) -> ResolvedCacheId | None:
         """
         Checks if content already cached.
 
@@ -198,11 +258,9 @@ class ContextCachingEndpoints(VertexBase):
             if "cachedContents" not in raw_response:
                 return None
 
-            # Check current page for matching cache_key
-            for cached_item in raw_response["cachedContents"]:
-                display_name = cached_item.get("displayName")
-                if display_name is not None and display_name == cache_key:
-                    return cached_item.get("name")
+            match = _find_matching_cache(raw_response["cachedContents"], cache_key)
+            if match is not None:
+                return match.resolved
 
             # Check if there are more pages
             page_token = raw_response.get("nextPageToken")
@@ -225,7 +283,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_location: str | None,
         vertex_auth_header: str | None,
         model: str | None = None,
-    ) -> str | None:
+    ) -> ResolvedCacheId | None:
         """
         Checks if content already cached.
 
@@ -285,11 +343,9 @@ class ContextCachingEndpoints(VertexBase):
             if "cachedContents" not in raw_response:
                 return None
 
-            # Check current page for matching cache_key
-            for cached_item in raw_response["cachedContents"]:
-                display_name = cached_item.get("displayName")
-                if display_name is not None and display_name == cache_key:
-                    return cached_item.get("name")
+            match = _find_matching_cache(raw_response["cachedContents"], cache_key)
+            if match is not None:
+                return match.resolved
 
             # Check if there are more pages
             page_token = raw_response.get("nextPageToken")
@@ -395,21 +451,38 @@ class ContextCachingEndpoints(VertexBase):
         generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        google_cache_name: Final = self.check_cache(
-            cache_key=generated_cache_key,
-            client=client,
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-            logging_obj=logging_obj,
+        id_cache_key: Final = make_cache_id_key(
+            content_key=generated_cache_key,
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
+            api_base=api_base,
+            api_key=api_key,
             vertex_auth_header=vertex_auth_header,
-            model=model,
+            extra_headers=extra_headers,
         )
-        if google_cache_name:
-            return non_cached_messages, optional_params, google_cache_name
+        _stash_context_cache_id_key(logging_obj, id_cache_key)
+        cached_id: Final = lookup_cache_id(id_cache_key)
+        resolved_cache: Final = (
+            ResolvedCacheId(name=cached_id, expire_time=None)
+            if cached_id is not None
+            else self.check_cache(
+                cache_key=generated_cache_key,
+                client=client,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=vertex_auth_header,
+                model=model,
+            )
+        )
+        if resolved_cache is not None:
+            store_cache_id(id_cache_key, resolved_cache.name, resolved_cache.expire_time)
+            return non_cached_messages, optional_params, resolved_cache.name
 
         ## TRANSFORM REQUEST
         cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
@@ -450,11 +523,13 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+        created_name: Final = raw_response_cached.get("name")
+        store_cache_id(id_cache_key, created_name, raw_response_cached.get("expireTime"))
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,
-            raw_response_cached.get("name"),
+            created_name,
         )
 
     async def async_check_and_create_cache(
@@ -548,22 +623,39 @@ class ContextCachingEndpoints(VertexBase):
         generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        google_cache_name: Final = await self.async_check_cache(
-            cache_key=generated_cache_key,
-            client=client,
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-            logging_obj=logging_obj,
+        id_cache_key: Final = make_cache_id_key(
+            content_key=generated_cache_key,
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
+            api_base=api_base,
+            api_key=api_key,
             vertex_auth_header=vertex_auth_header,
-            model=model,
+            extra_headers=extra_headers,
+        )
+        _stash_context_cache_id_key(logging_obj, id_cache_key)
+        cached_id: Final = lookup_cache_id(id_cache_key)
+        resolved_cache: Final = (
+            ResolvedCacheId(name=cached_id, expire_time=None)
+            if cached_id is not None
+            else await self.async_check_cache(
+                cache_key=generated_cache_key,
+                client=client,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=vertex_auth_header,
+                model=model,
+            )
         )
 
-        if google_cache_name:
-            return non_cached_messages, optional_params, google_cache_name
+        if resolved_cache is not None:
+            store_cache_id(id_cache_key, resolved_cache.name, resolved_cache.expire_time)
+            return non_cached_messages, optional_params, resolved_cache.name
 
         ## TRANSFORM REQUEST
         cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
@@ -604,11 +696,13 @@ class ContextCachingEndpoints(VertexBase):
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+        created_name: Final = raw_response_cached.get("name")
+        store_cache_id(id_cache_key, created_name, raw_response_cached.get("expireTime"))
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,
-            raw_response_cached.get("name"),
+            created_name,
         )
 
     def get_cache(self):
