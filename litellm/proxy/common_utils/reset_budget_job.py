@@ -285,11 +285,12 @@ def _queue_enduser_page_resets(
 
 
 def _queue_enduser_tier_resets(writes: LinkedSpendResetWrites, user_ids: Sequence[str], cap: float | None) -> None:
+    page: Final = {"user_id": {"in": list(user_ids)}}  # bounded-ok: one page of RESET_BUDGET_JOB_BATCH_SIZE ids
     if cap is None:
-        writes.queue_spend_zero(where={"user_id": {"in": list(user_ids)}, **_SPENT_ROWS_WHERE})
+        writes.queue_spend_zero(where={**page, **_SPENT_ROWS_WHERE})
         return
-    writes.queue_spend_zero(where={"user_id": {"in": list(user_ids)}, "spend": {"gt": 0, "lte": cap}})
-    writes.queue_spend_decrement(where={"user_id": {"in": list(user_ids)}, "spend": {"gt": cap}}, amount=cap)
+    writes.queue_spend_zero(where={**page, "spend": {"gt": 0, "lte": cap}})
+    writes.queue_spend_decrement(where={**page, "spend": {"gt": cap}}, amount=cap)
 
 
 @dataclass(frozen=True, slots=True)
