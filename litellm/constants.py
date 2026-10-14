@@ -1697,6 +1697,7 @@ AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:tran
 AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
 AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
 AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
+AWS_ERROR_TYPE_HEADER: Final = "x-amzn-errortype"
 AZURE_SPEECH_SHORT_AUDIO_MODEL: Final = "short-audio"
 AZURE_SPEECH_BATCH_MODEL: Final = "batch-transcription"
 AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL: Final = "fast-transcription"

@@ -34,6 +34,7 @@ from litellm import get_llm_provider
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
+    AWS_ERROR_TYPE_HEADER,
     AZURE_SPEECH_BATCH_PATH_PREFIX,
     AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN,
     AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
@@ -1059,14 +1060,14 @@ def extract_model_from_bedrock_endpoint(endpoint: str) -> str:
 
 
 _extract_model_from_bedrock_endpoint: Final = extract_model_from_bedrock_endpoint
-AWS_ERROR_TYPE_HEADER: Final = "x-amzn-errortype"
 
 
 def _guardrail_refusal_status(error: Exception) -> int | None:
     """The status a guardrail blocked the request with. None for a request check that answers with the same 400, 403
-    or 422, and for a guardrail that failed closed because it could not get a verdict.
+    or 422, for a guardrail that failed closed because it could not get a verdict, and for a guardrail block raised
+    with a plain-string detail.
 
-    Guardrail hooks stamp ``guardrail_name`` onto the detail of an HTTPException they raise."""
+    Guardrail hooks stamp ``guardrail_name`` onto the dict detail of an HTTPException they raise."""
     match error:
         case HTTPException():
             detail: Final[object] = error.detail

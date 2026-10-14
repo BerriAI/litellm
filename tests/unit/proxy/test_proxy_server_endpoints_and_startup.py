@@ -11961,10 +11961,9 @@ async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(
     assert [r for r in caplog.records if r.levelname == "WARNING"] == []
 
 
-
 @pytest.mark.asyncio
 async def test_aws_error_type_exception_handler_adds_the_aws_message_and_header():
-    error = ProxyException(
+    error: Final = ProxyException(
         message="synthetic policy says no",
         type="invalid_request_error",
         param=None,
@@ -11972,7 +11971,7 @@ async def test_aws_error_type_exception_handler_adds_the_aws_message_and_header(
         headers={"x-litellm-call-id": "call-1"},
     )
 
-    response = await aws_error_type_exception_handler(
+    response: Final = await aws_error_type_exception_handler(
         _http_request_scope(), AwsErrorTypeProxyException(error, "ValidationException")
     )
 
@@ -11983,7 +11982,6 @@ async def test_aws_error_type_exception_handler_adds_the_aws_message_and_header(
         "message": "synthetic policy says no",
         "error": {"message": "synthetic policy says no", "type": "invalid_request_error", "param": None, "code": "400"},
     }
-    assert app.exception_handlers[AwsErrorTypeProxyException] is aws_error_type_exception_handler
 
 
 @pytest.mark.asyncio

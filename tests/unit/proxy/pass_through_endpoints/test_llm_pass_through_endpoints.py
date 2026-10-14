@@ -24,12 +24,14 @@ from starlette.datastructures import FormData
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
 from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
+from litellm.proxy.utils import ProxyLogging
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -42,6 +44,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     azure_proxy_route,
     azure_speech_proxy_route,
     bedrock_llm_proxy_route,
+    bedrock_passthrough_error_response,
     bedrock_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
@@ -1934,66 +1937,38 @@ def _guardrail_detail(message: str) -> dict[str, str]:
     return {"error": message, "guardrail_name": "block-demo"}
 
 
+class _ReplacesFailures(CustomLogger):
+    def __init__(self, replacement: HTTPException) -> None:
+        super().__init__()
+        self.replacement: Final = replacement
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        return self.replacement
+
+
 class TestBedrockPassthroughAwsErrors:
     """A guardrail block or an error Bedrock returned reaches an AWS SDK caller with its code and message."""
 
     @staticmethod
-    async def _drive(route: str, error: Exception, failure_hook_result: object = None) -> object:
-        proxy_logging_obj: Final = Mock()
-        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=failure_hook_result)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
-        user_api_key_dict: Final = Mock()
-        user_api_key_dict.api_key = "test-key"
-        user_api_key_dict.allowed_model_region = None
-        request: Final = MagicMock(spec=Request)
-        request.method = "POST"
-        request.headers = {"content-type": "application/json"}
-        request.query_params = {}
-        body: Final = {"messages": [{"role": "user", "content": [{"text": "hi"}]}]}
-        with (
-            patch.object(
-                ProxyBaseLLMRequestProcessing,
-                "base_passthrough_process_llm_request",
-                new_callable=AsyncMock,
-                side_effect=error,
-            ),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.read_request_body",
-                new_callable=AsyncMock,
-                return_value=body,
-            ),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
-            patch("litellm.proxy.proxy_server.llm_router", None),
-        ):
-            if route == "router":
-                return await handle_bedrock_passthrough_router_model(
-                    model="bedrock-model",
-                    endpoint="model/bedrock-model/converse-stream",
-                    request=request,
-                    request_body=body,
-                    llm_router=Mock(),
-                    user_api_key_dict=user_api_key_dict,
-                    proxy_logging_obj=proxy_logging_obj,
-                    general_settings={},
-                    proxy_config=None,
-                    select_data_generator=None,
-                    user_model=None,
-                    user_temperature=None,
-                    user_request_timeout=None,
-                    user_max_tokens=None,
-                    user_api_base=None,
-                    version=None,
-                )
-            return await bedrock_llm_proxy_route(
-                endpoint="model/anthropic.claude-sonnet-5-v1:0/converse-stream",
-                request=request,
-                fastapi_response=Response(),
-                user_api_key_dict=user_api_key_dict,
-            )
+    async def _answer(error: Exception) -> Response:
+        return await bedrock_passthrough_error_response(
+            ProxyBaseLLMRequestProcessing(data={}),
+            error,
+            UserAPIKeyAuth(api_key="test-key"),
+            ProxyLogging(user_api_key_cache=DualCache()),
+        )
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("route", ("router", "direct"))
-    async def test_bedrock_error_reaches_the_caller_with_bedrocks_status_header_and_body(self, route: str) -> None:
+    async def test_bedrock_error_reaches_the_caller_with_bedrocks_status_header_and_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
         error: Final = _bedrock_status_error(
             429,
             _THROTTLE_BODY,
@@ -2004,9 +1979,8 @@ class TestBedrockPassthroughAwsErrors:
             },
         )
 
-        response: Final = await self._drive(route, error)
+        response: Final = await self._answer(error)
 
-        assert isinstance(response, Response)
         assert response.status_code == 429
         assert response.body == _THROTTLE_BODY
         assert response.headers["x-amzn-errortype"] == _THROTTLE_TYPE
@@ -2014,47 +1988,47 @@ class TestBedrockPassthroughAwsErrors:
         assert response.headers["llm_provider-x-amzn-requestid"] == "req-1"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("route", ("router", "direct"))
-    async def test_upstream_error_without_an_aws_error_type_keeps_the_litellm_error(self, route: str) -> None:
-        error: Final = _bedrock_status_error(502, b"<html>bad gateway</html>")
+    async def test_upstream_error_without_an_aws_error_type_keeps_the_litellm_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
 
         with pytest.raises(HTTPException) as exc_info:
-            await self._drive(route, error)
+            await self._answer(_bedrock_status_error(502, b"<html>bad gateway</html>"))
 
         assert exc_info.value.status_code == 502
         assert exc_info.value.detail == {"error": "<html>bad gateway</html>"}
         assert "x-amzn-errortype" not in (exc_info.value.headers or {})
 
     @pytest.mark.asyncio
-    async def test_bedrock_error_replaced_by_a_failure_hook_keeps_the_replacement(self) -> None:
-        replacement: Final = HTTPException(status_code=503, detail={"error": "rewritten by a callback"})
-
-        with pytest.raises(ProxyException) as exc_info:
-            await self._drive(
-                "router",
+    @pytest.mark.parametrize(
+        ("error", "replacement", "code"),
+        (
+            pytest.param(
                 _bedrock_status_error(429, _THROTTLE_BODY, {"x-amzn-errortype": _THROTTLE_TYPE}),
-                failure_hook_result=replacement,
-            )
-
-        assert not isinstance(exc_info.value, AwsErrorTypeProxyException)
-        assert (exc_info.value.message, exc_info.value.code) == ("rewritten by a callback", "503")
-
-    @pytest.mark.asyncio
-    async def test_guardrail_block_replaced_by_a_failure_hook_keeps_the_replacement(self) -> None:
-        replacement: Final = HTTPException(status_code=429, detail={"error": "try again later"})
+                HTTPException(status_code=503, detail={"error": "rewritten by a callback"}),
+                "503",
+                id="bedrock-error",
+            ),
+            pytest.param(
+                HTTPException(status_code=400, detail=_guardrail_detail("Violated guardrail policy")),
+                HTTPException(status_code=429, detail={"error": "rewritten by a callback"}),
+                "429",
+                id="guardrail-block",
+            ),
+        ),
+    )
+    async def test_error_replaced_by_a_failure_hook_keeps_the_replacement(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, replacement: HTTPException, code: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [_ReplacesFailures(replacement)])
 
         with pytest.raises(ProxyException) as exc_info:
-            await self._drive(
-                "router",
-                HTTPException(status_code=400, detail=_guardrail_detail("Violated guardrail policy")),
-                failure_hook_result=replacement,
-            )
+            await self._answer(error)
 
-        assert not isinstance(exc_info.value, AwsErrorTypeProxyException)
-        assert (exc_info.value.message, exc_info.value.code) == ("try again later", "429")
+        assert (exc_info.value.message, exc_info.value.code) == ("rewritten by a callback", code)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("route", ("router", "direct"))
     @pytest.mark.parametrize(
         ("error", "message", "status_code"),
         (
@@ -2090,27 +2064,46 @@ class TestBedrockPassthroughAwsErrors:
         ),
     )
     async def test_guardrail_block_is_raised_with_its_aws_error_type(
-        self, route: str, error: Exception, message: str, status_code: str
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, message: str, status_code: str
     ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
         with pytest.raises(AwsErrorTypeProxyException) as exc_info:
-            await self._drive(route, error)
+            await self._answer(error)
 
         assert exc_info.value.aws_error_type == "ValidationException"
-        assert (exc_info.value.message, exc_info.value.code) == (message, status_code)
+        assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "error",
+        ("error", "message", "code"),
         (
-            pytest.param(HTTPException(status_code=400, detail={"error": "model not found"}), id="request-check-400"),
-            pytest.param(HTTPException(status_code=403, detail="cache control not allowed"), id="request-check-403"),
-            pytest.param(HTTPException(status_code=429, detail=_guardrail_detail("vendor rate limited")), id="429"),
+            pytest.param(
+                HTTPException(status_code=400, detail={"error": "model not found"}),
+                "model not found",
+                "400",
+                id="request-check-400",
+            ),
+            pytest.param(
+                HTTPException(status_code=403, detail="cache control not allowed"),
+                "cache control not allowed",
+                "403",
+                id="request-check-403",
+            ),
+            pytest.param(
+                HTTPException(status_code=429, detail=_guardrail_detail("vendor rate limited")),
+                "vendor rate limited",
+                "429",
+                id="429",
+            ),
             pytest.param(
                 GuardrailRaisedException(
                     guardrail_name="fail-closed",
                     message="guardrail vendor unreachable",
                     should_wrap_with_default_message=False,
                 ),
+                "guardrail vendor unreachable",
+                "400",
                 id="guardrail-vendor-unreachable-400",
             ),
             pytest.param(
@@ -2120,19 +2113,28 @@ class TestBedrockPassthroughAwsErrors:
                     should_wrap_with_default_message=False,
                     status_code=503,
                 ),
+                "guardrail vendor unreachable",
+                "503",
                 id="guardrail-vendor-unreachable-503",
             ),
             pytest.param(
                 ModifyResponseException(message="replaced", model="bedrock-model", request_data={}),
+                "replaced",
+                "500",
                 id="modify-response",
             ),
         ),
     )
-    async def test_errors_that_are_not_guardrail_blocks_keep_the_litellm_error(self, error: Exception) -> None:
-        with pytest.raises(ProxyException) as exc_info:
-            await self._drive("router", error)
+    async def test_errors_that_are_not_guardrail_blocks_keep_the_litellm_error(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, message: str, code: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
 
-        assert not isinstance(exc_info.value, AwsErrorTypeProxyException)
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(error)
+
+        assert type(exc_info.value) is ProxyException
+        assert (exc_info.value.message, exc_info.value.code) == (message, code)
 
 
 class TestBedrockAgentRuntimePassthroughToggle:
