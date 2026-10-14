@@ -539,9 +539,8 @@ def test_member_update_temp_budget_increase_readmits_a_blocked_member(
         )
 
 
-@pytest.mark.covers("spend.team_member.runtime_rpm_limit_is_enforced_after_member_update")
 def test_member_rpm_limit_update_changes_runtime_admission(gateway: Gateway, upstream: httpx.Client) -> None:
-    pytest.skip("BUG: updating a team member RPM limit does not change admission for a warmed team key")
+    pytest.skip("BUG: member_update leaves a warmed key using the old RPM limit")
     with gateway.scenario() as scenario:
         model, provider_model = _free_model(scenario)
         team: Final = scenario.team(models=[model])
@@ -563,14 +562,14 @@ def test_member_rpm_limit_update_changes_runtime_admission(gateway: Gateway, ups
         assert admitted.status_code == 200, admitted.text
         limited: Final = _chat(gateway, model, key, f"member rpm limited request {uuid.uuid4().hex}")
         assert limited.status_code == 429, limited.text
-        assert _ErrorResponse.model_validate_json(limited.text).error.type == "rate_limit_error", limited.text
+        assert _ErrorResponse.model_validate_json(limited.text).error.type == "throttling_error", limited.text
         observed: Final = _observed_models(upstream)
         assert observed == (provider_model, provider_model), repr(observed)
 
 
-@pytest.mark.covers("spend.team_member.runtime_tpm_limit_is_enforced_after_member_update")
-def test_member_tpm_limit_update_changes_runtime_admission(gateway: Gateway, upstream: httpx.Client) -> None:
-    pytest.skip("BUG: updating a team member TPM limit does not change admission for a warmed team key")
+def test_member_rpm_limit_update_changes_runtime_admission_for_cold_key(
+    gateway: Gateway, upstream: httpx.Client
+) -> None:
     with gateway.scenario() as scenario:
         model, provider_model = _free_model(scenario)
         team: Final = scenario.team(models=[model])
@@ -583,18 +582,71 @@ def test_member_tpm_limit_update_changes_runtime_admission(gateway: Gateway, ups
         assert added.status_code == 200, added.text
         key: Final = scenario.key(team_id=team, user_id=user)
 
-        warm: Final = _chat(gateway, model, key, "warm member key before tpm limit")
-        assert warm.status_code == 200, warm.text
-        updated: Final = _member_update(gateway, {"team_id": team, "user_id": user, "tpm_limit": 45})
-        assert updated.tpm_limit == 45, repr(updated)
+        updated: Final = _member_update(gateway, {"team_id": team, "user_id": user, "rpm_limit": 1})
+        assert updated.rpm_limit == 1, repr(updated)
 
-        admitted: Final = _chat(gateway, model, key, "first member tpm-limited request")
+        admitted: Final = _chat(gateway, model, key, f"cold member rpm admitted request {uuid.uuid4().hex}")
         assert admitted.status_code == 200, admitted.text
-        limited: Final = _chat(gateway, model, key, "second member tpm-limited request")
+        limited: Final = _chat(gateway, model, key, f"cold member rpm limited request {uuid.uuid4().hex}")
         assert limited.status_code == 429, limited.text
-        assert _ErrorResponse.model_validate_json(limited.text).error.type == "rate_limit_error", limited.text
+        assert _ErrorResponse.model_validate_json(limited.text).error.type == "throttling_error", limited.text
+        observed: Final = _observed_models(upstream)
+        assert observed == (provider_model,), repr(observed)
+
+
+def test_member_tpm_limit_update_changes_runtime_admission(gateway: Gateway, upstream: httpx.Client) -> None:
+    pytest.skip("BUG: member_update leaves a warmed key using the old TPM limit")
+    with gateway.scenario() as scenario:
+        model, provider_model = _free_model(scenario)
+        team: Final = scenario.team(models=[model])
+        user: Final = scenario.user()
+        added: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"user_id": user, "role": "user"}},
+        )
+        assert added.status_code == 200, added.text
+        key: Final = scenario.key(team_id=team, user_id=user)
+
+        warm: Final = _chat(gateway, model, key, f"warm member key before tpm limit {uuid.uuid4().hex}")
+        assert warm.status_code == 200, warm.text
+        updated: Final = _member_update(gateway, {"team_id": team, "user_id": user, "tpm_limit": 30})
+        assert updated.tpm_limit == 30, repr(updated)
+
+        admitted: Final = _chat(gateway, model, key, f"first member tpm-limited request {uuid.uuid4().hex}")
+        assert admitted.status_code == 200, admitted.text
+        limited: Final = _chat(gateway, model, key, f"second member tpm-limited request {uuid.uuid4().hex}")
+        assert limited.status_code == 429, limited.text
+        assert _ErrorResponse.model_validate_json(limited.text).error.type == "throttling_error", limited.text
         observed: Final = _observed_models(upstream)
         assert observed == (provider_model, provider_model), repr(observed)
+
+
+def test_member_tpm_limit_update_changes_runtime_admission_for_cold_key(
+    gateway: Gateway, upstream: httpx.Client
+) -> None:
+    with gateway.scenario() as scenario:
+        model, provider_model = _free_model(scenario)
+        team: Final = scenario.team(models=[model])
+        user: Final = scenario.user()
+        added: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"user_id": user, "role": "user"}},
+        )
+        assert added.status_code == 200, added.text
+        key: Final = scenario.key(team_id=team, user_id=user)
+
+        updated: Final = _member_update(gateway, {"team_id": team, "user_id": user, "tpm_limit": 30})
+        assert updated.tpm_limit == 30, repr(updated)
+
+        admitted: Final = _chat(gateway, model, key, f"cold member tpm admitted request {uuid.uuid4().hex}")
+        assert admitted.status_code == 200, admitted.text
+        limited: Final = _chat(gateway, model, key, f"cold member tpm limited request {uuid.uuid4().hex}")
+        assert limited.status_code == 429, limited.text
+        assert _ErrorResponse.model_validate_json(limited.text).error.type == "throttling_error", limited.text
+        observed: Final = _observed_models(upstream)
+        assert observed == (provider_model,), repr(observed)
 
 
 def test_member_update_by_email_sets_models_role_and_forks_the_team_default_budget(

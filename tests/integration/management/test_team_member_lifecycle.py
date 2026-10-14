@@ -877,3 +877,49 @@ def test_bulk_delete_removes_exactly_the_named_members_and_revokes_their_access(
                 provider_model,
             )
         )
+
+
+def test_bulk_delete_by_case_variant_email_removes_member_and_refuses_warmed_key(
+    gateway: Gateway, upstream: httpx.Client
+) -> None:
+    pytest.skip("BUG: bulk member deletion does not match case-variant member email")
+    with gateway.scenario() as scenario:
+        model, provider_model = _model(scenario)
+        team: Final = scenario.team(models=[model])
+        _remove_default_user(gateway, team)
+        email: Final = f"bulk-case-delete-{uuid.uuid4().hex}@integration.test"
+        user: Final = scenario.user(user_email=email)
+        added: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"role": "user", "user_email": email}},
+        )
+        assert added.status_code == 200, added.text
+        member_key: Final = _key(scenario, team_id=team, user_id=user)
+        warmed: Final = _chat(gateway, model, member_key, f"warm bulk case-variant member {uuid.uuid4().hex}")
+        assert warmed.status_code == 200, warmed.text
+        observed_before_delete: Final = _models(upstream)
+        assert observed_before_delete == (provider_model,), repr(observed_before_delete)
+
+        deleted: Final = gateway.request(
+            "POST",
+            f"/management/v1/teams/{team}/members/bulk_delete",
+            {"members": [{"user_email": email.upper()}]},
+        )
+        assert deleted.status_code == 200, deleted.text
+        results: Final = _BulkDeleteResponse.model_validate_json(deleted.text).data
+        assert results == (_BulkDeleteResult(user_email=email.upper(), success=True),), deleted.text
+        info: Final = _team_info(gateway, team)
+        assert info.team_info.members_with_roles == [], repr(info)
+        assert read_rows(
+            'SELECT user_id, team_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s AND user_id = %s',
+            (team, user),
+        ) == [], deleted.text
+
+        refused: Final = _chat(gateway, model, member_key, f"deleted bulk case-variant member {uuid.uuid4().hex}")
+        _refused(refused, 401, "token_not_found_in_db")
+        after_refused: Final = _models(upstream)
+        assert after_refused == (), repr(after_refused)
+        assert observed_before_delete + after_refused == (provider_model,), repr(
+            (observed_before_delete, after_refused)
+        )
