@@ -429,6 +429,7 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token()
     assert cache.get_cache_key(**request, continuation_token="dG9rLTI=") not in (first_segment_key, resumed_key)
     assert cache.get_cache_key(**request, continuation_token="dG9rLTE=") == resumed_key
     assert cache.get_cache_key(**request, continuation_token=None) == first_segment_key
+    assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
 
 
 class PhaseRecordingCache(InMemoryCache):

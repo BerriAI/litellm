@@ -401,6 +401,8 @@ class Cache:
                 continue
             if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
                 param_value: str | None = self._get_param_value(param, kwargs)
+                if param in _ALWAYS_KEYED_PROVIDER_PARAMS and not param_value:
+                    continue
                 if param_value is not None:
                     cache_key += f"{param}: {param_value}"
             elif not is_litellm_owned_kwarg(param):

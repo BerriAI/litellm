@@ -3339,6 +3339,7 @@ class ModelResponseIterator:
         self._resume = resume
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
         self._pending_hop_token: str | None = None
+        self._first_response_id: str | None = None
         self._usage_offset: UsageMetadata = UsageMetadata()
         self._hop_usage: UsageMetadata = UsageMetadata()
         self._initial_prompt_tokens: int | None = None
@@ -3509,7 +3510,7 @@ class ModelResponseIterator:
             from litellm.types.utils import ModelResponseStream
 
             processed_chunk: Final = self._with_usage_offset(GenerateContentResponseBody(**chunk))
-            response_id: Final = processed_chunk.get("responseId")
+            response_id: Final = self._first_response_id or processed_chunk.get("responseId")
             served: Final = _served_model_name(processed_chunk.get("modelVersion"))
             model_response = ModelResponseStream(
                 choices=[],
@@ -3573,6 +3574,7 @@ class ModelResponseIterator:
         if token is None:
             return
         self._pending_hop_token = token
+        self._first_response_id = self._first_response_id or processed_chunk.get("responseId")
         for choice in model_response.choices:
             delta_fields: Mapping[str, object] = choice.delta.provider_specific_fields or {}
             choice.finish_reason = None
@@ -3589,18 +3591,18 @@ class ModelResponseIterator:
         self._hop_grounding = ()
         self.response = response
 
-    @staticmethod
-    def _truncated_stream_end(token: str) -> "ModelResponseStream":
+    def _truncated_stream_end(self, token: str) -> "ModelResponseStream":
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         return ModelResponseStream(
+            id=self._first_response_id,
             choices=[
                 StreamingChoices(
                     index=0,
                     finish_reason="length",
                     delta=Delta(provider_specific_fields={"continuation_token": token}),
                 )
-            ]
+            ],
         )
 
     async def _open_next_hop_async(self, token: str) -> Optional["ModelResponseStream"]:

@@ -67,6 +67,10 @@ STREAM_HOP_1_END: Final = {
 }
 
 
+def _answered_as(body: Mapping[str, object], response_id: str) -> dict[str, object]:
+    return {**body, "responseId": response_id}
+
+
 def _ending_with(body: Mapping[str, object], finish_reason: str) -> dict[str, object]:
     candidates: Final = body["candidates"]
     assert isinstance(candidates, list)
@@ -128,6 +132,61 @@ async def test_unary_long_decode_resends_the_original_request_with_the_token_and
     assert response.usage.completion_tokens == 50
     assert response.usage.prompt_tokens_details.cached_tokens == 9
     assert response.usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_long_decode_answers_under_the_first_requests_response_id(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        httpx.Response(200, json=_answered_as(HOP_1, "resp-1")),
+        httpx.Response(200, json=_answered_as(HOP_2, "resp-2")),
+    )
+    kwargs: Final = {"model": MODEL, "messages": list(MESSAGES), "max_tokens": 100_000, "api_key": "fake-gemini-key"}
+
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent))))
+        if is_async
+        else litellm.completion(
+            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(hops, sent))))
+        )
+    )
+
+    assert len(sent) == 2
+    assert response.id == "resp-1"
+
+
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("sent_as_a_string", [{"n": "1"}, {"max_tokens": "100000"}])
+@pytest.mark.asyncio
+async def test_request_whose_n_or_max_tokens_is_a_string_is_sent_once_and_never_continued(
+    stream: bool, sent_as_a_string: Mapping[str, str]
+):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        _sse(STREAM_FIRST_CHUNK, STREAM_HOP_1_END) if stream else httpx.Response(200, json=HOP_1),
+        httpx.Response(400, json=GOOGLE_REJECTION),
+    )
+    kwargs: Final = {
+        "model": MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 100_000,
+        "stream": stream,
+        "api_key": "fake-gemini-key",
+        **sent_as_a_string,
+    }
+
+    response: Final = await litellm.acompletion(
+        **kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent)))
+    )
+    text: Final = (
+        "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+        if stream
+        else response.choices[0].message.content
+    )
+
+    assert len(sent) == 1
+    assert text == "hello"
 
 
 @pytest.mark.parametrize("hop_2_searches", [(), HOP_2_SEARCHES])
@@ -376,6 +435,27 @@ async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish
     assert chunks[-1].usage.prompt_tokens == 20
     assert chunks[-1].usage.completion_tokens == 50
     assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+@pytest.mark.parametrize("next_request_fails", [False, True])
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_long_decode_keeps_the_first_requests_response_id_on_every_chunk(
+    is_async: bool, next_request_fails: bool
+):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        _sse(_answered_as(STREAM_FIRST_CHUNK, "resp-1"), _answered_as(STREAM_HOP_1_END, "resp-1")),
+        httpx.Response(500, json={"error": {"code": 500}})
+        if next_request_fails
+        else _sse(_answered_as(HOP_2, "resp-2")),
+    )
+
+    chunks: Final = await _collect_stream(is_async, hops, sent)
+
+    assert len(sent) == 2
+    assert _stream_finish_reasons(chunks) == ["length" if next_request_fails else "stop"]
+    assert {chunk.id for chunk in chunks} == {"resp-1"}
 
 
 @pytest.mark.parametrize("is_async", [True, False])

@@ -66,13 +66,17 @@ class SyncStreamResume:
 StreamResume: TypeAlias = AsyncStreamResume | SyncStreamResume
 
 
+def _int_or_none(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
 def continuation_cap_of(request_body: RequestBody) -> int | None:
     generation_config: Final = request_body.get("generationConfig")
     if generation_config is None or "max_output_tokens" not in generation_config:
         return None
-    if "candidate_count" in generation_config and generation_config["candidate_count"] > 1:
+    if "candidate_count" in generation_config and _int_or_none(generation_config["candidate_count"]) != 1:
         return None
-    return generation_config["max_output_tokens"]
+    return _int_or_none(generation_config["max_output_tokens"])
 
 
 def client_continuation_token(candidate: Candidates) -> str | None:
@@ -159,11 +163,13 @@ def merge_hops(hops: LongDecodeHops) -> GenerateContentResponseBody:
         **(_first_candidate(last) or Candidates()),
         "content": {"role": "model", "parts": list(chain.from_iterable(map(_candidate_parts, hop_candidates)))},
     }
-    return {
+    merged: Final[GenerateContentResponseBody] = {
         **last,
         "candidates": [_with_hop_grounding(merged_first, hop_candidates), *(last.get("candidates") or [])[1:]],
         "usageMetadata": sum_usage_metadata(*(hop.get("usageMetadata", UsageMetadata()) for hop in hops)),
     }
+    first_response_id: Final = hops[0].get("responseId")
+    return {**merged, "responseId": first_response_id} if first_response_id else merged
 
 
 def initial_prompt_tokens_of(hops: LongDecodeHops) -> int | None:

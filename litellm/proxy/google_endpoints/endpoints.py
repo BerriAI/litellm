@@ -449,7 +449,7 @@ async def cancel_interaction(
     """
     Cancel an interaction by ID.
 
-    Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
+    Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}/cancel
     """
     from litellm.proxy.proxy_server import (
         general_settings,
