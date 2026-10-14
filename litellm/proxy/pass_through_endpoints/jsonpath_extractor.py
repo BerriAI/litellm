@@ -9,28 +9,21 @@ from typing import Any, Final
 from litellm._logging import verbose_proxy_logger
 
 
-def _normalize_wildcard_segments(expr: str) -> list[str]:
+def _normalize_wildcard_segments(expr: str) -> tuple[str, ...]:
     """Normalize ``key[*]`` into ``key`` + ``[*]`` segments.
 
     Idempotent: the recursion in :meth:`JsonPathExtractor.evaluate` passes
-    already-normalized paths (e.g. ``content.[*].text``) back through here,
-    and re-running ``expr.replace("[*]", ".[*]")`` on those would inject
-    empty segments (``content..[*].text``) and silently drop every
-    nested-wildcard expression, skipping the guardrail (#46302).
+    already-normalized paths (e.g. ``content.[*].text``) back through here.
+    Re-running ``expr.replace("[*]", ".[*]")`` on those injects empty
+    segments (``content..[*].text``); dropping empty segments afterwards
+    keeps the normalization stable for raw (``a[*].b``), adjacent
+    (``a[*][*].b``) and already-normalized inputs alike, so no
+    nested-wildcard expression is silently dropped and skips the
+    guardrail (#46302).
     """
-    segments: list[str] = []
-    for segment in expr.split("."):
-        if segment == "[*]":
-            segments.append("[*]")
-            continue
-        # Peel trailing wildcards one at a time so adjacent wildcards
-        # ("a[*][*]") and already-normalized paths both split cleanly.
-        while segment.endswith("[*]"):
-            segments.append(segment[:-3])
-            segments.append("[*]")
-            segment = ""
-        if segment:
-            segments.append(segment)
+    segments: Final = tuple(
+        segment for segment in expr.replace("[*]", ".[*]").split(".") if segment
+    )
     return segments
 
 
