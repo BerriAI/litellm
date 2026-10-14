@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 import threading
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, NoReturn, Optional
@@ -2083,3 +2084,101 @@ def test_repair_survives_an_unreachable_database(monkeypatch: pytest.MonkeyPatch
 
     assert ProxyExtrasDBManager.repair_invalid_indexes() is False
 
+
+@pytest.mark.parametrize(
+    "environment",
+    (
+        {"DATABASE_URL": "postgresql://pool/db"},
+        {"DATABASE_URL": "postgresql://pool/db?pgbouncer=true", "DIRECT_URL": "postgresql://writer/db"},
+    ),
+    ids=("pooled-only", "pooled-with-direct"),
+)
+def test_prisma_runs_its_migrations_without_a_session_advisory_lock(environment):
+    from litellm_proxy_extras.migration_lock import migration_environment
+
+    migrated = migration_environment(environment)
+
+    assert migrated["PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK"] == "1"
+    assert "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK" not in migration_environment({"PRISMA_OFFLINE_MODE": "true"})
+
+
+class TestMigrateDeployRunsUnderTheCoordinatorLock:
+    """`prisma migrate deploy` only runs while the injected lock is held, and the lock is
+    released again before the resolver handles the outcome, success or failure."""
+
+    @staticmethod
+    def _recording_lock(events: list[str]):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def lock():
+            events.append("lock")
+            try:
+                yield
+            finally:
+                events.append("unlock")
+
+        return lock
+
+    def test_deploy_runs_between_lock_and_unlock(self, monkeypatch, tmp_path):
+        import litellm_proxy_extras.utils as utils_module
+
+        events: list[str] = []
+        harness = _MigrateDeployHarness(monkeypatch, tmp_path, ["ok"])
+        original_run = harness._fake_run
+
+        def run_and_record(cmd, **kwargs):
+            events.append("deploy")
+            return original_run(cmd, **kwargs)
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", run_and_record)
+
+        assert ProxyExtrasDBManager._run_database_v2(True, deploy_lock=self._recording_lock(events)) is True
+        assert events == ["lock", "deploy", "unlock"]
+
+    def test_a_failed_deploy_releases_the_lock_before_the_retry(self, monkeypatch, tmp_path):
+        import litellm_proxy_extras.utils as utils_module
+
+        events: list[str] = []
+        harness = _MigrateDeployHarness(
+            monkeypatch, tmp_path, ["Error: P1002\nTimed out waiting for the advisory lock", "ok"]
+        )
+        original_run = harness._fake_run
+
+        def run_and_record(cmd, **kwargs):
+            events.append("deploy")
+            return original_run(cmd, **kwargs)
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", run_and_record)
+
+        assert ProxyExtrasDBManager._run_database_v2(True, deploy_lock=self._recording_lock(events)) is True
+        assert events == ["lock", "deploy", "unlock", "lock", "deploy", "unlock"]
+
+    def test_a_deadlock_rollback_runs_under_the_coordinator_lock(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import litellm_proxy_extras.utils as utils_module
+
+        migration_name: Final = "20260921190000_agent_identity"
+        stderr: Final = (
+            "Error: P3018\n\n"
+            "A migration failed to apply. New migrations cannot be applied before the error is recovered from.\n\n"
+            f"Migration name: {migration_name}\n\n"
+            "Database error code: 40P01\n\n"
+            f"Database error:\n{_P3009_DEADLOCK_LOGS}"
+        )
+        events: Final[list[str]] = []
+        harness: Final = _MigrateDeployHarness(monkeypatch, tmp_path, [stderr, "ok"])
+        original_run: Final = harness._fake_run
+
+        def run_and_record(cmd: Sequence[str], *, timeout: float, env: Mapping[str, str]) -> _FakeCompleted:
+            if cmd[1:] == ["migrate", "deploy"]:
+                events.append("deploy")
+            elif cmd[1:4] == ["migrate", "resolve", "--rolled-back"]:
+                events.append("rollback")
+            return original_run(cmd, timeout=timeout, env=env)
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", run_and_record)
+
+        assert ProxyExtrasDBManager._run_database_v2(True, deploy_lock=self._recording_lock(events)) is True
+        assert events == ["lock", "deploy", "unlock", "lock", "rollback", "unlock", "lock", "deploy", "unlock"]
