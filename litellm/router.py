@@ -72,6 +72,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.exceptions import BadRequestError, ContentPolicyViolationError, ContextWindowExceededError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -7650,8 +7651,8 @@ class Router:
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
         bad_request_without_fallback: Final = (
-            isinstance(e, litellm.BadRequestError)
-            and not isinstance(e, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError))
+            isinstance(e, BadRequestError)
+            and not isinstance(e, (ContextWindowExceededError, ContentPolicyViolationError))
             and not self.fallback_on_bad_request
         )
         if (
