@@ -901,7 +901,7 @@ class Router:
     def _routing_groups(self, value: dict[str, RoutingGroup]) -> None:
         self.routing_groups = value
 
-    model_names: set = set()
+    model_names: set[str] = set()
     cache_responses: bool | None = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
     tenacity = None
@@ -12011,7 +12011,8 @@ class Router:
         Strategy:
         1. First, check if model_id directly matches a model_name or deployment ID
         2. If not, search through router's model_list to find a match by litellm_params.model
-        3. Return the model_name if found, None otherwise
+        3. If not, keep model_id when the router routes that name itself (an alias, a routing group, or a wildcard)
+        4. Return the model_name if found, None otherwise
 
         Args:
             model_id: The model_id extracted from decoded video_id
@@ -12055,8 +12056,7 @@ class Router:
                 if model_name:
                     return model_name
 
-        # No match found
-        return None
+        return model_id if self.is_recognized_model(model_id) or self.pattern_router.route(model_id) else None
 
     def map_team_model(self, team_model_name: str | None, team_id: str) -> str | None:
         """

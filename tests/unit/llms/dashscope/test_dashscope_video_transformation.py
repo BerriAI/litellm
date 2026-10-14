@@ -25,6 +25,8 @@ from litellm.llms.dashscope.videos.transformation import (
     _parse_task_response,
     _video_url_from_task,
 )
+from litellm.proxy.auth.auth_checks import _can_object_call_model
+from litellm.proxy.auth.auth_utils import _resolve_model_id_with_router
 from litellm.router import Router
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.utils import (
@@ -523,7 +525,7 @@ class TestDashScopeVideoCreateResponse:
     def test_a_model_group_the_id_format_cannot_carry_falls_back_to_the_model(self):
         """The id joins its fields with ';', so a group name holding one would decode
         to a truncated model id that no deployment matches."""
-        logging_obj = Mock(litellm_params={"litellm_metadata": {"deployment_model_name": "wan3;beijing"}})
+        logging_obj = Mock(litellm_params={"litellm_metadata": {"model_group": "wan3;beijing"}})
 
         video_obj = DashScopeVideoConfig().transform_video_create_response(
             model="wan3.0-video",
@@ -598,6 +600,47 @@ def test_created_video_id_resolves_back_to_the_region_that_created_the_task(
     router.video_status(model=resolved, video_id=created.id)
 
     assert [call.request.headers["authorization"] for call in task_get.calls] == ["Bearer cn-key"]
+
+
+@pytest.mark.parametrize(
+    "requested,host,api_key",
+    [("video-alias", BEIJING_HOST, "cn-key"), ("dashscope/wan2.7-t2v", SINGAPORE_HOST, "wildcard-key")],
+)
+@respx.mock
+def test_a_key_scoped_to_the_requested_alias_or_wildcard_name_can_poll_its_video(
+    requested: str, host: str, api_key: str
+):
+    """The served group is `wan3` behind the alias and `dashscope/*` behind the wildcard, and a key given
+    only the requested name was refused the poll and the download of a video it had just paid for."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "wan3",
+                "litellm_params": {"model": "dashscope/wan3.0-video", "api_key": "cn-key", "api_base": BEIJING_HOST},
+            },
+            {
+                "model_name": "dashscope/*",
+                "litellm_params": {"model": "dashscope/*", "api_key": "wildcard-key", "api_base": SINGAPORE_HOST},
+            },
+        ],
+        model_group_alias={"video-alias": "wan3"},
+    )
+    respx.post(f"{host}/api/v1/services/aigc/video-generation/video-synthesis").mock(
+        return_value=httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+    )
+    task_get = respx.get(f"{host}/api/v1/tasks/{TASK_ID}").mock(
+        return_value=httpx.Response(200, json=_succeeded_task_payload())
+    )
+
+    created = router.video_generation(model=requested, prompt="a cat on a roof")
+
+    model_id = decode_video_id_with_provider(created.id)["model_id"]
+    checked = _resolve_model_id_with_router(model_id, router)
+    assert _can_object_call_model(model=checked, llm_router=router, models=[requested], object_type="key")
+
+    router.video_status(model=router.resolve_model_name_from_model_id(model_id), video_id=created.id)
+
+    assert [call.request.headers["authorization"] for call in task_get.calls] == [f"Bearer {api_key}"]
 
 
 class TestDashScopeVideoStatus:
