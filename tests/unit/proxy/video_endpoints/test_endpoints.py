@@ -138,11 +138,11 @@ def harness():
         stack.enter_context(
             patch.object(
                 ProxyBaseLLMRequestProcessing,
-                "_handle_llm_api_exception",
+                "handle_llm_api_exception",
                 handle_exc,
             )
         )
-        stack.enter_context(patch.object(endpoints, "_read_request_body", read_body))
+        stack.enter_context(patch.object(endpoints, "read_request_body", read_body))
         stack.enter_context(
             patch.object(endpoints, "batch_to_bytesio", batch_to_bytesio)
         )

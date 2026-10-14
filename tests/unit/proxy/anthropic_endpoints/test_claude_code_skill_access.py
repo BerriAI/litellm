@@ -58,7 +58,7 @@ def test_visibility_enabled_plugin_is_public_for_everyone():
 
 def test_visibility_disabled_plugin_needs_grant_or_admin():
     private = _plugin("private-skill", enabled=False)
-    admin = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    admin = UserAPIKeyAuth(api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     assert not skill_visibility(None).allows(private)
     assert not skill_visibility(_key(None, None)).allows(private)
@@ -70,7 +70,7 @@ def test_visibility_disabled_plugin_needs_grant_or_admin():
 
 
 def test_where_clause_bounds_the_plugin_query_to_what_the_caller_may_see():
-    admin = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    admin = UserAPIKeyAuth(api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     assert skill_visibility(None).where() == {"enabled": True}
     assert skill_visibility(_key(None, None)).where() == {"enabled": True}
