@@ -22,7 +22,6 @@ from httpx import Response
 from pydantic import BaseModel, JsonValue
 
 import litellm
-from litellm import _custom_logger_compatible_callbacks_literal
 from litellm._internal_context import post_response_phase
 from litellm._logging import (
     is_debugging_on,
@@ -5274,10 +5273,11 @@ def build_custom_logger_compatible_class(
 
 
 def _init_custom_logger_compatible_class(
-    logging_integration: _custom_logger_compatible_callbacks_literal,
+    logging_integration: str,
     internal_usage_cache: DualCache | None,
     llm_router: object,
     custom_logger_init_args: dict[str, object] | None = {},
+    raise_import_errors: bool = False,
 ) -> CustomLogger | None:
     """
     Initialize a custom logger compatible class
@@ -5290,6 +5290,10 @@ def _init_custom_logger_compatible_class(
             custom_logger_init_args=custom_logger_init_args,
         )
     except Exception as e:
+        if raise_import_errors and isinstance(e, ImportError):
+            raise ImportError(
+                f"Could not build the '{logging_integration}' callback configured in litellm_settings: {e}"
+            ) from e
         verbose_logger.exception("[Non-Blocking Error] Error initializing custom logger: %s", e)
         return None
 
@@ -5299,15 +5303,9 @@ def init_custom_logger_compatible_class_at_startup(
     internal_usage_cache: DualCache | None,
     llm_router: object,
 ) -> CustomLogger | None:
-    try:
-        return build_custom_logger_compatible_class(
-            callback, internal_usage_cache=internal_usage_cache, llm_router=llm_router
-        )
-    except ImportError as e:
-        raise ImportError(f"Could not build the '{callback}' callback configured in litellm_settings: {e}") from e
-    except Exception as e:
-        verbose_logger.exception("[Non-Blocking Error] Error initializing custom logger: %s", e)
-        return None
+    return _init_custom_logger_compatible_class(
+        callback, internal_usage_cache=internal_usage_cache, llm_router=llm_router, raise_import_errors=True
+    )
 
 
 def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[CustomLogger]) -> "OpenTelemetryV2 | None":
