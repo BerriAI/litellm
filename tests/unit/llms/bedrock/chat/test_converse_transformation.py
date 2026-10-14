@@ -4696,6 +4696,7 @@ def test_create_output_config_for_response_format():
     }
 
     output_config = config._create_output_config_for_response_format(
+        model="qwen.qwen3-32b-v1:0",
         json_schema=schema,
         name="PersonInfo",
         description="A person's info",
@@ -5280,13 +5281,70 @@ def test_output_config_applies_additional_properties():
         },
     }
     output_config = AmazonConverseConfig._create_output_config_for_response_format(
-        json_schema=schema, name="test_schema"
+        model="qwen.qwen3-32b-v1:0", json_schema=schema, name="test_schema"
     )
     parsed = json.loads(
         output_config["textFormat"]["structure"]["jsonSchema"]["schema"]
     )
     assert parsed["additionalProperties"] is False
     assert parsed["properties"]["nested"]["additionalProperties"] is False
+
+
+_SCHEMA_CLAUDE_REJECTS = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "number", "minimum": 0, "maximum": 1},
+        "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+        "id": {"type": "string", "format": "int64"},
+        "meta": {"type": ["object", "null"], "properties": {"a": {"type": "string"}}},
+        "labels": {"type": "object", "additionalProperties": {"type": "string"}},
+    },
+    "required": ["score"],
+}
+
+
+def _converse_schema_for(model: str) -> dict:
+    response_format = {"type": "json_schema", "json_schema": {"name": "Score", "schema": _SCHEMA_CLAUDE_REJECTS}}
+    result = AmazonConverseConfig()._translate_response_format_param(
+        value=response_format,
+        model=model,
+        optional_params={},
+        non_default_params={"response_format": response_format},
+        is_thinking_enabled=False,
+    )
+    return json.loads(result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+
+
+def test_claude_response_format_schema_shaped_like_anthropic_path(local_model_cost_map):
+    """Bedrock relays a Claude schema to Claude's grammar compiler, which 400s on
+    keywords it cannot enforce ("For 'array' type, property 'maxItems' is not
+    supported") and on any object that is not closed, so Converse shapes it like
+    the direct Anthropic path."""
+    assert _converse_schema_for("us.anthropic.claude-mythos-5-1") == {
+        "type": "object",
+        "properties": {
+            "score": {"type": "number", "description": "Note: minimum value: 0, maximum value: 1."},
+            "tags": {"type": "array", "items": {"type": "string"}, "description": "Note: maximum number of items: 3."},
+            "id": {"type": "string", "description": "Note: format: int64."},
+            "meta": {
+                "type": ["object", "null"],
+                "properties": {"a": {"type": "string"}},
+                "additionalProperties": False,
+            },
+            "labels": {"type": "object", "additionalProperties": False},
+        },
+        "required": ["score"],
+        "additionalProperties": False,
+    }
+
+
+def test_non_claude_response_format_schema_keeps_constraints(local_model_cost_map):
+    """Non-Claude Bedrock models enforce these keywords and schema-valued maps,
+    so only the missing ``additionalProperties`` is filled in."""
+    sent = _converse_schema_for("qwen.qwen3-32b-v1:0")
+
+    assert sent["properties"] == _SCHEMA_CLAUDE_REJECTS["properties"]
+    assert sent["additionalProperties"] is False
 
 
 _TOOL_PARAM = [

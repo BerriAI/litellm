@@ -29,6 +29,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.anthropic.output_schema import shape_claude_output_format
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -266,6 +267,7 @@ def apply_bedrock_invoke_structured_output(
     ``output_config.format``, keeping the pre-existing precedence of the legacy
     field when a request carries both. Models flagged
     ``supports_native_structured_output`` in the model map get the schema
+    shaped by ``shape_claude_output_format`` like the direct Anthropic path and
     forwarded as ``output_config.format``, which Bedrock relays to the model for
     enforced structured output. For every other model the schema is inlined into
     the last user message as best-effort text, with a warning because nothing
@@ -273,16 +275,19 @@ def apply_bedrock_invoke_structured_output(
     """
     legacy_output_format: Final = request_body.pop("output_format", None)
     output_config_format: Final = pop_bedrock_invoke_output_config_format(request_body)
-    schema_format: Final = legacy_output_format if isinstance(legacy_output_format, dict) else output_config_format
+    schema_format: Final[dict[str, object] | None] = (
+        legacy_output_format if isinstance(legacy_output_format, dict) else output_config_format
+    )
     if schema_format is None:
         return
 
     if _bedrock_model_supports(model, "supports_native_structured_output"):
+        native_format: Final = shape_claude_output_format(schema_format)
         existing_output_config: Final = request_body.get("output_config")
         if isinstance(existing_output_config, dict):
-            existing_output_config["format"] = schema_format
+            existing_output_config["format"] = native_format
         else:
-            request_body["output_config"] = {"format": schema_format}  # rebind-ok: out-param
+            request_body["output_config"] = {"format": native_format}  # rebind-ok: out-param
         return
 
     verbose_logger.warning(

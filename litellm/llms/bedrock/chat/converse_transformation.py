@@ -51,6 +51,7 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.output_schema import shape_claude_output_schema
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
@@ -973,13 +974,25 @@ class AmazonConverseConfig(BaseConfig):
         return result
 
     @staticmethod
+    def _native_output_schema(model: str, json_schema: dict[str, object]) -> Mapping[str, object]:
+        if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
+            return shape_claude_output_schema(json_schema)
+        return AmazonConverseConfig._add_additional_properties_to_schema(json_schema)
+
+    @staticmethod
     def _create_output_config_for_response_format(
+        model: str,
         json_schema: dict | None = None,
         name: str | None = None,
         description: str | None = None,
     ) -> "OutputConfigBlock":
         """
         Build an outputConfig block for Bedrock's native structured outputs API.
+
+        Claude schemas are shaped like the direct Anthropic path because Bedrock
+        relays them to the same grammar compiler, which rejects keywords it
+        cannot enforce. Other models accept those keywords, so they only get
+        ``additionalProperties: false`` filled in where it is missing.
 
         The Converse API expects:
         {
@@ -997,9 +1010,9 @@ class AmazonConverseConfig(BaseConfig):
             }
         }
         """
-        if json_schema is not None:
-            json_schema = AmazonConverseConfig._add_additional_properties_to_schema(json_schema)
-        schema_str: Final = json.dumps(json_schema) if json_schema is not None else "{}"
+        schema_str: Final = (
+            "{}" if json_schema is None else json.dumps(AmazonConverseConfig._native_output_schema(model, json_schema))
+        )
         json_schema_def: Final[JsonSchemaDefinition] = {"schema": schema_str}
         if name is not None:
             json_schema_def["name"] = name
@@ -1271,6 +1284,7 @@ class AmazonConverseConfig(BaseConfig):
             # Requires an explicit schema — json_object with no schema falls through
             # to the tool-call path below.
             output_config: Final = self._create_output_config_for_response_format(
+                model=model,
                 json_schema=json_schema,
                 name=name,
                 description=description,
@@ -1650,6 +1664,7 @@ class AmazonConverseConfig(BaseConfig):
             and self._supports_native_structured_outputs(model, self.custom_llm_provider)
         ):
             output_config = self._create_output_config_for_response_format(
+                model=model,
                 json_schema=output_config_format.get("schema"),
                 name=output_config_format.get("name"),
                 description=output_config_format.get("description"),
