@@ -30,14 +30,13 @@ AZURE_SPILLOVER_FROM_HEADER: Final = "x-ms-spillover-from-deployment"
 def is_ptu_cost_attribution_enabled() -> bool:
     """Whether PTU flat-cost attribution is turned on for this process.
 
-    The environment decides whenever the variable is set there. Otherwise a configured secret
-    manager holding it decides, read at most once a minute, since the router and the rate
-    limiter ask on every request.
+    A configured secret manager that ``get_secret`` would ask decides, as it does for every
+    other setting, read at most once a minute, since the router and the rate limiter ask on
+    every request. Otherwise the environment decides.
     """
-    from_env: Final = os.environ.get(PTU_COST_ATTRIBUTION_ENV_VAR)
-    if from_env is not None or not secret_manager_would_be_consulted(PTU_COST_ATTRIBUTION_ENV_VAR):
-        return str_to_bool(from_env) is True
-    return _enabled_in_secret_manager(int(monotonic() // SECRET_MANAGER_FLAG_REFRESH_SECONDS))
+    if secret_manager_would_be_consulted(PTU_COST_ATTRIBUTION_ENV_VAR):
+        return _enabled_in_secret_manager(int(monotonic() // SECRET_MANAGER_FLAG_REFRESH_SECONDS))
+    return str_to_bool(os.environ.get(PTU_COST_ATTRIBUTION_ENV_VAR)) is True
 
 
 @lru_cache(maxsize=1)

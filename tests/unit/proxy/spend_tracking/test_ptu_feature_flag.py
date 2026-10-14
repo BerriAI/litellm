@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.litellm_core_utils import ptu_pricing
+from litellm.secret_managers.main import get_secret_bool
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
@@ -76,12 +77,19 @@ def test_reads_the_env_var_on_every_call(monkeypatch):
     assert is_ptu_cost_attribution_enabled() is True
 
 
-def test_an_env_value_wins_without_asking_the_secret_manager(
+def test_the_secret_manager_outranks_the_env_like_every_other_setting(
     monkeypatch: pytest.MonkeyPatch, secret_manager: _SecretManagerHolding
 ) -> None:
     monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "false")
+    assert is_ptu_cost_attribution_enabled() is get_secret_bool(PTU_COST_ATTRIBUTION_ENV_VAR) is True
+
+
+def test_a_secret_manager_set_to_false_turns_attribution_off_despite_the_env(
+    monkeypatch: pytest.MonkeyPatch, secret_manager: _SecretManagerHolding
+) -> None:
+    secret_manager.secrets[PTU_COST_ATTRIBUTION_ENV_VAR] = "false"
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
     assert is_ptu_cost_attribution_enabled() is False
-    assert secret_manager.reads == 0
 
 
 def test_a_flag_kept_in_a_secret_manager_still_turns_attribution_on(secret_manager: _SecretManagerHolding) -> None:
