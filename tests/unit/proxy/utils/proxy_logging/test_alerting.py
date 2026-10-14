@@ -14,7 +14,6 @@ import pytest
 from fastapi import HTTPException
 from prisma.errors import PrismaError
 
-import litellm
 from litellm._service_logger import ServiceTypes
 from litellm.litellm_core_utils import litellm_logging
 from litellm.proxy._types import AlertType, CallInfo
