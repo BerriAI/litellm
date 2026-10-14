@@ -46,11 +46,11 @@ from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
     MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS,
     FallbackAwareAnthropicMessagesStream,
-    _anthropic_stream_commits_now,
+    _stream_commits_now,
     _anthropic_stream_error_is_gateway_verdict,
-    _anthropic_stream_fallback_error_for_raised,
+    _stream_fallback_error_for_raised,
     _anthropic_stream_forwards_ping_live,
-    _anthropic_stream_raised_error_status,
+    _stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
@@ -15593,10 +15593,10 @@ def test_anthropic_stream_should_decline_fallback_direct_call():
 def test_anthropic_stream_commits_now_direct_call():
     content = _anthropic_messages_content_chunk("hi")
     lifecycle_chunk = _anthropic_messages_message_start_chunk()
-    assert _anthropic_stream_commits_now(content, has_generated_content=False, buffered_chunk_count=0) is True
-    assert _anthropic_stream_commits_now(content, has_generated_content=True, buffered_chunk_count=0) is False
+    assert _stream_commits_now(content, has_generated_content=False, buffered_chunk_count=0) is True
+    assert _stream_commits_now(content, has_generated_content=True, buffered_chunk_count=0) is False
     assert (
-        _anthropic_stream_commits_now(
+        _stream_commits_now(
             lifecycle_chunk,
             has_generated_content=False,
             buffered_chunk_count=MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
@@ -15604,7 +15604,7 @@ def test_anthropic_stream_commits_now_direct_call():
         is True
     )
     assert (
-        _anthropic_stream_commits_now(
+        _stream_commits_now(
             lifecycle_chunk,
             has_generated_content=False,
             buffered_chunk_count=MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS - 1,
@@ -16175,15 +16175,15 @@ def test_anthropic_messages_retry_budget_precedence_direct_call():
         num_retries=3, retry_policy=RetryPolicy(InternalServerErrorRetries=4)
     )
 
-    assert router._anthropic_messages_retry_budget(drop, {"model": "glm"}) == (3, False)
-    assert router._anthropic_messages_retry_budget(drop, routed) == (2, False)
-    assert router._anthropic_messages_retry_budget(drop, {**routed, "num_retries": 1}) == (1, False)
-    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 1}) == (4, True)
-    assert policy_router._anthropic_messages_retry_budget(drop, {"model": "glm", "num_retries": 1}) == (1, False)
-    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 0}) == (0, False)
+    assert router._stream_retry_budget(drop, {"model": "glm"}) == (3, False)
+    assert router._stream_retry_budget(drop, routed) == (2, False)
+    assert router._stream_retry_budget(drop, {**routed, "num_retries": 1}) == (1, False)
+    assert policy_router._stream_retry_budget(reset, {"model": "glm", "num_retries": 1}) == (4, True)
+    assert policy_router._stream_retry_budget(drop, {"model": "glm", "num_retries": 1}) == (1, False)
+    assert policy_router._stream_retry_budget(reset, {"model": "glm", "num_retries": 0}) == (0, False)
     committed = {**routed, "litellm_metadata": {**routed["litellm_metadata"], "attempted_retries": 1, "max_retries": 5}}
-    assert router._anthropic_messages_retry_budget(drop, committed) == (5, False)
-    assert policy_router._anthropic_messages_retry_budget(reset, committed) == (5, True)
+    assert router._stream_retry_budget(drop, committed) == (5, False)
+    assert policy_router._stream_retry_budget(reset, committed) == (5, True)
 
 
 def test_anthropic_messages_stream_can_retry_direct_call():
@@ -16998,7 +16998,7 @@ async def test_anthropic_messages_raised_provider_error_after_content_propagates
     ids=["int", "digit-str", "response-only", "none"],
 )
 def test_anthropic_stream_raised_error_status_reads_every_status_shape(error, expected_status):
-    assert _anthropic_stream_raised_error_status(error) == expected_status
+    assert _stream_raised_error_status(error) == expected_status
 
 
 @pytest.mark.parametrize(
@@ -17014,7 +17014,7 @@ def test_anthropic_stream_raised_error_status_reads_every_status_shape(error, ex
 def test_anthropic_stream_fallback_error_for_raised_gates_like_a_detected_error_event(
     error, has_generated_content, converts
 ):
-    converted = _anthropic_stream_fallback_error_for_raised(error, "primary", has_generated_content)
+    converted = _stream_fallback_error_for_raised(error, "primary", has_generated_content)
     if not converts:
         assert converted is None
         return
