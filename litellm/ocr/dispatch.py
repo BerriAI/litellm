@@ -1,8 +1,9 @@
 from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
-from typing import Final, Never
+from typing import Final
 
 import httpx
+from typing_extensions import Never
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import runtime
