@@ -573,9 +573,10 @@ async def test_sync_batch_get_cache_reports_a_failed_read_from_a_running_loop(
     outage while the success path keeps reporting, so the dashboards read healthy.
     """
     cache, service_logger = sync_batch_cache_with_service_logger
+    tasks_before_read = asyncio.all_tasks()
 
     assert cache.batch_get_cache(key_list=["lit6729"]) == {}
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(asyncio.gather(*(asyncio.all_tasks() - tasks_before_read)), timeout=5)
 
     assert service_logger.mock_testing_sync_failure_hook == 1
     assert service_logger.mock_testing_async_failure_hook == 1
@@ -779,20 +780,28 @@ async def test_concurrent_success_is_not_cancelled_by_another_calls_failure():
     # The failure has to land after both calls are already in flight, which is the only
     # ordering where a shared counter confuses the two. Failing before the healthy call
     # starts would leave its snapshot correct and prove nothing.
-    async def swallows_a_failure():
-        await asyncio.sleep(0.02)
-        _record_swallowed_redis_failure(breaker, RedisConnectionError("redis unreachable"))
+    async def run_one_round() -> None:
+        healthy_call_in_flight = asyncio.Event()
+        failure_recorded = asyncio.Event()
 
-    async def succeeds_while_the_other_fails():
-        await asyncio.sleep(0.05)
-        return "ok"
+        async def swallows_a_failure() -> None:
+            await asyncio.wait_for(healthy_call_in_flight.wait(), timeout=5)
+            _record_swallowed_redis_failure(breaker, RedisConnectionError("redis unreachable"))
+            failure_recorded.set()
 
-    rounds = breaker.failure_threshold + 1
-    for _ in range(rounds):
+        async def succeeds_while_the_other_fails() -> str:
+            healthy_call_in_flight.set()
+            await asyncio.wait_for(failure_recorded.wait(), timeout=5)
+            return "ok"
+
         await asyncio.gather(
             _run_under_circuit_breaker(breaker, "failing", swallows_a_failure),
             _run_under_circuit_breaker(breaker, "healthy", succeeds_while_the_other_fails),
         )
+
+    rounds = breaker.failure_threshold + 1
+    for _ in range(rounds):
+        await run_one_round()
 
     assert breaker._failure_count < breaker.failure_threshold, "the healthy call must clear the streak"
     assert breaker.is_open() is False, "a Redis answering every round must stay in the pool"
