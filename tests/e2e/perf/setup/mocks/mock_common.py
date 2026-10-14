@@ -123,6 +123,7 @@ def bool_field(body: object, key: str) -> bool:
 class MockRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    provider: Provider
     marker: str | None
     model: str
     route: str
@@ -218,6 +219,7 @@ class RequestLog:
         )
         self._entries.append(
             MockRequest(
+                provider=self._provider,
                 marker=marker,
                 model=model,
                 route=route,
