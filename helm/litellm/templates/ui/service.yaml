@@ -10,9 +10,12 @@ spec:
   type: {{ .Values.ui.service.type }}
   ports:
     - port: {{ .Values.ui.service.port }}
-      targetPort: http
+      targetPort: {{ .Values.ui.service.portName | default "http" }}
       protocol: TCP
-      name: http
+      name: {{ .Values.ui.service.portName | default "http" }}
+      {{- with .Values.ui.service.appProtocol }}
+      appProtocol: {{ . }}
+      {{- end }}
   selector:
     {{- include "litellm.ui.selectorLabels" . | nindent 4 }}
 {{- end }}
