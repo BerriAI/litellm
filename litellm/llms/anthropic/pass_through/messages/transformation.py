@@ -101,6 +101,10 @@ def without_prompt_cache_breakpoints(anthropic_messages_request: Mapping[str, ob
     }
 
 
+def _deployment_drop_params(litellm_params: GenericLiteLLMParams | Mapping[str, object]) -> object:
+    return litellm_params.get("drop_params") if isinstance(litellm_params, Mapping) else litellm_params.drop_params
+
+
 def messages_request_for_claude(
     anthropic_messages_request: Mapping[str, object], *, drop_params: bool
 ) -> Mapping[str, object] | UnsupportedParamsError:
@@ -715,7 +719,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         )
         drop_params: Final = (
             normalize_drop_params(litellm.drop_params) is True
-            or normalize_drop_params(litellm_params.drop_params) is True
+            or normalize_drop_params(_deployment_drop_params(litellm_params)) is True
         )
         return dict(
             without_prompt_cache_breakpoints(anthropic_messages_request) if drop_params else anthropic_messages_request

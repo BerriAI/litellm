@@ -13,6 +13,8 @@ from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
@@ -28,13 +30,14 @@ from litellm.llms.anthropic.pass_through.utils import (
     litellm_logging_obj_from_kwargs,
     local_model_name,
 )
+from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import OpenAIWebSearchOptions
-from litellm.types.utils import ModelResponse
-from litellm.utils import get_model_info
+from litellm.types.utils import LlmProviders, LlmProvidersSet, ModelResponse
+from litellm.utils import ProviderConfigManager, get_model_info
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -63,6 +66,30 @@ def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
             if isinstance(block, dict) and block.get("type") == "compaction":
                 return True
     return False
+
+
+def _target_rebuilds_claude_blocks(model: str, custom_llm_provider: str | None) -> bool:
+    """Whether a Claude target's chat config rebuilds every block (Anthropic's family and Bedrock Converse), so a
+    ``prompt_cache_breakpoint`` would be translated or silently dropped there. OpenAI-compatible hosts forward it."""
+    if not (
+        LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(model)
+        or LiteLLMAnthropicMessagesAdapter.is_bedrock_arn_model(model)
+    ):
+        return False
+    if declared_authenticating_provider(model, custom_llm_provider) is not None:
+        return False
+    try:
+        local_model, provider, _, _ = litellm.utils.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+    except litellm.exceptions.BadRequestError:
+        return False
+    if provider not in LlmProvidersSet:
+        return False
+    chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=local_model, provider=LlmProviders(provider)
+    )
+    return isinstance(chat_config, (AnthropicConfig, AmazonConverseConfig))
 
 
 def _proxy_router_fallback() -> "Router | None":
@@ -535,19 +562,21 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
+        custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
         translatable_request: Final = (
             messages_request_for_claude(
                 request_data,
                 drop_params=normalize_drop_params(litellm.drop_params) is True
                 or normalize_drop_params(extra_kwargs.get("drop_params")) is True,
             )
-            if LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(model)
+            if _target_rebuilds_claude_blocks(
+                model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
+            )
             else request_data
         )
         if isinstance(translatable_request, UnsupportedParamsError):
             raise translatable_request
 
-        custom_llm_provider: Final = extra_kwargs.get("custom_llm_provider")
         (
             openai_request,
             tool_name_mapping,

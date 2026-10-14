@@ -256,6 +256,7 @@ def _create_marked(client: Anthropic, model: str, mark: CacheMark) -> Message:
     )
 
 
+@pytest.mark.provider_live
 class TestPromptCacheBreakpointOnMessages:
     """/v1/messages speaks Anthropic syntax only, so OpenAI's ``prompt_cache_breakpoint`` never becomes a cache mark.
 

@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -269,11 +269,26 @@ def _cache_control_only_request() -> tuple[Sequence[Mapping[str, object]], Mappi
     )
 
 
-def test_drop_params_keeps_a_cache_control_only_request_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:
+def _plain_string_request() -> tuple[Sequence[Mapping[str, object]], Mapping[str, object]]:
+    return (
+        [
+            {"role": "user", "content": "hello there"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "user", "content": "again"},
+        ],
+        {"max_tokens": 64, "system": "be terse"},
+    )
+
+
+@pytest.mark.parametrize("request_shape", [_cache_control_only_request, _plain_string_request])
+def test_drop_params_keeps_a_request_without_a_breakpoint_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+    request_shape: Callable[[], tuple[Sequence[Mapping[str, object]], Mapping[str, object]]],
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", None)
 
-    without_drop: Final = _transform(*_cache_control_only_request(), GenericLiteLLMParams())
-    with_drop: Final = _transform(*_cache_control_only_request(), GenericLiteLLMParams(drop_params=True))
+    without_drop: Final = _transform(*request_shape(), GenericLiteLLMParams())
+    with_drop: Final = _transform(*request_shape(), GenericLiteLLMParams(drop_params=True))
 
     assert json.dumps(with_drop) == json.dumps(without_drop)
 

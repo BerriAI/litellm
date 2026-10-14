@@ -1357,6 +1357,30 @@ def test_bedrock_messages_prompt_cache_breakpoint_follows_drop_params(
     assert result["tools"] == _breakpoint_tools(marked)
 
 
+def _bedrock_invoke_plain_string_request(drop_params: bool) -> str:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return json.dumps(
+        AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+            model="us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hello there"}],
+            anthropic_messages_optional_request_params={"max_tokens": 64, "system": "be terse"},
+            litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+            headers={},
+        )
+    )
+
+
+def test_bedrock_messages_drop_params_keeps_plain_string_content_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", None)
+
+    assert _bedrock_invoke_plain_string_request(drop_params=True) == _bedrock_invoke_plain_string_request(
+        drop_params=False
+    )
+
+
 def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
     """``drop_params=True`` does not strip on opus-4-7 (supports effort)."""
     from unittest.mock import patch
