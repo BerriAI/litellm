@@ -245,7 +245,7 @@ def _assert_connection_error(response: httpx.Response) -> None:
 def test_azure_ai_entra_auth_reaches_the_scripted_upstream_for_both_decisions_routes(
     gateway: Gateway, scenario: Scenario
 ) -> None:
-    provider: Final = _PROVIDERS[9]
+    provider: Final = next(provider for provider in _PROVIDERS if provider.name == "azure_ai")
     handle: Final = register_scenario(
         _AZURE_AI_ENTRA_SCENARIO,
         JsonResponse(content_type="application/json", body=_answer_body(provider)),
