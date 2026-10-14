@@ -3411,6 +3411,19 @@ class TeamNotFoundError(HTTPException):
         super().__init__(status_code=404, detail=detail)
 
 
+class AccessGroupNotFoundError(HTTPException):
+    """The access group row is provably absent, as opposed to merely unreadable. ``get_access_object``
+    reports every failure as a 404, so a group that was never created and a database that would not
+    answer look the same to its callers. Policy code that must not treat a degraded read as a definitive
+    answer keys on this subclass. It stays a 404 with the same detail, so every other caller is unaffected."""
+
+    def __init__(self, access_group_id: str) -> None:
+        super().__init__(
+            status_code=404,
+            detail={"error": f"Access group doesn't exist in db. Access group={access_group_id}."},
+        )
+
+
 @log_db_metrics
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None, *, use_writer: bool = False
@@ -3667,10 +3680,7 @@ async def get_access_object(
         ).find_unique(where={"access_group_id": access_group_id})
 
         if response is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"Access group doesn't exist in db. Access group={access_group_id}."},
-            )
+            raise AccessGroupNotFoundError(access_group_id=access_group_id)
 
         _response: Final = LiteLLM_AccessGroupTable.model_validate(response.dict())
 
@@ -4532,6 +4542,56 @@ async def get_org_object_for_request(
     return org
 
 
+async def get_access_group_tables(
+    access_group_ids: Sequence[str],
+    prisma_client: DatabaseClient | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+    check_db_only: bool = False,
+    *,
+    unreadable: Literal["skip", "raise"] = "skip",
+) -> tuple[LiteLLM_AccessGroupTable, ...]:
+    """Load unified access groups by id (cache first, then DB). A group that provably does not exist is
+    skipped, it grants nothing. A group that exists but cannot be read is skipped too unless
+    ``check_db_only`` is set or ``unreadable`` is ``"raise"``, in which case the failure propagates so a
+    caller enforcing policy can deny instead of shedding a restriction it could not read."""
+    if not access_group_ids:
+        return ()
+
+    if prisma_client is None or user_api_key_cache is None:
+        from litellm.proxy.proxy_server import prisma_client as _prisma_client
+        from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
+        from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
+
+        prisma_client = prisma_client or _prisma_client  # rebind-ok: lazy proxy_server fallback
+        user_api_key_cache = user_api_key_cache or _user_api_key_cache  # rebind-ok: lazy proxy_server fallback
+        proxy_logging_obj = proxy_logging_obj or _proxy_logging_obj  # rebind-ok: lazy proxy_server fallback
+
+    if user_api_key_cache is None:
+        return ()
+
+    async def load(ag_id: str) -> LiteLLM_AccessGroupTable | None:
+        try:
+            return await get_access_object(
+                access_group_id=ag_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=check_db_only,
+            )
+        except AccessGroupNotFoundError:
+            verbose_proxy_logger.debug("One of the requested access groups does not exist, it grants nothing")
+            return None
+        except Exception:
+            if check_db_only or unreadable == "raise":
+                raise
+            verbose_proxy_logger.debug("Could not fetch one of the requested access groups")
+            return None
+
+    loaded: Final = [await load(ag_id) for ag_id in access_group_ids]
+    return tuple(ag for ag in loaded if ag is not None)
+
+
 async def _get_resources_from_access_groups(
     access_group_ids: Sequence[str],
     resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
@@ -4540,59 +4600,30 @@ async def _get_resources_from_access_groups(
     proxy_logging_obj: ProxyLogging | None = None,
     check_db_only: bool = False,
 ) -> list[str]:
-    """
-    Fetch access groups by their IDs (from cache or DB) and collect
-    the specified resource field across all of them.
+    """Deduplicated ``resource_field`` values across the resolved access groups."""
+    groups: Final = await get_access_group_tables(
+        access_group_ids=access_group_ids,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
+    )
+    return list(
+        {resource for ag in groups for resource in _access_group_field(ag, resource_field)}  # comprehension-ok: flatten
+    )
 
-    Args:
-        access_group_ids: List of access group IDs to fetch
-        resource_field: Which resource list to extract from each access group
-            - "access_model_names": model names (for model access checks)
-            - "access_mcp_server_ids": MCP server IDs (for MCP access checks)
-            - "access_agent_ids": agent IDs (for agent access checks)
-        prisma_client: Optional PrismaClient (lazy-imported from proxy_server if None)
-        user_api_key_cache: Optional DualCache (lazy-imported from proxy_server if None)
-        proxy_logging_obj: Optional ProxyLogging (lazy-imported from proxy_server if None)
 
-    Returns:
-        Deduplicated list of resource identifiers from all resolved access groups.
-    """
-    if not access_group_ids:
-        return []
-
-    # Lazy import to avoid circular imports
-    if prisma_client is None or user_api_key_cache is None:
-        from litellm.proxy.proxy_server import prisma_client as _prisma_client
-        from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
-        from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
-
-        prisma_client = prisma_client or _prisma_client
-        user_api_key_cache = user_api_key_cache or _user_api_key_cache
-        proxy_logging_obj = proxy_logging_obj or _proxy_logging_obj
-
-    if user_api_key_cache is None:
-        return []
-
-    resources: Final[list[str]] = []
-    for ag_id in access_group_ids:
-        try:
-            ag = await get_access_object(
-                access_group_id=ag_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-                check_db_only=check_db_only,
-            )
-            resources.extend(getattr(ag, resource_field, []))
-        except Exception:
-            if check_db_only:
-                raise
-            verbose_proxy_logger.debug(
-                "Could not fetch access group %s for resource field %s",
-                ag_id,
-                resource_field,
-            )
-    return list(set(resources))
+def _access_group_field(
+    group: LiteLLM_AccessGroupTable,
+    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
+) -> list[str]:
+    match resource_field:
+        case "access_model_names":
+            return group.access_model_names
+        case "access_mcp_server_ids":
+            return group.access_mcp_server_ids
+        case "access_agent_ids":
+            return group.access_agent_ids
 
 
 async def get_models_from_access_groups(

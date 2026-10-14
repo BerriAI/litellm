@@ -46,7 +46,10 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
     handler = LiteLLMCompletionTransformationHandler()
 
     async def fake_session_handler(
-        previous_response_id: str, litellm_completion_request: dict[str, object], instructions: str | None = None
+        previous_response_id: str,
+        litellm_completion_request: dict[str, object],
+        instructions: str | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request
@@ -479,9 +482,7 @@ async def test_previous_response_id_drops_a_client_replayed_search_call_only_off
 
 
 def _anthropic_sse(*events: Mapping[str, object]) -> bytes:
-    return b"".join(
-        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events
-    )
+    return b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
 
 
 def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(respx_mock: respx.MockRouter) -> None:
