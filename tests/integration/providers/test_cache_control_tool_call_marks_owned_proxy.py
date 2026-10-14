@@ -18,7 +18,6 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from integration.providers._cache_control_marks_support import (
-    ASK_LABEL,
     CITIES,
     POINTS,
     SYSTEM_LABEL,
@@ -76,8 +75,6 @@ def _surface_request(surface: str, marker: str) -> tuple[str, dict[str, JsonValu
 
 
 def _expected_labels(item: _Sent) -> list[str]:
-    if item.surface == "responses":
-        return [SYSTEM_LABEL, ASK_LABEL]
     if item.surface == "chat-unmarked":
         return [SYSTEM_LABEL, final_label(item.marker)]
     return client_marked()

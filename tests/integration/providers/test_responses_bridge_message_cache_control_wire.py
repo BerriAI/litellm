@@ -951,9 +951,11 @@ def _shaped_requests(model: str, shape: str) -> tuple[dict[str, JsonValue], dict
         pytest.param("snowflake/claude-4-sonnet", "tool", True, id="snowflake-claude-tool-output"),
         pytest.param("vertex-claude", "system", True, id="vertex-claude"),
         pytest.param("sap-claude", "system", True, id="sap-claude"),
+        pytest.param("anthropic/my-gateway-model", "system", True, id="anthropic-non-claude-name"),
         pytest.param("snowflake/claude-4-sonnet", "system", False, id="snowflake-claude-string-system"),
         pytest.param("openrouter/openai/gpt-5.4", "system", False, id="openrouter-gpt"),
         pytest.param("snowflake/llama3.1-70b", "system", False, id="snowflake-llama"),
+        pytest.param("databricks/databricks-meta-llama-3-3-70b-instruct", "tool", False, id="databricks-llama"),
         pytest.param("bedrock-llama", "system", False, id="bedrock-llama"),
     ),
 )

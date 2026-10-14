@@ -5296,6 +5296,7 @@ def test_cache_control_preserved_in_full_input_transform():
     result = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=input_items,
         responses_api_request={},
+        item_cache_control=True,
     )
 
     # 3 messages, no system
@@ -5377,6 +5378,7 @@ def test_function_call_cache_control_reaches_the_provider_tool_use_block():
             {"type": "function_call_output", "call_id": "call_cached_tool_use", "output": "p50 120ms"},
         ],
         responses_api_request={},
+        item_cache_control=True,
     )
 
     anthropic_turns: Final = anthropic_messages_pt(
@@ -5408,6 +5410,7 @@ def test_assistant_text_merged_into_a_function_call_turn_keeps_its_cache_control
             {"type": "function_call_output", "call_id": "call_merged_text", "output": "p50 120ms"},
         ],
         responses_api_request={},
+        item_cache_control=True,
     )
 
     assert len(messages) == 3
@@ -5442,6 +5445,7 @@ def test_assistant_text_merged_behind_earlier_text_puts_cache_control_on_the_las
             {"type": "function_call_output", "call_id": "call_two_texts", "output": "p50 120ms"},
         ],
         responses_api_request={},
+        item_cache_control=True,
     )
 
     merged_turn: Final = messages[1]
@@ -5467,6 +5471,7 @@ def test_marked_assistant_text_merged_ahead_of_later_text_keeps_its_cache_contro
             {"type": "function_call_output", "call_id": "call_marked_first_text", "output": "p50 120ms"},
         ],
         responses_api_request={},
+        item_cache_control=True,
     )
 
     merged_turn: Final = messages[1]
@@ -5805,6 +5810,8 @@ def test_a_marked_developer_item_reaches_a_claude_target_as_a_marked_system_mess
         ("mistral/mistral-small-latest", "mistral"),
         ("bedrock/meta.llama3-70b-instruct-v1:0", "bedrock"),
         ("openrouter/openai/gpt-5", "openrouter"),
+        ("databricks/databricks-meta-llama-3-3-70b-instruct", "databricks"),
+        ("snowflake/llama-claude-distill", "snowflake"),
     ],
 )
 def test_item_marks_stay_off_a_target_without_cache_points(model: str, custom_llm_provider: str):
@@ -5831,6 +5838,7 @@ def test_item_marks_stay_off_a_target_without_cache_points(model: str, custom_ll
         ("openrouter/anthropic/claude-sonnet-4.5", "openrouter"),
         ("openrouter/google/gemini-2.5-flash", "openrouter"),
         ("snowflake/claude-sonnet-4-5", "snowflake"),
+        ("anthropic/my-gateway-model", "anthropic"),
     ],
 )
 def test_item_marks_reach_a_target_whose_chat_route_keeps_them(model: str, custom_llm_provider: str):
@@ -5884,13 +5892,29 @@ def test_an_application_inference_profile_gets_no_item_marks_under_drop_params()
     assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 0
 
 
-def test_the_shared_input_transform_keeps_every_mark_for_guardrails_and_token_counting():
+def test_the_shared_input_transform_keeps_every_item_mark_for_a_request_it_sends():
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=cast(ResponseInputParam, list(_marked_turns(5))),  # cast-ok: cache_control is not an input TypedDict key
         responses_api_request={},
+        item_cache_control=True,
     )
 
     assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == MAX_CACHE_CONTROL_BLOCKS + 1
+
+
+def test_guardrails_and_token_counting_read_the_input_as_if_it_carried_no_item_marks():
+    marked_turns: Final = list(_marked_turns(5))
+
+    inspected: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=cast(ResponseInputParam, marked_turns),  # cast-ok: cache_control is not an input TypedDict key
+        responses_api_request={},
+    )
+    unmarked: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=cast(ResponseInputParam, [{"role": "user", "content": turn["content"]} for turn in marked_turns]),
+        responses_api_request={},
+    )
+
+    assert inspected == unmarked
 
 
 @pytest.mark.parametrize("index", [0, 1, 2])

@@ -658,7 +658,6 @@ class ChatCompletionToolCallChunk(TypedDict):  # result of /chat/completions cal
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
     index: int
-    cache_control: NotRequired[ReadOnly["ChatCompletionCachedContent"]]
 
 
 class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
@@ -916,7 +915,6 @@ class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
     content: str | Iterable[ToolMessageContentPart]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tool_call_id: str
-    cache_control: NotRequired[ChatCompletionCachedContent]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 class ChatCompletionFunctionMessage(TypedDict):

@@ -2864,6 +2864,20 @@ class TestPerMessageRewriteWriteBack:
     is otherwise rejected by name instead of sent unrewritten."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "cache_control", [{"type": "ephemeral", "ttl": "30m"}, {"type": "persistent"}], ids=["ttl-30m", "unknown-type"]
+    )
+    async def test_an_item_mark_no_chat_row_can_hold_still_lets_the_guardrail_run(self, cache_control: dict):
+        guardrail = _per_message_redactor()
+        marked_item = {"role": "user", "content": "Look up " + SSN + " for me.", "cache_control": cache_control}
+        data = {"model": "gemini/gemini-2.5-flash", "input": [marked_item]}
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(True)):
+            result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["input"] == [{**marked_item, "content": "Look up " + REDACTED_SSN + " for me."}]
+
+    @pytest.mark.asyncio
     async def test_structured_rows_land_on_instructions_and_tool_output(self):
         guardrail = _per_message_redactor()
         data = _tool_replay_request()

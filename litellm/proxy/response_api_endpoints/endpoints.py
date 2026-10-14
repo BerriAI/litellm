@@ -1117,12 +1117,11 @@ def _responses_input_as_token_count_messages(
 ) -> tuple[Mapping[str, object], ...]:
     from litellm.responses.litellm_completion_transformation.transformation import (
         LiteLLMCompletionResponsesConfig,
-        without_item_cache_control,
     )
 
     request_params: Final[ResponsesAPIOptionalRequestParams] = {"instructions": instructions}
     transformed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-        input=without_item_cache_control(input_value),
+        input=input_value,
         responses_api_request=request_params,
     )
     return tuple(

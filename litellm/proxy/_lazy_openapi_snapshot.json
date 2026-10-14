@@ -46073,9 +46073,6 @@
         },
         "ChatCompletionToolCallChunk": {
           "properties": {
-            "cache_control": {
-              "$ref": "#/components/schemas/ChatCompletionCachedContent"
-            },
             "function": {
               "$ref": "#/components/schemas/ChatCompletionToolCallFunctionChunk"
             },
@@ -46144,9 +46141,6 @@
         },
         "ChatCompletionToolMessage": {
           "properties": {
-            "cache_control": {
-              "$ref": "#/components/schemas/ChatCompletionCachedContent"
-            },
             "content": {
               "anyOf": [
                 {

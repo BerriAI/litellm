@@ -28654,7 +28654,6 @@ export interface components {
         };
         /** ChatCompletionToolCallChunk */
         ChatCompletionToolCallChunk: {
-            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             function: components["schemas"]["ChatCompletionToolCallFunctionChunk"];
             /** Id */
             id: string | null;
@@ -28679,7 +28678,6 @@ export interface components {
         };
         /** ChatCompletionToolMessage */
         ChatCompletionToolMessage: {
-            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             /** Content */
             content: string | (components["schemas"]["ChatCompletionTextObject"] | components["schemas"]["ChatCompletionImageObject"] | components["schemas"]["ChatCompletionToolReferenceObject"])[];
             /**

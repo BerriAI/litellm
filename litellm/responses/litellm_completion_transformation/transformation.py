@@ -55,6 +55,7 @@ from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
+from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -225,6 +226,14 @@ class _ResponsesToolCallItem(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
+class _MarkedToolCallChunk(ChatCompletionToolCallChunk):
+    cache_control: ReadOnly[ChatCompletionCachedContent]
+
+
+class _MarkedToolMessage(ChatCompletionToolMessage):
+    cache_control: ReadOnly[ChatCompletionCachedContent]
+
+
 class _ToolFunctionDefinition(TypedDict, total=False):
     name: ReadOnly[str]
     description: ReadOnly[str]
@@ -280,7 +289,7 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     )
 
 
-_PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("databricks", "dashscope", "minimax", "sap", "zai"))
+_PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("anthropic", "dashscope", "minimax", "sap", "zai"))
 
 
 def _bedrock_target_keeps_item_marks(model: str, drop_params: bool) -> bool:
@@ -296,6 +305,8 @@ def _target_keeps_item_marks(model: str, custom_llm_provider: str | None, drop_p
     if custom_llm_provider == "openrouter":
         return openrouter_model_supports_cache_control(model)
     if custom_llm_provider == "snowflake":
+        return is_snowflake_claude_model(model)
+    if custom_llm_provider == "databricks":
         return "claude" in model.lower()
     return custom_llm_provider == "bedrock" and _bedrock_target_keeps_item_marks(model, drop_params)
 
@@ -749,9 +760,10 @@ class LiteLLMCompletionResponsesConfig:
             model, custom_llm_provider, drops_unsupported_params(request_kwargs.get("drop_params"))
         )
         bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=input if keeps_item_marks else without_item_cache_control(input),
+            input=input,
             responses_api_request=responses_api_request,
             replay_reasoning=True,
+            item_cache_control=keeps_item_marks,
         )
 
         litellm_completion_request: dict = {
@@ -812,6 +824,7 @@ class LiteLLMCompletionResponsesConfig:
         input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams | dict,
         replay_reasoning: bool = False,
+        item_cache_control: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -826,11 +839,13 @@ class LiteLLMCompletionResponsesConfig:
         sent to a model: prior-turn ``reasoning`` items are then rebuilt as
         assistant ``reasoning_content`` and signed ``thinking_blocks`` so the
         provider gets its own chain-of-thought back instead of reading it as
-        visible text.
+        visible text. ``item_cache_control`` belongs to the same callers, when
+        the target keeps an input item's ``cache_control`` on the message.
 
         Callers that only inspect the messages (token counting, rate limiting,
-        guardrail scanning) leave it off, because they need every piece of text
-        in the request to stay readable as message ``content``.
+        guardrail scanning) leave both off, because they need every piece of text
+        in the request to stay readable as message ``content``, with no item mark
+        a strict message schema could refuse.
         """
         messages: list[
             AllMessageValues
@@ -848,7 +863,7 @@ class LiteLLMCompletionResponsesConfig:
 
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                input=input,
+                input=input if item_cache_control else without_item_cache_control(input),
                 replay_reasoning=replay_reasoning,
             )
         )
@@ -1983,7 +1998,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_output_message: Final = (
             ChatCompletionToolMessage(role="tool", content=tool_content, tool_call_id=str(call_id))
             if output_cache_control is None
-            else ChatCompletionToolMessage(
+            else _MarkedToolMessage(
                 role="tool", content=tool_content, tool_call_id=str(call_id), cache_control=output_cache_control
             )
         )
@@ -2076,7 +2091,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_call: Final = (
             ChatCompletionToolCallChunk(id=tool_call_id, type="function", function=tool_call_function, index=0)
             if function_call_cache_control is None
-            else ChatCompletionToolCallChunk(
+            else _MarkedToolCallChunk(
                 id=tool_call_id,
                 type="function",
                 function=tool_call_function,

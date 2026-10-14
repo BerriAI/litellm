@@ -588,6 +588,10 @@ def _item_carries_a_mark_outside_the_provisional_messages(item: object) -> bool:
     )
 
 
+def _function_tool_carries_a_mark(tool: Mapping[str, object]) -> bool:
+    return isinstance(tool, dict) and tool.get("type") == "function" and bool(tool.get("cache_control"))
+
+
 def _cache_control_marks_outside_the_provisional_messages(
     input: str | ResponseInputParam | None, tools: Iterable[Mapping[str, object]] | None
 ) -> int:
@@ -603,7 +607,7 @@ def _cache_control_marks_outside_the_provisional_messages(
         if input is None or isinstance(input, str)
         else sum(1 for item in input if _item_carries_a_mark_outside_the_provisional_messages(item))
     )
-    tool_marks: Final = sum(1 for tool in tools or () if tool.get("type") == "function" and tool.get("cache_control"))
+    tool_marks: Final = sum(1 for tool in tools or () if _function_tool_carries_a_mark(tool))
     return item_marks + tool_marks
 
 

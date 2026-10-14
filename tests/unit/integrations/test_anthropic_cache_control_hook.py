@@ -4272,6 +4272,14 @@ class TestResponsesLayerReservesMarksOutsideTheProvisionalMessages:
         ]
         assert _cache_control_marks_outside_the_provisional_messages(items, None) == 1
 
+    def test_sdk_typed_tools_are_skipped_by_the_reserve(self):
+        from openai.types.responses import FunctionTool
+
+        from litellm.responses.main import _cache_control_marks_outside_the_provisional_messages
+
+        tools = [*self._tools(1), FunctionTool(type="function", name="typed", parameters={}, strict=False)]
+        assert _cache_control_marks_outside_the_provisional_messages(self._items(1), tools) == 2
+
     def test_the_chat_pass_replaces_the_count_the_responses_layer_stamped(self):
         messages = [
             {"role": "system", "content": "sys"},

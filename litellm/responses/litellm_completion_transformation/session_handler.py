@@ -126,7 +126,6 @@ class ResponsesSessionHandler:
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
             LiteLLMCompletionResponsesConfig,
-            without_item_cache_control,
         )
 
         response_input_param: str | ResponseInputParam | None = None
@@ -149,11 +148,10 @@ class ResponsesSessionHandler:
         if response_input_param:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=(
-                        response_input_param if item_cache_control else without_item_cache_control(response_input_param)
-                    ),
+                    input=response_input_param,
                     responses_api_request={},
                     replay_reasoning=True,
+                    item_cache_control=item_cache_control,
                 )
             )
 
