@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
+    map_developer_role_to_system_role_keeping_cache_marks,
     response_format_schema,
     type_to_response_format_param,
     unwrap_response_format_envelope,
@@ -1779,6 +1780,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         base config keeps them. Providers that reject them (e.g. Bedrock) override this to True.
         """
         return False
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: overrides BaseConfig.translate_developer_role_to_system_role
+    ) -> list[AllMessageValues]:  # mutable-ok: overrides BaseConfig.translate_developer_role_to_system_role
+        return list(map_developer_role_to_system_role_keeping_cache_marks(messages))
 
     def translate_system_message(self, messages: list[AllMessageValues]) -> list[AnthropicSystemMessageContent]:
         """

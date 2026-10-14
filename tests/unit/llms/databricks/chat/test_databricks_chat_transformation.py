@@ -2345,3 +2345,17 @@ def test_prompt_cache_options_toward_a_non_claude_databricks_model_are_forwarded
     )
 
     assert json.loads(route.calls.last.request.content)["prompt_cache_options"] == {"mode": "explicit"}
+
+
+@pytest.mark.parametrize("mark", ({"prompt_cache_breakpoint": _EXPLICIT}, {"cache_control": _EPHEMERAL}))
+def test_a_developer_message_cache_mark_never_reaches_a_non_claude_databricks_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, mark: dict[str, dict[str, str]]
+) -> None:
+    route: Final = _databricks_claude_route(respx_mock, monkeypatch)
+
+    litellm.completion(
+        model="databricks/databricks-meta-llama-3-3-70b-instruct",
+        messages=[{"role": "developer", "content": "rules", **mark}, {"role": "user", "content": "hi"}],
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"][0] == {"role": "system", "content": "rules"}

@@ -246,6 +246,11 @@ def _cache_marks(block: Mapping[str, object]) -> Mapping[str, object]:
     return {key: block[key] for key in CACHE_MARK_KEYS if block.get(key) is not None}
 
 
+def _part_cache_marks(part: Mapping[str, object]) -> Mapping[str, object]:
+    """``_cache_marks`` for a content part, which keeps a present ``cache_control`` even when it is null."""
+    return {**_cache_marks(part), **({"cache_control": part["cache_control"]} if "cache_control" in part else {})}
+
+
 def _tool_output_cache_marks(tool_call_output: Mapping[str, object]) -> Mapping[str, object]:
     """The marks on the output item and on the last marked part of a part-list output. The chat tool message carries
     them at message level, since a text-only part list is flattened to a string there."""
@@ -258,9 +263,9 @@ def _tool_output_cache_marks(tool_call_output: Mapping[str, object]) -> Mapping[
     return {**last_part_marks, **_cache_marks(tool_call_output)}
 
 
-def _chat_route_reads_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None) -> bool:
-    """Only the Claude chat transforms read ``prompt_cache_breakpoint`` (renamed to ``cache_control``). Any other
-    bridged provider never got OpenAI's key from this bridge, and must not start receiving it raw."""
+def _is_claude_chat_route(model: str, custom_llm_provider: str | None) -> bool:
+    """Only the Claude chat transforms read ``prompt_cache_breakpoint`` (renamed to ``cache_control``) and the
+    message-level marks this bridge carries. Any other bridged provider must not start receiving them."""
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
     from litellm.llms.databricks.chat.transformation import DatabricksConfig
@@ -276,17 +281,19 @@ def _chat_route_reads_prompt_cache_breakpoint(model: str, custom_llm_provider: s
     return isinstance(config, (AnthropicConfig, AmazonConverseConfig))
 
 
-def _without_prompt_cache_breakpoint(block: Mapping[str, object]) -> dict[str, object]:
-    return {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
+def _without_keys(block: Mapping[str, object], keys: frozenset[str]) -> Mapping[str, object]:
+    return {key: value for key, value in block.items() if key not in keys}
 
 
 def _part_without_prompt_cache_breakpoint(part: object) -> object:
     if not isinstance(part, dict):
         return part
-    return _without_prompt_cache_breakpoint(_STR_KEY_DICT_ADAPTER.validate_python(part))
+    return _without_keys(_STR_KEY_DICT_ADAPTER.validate_python(part), frozenset({"prompt_cache_breakpoint"}))
 
 
-def _message_without_prompt_cache_breakpoints(message: _BridgedChatMessage) -> _BridgedChatMessage:
+def _message_for_non_claude_route(message: _BridgedChatMessage) -> _BridgedChatMessage:
+    """The message without the marks only Claude routes read: message-level ones, and ``prompt_cache_breakpoint``
+    on its parts."""
     if not isinstance(message, dict):
         return message
     fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(message)
@@ -295,8 +302,8 @@ def _message_without_prompt_cache_breakpoints(message: _BridgedChatMessage) -> _
     stripped_content: Final[Mapping[str, object]] = (
         {"content": [_part_without_prompt_cache_breakpoint(part) for part in parts]} if parts is not None else {}
     )
-    return cast(  # cast-ok: the same message with only prompt_cache_breakpoint keys removed
-        _BridgedChatMessage, {**_without_prompt_cache_breakpoint(fields), **stripped_content}
+    return cast(  # cast-ok: the same message with only cache mark keys removed
+        _BridgedChatMessage, {**_without_keys(fields, frozenset(CACHE_MARK_KEYS)), **stripped_content}
     )
 
 
@@ -560,8 +567,8 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request: dict = {
             "messages": (
                 messages
-                if _chat_route_reads_prompt_cache_breakpoint(model, custom_llm_provider)
-                else [_message_without_prompt_cache_breakpoints(message) for message in messages]
+                if _is_claude_chat_route(model, custom_llm_provider)
+                else [_message_for_non_claude_route(message) for message in messages]
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
@@ -1884,7 +1891,7 @@ class LiteLLMCompletionResponsesConfig:
         if item.get("filename"):
             file_dict["filename"] = item["filename"]
 
-        return {"type": "file", "file": file_dict, **_cache_marks(item)}
+        return {"type": "file", "file": file_dict, **_part_cache_marks(item)}
 
     @staticmethod
     def _transform_input_image_item_to_image_item(
@@ -1929,7 +1936,7 @@ class LiteLLMCompletionResponsesConfig:
                         content_list.append(
                             {
                                 **LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item),
-                                **_cache_marks(item),
+                                **_part_cache_marks(item),
                             }
                         )
                     elif item.get("type") == "encrypted_content":
@@ -1949,7 +1956,7 @@ class LiteLLMCompletionResponsesConfig:
                                     item.get("type") or "text"
                                 ),
                                 "text": text_value,
-                                **_cache_marks(item),
+                                **_part_cache_marks(item),
                             }
                         )
             return content_list

@@ -4462,6 +4462,44 @@ class TestCacheControlPreservation:
         assert [part.get("prompt_cache_breakpoint") for part in user["content"]] == [expected_mark, None]
         assert user["content"][1]["cache_control"] == {"type": "ephemeral"}
 
+    @pytest.mark.parametrize(
+        ("model", "custom_llm_provider", "carried"),
+        (
+            ("claude-haiku-5-5", "anthropic", True),
+            ("us.anthropic.claude-haiku-5-5", "bedrock", True),
+            ("gemini-2.5-pro", "gemini", False),
+            ("my-model", "hosted_vllm", False),
+        ),
+    )
+    def test_a_message_level_cache_control_reaches_the_chat_request_only_for_a_claude_route(
+        self, model: str, custom_llm_provider: str, carried: bool
+    ) -> None:
+        ephemeral: Final = {"type": "ephemeral"}
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=[
+                {"type": "message", "role": "user", "content": "Ask", "cache_control": ephemeral},
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_never_cached",
+                    "output": [{"type": "input_text", "text": "sunny", "cache_control": ephemeral}],
+                },
+            ],
+            responses_api_request={},
+            custom_llm_provider=custom_llm_provider,
+        )
+        expected_mark: Final = ephemeral if carried else None
+        assert [(message["role"], message.get("cache_control")) for message in result["messages"]] == [
+            ("user", expected_mark),
+            ("tool", expected_mark),
+        ]
+
+    def test_a_null_cache_control_on_a_part_is_still_copied_onto_the_chat_part(self) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            [{"type": "input_text", "text": "hi", "cache_control": None}]
+        )
+        assert result == [{"type": "text", "text": "hi", "cache_control": None}]
+
 
 def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0`` that

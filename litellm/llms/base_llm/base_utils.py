@@ -6,7 +6,7 @@ import copy
 import itertools
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, cast
 
@@ -372,12 +372,28 @@ def map_developer_role_to_system_role(
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    return [_developer_as_system_message(m) if m["role"] == "developer" else m for m in messages]
+    new_messages: Final[list[AllMessageValues]] = []
+    for m in messages:
+        if m["role"] == "developer":
+            verbose_logger.debug(
+                "Translating developer role to system role for non-OpenAI providers."
+            )  # ensure user knows what's happening with their input.
+            new_messages.append({"role": "system", "content": m["content"]})
+        else:
+            new_messages.append(m)
+    return new_messages
 
 
-def _developer_as_system_message(message: ChatCompletionDeveloperMessage) -> AllMessageValues:
-    verbose_logger.debug(
-        "Translating developer role to system role for non-OpenAI providers."
-    )  # ensure user knows what's happening with their input.
+def map_developer_role_to_system_role_keeping_cache_marks(
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    """``map_developer_role_to_system_role`` for the Claude configs, whose transforms cache the system prompt from the
+    developer message's ``cache_control`` or ``prompt_cache_breakpoint``. Every other provider drops both marks."""
+    return tuple(_developer_as_marked_system_message(m) if m["role"] == "developer" else m for m in messages)
+
+
+def _developer_as_marked_system_message(message: ChatCompletionDeveloperMessage) -> AllMessageValues:
     cache_marks: Final = {key: value for key, value in message.items() if key in CACHE_MARK_KEYS}
-    return cast(AllMessageValues, {"role": "system", "content": message["content"], **cache_marks})
+    return cast(  # cast-ok: a system message plus the developer message's cache marks, which the Claude transforms read
+        AllMessageValues, {"role": "system", "content": message["content"], **cache_marks}
+    )
