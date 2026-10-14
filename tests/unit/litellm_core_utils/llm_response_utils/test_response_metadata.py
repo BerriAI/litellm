@@ -649,3 +649,32 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
 
     assert result._response_ms == pytest.approx(2000)
     assert result._hidden_params["response_cost"] == pytest.approx(0.02 * 2)
+
+
+class TestCacheHitResponseCost:
+    """A response served from the response cache must be priced as a cache hit in
+    _hidden_params, so the x-litellm-response-cost header reports 0 (#46450)."""
+
+    def _make_logging_obj(self):
+        logging_obj = MagicMock()
+        # model_call_details deliberately has no cache_hit: it is only set later
+        # in the success handler, after update_response_metadata has already run.
+        logging_obj.model_call_details = {}
+        return logging_obj
+
+    def test_cache_hit_result_is_priced_as_cache_hit(self):
+        result = ModelResponse()
+        result._hidden_params = {"cache_hit": True}
+        logging_obj = self._make_logging_obj()
+
+        ResponseMetadata(result).set_hidden_params(logging_obj=logging_obj, model="gpt-4o", kwargs={})
+
+        assert logging_obj.response_cost_calculator.call_args.kwargs.get("cache_hit") is True
+
+    def test_uncached_result_leaves_cache_hit_detection_to_the_calculator(self):
+        result = ModelResponse()
+        logging_obj = self._make_logging_obj()
+
+        ResponseMetadata(result).set_hidden_params(logging_obj=logging_obj, model="gpt-4o", kwargs={})
+
+        assert logging_obj.response_cost_calculator.call_args.kwargs.get("cache_hit") is None
