@@ -140,7 +140,9 @@ const WarningItem = ({ warning, ...permissions }: ItemPermissions & { warning: D
         <p className="font-medium">{content.title}</p>
         <ItemAction warning={warning} title={content.title} {...permissions} />
       </div>
-      {content.fix ? <p className="text-muted-foreground [&_code]:font-mono">{content.fix}</p> : null}
+      {content.fix ? (
+        <p className="text-muted-foreground [&_code]:font-mono [&_code]:wrap-break-word">{content.fix}</p>
+      ) : null}
       {content.docsUrl ? (
         <a
           className="w-fit text-primary underline-offset-4 hover:underline"
