@@ -5784,7 +5784,11 @@ class Router:
         )
         if fallback_error is None:
             raise stream_error
-        outcome: Final = await self._astream_retry_same_group(fallback_error, initial_kwargs)
+        outcome: Final = await self._astream_retry_same_group(
+            fallback_error,
+            initial_kwargs,
+            attempt_function=self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt,
+        )
         match outcome:
             case _StreamRetryOpened(response=retried, attempted_retries=attempted, max_retries=budget):
                 async for item in self._aanthropic_messages_yield_recovered(retried, wrapper, (attempted, budget)):
@@ -5936,16 +5940,15 @@ class Router:
         self,
         e: "MidStreamFallbackError",
         initial_kwargs: Mapping[str, object],
-        attempt_function: "Callable[..., Awaitable[object]] | None" = None,
+        attempt_function: "Callable[..., Awaitable[object]]",
     ) -> _StreamRetryOutcome:
         """
         Re-runs the attempt within the request's own model group, the way async_function_with_retries
         would have for a failure raised before the stream opened, until a retry opens a stream or the
         budget runs out. Each retry's stream carries its own wrapper with the remaining budget, so a
         retry that drops before content again continues the same count instead of starting over.
-        `attempt_function` defaults to the /v1/messages attempt, chat completions streams pass their own.
+        `attempt_function` is the request's own attempt (the /v1/messages attempt, or a chat completions one).
         """
-        run_attempt: Final = attempt_function or self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt
         model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
         retry_kwargs: Final = mid_stream_retry_kwargs(initial_kwargs)
         healthy_deployments, all_deployments = await self._async_get_healthy_deployments(
@@ -5975,7 +5978,7 @@ class Router:
                 "Retrying stream that failed before content, attempt %s of %s", attempt + 1, budget
             )
             try:
-                response = await run_attempt(**retry_kwargs)
+                response = await attempt_function(**retry_kwargs)
             except Exception as retry_error:  # noqa: BLE001  # the fallback chain judges the failed retry
                 wrapped = _stream_fallback_error_for_raised(retry_error, model_group, False, e.llm_provider)
                 if wrapped is None:
