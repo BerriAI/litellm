@@ -1463,6 +1463,42 @@ async def test_legacy_unreadable_api_key_is_not_served_as_the_ciphertext(salt_ke
 
 
 @pytest.mark.asyncio
+async def test_legacy_unreadable_params_keep_the_loaded_tool_instead_of_an_empty_one(salt_key, monkeypatch):
+    """Without PyNaCl a stored tool's params read as unset; the registry must then keep the loaded
+    in-memory tool over the emptied DB row — the same did-not-decrypt case the loaded version
+    already covers for params sealed under another key."""
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.search_endpoints.search_tool_registry import (
+        SearchToolRegistry,
+        keep_loaded_search_tools_that_do_not_decrypt,
+    )
+
+    monkeypatch.setattr(ps, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_row = _stored_row(
+        "legacy-id",
+        "legacy",
+        {"search_provider": encrypt_value_helper("tavily"), "api_key": encrypt_value_helper("tvly-real-key")},
+    )
+    monkeypatch.setattr(ps, "general_settings", {})
+    loaded = [
+        {
+            "search_tool_id": "legacy-id",
+            "search_tool_name": "legacy",
+            "litellm_params": {"search_provider": "tavily", "api_key": "tvly-loaded-key"},
+        }
+    ]
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    db_tools = await SearchToolRegistry.get_all_search_tools_from_db(
+        prisma_client=_prisma_client_over(_InMemorySearchToolsTable([legacy_row]))
+    )
+    kept = keep_loaded_search_tools_that_do_not_decrypt(db_tools, loaded_search_tools=loaded)
+
+    assert [tool["litellm_params"] for tool in kept] == [{"search_provider": "tavily", "api_key": "tvly-loaded-key"}]
+
+
+@pytest.mark.asyncio
 async def test_master_key_rotation_reencrypts_only_values_the_current_key_decrypts(master_key_only):
     from litellm.proxy.common_utils.encrypt_decrypt_utils import (
         decrypt_if_encrypted_with,

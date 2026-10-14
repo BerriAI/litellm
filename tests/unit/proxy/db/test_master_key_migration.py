@@ -212,10 +212,11 @@ async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
 
 
 @pytest.mark.asyncio
-async def test_legacy_values_without_pynacl_still_count_so_the_boot_keeps_the_variable(monkeypatch):
+async def test_legacy_values_without_pynacl_keep_the_variable_instead_of_a_clean_bill(monkeypatch):
     """Without PyNaCl the count must not read legacy rows as "not encrypted with the previous key":
     the boot would report NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY and tell the operator to delete
-    LITELLM_MIGRATE_FROM_MASTER_KEY while values under that key remain, unreadable."""
+    LITELLM_MIGRATE_FROM_MASTER_KEY while values under that key remain, unreadable. The residual is
+    reported as unreadable with the install-the-extra remedy, never as a finished migration."""
     import sys
 
     monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
@@ -241,8 +242,12 @@ async def test_legacy_values_without_pynacl_still_count_so_the_boot_keeps_the_va
     )
 
     assert isinstance(outcome, Migrated)
-    assert outcome.remaining == 1
+    assert outcome == Migrated(migrated=0, remaining=1, unreadable=1)
     assert database.writes == []  # nothing it cannot read is ever rewritten
+    message = describe_outcome(outcome)
+    assert "legacy-encryption extra" in message
+    assert f"keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} set" in message
+    assert "You may now delete" not in message
 
 
 @pytest.mark.asyncio

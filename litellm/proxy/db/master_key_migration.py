@@ -13,6 +13,7 @@ from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PRE
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_if_encrypted_with,
     encrypt_value_helper,
+    legacy_encryption_available,
     legacy_unreadable,
 )
 from litellm.proxy.db.create_views import SupportsRawQueries
@@ -103,6 +104,26 @@ async def count_values_encrypted_with_or_none(
         return None
 
 
+async def _count_values_legacy_unreadable(database: SupportsRawQueries) -> int:
+    """How many stored strings only PyNaCl could read — 0 without even walking when it is installed.
+
+    Without PyNaCl an unprefixed value cannot be told apart from legacy ciphertext, so the
+    encrypted-with-previous-key count stays conservative and this walk explains the residual."""
+    if legacy_encryption_available():
+        return 0
+
+    def unreadable(value: str) -> str | None:
+        return value if legacy_unreadable(value) else None
+
+    async def unreadable_in(secret_column: _SecretColumn) -> int:
+        return sum(
+            replace_ciphertexts(_STORED_VALUE.validate_python(row[secret_column.column]), unreadable)[1]
+            for row in await _rows_of(database, secret_column)
+        )
+
+    return sum([await unreadable_in(secret_column) for secret_column in await _secret_columns_in(database)])
+
+
 async def reencrypt_stored_values(database: SupportsRawQueries, *, from_key: str, to_key: str) -> int:
     def reencrypted(value: str) -> str | None:
         plaintext: Final = decrypt_if_encrypted_with(value, from_key)
@@ -182,6 +203,7 @@ class NothingToMigrate(Enum):
 class Migrated:
     migrated: int
     remaining: int
+    unreadable: int = 0  # values only PyNaCl could read; this build can neither migrate nor clear them
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,6 +297,7 @@ async def _migrate(
     migrated: Final = Migrated(
         migrated=await reencrypt_stored_values(database, from_key=previous_master_key, to_key=master_key),
         remaining=await count_values_encrypted_with(database, previous_master_key),
+        unreadable=await _count_values_legacy_unreadable(database),
     )
     another_worker_migrated_everything: Final = migrated == Migrated(migrated=0, remaining=0)
     return NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY if another_worker_migrated_everything else migrated
@@ -297,16 +320,25 @@ def describe_outcome(outcome: MigrationOutcome) -> str:
                 f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} is still set, but nothing in the database is left to migrate "
                 f"from that key. You may now delete {MIGRATE_FROM_MASTER_KEY_ENV_VAR}."
             )
-        case Migrated(migrated=migrated, remaining=0):
+        case Migrated(migrated=migrated, remaining=0, unreadable=0):
             return (
                 f"Done re-encrypting {migrated} stored value(s) with the new master key. You may now delete the "
                 f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} environment variable."
             )
-        case Migrated(migrated=migrated, remaining=remaining):
+        case Migrated(migrated=migrated, remaining=remaining, unreadable=0):
             return (
                 f"Re-encrypted {migrated} stored value(s), but {remaining} are still encrypted with the previous key "
                 f"because they changed during the migration. Keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} set and restart "
                 "the proxy to migrate them."
+            )
+        case Migrated(migrated=migrated, remaining=remaining, unreadable=unreadable):
+            changed: Final = remaining - unreadable
+            return (
+                f"Re-encrypted {migrated} stored value(s), but {unreadable} cannot be read without the "
+                "legacy-encryption extra (pip install 'litellm[legacy-encryption]')"
+                + (f" and {changed} changed during the migration" if changed > 0 else "")
+                + f". They may still be encrypted with the previous key, so keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} "
+                "set, install the extra, and restart the proxy to finish."
             )
         case MigrationFailed(error=error):
             cause: Final = f"{type(error).__name__}: {error}"[:300]

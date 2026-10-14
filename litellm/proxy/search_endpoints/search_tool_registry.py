@@ -181,11 +181,12 @@ _SHORTEST_CIPHERTEXT_LENGTH: Final = 47
 def _did_not_decrypt(search_tool: Mapping[str, object]) -> bool:
     litellm_params: Final = search_tool.get("litellm_params")
     search_provider: Final = litellm_params.get("search_provider") if isinstance(litellm_params, Mapping) else None
-    return (
-        isinstance(search_provider, str)
-        and search_provider not in _KNOWN_SEARCH_PROVIDERS
-        and len(search_provider) >= _SHORTEST_CIPHERTEXT_LENGTH
-    )
+    if not isinstance(search_provider, str):
+        # The write path always stores a search_provider (encrypted like every param string), so its
+        # absence after decryption means it read as legacy-unreadable and was dropped as unset: the
+        # same params-do-not-decrypt case the loaded version replaces.
+        return True
+    return search_provider not in _KNOWN_SEARCH_PROVIDERS and len(search_provider) >= _SHORTEST_CIPHERTEXT_LENGTH
 
 
 def keep_loaded_search_tools_that_do_not_decrypt(
