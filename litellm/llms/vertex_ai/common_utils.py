@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -32,54 +32,6 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 
 
 GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
-
-
-class _OpenAIFunctionDefinition(TypedDict):
-    name: ReadOnly[str]
-    description: ReadOnly[NotRequired[str]]
-    parameters: ReadOnly[NotRequired[JsonValue]]
-
-
-class _OpenAIFunctionTool(TypedDict):
-    type: ReadOnly[Literal["function"]]
-    function: ReadOnly[_OpenAIFunctionDefinition]
-
-
-def _vertex_gemini_anthropic_tools(tools: object | None) -> tuple[Mapping[str, JsonValue], ...] | None:
-    if tools is None:
-        return None
-    try:
-        openai_tools: Final = TypeAdapter(tuple[_OpenAIFunctionTool, ...]).validate_python(tools)
-    except ValidationError:
-        return tuple(TypeAdapter(tuple[Mapping[str, JsonValue], ...]).validate_python(tools))
-    return tuple(
-        MappingProxyType(
-            {
-                "name": tool["function"]["name"],
-                **(
-                    {"description": description}
-                    if (description := tool["function"].get("description"))
-                    else {}
-                ),
-                "input_schema": tool["function"].get("parameters") or {"type": "object", "properties": {}},
-            }
-        )
-        for tool in openai_tools
-    )
-
-
-def _gemini_system_texts(system: object | None) -> tuple[str, ...] | None:
-    from litellm.types.llms.anthropic import AnthropicMessagesTextParam
-
-    if system is None:
-        return ()
-    if isinstance(system, str):
-        return (system,) if system else ()
-    try:
-        blocks: Final = TypeAdapter(tuple[AnthropicMessagesTextParam, ...]).validate_python(system)
-    except ValidationError:
-        return None
-    return tuple(block["text"] for block in blocks)
 
 
 def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:
@@ -1391,102 +1343,37 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
-            from litellm.llms.anthropic.pass_through.adapters.transformation import (
-                LiteLLMAnthropicMessagesAdapter,
+            from litellm.llms.vertex_ai.count_tokens.context import (
+                VertexGeminiCountContext,
+                VertexGeminiCountContextError,
+                vertex_gemini_count_context,
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
             from litellm.llms.vertex_ai.gemini.transformation import (
                 gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
-                get_supports_system_message,
-                transform_system_message,
             )
-            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-            from litellm.types.llms.anthropic import AnthropicMessagesRequest
-            from litellm.types.utils import AllMessageValues
 
-            system_texts: Final = _gemini_system_texts(system)
-            if system_texts is None:
-                return TokenCountResponse(
-                    total_tokens=0,
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type="gemini",
-                    error=True,
-                    error_message="Vertex AI Gemini system instructions only support text blocks.",
-                    status_code=400,
+            count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
+            match count_context:
+                case VertexGeminiCountContextError(error_message=context_error):
+                    return TokenCountResponse(
+                        total_tokens=0,
+                        request_model=request_model,
+                        model_used=model_to_use,
+                        tokenizer_type="gemini",
+                        error=True,
+                        error_message=context_error,
+                        status_code=400,
+                    )
+                case VertexGeminiCountContext():
+                    pass
+
+            resolved_contents: Final = (
+                contents
+                if contents is not None
+                else gemini_convert_messages_with_history(
+                    messages=messages or []  # pyright: ignore[reportArgumentType]  # preserve direct caller message handling
                 )
-
-            anthropic_tools: Final = _vertex_gemini_anthropic_tools(tools)
-            anthropic_request_data: Final = MappingProxyType(
-                {
-                    "model": model_to_use,
-                    "messages": messages or [],
-                    **({"system": system} if system is not None else {}),
-                    **({"tools": anthropic_tools} if anthropic_tools is not None else {}),
-                }
-            )
-            anthropic_request: Final = TypeAdapter(AnthropicMessagesRequest).validate_python(anthropic_request_data)
-            translated_result: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-                anthropic_request,
-                custom_llm_provider="vertex_ai",
-            )
-            translated_request: Final = TypeAdapter(dict[str, object]).validate_python(translated_result[0])
-            supports_system_message: Final = get_supports_system_message(
-                model=model_to_use, custom_llm_provider="vertex_ai"
-            )
-            translated_messages: Final = TypeAdapter(list[AllMessageValues]).validate_python(
-                translated_result[0]["messages"]
-            )
-
-            _, messages_without_system = transform_system_message(
-                supports_system_message=supports_system_message,
-                messages=translated_messages,
-            )
-
-            def transform_system_text(text: str) -> Mapping[str, object] | None:
-                transformed_system, _ = transform_system_message(
-                    supports_system_message=supports_system_message,
-                    messages=TypeAdapter(list[AllMessageValues]).validate_python(
-                        [{"role": "system", "content": text}]
-                    ),
-                )
-                if transformed_system is None or not transformed_system["parts"]:
-                    return None
-                return TypeAdapter(dict[str, object]).validate_python(transformed_system["parts"][0])
-
-            system_parts: Final = tuple(
-                part
-                for text in system_texts
-                if (part := transform_system_text(text)) is not None
-            )
-            system_instruction: Final = MappingProxyType({"parts": system_parts}) if system_parts else None
-            generated_contents: Final = gemini_convert_messages_with_history(
-                messages=messages_without_system
-            )
-            resolved_contents: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(
-                contents if contents is not None else generated_contents
-            )
-            openai_tools: Final = TypeAdapter(list[dict[str, object]]).validate_python(
-                translated_request.get("tools", [])
-            )
-            mapped_tools: Final = (
-                VertexGeminiConfig().map_function(
-                    value=TypeAdapter(list[dict[str, object]]).validate_python(copy.deepcopy(openai_tools)),
-                    optional_params={},
-                )
-                if openai_tools
-                else []
-            )
-            rest_tools: Final = tuple(
-                {
-                    {
-                        "function_declarations": "functionDeclarations",
-                        "url_context": "urlContext",
-                        "code_execution": "codeExecution",
-                    }.get(key, key): value
-                    for key, value in tool.items()
-                }
-                for tool in TypeAdapter(list[dict[str, object]]).validate_python(mapped_tools)
             )
             token_count_settings: Final = TypeAdapter(dict[str, object]).validate_python(count_tokens_params_request)
             vertex_litellm_params: Final = MappingProxyType(
@@ -1516,8 +1403,8 @@ class VertexAITokenCounter(BaseTokenCounter):
                         api_key=api_key,
                         api_base=api_base,
                         timeout=timeout,
-                        system_instruction=system_instruction,
-                        tools=rest_tools or None,
+                        system_instruction=count_context.system_instruction,
+                        tools=[dict(tool) for tool in count_context.tools] if count_context.tools is not None else None,
                         **vertex_litellm_params,
                     )
                 )
@@ -1530,16 +1417,14 @@ class VertexAITokenCounter(BaseTokenCounter):
                     error=True,
                     error_message=error.message,
                     status_code=error.status_code,
-            )
+                )
 
             if "totalTokens" in gemini_count_tokens_result:
                 total_tokens: Final = gemini_count_tokens_result["totalTokens"]
                 if not isinstance(total_tokens, int) or isinstance(total_tokens, bool):
                     return None
                 tokenizer_type_value: Final = gemini_count_tokens_result.get("tokenizer_used")
-                tokenizer_type: Final = (
-                    tokenizer_type_value if isinstance(tokenizer_type_value, str) else "gemini"
-                )
+                tokenizer_type: Final = tokenizer_type_value if isinstance(tokenizer_type_value, str) else "gemini"
                 return TokenCountResponse(
                     total_tokens=total_tokens,
                     request_model=request_model,

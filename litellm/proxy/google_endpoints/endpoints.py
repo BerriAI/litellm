@@ -59,8 +59,8 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
 
     validated_data: Final = TypeAdapter(_GoogleCountTokensRequest).validate_python(data)
     contents: Final = [dict(content) for content in validated_data.contents]
-    messages: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get(
-        "messages", []
+    messages: Final = (
+        GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
     )
     system: Final = (
         [{"type": "text", "text": part.text} for part in validated_data.system_instruction.parts]

@@ -156,9 +156,7 @@ class GoogleAIStudioTokenCounter:
         }
 
         async_httpx_client: Final = (
-            self._client
-            if self._client is not None
-            else get_async_httpx_client(llm_provider=LlmProviders.GEMINI)
+            self._client if self._client is not None else get_async_httpx_client(llm_provider=LlmProviders.GEMINI)
         )
 
         try:

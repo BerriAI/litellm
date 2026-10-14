@@ -17,7 +17,7 @@ from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _MODEL: Final = "gemini-4-argon"
 _PROJECT: Final = "scripted-project"
@@ -25,10 +25,10 @@ _LOCATION: Final = "us-east5"
 _COUNT: Final = 777
 _UNIT: Final = " red blue green yellow orange purple black white silver gold"
 _USER: Final = f"<filler>{_UNIT * 100}</filler>\nReturn exactly OK."
-_MESSAGES: Final[list[JsonValue]] = [{"role": "user", "content": _USER}]
+_MESSAGES: Final[JsonValue] = [{"role": "user", "content": _USER}]
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _JSON_LIST: Final = TypeAdapter(list[JsonValue])
-_REPLY: Final[dict[str, JsonValue]] = {
+_REPLY: Final[Mapping[str, JsonValue]] = {
     "candidates": [
         {
             "content": {"role": "model", "parts": [{"text": "OK"}]},
@@ -76,7 +76,7 @@ def _deployment(gateway: Gateway, scenario: Scenario, api_base: str) -> str:
     )
 
 
-def _messages(model: str, system: JsonValue | None, tools: JsonValue | None) -> dict[str, JsonValue]:
+def _messages(model: str, system: JsonValue | None, tools: JsonValue | None) -> Mapping[str, JsonValue]:
     return {
         "model": model,
         "messages": _MESSAGES,
@@ -85,7 +85,7 @@ def _messages(model: str, system: JsonValue | None, tools: JsonValue | None) -> 
     }
 
 
-def _json_body(request: Request) -> dict[str, JsonValue]:
+def _json_body(request: Request) -> Mapping[str, JsonValue]:
     return _JSON_OBJECT.validate_json(request.body)
 
 
@@ -123,7 +123,7 @@ def _count_tokens_request_from_generate_content(
     )
 
 
-def _tools(description: str) -> list[JsonValue]:
+def _tools(description: str) -> JsonValue:
     return _JSON_LIST.validate_python(
         [
             {
@@ -148,8 +148,7 @@ def test_messages_and_count_tokens_send_matching_gemini_context(
         model: Final = _deployment(gateway, scenario, wire.url)
         system: Final = (
             f"<cache-buster>{uuid4().hex}</cache-buster>\n"
-            "This is a synthetic context-budget diagnostic. Return exactly OK."
-            + (_UNIT * 100 if large_system else "")
+            "This is a synthetic context-budget diagnostic. Return exactly OK." + (_UNIT * 100 if large_system else "")
             if large_system
             else None
         )
@@ -161,7 +160,9 @@ def test_messages_and_count_tokens_send_matching_gemini_context(
         assert counted.status_code == 200, counted.text
         assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _COUNT, counted.text
         requests: Final = peer.drain()
-        generated_body: Final = _json_body(next(request for request in requests if request.target.endswith(":generateContent")))
+        generated_body: Final = _json_body(
+            next(request for request in requests if request.target.endswith(":generateContent"))
+        )
         count_body: Final = _json_body(next(request for request in requests if request.target.endswith(":countTokens")))
         assert count_body == _count_tokens_request_from_generate_content(generated_body)
 
@@ -170,21 +171,17 @@ def test_count_tokens_keeps_each_text_block_in_system_instruction(gateway: Gatew
     peer: Final = _GeminiPeer()
     with wire_server(peer) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url)
-        system: Final = [
+        system: Final[JsonValue] = [
             {"type": "text", "text": "First instruction"},
             {"type": "text", "text": "Second instruction"},
         ]
-        response: Final = gateway.request(
-            "POST", "/v1/messages/count_tokens", _messages(model, system, None)
-        )
+        response: Final = gateway.request("POST", "/v1/messages/count_tokens", _messages(model, system, None))
         assert response.status_code == 200, response.text
         requests: Final = _count_requests(wire)
         assert len(requests) == 1
         assert _json_body(requests[0]) == {
             "contents": [{"role": "user", "parts": [{"text": _USER}]}],
-            "systemInstruction": {
-                "parts": [{"text": "First instruction"}, {"text": "Second instruction"}]
-            },
+            "systemInstruction": {"parts": [{"text": "First instruction"}, {"text": "Second instruction"}]},
         }
 
 
@@ -201,14 +198,22 @@ def test_count_tokens_without_system_or_tools_sends_contents_only(gateway: Gatew
 
 @pytest.mark.parametrize("asynchronous", (False, True), ids=("sync-sdk", "async-sdk"))
 def _sync_sdk_count_tokens(gateway: Gateway, model: str) -> int:
-    return anthropic.Anthropic(
-        base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0
-    ).messages.count_tokens(
-        model=model,
-        messages=[{"role": "user", "content": _USER}],
-        system="Follow the system instruction.",
-        tools=[{"name": "noop", "description": "Return no output", "input_schema": {"type": "object", "properties": {}}}],
-    ).input_tokens
+    return (
+        anthropic.Anthropic(base_url=str(gateway.client.base_url), api_key=gateway.key, max_retries=0)
+        .messages.count_tokens(
+            model=model,
+            messages=[{"role": "user", "content": _USER}],
+            system="Follow the system instruction.",
+            tools=[
+                {
+                    "name": "noop",
+                    "description": "Return no output",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
+        )
+        .input_tokens
+    )
 
 
 async def _async_sdk_count_tokens(gateway: Gateway, model: str) -> int:
@@ -219,7 +224,13 @@ async def _async_sdk_count_tokens(gateway: Gateway, model: str) -> int:
             model=model,
             messages=[{"role": "user", "content": _USER}],
             system="Follow the system instruction.",
-            tools=[{"name": "noop", "description": "Return no output", "input_schema": {"type": "object", "properties": {}}}],
+            tools=[
+                {
+                    "name": "noop",
+                    "description": "Return no output",
+                    "input_schema": {"type": "object", "properties": {}},
+                }
+            ],
         )
     ).input_tokens
 
@@ -245,8 +256,15 @@ def test_google_count_tokens_forwards_system_and_tools_to_vertex(gateway: Gatewa
     peer: Final = _GeminiPeer()
     with wire_server(peer) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url)
-        body: Final[dict[str, JsonValue]] = {
-            "contents": [{"role": "user", "parts": [{"text": _USER}]}],
+        body: Final[Mapping[str, JsonValue]] = {
+            "contents": [
+                {"role": "user", "parts": [{"text": _USER}]},
+                {"role": "model", "parts": [{"functionCall": {"name": "noop", "args": {"query": "value"}}}]},
+                {
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": "noop", "response": {"result": "ok"}}}],
+                },
+            ],
             "systemInstruction": {"parts": [{"text": "Follow this instruction."}]},
             "tools": [
                 {
@@ -262,9 +280,11 @@ def test_google_count_tokens_forwards_system_and_tools_to_vertex(gateway: Gatewa
         }
         response: Final = gateway.request("POST", f"/v1beta/models/{model}:countTokens", body)
         assert response.status_code == 200, response.text
+        assert _JSON_OBJECT.validate_json(response.content)["totalTokens"] == _COUNT, response.text
         requests: Final = _count_requests(wire)
         assert len(requests) == 1
         request_body: Final = _json_body(requests[0])
+        assert request_body["contents"] == body["contents"]
         assert request_body["systemInstruction"] == body["systemInstruction"]
         assert request_body["tools"] == [
             {
@@ -279,12 +299,60 @@ def test_google_count_tokens_forwards_system_and_tools_to_vertex(gateway: Gatewa
         ]
 
 
+def test_responses_input_tokens_maps_flat_function_tools_to_vertex(gateway: Gateway) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire.url)
+        body: Final[Mapping[str, JsonValue]] = {
+            "model": model,
+            "instructions": "Follow the system instruction.",
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_lookup",
+                    "name": "lookup",
+                    "arguments": '{"query":"value"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_lookup",
+                    "output": "result",
+                },
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Look up a value",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        }
+        response: Final = gateway.request("POST", "/v1/responses/input_tokens", body)
+        assert response.status_code == 200, response.text
+        assert _JSON_OBJECT.validate_json(response.content)["input_tokens"] == _COUNT, response.text
+        requests: Final = _count_requests(wire)
+        assert len(requests) == 1
+        request_body: Final = _json_body(requests[0])
+        assert request_body["tools"] == [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "lookup",
+                        "description": "Look up a value",
+                        "parameters": {"type": "object"},
+                    }
+                ]
+            }
+        ]
+
+
 def test_utils_token_counter_maps_openai_function_tools_to_vertex(gateway: Gateway) -> None:
     peer: Final = _GeminiPeer()
     with wire_server(peer) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url)
-        tool_schema: Final = {"type": "object", "properties": {}}
-        body: Final[dict[str, JsonValue]] = {
+        tool_schema: Final[JsonValue] = {"type": "object", "properties": {}}
+        body: Final[Mapping[str, JsonValue]] = {
             "model": model,
             "messages": _MESSAGES,
             "system": "Follow the system instruction.",
@@ -299,9 +367,7 @@ def test_utils_token_counter_maps_openai_function_tools_to_vertex(gateway: Gatew
                 }
             ],
         }
-        response: Final = gateway.request(
-            "POST", "/utils/token_counter", body, params={"call_endpoint": "true"}
-        )
+        response: Final = gateway.request("POST", "/utils/token_counter", body, params={"call_endpoint": "true"})
         assert response.status_code == 200, response.text
         assert _JSON_OBJECT.validate_json(response.content)["total_tokens"] == _COUNT, response.text
         requests: Final = _count_requests(wire)
@@ -346,9 +412,7 @@ def test_count_tokens_surfaces_peer_errors_and_rejects_non_text_system(gateway: 
         assert _count_requests(invalid_wire) == ()
 
 
-def _count_wave(
-    clients: Sequence[httpx.Client], body: Mapping[str, JsonValue]
-) -> tuple[tuple[int, JsonValue], ...]:
+def _count_wave(clients: Sequence[httpx.Client], body: Mapping[str, JsonValue]) -> tuple[tuple[int, JsonValue], ...]:
     def count(client: httpx.Client) -> tuple[int, JsonValue]:
         response: Final = client.post("/v1/messages/count_tokens", json=dict(body))
         payload: Final = _JSON_OBJECT.validate_json(response.content)
@@ -381,6 +445,7 @@ def test_concurrent_count_waves_recover_after_vertex_count_outage(gateway: Gatew
         assert _count_wave(clients, body) == ((200, _COUNT), (200, _COUNT), (200, _COUNT))
         requests: Final = _count_requests(wire)
         assert len(requests) == 9
-        assert tuple(_json_body(request) for request in requests) == (
-            {"contents": [{"role": "user", "parts": [{"text": _USER}]}]},
-        ) * 9
+        assert (
+            tuple(_json_body(request) for request in requests)
+            == ({"contents": [{"role": "user", "parts": [{"text": _USER}]}]},) * 9
+        )
