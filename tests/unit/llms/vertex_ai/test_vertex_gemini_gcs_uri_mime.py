@@ -4,7 +4,6 @@ Split from test_vertex.py to satisfy CI per-file size limits.
 """
 import asyncio
 import threading
-from typing import Final
 
 from dotenv import load_dotenv
 
@@ -251,16 +250,9 @@ def test_get_gcs_object_content_type_anonymous_success_no_auth_header():
     assert hdrs is None or "Authorization" not in hdrs
 
 
-def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text() -> None:
+def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text():
     from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
 
-    get_started: Final = threading.Event()
-    loop_progressed: Final = threading.Event()
-    response: Final = MagicMock()
-    response.is_error = False
-    response.status_code = 200
-    response.raise_for_status.return_value = None
-    response.json.return_value = {"contentType": "image/png"}
     messages = [
         {
             "role": "user",
@@ -273,9 +265,15 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
         }
     ]
 
-    def slow_http_get(*args, **kwargs):
-        get_started.set()
-        response.wait_result = loop_progressed.wait(timeout=10)
+    http_get_released_by_the_loop = threading.Event()
+    released_while_blocked = []
+
+    def http_get_response() -> MagicMock:
+        response = MagicMock()
+        response.is_error = False
+        response.status_code = 200
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"contentType": "image/png"}
         return response
 
     async def fake_check_and_create_cache(self, **kwargs):
@@ -284,14 +282,22 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
     mock_v = MagicMock()
     mock_v.get_access_token.return_value = ("token", "project")
     mock_http = MagicMock()
-    mock_http.get.side_effect = slow_http_get
 
     async def run_scenario() -> None:
-        async def concurrent_progress() -> None:
-            while not get_started.is_set():
-                await asyncio.sleep(0.001)
-            loop_progressed.set()
+        loop = asyncio.get_running_loop()
+        http_get_blocked = asyncio.Event()
 
+        def blocking_http_get(*args: object, **kwargs: object) -> MagicMock:
+            loop.call_soon_threadsafe(http_get_blocked.set)
+            released_while_blocked.append(http_get_released_by_the_loop.wait(timeout=5))
+            return http_get_response()
+
+        async def release_http_get_from_the_loop() -> None:
+            await http_get_blocked.wait()
+            http_get_released_by_the_loop.set()
+
+        mock_http.get.side_effect = blocking_http_get
+        releaser = asyncio.create_task(release_http_get_from_the_loop())
         task = asyncio.create_task(
             gemini_transformation.async_transform_request_body(
                 gemini_api_key=None,
@@ -310,7 +316,8 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
                 vertex_auth_header=None,
             )
         )
-        await asyncio.gather(task, concurrent_progress())
+        await task
+        await asyncio.wait_for(releaser, timeout=5)
 
     with (
         patch.object(gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_v),
@@ -326,7 +333,9 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
     ):
         asyncio.run(run_scenario())
 
-    assert response.wait_result is True
+    assert released_while_blocked and all(released_while_blocked), (
+        "Event loop blocked; async_transform_request_body did not offload sync GCS metadata"
+    )
 
     async def fake_cache2(self, **kwargs):
         return kwargs["messages"], kwargs["optional_params"], None

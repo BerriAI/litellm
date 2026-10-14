@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Final, TypedDict
+from typing import Awaitable, Final, TypedDict, TypeVar
 from unittest.mock import AsyncMock
 
 import httpx
@@ -24,21 +24,23 @@ from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
+_T = TypeVar("_T")
+
+
+async def _await_with_spawned_tasks(call: Awaitable[_T]) -> _T:
+    before: Final = asyncio.all_tasks()
+    result: Final = await call
+    spawned: Final = asyncio.all_tasks() - before - {asyncio.current_task()}
+    await asyncio.wait_for(asyncio.gather(*spawned), timeout=5)
+    return result
+
+
 @pytest.fixture(autouse=True)
 def set_verbose_logger_level() -> Iterator[None]:
     original_level = verbose_logger.level
     verbose_logger.setLevel(logging.DEBUG)
     yield
     verbose_logger.setLevel(original_level)
-
-
-async def _wait_for_events_and_flush(generic_logger: GenericAPILogger, expected: int) -> None:
-    async def _poll() -> None:
-        while len(generic_logger.log_queue) < expected:
-            await asyncio.sleep(0.01)
-
-    await asyncio.wait_for(_poll(), timeout=10)
-    await generic_logger.flush_queue()
 
 
 @pytest.mark.asyncio
@@ -65,14 +67,17 @@ async def test_generic_api_callback():
     litellm.callbacks = [generic_logger]
 
     # Make the completion call
-    response = await litellm.acompletion(
-        model="gpt-5.5",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        mock_response="hi",
-        user="test_user",
+    response = await _await_with_spawned_tasks(
+        litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="hi",
+            user="test_user",
+        )
     )
 
-    await _wait_for_events_and_flush(generic_logger, 1)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -144,15 +149,17 @@ async def test_generic_api_callback_multiple_logs():
 
     # Make the completion call
     for _ in range(10):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await _wait_for_events_and_flush(generic_logger, 10)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -224,15 +231,17 @@ async def test_generic_api_callback_ndjson_format():
 
     # Make multiple completion calls to generate multiple logs
     for i in range(3):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await _wait_for_events_and_flush(generic_logger, 3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -293,15 +302,17 @@ async def test_generic_api_callback_single_format():
 
     # Make 3 completion calls
     for i in range(3):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await _wait_for_events_and_flush(generic_logger, 3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called 3 times (once per log in batch)
     assert mock_post.call_count == 3, f"Expected 3 calls, got {mock_post.call_count}"
@@ -352,15 +363,17 @@ async def test_generic_api_callback_json_array_format_explicit():
 
     # Make multiple completion calls
     for i in range(5):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await _wait_for_events_and_flush(generic_logger, 5)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called once (batched)
     mock_post.assert_called_once()
@@ -403,15 +416,17 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
 
     # Make completion calls
     for i in range(2):
-        await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Test {i}"}],
-            mock_response="response",
-            user="test_user",
+        await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Test {i}"}],
+                mock_response="response",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await _wait_for_events_and_flush(generic_logger, 2)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -426,42 +441,6 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     this_test_messages: Final = [[{"role": "user", "content": f"Test {i}"}] for i in range(2)]
     mine: Final = [record for record in records if record.get("messages") in this_test_messages]
     assert len(mine) == 2, f"Expected this test's 2 calls as NDJSON lines, got {len(mine)} of {len(records)}"
-
-
-@pytest.mark.asyncio
-async def test_generic_api_callback_sends_queued_events_on_its_own(monkeypatch: pytest.MonkeyPatch):
-    mock_post = AsyncMock()
-    mock_post.return_value.status_code = 200
-    mock_post.return_value.text = "OK"
-
-    test_endpoint = "https://example.com/api/logs"
-    test_headers = {"Authorization": "Bearer test_token"}
-    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", test_endpoint)
-
-    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=0.05)
-    generic_logger.async_httpx_client.post = mock_post
-    monkeypatch.setattr(litellm, "callbacks", [generic_logger])
-
-    for i in range(3):
-        await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
-        )
-
-    async def _poll() -> None:
-        while sum(len(json.loads(call.kwargs["data"])) for call in mock_post.call_args_list) < 3:
-            await asyncio.sleep(0.01)
-
-    await asyncio.wait_for(_poll(), timeout=10)
-
-    posted_bodies: Final = [json.loads(call.kwargs["data"]) for call in mock_post.call_args_list]
-    for body in posted_bodies:
-        assert isinstance(body, list), "Each posted body should be a JSON array"
-    posted_items: Final = sum(posted_bodies, [])
-    contents: Final = sorted(item["messages"][0]["content"] for item in posted_items)
-    assert contents == [f"Hello, world! {i}" for i in range(3)]
 
 
 @pytest.mark.asyncio

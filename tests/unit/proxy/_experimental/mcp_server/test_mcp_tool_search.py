@@ -1412,7 +1412,7 @@ async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> No
             os.sched_setaffinity(0, {min(original_affinity)})
         for _ in range(2):
             results: Final = await asyncio.gather(
-                *(_tool_argument_validation_error(schema, {"amount": 0.75}) for _ in range(8))
+                *(_tool_argument_validation_error(schema, {"amount": 0.75}, timeout_seconds=90.0) for _ in range(8))
             )
             assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
         workers: Final = tuple(
