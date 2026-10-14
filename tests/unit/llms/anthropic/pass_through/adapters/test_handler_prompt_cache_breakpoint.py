@@ -101,8 +101,9 @@ def test_openai_compatible_claude_host_forwards_prompt_cache_breakpoint_verbatim
     [
         (True, {"custom_llm_provider": "bedrock"}),
         (None, {"custom_llm_provider": "bedrock", "drop_params": True}),
+        (None, {"custom_llm_provider": "bedrock", "drop_params": "true"}),
     ],
-    ids=["litellm.drop_params", "request_or_deployment_drop_params"],
+    ids=["litellm.drop_params", "request_or_deployment_drop_params", "drop_params_string_flag"],
 )
 def test_claude_target_drops_prompt_cache_breakpoint_under_drop_params(
     monkeypatch: pytest.MonkeyPatch, global_drop_params: bool | None, extra_kwargs: Mapping[str, object]

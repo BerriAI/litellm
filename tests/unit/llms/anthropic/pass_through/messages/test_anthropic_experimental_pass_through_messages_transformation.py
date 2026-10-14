@@ -178,14 +178,22 @@ def _optional_params_with_breakpoints() -> Mapping[str, object]:
 def _transform(
     messages: Sequence[Mapping[str, object]],
     optional_params: Mapping[str, object],
-    litellm_params: GenericLiteLLMParams,
+    litellm_params: GenericLiteLLMParams | dict[str, object],
+) -> Mapping[str, object]:
+    return _transform_in_place([dict(message) for message in messages], optional_params, litellm_params)
+
+
+def _transform_in_place(
+    messages: list[dict[str, object]],
+    optional_params: Mapping[str, object],
+    litellm_params: GenericLiteLLMParams | dict[str, object],
 ) -> Mapping[str, object]:
     return _REQUEST.validate_python(
         AnthropicMessagesConfig().transform_anthropic_messages_request(
             model="claude-haiku-5-5",
-            messages=[dict(message) for message in messages],
+            messages=messages,
             anthropic_messages_optional_request_params=dict(optional_params),
-            litellm_params=litellm_params,
+            litellm_params=litellm_params,  # pyright: ignore[reportArgumentType]  # handlers also pass litellm_params as a dict
             headers={},
         )
     )
@@ -209,11 +217,14 @@ def test_prompt_cache_breakpoint_is_forwarded_verbatim_without_drop_params(monke
         (True, GenericLiteLLMParams()),
         (None, GenericLiteLLMParams(drop_params=True)),
         (None, GenericLiteLLMParams(drop_params="true")),
+        (None, {"drop_params": True}),
     ],
-    ids=["litellm.drop_params", "request_or_deployment_drop_params", "drop_params_string_flag"],
+    ids=["litellm.drop_params", "request_or_deployment_drop_params", "drop_params_string_flag", "dict_litellm_params"],
 )
 def test_drop_params_strips_prompt_cache_breakpoint_from_every_block(
-    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool | None, litellm_params: GenericLiteLLMParams
+    monkeypatch: pytest.MonkeyPatch,
+    global_drop_params: bool | None,
+    litellm_params: GenericLiteLLMParams | dict[str, object],
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", global_drop_params)
 
@@ -246,12 +257,12 @@ def test_drop_params_strips_prompt_cache_breakpoint_from_every_block(
 
 def test_drop_params_leaves_the_callers_blocks_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", True)
-    messages: Final = _messages_with_breakpoints()
+    messages: Final = [dict(message) for message in _messages_with_breakpoints()]
     optional_params: Final = _optional_params_with_breakpoints()
     system: Final = optional_params["system"]
     tools: Final = optional_params["tools"]
 
-    _transform(messages, optional_params, GenericLiteLLMParams())
+    _transform_in_place(messages, optional_params, GenericLiteLLMParams())
 
     assert messages == _messages_with_breakpoints()
     assert system == _optional_params_with_breakpoints()["system"]
