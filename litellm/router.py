@@ -696,7 +696,7 @@ def _mid_stream_retry_trigger(error: "MidStreamFallbackError") -> Exception:
 class _FirstChunk:
     """The chunk Router._acompletion / _completion already read off a stream; None means the provider closed it empty."""
 
-    chunk: "ModelResponseStream | None"
+    chunk: ModelResponseStream | None
 
 
 async def _aread_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
