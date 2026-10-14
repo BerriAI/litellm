@@ -1811,14 +1811,14 @@ class TestToolTransformation:
         assert [tool["type"] for tool in result["tools"]] == ["function", "function"]
 
     def test_dropping_the_search_tool_undefers_the_remaining_tools(self) -> None:
-        model: Final = "azure_ai/claude-sonnet-5-5"
-        assert litellm.supports_tool_search(model, "azure_ai") is False
+        model: Final = "anthropic/claude-3-haiku-20240307"
+        assert litellm.supports_tool_search(model, "anthropic") is False
 
         result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model=model,
             input="What is the weather in Paris right now?",
             responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
-            custom_llm_provider="azure_ai",
+            custom_llm_provider="anthropic",
         )
 
         assert [tool["type"] for tool in result["tools"]] == ["function", "function"]
@@ -1876,8 +1876,8 @@ class TestToolTransformation:
         assert [tool["defer_loading"] for tool in chat_tools if tool["type"] == "function"] == [True, True]
 
     def test_native_search_tool_passes_through_routes_without_tool_search(self) -> None:
-        model: Final = "azure_ai/claude-sonnet-5-5"
-        assert litellm.supports_tool_search(model, "azure_ai") is False
+        model: Final = "anthropic/claude-3-haiku-20240307"
+        assert litellm.supports_tool_search(model, "anthropic") is False
         tools: Final = [
             {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
             *_deferred_tools_with_server_tool_search()[1:],
@@ -1887,7 +1887,7 @@ class TestToolTransformation:
             model=model,
             input="What is the weather in Paris right now?",
             responses_api_request={"tools": tools},
-            custom_llm_provider="azure_ai",
+            custom_llm_provider="anthropic",
         )
 
         chat_tools: Final = result["tools"]

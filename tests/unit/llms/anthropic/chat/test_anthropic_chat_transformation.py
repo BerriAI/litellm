@@ -8808,6 +8808,7 @@ def _deferral_by_function_name(tools: list[dict[str, object]]) -> dict[object, o
         pytest.param(AnthropicConfig(), "claude-sonnet-5-5", "anthropic", id="anthropic"),
         pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-sonnet-5-5", "bedrock", id="bedrock-invoke"),
         pytest.param(VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", id="vertex_ai"),
+        pytest.param(AzureAnthropicConfig(), "claude-sonnet-5-5", "azure_ai", id="azure_ai"),
     ],
 )
 @pytest.mark.parametrize(
@@ -8837,8 +8838,8 @@ def test_map_openai_params_sends_one_anthropic_search_tool_and_keeps_deferral_on
 @pytest.mark.parametrize(
     ("config", "model"),
     [
-        pytest.param(AnthropicConfig(), "claude-sonnet-5-5", id="route-with-tool-search"),
-        pytest.param(AzureAnthropicConfig(), "claude-sonnet-5-5", id="route-without-tool-search"),
+        pytest.param(AnthropicConfig(), "claude-sonnet-5-5", id="model-with-tool-search"),
+        pytest.param(AnthropicConfig(), "claude-3-haiku-20240307", id="model-without-tool-search"),
     ],
 )
 def test_map_openai_params_lets_a_native_anthropic_search_tool_replace_the_openai_one(
@@ -8892,7 +8893,6 @@ def test_map_openai_params_judges_tool_search_on_the_real_model_when_tool_based_
 
 
 _UNRUNNABLE_TOOL_SEARCH_CASES: Final = [
-    pytest.param(AzureAnthropicConfig(), "claude-sonnet-5-5", "azure_ai", "server", id="route-without-tool-search"),
     pytest.param(AnthropicConfig(), "claude-3-haiku-20240307", "anthropic", "server", id="model-without-tool-search"),
     pytest.param(AnthropicConfig(), "claude-sonnet-5-5", None, "client", id="client-executed-search"),
 ]

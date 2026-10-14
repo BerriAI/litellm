@@ -147,7 +147,6 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
-_DEFERRAL_CARRYING_TOOL_KEYS: Final = frozenset({"function", "tools"})
 
 
 def _tool_type(tool: object) -> str | None:
@@ -166,18 +165,47 @@ def _is_anthropic_tool_search_tool(tool: object) -> bool:
     return _tool_type(tool) in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
-def _without_deferral(tool: object) -> object:
-    match tool:
+def _without_defer_loading(fields: object) -> object:
+    match fields:
         case Mapping():
             return {
-                key: _without_deferral(value) if key in _DEFERRAL_CARRYING_TOOL_KEYS else value
-                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(tool).items()
+                key: value
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(fields).items()
                 if key != "defer_loading"
             }
-        case list():
-            return [_without_deferral(member) for member in _TOOLS_ADAPTER.validate_python(tool)]
         case _:
-            return tool
+            return fields
+
+
+def _member_without_deferral(member: object) -> object:
+    match member:
+        case Mapping():
+            return {
+                key: _without_defer_loading(value) if key == "function" else value
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(member).items()
+                if key != "defer_loading"
+            }
+        case _:
+            return member
+
+
+def _namespace_members_without_deferral(members: object) -> object:
+    match members:
+        case list():
+            return [_member_without_deferral(member) for member in _TOOLS_ADAPTER.validate_python(members)]
+        case _:
+            return members
+
+
+def _without_deferral(tool: object) -> object:
+    match _member_without_deferral(tool):
+        case Mapping() as stripped:
+            return {
+                key: _namespace_members_without_deferral(value) if key == "tools" else value
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(stripped).items()
+            }
+        case stripped:
+            return stripped
 
 
 def _validated_defer_loading(value: object) -> bool:
