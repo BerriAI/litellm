@@ -8192,6 +8192,15 @@ def test_metadata_user_id_from_litellm_params_strips_extras():
     assert data.get("metadata") == {"user_id": "abc123"}
 
 
+@pytest.mark.parametrize("user_id", [12345, {"id": "abc123"}, ["abc123"]])
+def test_metadata_non_string_user_id_is_skipped_instead_of_raising(user_id):
+    data: Final = _make_transform_request(
+        optional_params={},
+        litellm_params={"metadata": {"user_id": user_id}},
+    )
+    assert "metadata" not in data
+
+
 def test_metadata_filter_applies_to_vertex_anthropic():
     """VertexAIAnthropicConfig inherits the metadata filter."""
     from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
