@@ -202,7 +202,9 @@ the chart context (needed for .Values), `component` selects which component's
 Sensitive values (master key, DB username + password, Redis password) come
 only from referenced Secrets; the chart never accepts inline values for them.
 
-The chart never assembles DATABASE_URL itself. It emits only the discrete
+The chart never assembles DATABASE_URL itself. When
+database.writer.passwordSecret.urlKey is set, the chart passes the operator's
+URL through from the Secret. Otherwise it emits only the discrete
 DATABASE_HOST/PORT/USER/NAME/SCHEMA (+ DATABASE_PASSWORD for password auth)
 vars; the proxy's entrypoint (DatabaseURLSettings in
 litellm/proxy/db/db_url_settings.py) builds the URL from them and
@@ -218,11 +220,11 @@ token instead of a static password. `database.writer.useAzureEntraAuth: true`
 does the same with AZURE_POSTGRESQL_AUTH=true and a Microsoft Entra ID token,
 for Azure Database for PostgreSQL. The two are mutually exclusive.
 
-The read replica is opt-in via `database.reader.host`. The chart emits
-DATABASE_HOST_READ_REPLICA / DATABASE_PORT_READ_REPLICA /
-DATABASE_NAME_READ_REPLICA (+ DATABASE_SCHEMA_READ_REPLICA) for both auth
-modes, plus DATABASE_USER_READ_REPLICA / DATABASE_PASSWORD_READ_REPLICA for
-password auth. When `database.reader.useIAMAuth: true` (or
+The read replica is opt-in via `database.reader.host`, `hostKey`, or `urlKey`.
+The chart emits DATABASE_URL_READ_REPLICA alone for urlKey, or discrete
+DATABASE_*_READ_REPLICA vars for host and hostKey configurations, plus
+DATABASE_USER_READ_REPLICA / DATABASE_PASSWORD_READ_REPLICA for password auth.
+When `database.reader.useIAMAuth: true` (or
 `database.reader.useAzureEntraAuth: true`) it omits
 DATABASE_PASSWORD_READ_REPLICA and the entrypoint mints the reader URL the
 same way. Reader token auth only takes effect when the writer uses the same
@@ -242,8 +244,36 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
   value: {{ $component.logLevel | quote }}
 {{- end }}
 {{- with $root.Values.database.writer }}
+{{- $hostKey := .passwordSecret.hostKey }}
+{{- $urlKey := .passwordSecret.urlKey }}
+{{- if and .host $hostKey }}
+{{- fail "database.writer.host and database.writer.passwordSecret.hostKey cannot both be set" }}
+{{- end }}
+{{- if and $urlKey (or .host $hostKey .dbname .schema .sslMode .sslRootCert .useIAMAuth .useAzureEntraAuth) }}
+{{- fail "database.writer.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, sslMode, sslRootCert, useIAMAuth, or useAzureEntraAuth" }}
+{{- end }}
+{{- if and (not .host) (not $hostKey) (not $urlKey) }}
+{{- fail "one of database.writer.host, database.writer.passwordSecret.hostKey, or database.writer.passwordSecret.urlKey is required" }}
+{{- end }}
+{{- if and (or $hostKey $urlKey) (not .passwordSecret.name) }}
+{{- fail "database.writer.passwordSecret.name is required when hostKey or urlKey is set" }}
+{{- end }}
+{{- if $urlKey }}
+- name: DATABASE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name | quote }}
+      key: {{ $urlKey | quote }}
+{{- else }}
 - name: DATABASE_HOST
-  value: {{ required "database.writer.host is required" .host | quote }}
+  {{- if $hostKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name | quote }}
+      key: {{ $hostKey | quote }}
+  {{- else }}
+  value: {{ .host | quote }}
+  {{- end }}
 - name: DATABASE_PORT
   value: {{ .port | default 5432 | quote }}
 - name: DATABASE_USER
@@ -282,8 +312,29 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
       key: {{ .passwordSecret.passwordKey | default "password" }}
 {{- end }}
 {{- end }}
+{{- end }}
 {{- with $root.Values.database.reader }}
-{{- if .host }}
+{{- $readerSecret := .passwordSecret | default dict }}
+{{- $hostKey := $readerSecret.hostKey }}
+{{- $urlKey := $readerSecret.urlKey }}
+{{- $readerEnabled := or .host $hostKey $urlKey }}
+{{- if and .host $hostKey }}
+{{- fail "database.reader.host and database.reader.passwordSecret.hostKey cannot both be set" }}
+{{- end }}
+{{- if and $urlKey (or .host $hostKey .dbname .schema .useIAMAuth .useAzureEntraAuth) }}
+{{- fail "database.reader.passwordSecret.urlKey cannot be combined with host, hostKey, dbname, schema, useIAMAuth, or useAzureEntraAuth" }}
+{{- end }}
+{{- if and (or $hostKey $urlKey) (not $readerSecret.name) }}
+{{- fail "database.reader.passwordSecret.name is required when hostKey or urlKey is set" }}
+{{- end }}
+{{- if $readerEnabled }}
+{{- if $urlKey }}
+- name: DATABASE_URL_READ_REPLICA
+  valueFrom:
+    secretKeyRef:
+      name: {{ $readerSecret.name | quote }}
+      key: {{ $urlKey | quote }}
+{{- else }}
 {{- if and .useIAMAuth (not $root.Values.database.writer.useIAMAuth) }}
 {{- fail "database.reader.useIAMAuth requires database.writer.useIAMAuth: true (the proxy gates IAM URL minting on IAM_TOKEN_DB_AUTH, which is only set by the writer)" }}
 {{- end }}
@@ -291,11 +342,18 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 {{- fail "database.reader.useAzureEntraAuth requires database.writer.useAzureEntraAuth: true (the proxy gates Entra URL minting on AZURE_POSTGRESQL_AUTH, which is only set by the writer)" }}
 {{- end }}
 - name: DATABASE_HOST_READ_REPLICA
+  {{- if $hostKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $readerSecret.name | quote }}
+      key: {{ $hostKey | quote }}
+  {{- else }}
   value: {{ .host | quote }}
+  {{- end }}
 - name: DATABASE_PORT_READ_REPLICA
   value: {{ .port | default 5432 | quote }}
 - name: DATABASE_NAME_READ_REPLICA
-  value: {{ required "database.reader.dbname is required when database.reader.host is set" .dbname | quote }}
+  value: {{ required "database.reader.dbname is required when database.reader.host, hostKey, or urlKey is set" .dbname | quote }}
 {{- if .schema }}
 - name: DATABASE_SCHEMA_READ_REPLICA
   value: {{ .schema | quote }}
@@ -325,6 +383,7 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 {{- end }}
 {{- end }}
 {{- end }}
+{{- end }}
 {{/*
 The migrations Job (helm.sh/hook: pre-upgrade) is the single owner of
 `prisma migrate deploy`. Without this, every gateway/backend pod also runs
@@ -341,9 +400,34 @@ harmless no-op for the Job and authoritative for the app pods.
      tracking, pod lock manager) via its REDIS_* env fallback. An explicit
      `general_settings.coordination_redis` block in proxy_config takes
      precedence over anything emitted here. */}}
-{{- if $root.Values.redis.host }}
+{{- $redisSecret := $root.Values.redis.passwordSecret | default dict }}
+{{- $hostKey := $redisSecret.hostKey }}
+{{- $urlKey := $redisSecret.urlKey }}
+{{- if and $root.Values.redis.host $hostKey }}
+{{- fail "redis.host and redis.passwordSecret.hostKey cannot both be set" }}
+{{- end }}
+{{- if and $urlKey (or $root.Values.redis.host $hostKey $root.Values.redis.cluster) }}
+{{- fail "redis.passwordSecret.urlKey cannot be combined with host, hostKey, or cluster" }}
+{{- end }}
+{{- if and (or $hostKey $urlKey) (not $redisSecret.name) }}
+{{- fail "redis.passwordSecret.name is required when hostKey or urlKey is set" }}
+{{- end }}
+{{- if $urlKey }}
+- name: REDIS_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ $redisSecret.name | quote }}
+      key: {{ $urlKey | quote }}
+{{- else if or $root.Values.redis.host $hostKey }}
 - name: REDIS_HOST
+  {{- if $hostKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $redisSecret.name | quote }}
+      key: {{ $hostKey | quote }}
+  {{- else }}
   value: {{ $root.Values.redis.host | quote }}
+  {{- end }}
 - name: REDIS_PORT
   value: {{ $root.Values.redis.port | quote }}
 {{- if $root.Values.redis.passwordSecret.name }}
@@ -360,7 +444,11 @@ harmless no-op for the Job and authoritative for the app pods.
      configured endpoint; the cluster client discovers the remaining nodes from
      CLUSTER SLOTS at startup. */}}
 - name: REDIS_CLUSTER_NODES
+  {{- if $hostKey }}
+  value: {{ printf "[{\"host\":\"$(REDIS_HOST)\",\"port\":%v}]" (int $root.Values.redis.port) | quote }}
+  {{- else }}
   value: {{ printf "[{\"host\":%q,\"port\":%v}]" $root.Values.redis.host (int $root.Values.redis.port) | quote }}
+  {{- end }}
 {{- end }}
 {{- end }}
 {{- with $component.extraEnv }}
