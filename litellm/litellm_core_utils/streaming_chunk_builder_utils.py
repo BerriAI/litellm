@@ -11,7 +11,7 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,  # pyright: ignore[reportUnknownVariableType]  # response param accepts an untyped dict
 )
@@ -241,6 +241,16 @@ def apply_grounding_request_counts(
     return counted.model_copy(update=updates)
 
 
+def _with_upstream_provider(hidden_params: Mapping[str, object] | None, upstream_provider: str) -> Mapping[str, object]:
+    """
+    A copy of ``hidden_params`` carrying ``upstream_provider``. A copy, not a mutation: the
+    assembled response may share its hidden-params dict with the chunk it was built from.
+    """
+    if hidden_params is None:
+        return {"upstream_provider": upstream_provider}
+    return {**hidden_params, "upstream_provider": upstream_provider}
+
+
 class ChunkProcessor:
     def __init__(self, chunks: list, messages: Sequence | None = None):
         self.chunks = self._sort_chunks(chunks)
@@ -399,6 +409,20 @@ class ChunkProcessor:
             None,
         )
 
+    @staticmethod
+    def _get_upstream_provider_from_chunks(chunks: Sequence["_BaseChunk"]) -> str | None:
+        """
+        The provider that served the stream, as recorded in a chunk's hidden params
+        (e.g. OpenRouter's top-level ``provider``). Any chunk may carry it, so scan them
+        all rather than trusting the first.
+        """
+        for chunk in reversed(chunks):
+            hidden = get_hidden_params(chunk)
+            value = hidden.get("upstream_provider") if hidden is not None else None
+            if isinstance(value, str) and value:
+                return value
+        return None
+
     def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
@@ -460,6 +484,9 @@ class ChunkProcessor:
                 response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params getter
                 provider_response_model=provider_response_model,
             )
+        upstream_provider: Final = self._get_upstream_provider_from_chunks(chunks)
+        if upstream_provider is not None:
+            set_hidden_params(response, dict(_with_upstream_provider(get_hidden_params(response), upstream_provider)))
         return response
 
     @staticmethod

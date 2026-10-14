@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Final, cast
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_param, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -183,7 +183,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
         """
         Transform the response from OpenRouter API.
 
-        Extracts cost information from response headers if available.
+        Extracts cost information from response headers if available, and records the
+        upstream provider that served the request (OpenRouter's top-level ``provider``).
 
         Returns:
             ModelResponse: The transformed response with cost information.
@@ -223,6 +224,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
                     )
                     if isinstance(response_cost, str | int | float):
                         additional_headers["llm_provider-x-litellm-response-cost"] = float(response_cost)
+            upstream_provider: Final = response_json.get("provider")
+            if isinstance(upstream_provider, str) and upstream_provider:
+                set_hidden_param(model_response, "upstream_provider", upstream_provider)
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass
@@ -274,7 +278,7 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
                 new_choices.append(choice)
-            return ModelResponseStream(
+            stream_chunk: Final = ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
                 created=chunk["created"],
@@ -282,6 +286,12 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                 model=chunk["model"],
                 choices=new_choices,
             )
+            chunk_body: Final = cast(  # cast-ok: parsed SSE chunk; only a string-valued top-level key is read
+                dict[str, object], chunk
+            )
+            upstream_provider: Final = chunk_body.get("provider")
+            if isinstance(upstream_provider, str) and upstream_provider:
+                set_hidden_param(stream_chunk, "upstream_provider", upstream_provider)
         except KeyError as e:
             raise OpenRouterException(
                 message=f"KeyError: {e}, Got unexpected response from OpenRouter: {chunk}",
@@ -290,3 +300,5 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
             )
         except Exception as e:
             raise e
+        else:
+            return stream_chunk

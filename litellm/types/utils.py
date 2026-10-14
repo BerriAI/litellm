@@ -3330,6 +3330,7 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_failed_requests: ReadOnly[int | None]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
+    upstream_provider: ReadOnly[str | None]  # provider that served the call behind an aggregator, e.g. OpenRouter
 
 
 class StandardLoggingModelInformation(TypedDict):

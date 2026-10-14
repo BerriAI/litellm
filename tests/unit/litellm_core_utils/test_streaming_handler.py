@@ -6415,3 +6415,29 @@ def validate_last_format(chunk):
         assert isinstance(
             choice["finish_reason"], str
         ), "'finish_reason' should be a string."
+
+
+def test_chunk_creator_preserves_upstream_provider_from_parsed_chunk():
+    """
+    A chunk parser that records the serving provider as a hidden param (OpenRouter's
+    top-level ``provider``) has it forwarded onto every returned chunk and onto the
+    assembled response, where the logging payload reads it.
+    """
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="openrouter/some-org/some-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openrouter",
+    )
+    parsed_chunk = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello", role="assistant"), finish_reason=None)],
+    )
+    parsed_chunk._hidden_params["upstream_provider"] = "SomeProvider"
+
+    result = wrapper.chunk_creator(chunk=parsed_chunk)
+
+    assert result is not None
+    assert result._hidden_params["upstream_provider"] == "SomeProvider"
+    assembled = litellm.stream_chunk_builder(chunks=[result])
+    assert assembled is not None
+    assert assembled._hidden_params["upstream_provider"] == "SomeProvider"

@@ -2138,3 +2138,58 @@ def test_stream_chunk_builder_joins_openai_audio_output_pieces() -> None:
         "expires_at": 1767225600,
         "transcript": "Yes.",
     }
+
+
+def test_stream_chunk_builder_takes_upstream_provider_from_any_chunk():
+    """The serving provider may arrive on any chunk; the assembled response carries it either way."""
+    import litellm
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    first = ModelResponseStream(
+        id="chunk-1",
+        created=1742056047,
+        model="openrouter/some-org/some-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content="hi", role="assistant"), finish_reason=None)],
+    )
+    last = ModelResponseStream(
+        id="chunk-1",
+        created=1742056048,
+        model="openrouter/some-org/some-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+    last._hidden_params["upstream_provider"] = "SomeProvider"
+
+    assembled = litellm.stream_chunk_builder(chunks=[first, last], messages=[{"role": "user", "content": "hi"}])
+
+    assert assembled is not None
+    assert assembled._hidden_params["upstream_provider"] == "SomeProvider"
+
+    none_assembled = litellm.stream_chunk_builder(
+        chunks=[first.model_copy(deep=True)], messages=[{"role": "user", "content": "hi"}]
+    )
+    assert none_assembled is not None
+    assert "upstream_provider" not in none_assembled._hidden_params
+
+
+def test_with_upstream_provider_copies_and_handles_missing_hidden_params():
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import _with_upstream_provider
+
+    assert _with_upstream_provider(None, "SomeProvider") == {"upstream_provider": "SomeProvider"}
+
+    existing = {"model_id": "mid"}
+    merged = _with_upstream_provider(existing, "SomeProvider")
+    assert merged == {"model_id": "mid", "upstream_provider": "SomeProvider"}
+    assert "upstream_provider" not in existing
+
+
+def test_get_upstream_provider_from_chunks_ignores_chunks_without_it():
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+
+    chunks = [
+        {"choices": [], "_hidden_params": {"provider_specific_fields": {"k": "v"}}},
+        {"choices": []},
+        {"choices": [], "_hidden_params": {"upstream_provider": ""}},
+    ]
+    assert ChunkProcessor._get_upstream_provider_from_chunks(chunks) is None
+    chunks.append({"choices": [], "_hidden_params": {"upstream_provider": "SomeProvider"}})
+    assert ChunkProcessor._get_upstream_provider_from_chunks(chunks) == "SomeProvider"

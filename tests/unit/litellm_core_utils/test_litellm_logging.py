@@ -11757,3 +11757,17 @@ def test_masking_function_not_in_metadata_when_not_provided():
     assert "_langfuse_masking_function" not in result
 
     assert result["metadata"]["some_key"] == "some_value"
+
+
+def test_standard_logging_hidden_params_carries_upstream_provider():
+    """``upstream_provider`` on response hidden params reaches StandardLoggingHiddenParams."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    hidden = StandardLoggingPayloadSetup.get_hidden_params(
+        {"model_id": "mid-test", "upstream_provider": "SomeProvider"}
+    )
+    assert hidden["upstream_provider"] == "SomeProvider"
+    assert hidden["model_id"] == "mid-test"
+
+    empty = StandardLoggingPayloadSetup.get_hidden_params(None)
+    assert empty["upstream_provider"] is None
