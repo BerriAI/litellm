@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles
@@ -278,6 +280,92 @@ async def test_team_update_team_admin_cannot_set_soft_budget_on_a_team_they_do_n
     assert resp.status_code == 403, resp.text
     row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
     assert row is not None and row.soft_budget != 7.5, "denied but team mutated"
+
+
+async def _seed_team_metadata(db, team_id: str, metadata: dict[str, object]) -> None:
+    await db.db.litellm_teamtable.update(where={"team_id": team_id}, data={"metadata": json.dumps(metadata)})
+
+
+async def _stored_team_metadata(db, team_id: str) -> dict[str, object]:
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    assert row is not None
+    return dict(row.metadata or {})
+
+
+_STORED_TEAM_METADATA = {"cost_center": "eng", "region": "eu", "priority": "high"}
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [
+        pytest.param({**_STORED_TEAM_METADATA, "project": "atlas"}, id="add"),
+        pytest.param({**_STORED_TEAM_METADATA, "cost_center": "sales"}, id="edit"),
+        pytest.param({"region": "eu", "priority": "high"}, id="delete"),
+    ],
+)
+async def test_team_update_team_admin_edits_ordinary_metadata_keys(sent, gateway_client, db, resources, actors):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "alpha", resources.prefix)
+    await _seed_team_metadata(db, resources.prefix, _STORED_TEAM_METADATA)
+    headers = {"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"}
+
+    with team_admin_permissions(gateway_client.gateway, ["tpm_limit"]):
+        denied = await gateway_client.post(
+            "/team/update", headers=headers, json={"team_id": resources.prefix, "metadata": sent}
+        )
+    assert denied.status_code == 403, denied.text
+    assert "'metadata'" in denied.text, denied.text
+    assert await _stored_team_metadata(db, resources.prefix) == _STORED_TEAM_METADATA
+
+    with team_admin_permissions(gateway_client.gateway, ["metadata"]):
+        allowed = await gateway_client.post(
+            "/team/update", headers=headers, json={"team_id": resources.prefix, "metadata": sent}
+        )
+    assert allowed.status_code == 200, allowed.text
+    assert await _stored_team_metadata(db, resources.prefix) == sent
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [
+        pytest.param({**_STORED_TEAM_METADATA, "priority": "low"}, id="change"),
+        pytest.param({"cost_center": "eng", "region": "eu"}, id="remove"),
+        pytest.param({**_STORED_TEAM_METADATA, "callback_settings": {"callbacks": []}}, id="add"),
+    ],
+)
+async def test_team_update_team_admin_cannot_touch_proxy_controlled_metadata_keys(
+    sent, gateway_client, db, resources, actors
+):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "alpha", resources.prefix)
+    await _seed_team_metadata(db, resources.prefix, _STORED_TEAM_METADATA)
+
+    with team_admin_permissions(gateway_client.gateway, ["metadata"]):
+        resp = await gateway_client.post(
+            "/team/update",
+            headers={"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"},
+            json={"team_id": resources.prefix, "metadata": sent},
+        )
+    assert resp.status_code == 403, resp.text
+    assert "proxy setting" in resp.text, resp.text
+    assert await _stored_team_metadata(db, resources.prefix) == _STORED_TEAM_METADATA
+
+
+async def test_team_update_team_admin_resending_stored_metadata_is_not_an_edit(gateway_client, db, resources, actors):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "alpha", resources.prefix)
+    await _seed_team_metadata(db, resources.prefix, _STORED_TEAM_METADATA)
+
+    with team_admin_permissions(gateway_client.gateway, ["tpm_limit"]):
+        resp = await gateway_client.post(
+            "/team/update",
+            headers={"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"},
+            json={"team_id": resources.prefix, "tpm_limit": 500, "metadata": dict(_STORED_TEAM_METADATA)},
+        )
+    assert resp.status_code == 200, resp.text
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert row is not None and row.tpm_limit == 500
+    assert dict(row.metadata or {}) == _STORED_TEAM_METADATA
 
 
 # Relocation gate — moving a team to a different org. The resources team starts
