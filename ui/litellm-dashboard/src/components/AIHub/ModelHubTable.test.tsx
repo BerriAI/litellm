@@ -374,7 +374,7 @@ describe("ModelHubTable", () => {
       await renderHub(chatOnly);
 
       const garden = await screen.findByTestId("decision-model-garden");
-      expect(garden).toHaveTextContent("1 more are self-hosted and answer on their own routes");
+      expect(garden).toHaveTextContent("1 more is self-hosted and answers on its own route.");
       const layaCard = within(garden).getByTestId("decision-model-card-laya/english");
       expect(within(layaCard).queryByRole("link", { name: "/v1/decisions docs" })).not.toBeInTheDocument();
       expect(within(layaCard).getByRole("link", { name: "Self-hosted, own route" })).toHaveAttribute(
@@ -406,7 +406,7 @@ describe("ModelHubTable", () => {
 
       const garden = await screen.findByTestId("decision-model-garden");
       expect(garden).toHaveTextContent("2 decision models across 2 providers answer on /v1/decisions");
-      expect(garden).toHaveTextContent("1 more need a newer LiteLLM version");
+      expect(garden).toHaveTextContent("1 more needs a newer LiteLLM version.");
       const newCard = within(garden).getByTestId("decision-model-card-newvendor/decider");
       expect(within(newCard).getByRole("link", { name: "Needs a newer LiteLLM" })).toHaveAttribute(
         "href",
@@ -425,7 +425,7 @@ describe("ModelHubTable", () => {
 
       const garden = await screen.findByTestId("decision-model-garden");
       expect(garden).toHaveTextContent("3 decision models across 3 providers answer on /v1/decisions");
-      expect(garden).not.toHaveTextContent("need a newer LiteLLM version");
+      expect(garden).not.toHaveTextContent("a newer LiteLLM version");
     });
 
     it("offers a decisions mode option that keeps the garden, hides the chat rows, and points at the garden", async () => {

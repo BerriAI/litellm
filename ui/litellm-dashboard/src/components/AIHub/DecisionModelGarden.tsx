@@ -107,8 +107,10 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ accessToken, 
           <p className="m-0 mt-0.5 text-sm text-muted-foreground">
             {routedRows.length} decision models across {routedProviderCount} providers answer on{" "}
             <code>/v1/decisions</code> once added to this proxy.
-            {selfHostedCount > 0 && ` ${selfHostedCount} more are self-hosted and answer on their own routes.`}
-            {needsUpgradeCount > 0 && ` ${needsUpgradeCount} more need a newer LiteLLM version.`}
+            {selfHostedCount > 0 &&
+              ` ${selfHostedCount} more ${selfHostedCount === 1 ? "is self-hosted and answers on its own route" : "are self-hosted and answer on their own routes"}.`}
+            {needsUpgradeCount > 0 &&
+              ` ${needsUpgradeCount} more ${needsUpgradeCount === 1 ? "needs" : "need"} a newer LiteLLM version.`}
           </p>
         </div>
         <Button
