@@ -317,7 +317,7 @@ def test_a_served_group_the_ids_own_model_does_not_route_to_is_ignored(rig: _Rig
     task: Final = task_of(video_id)
     forged: Final = forged_id("dashscope", rig.member_a, task, rig.member_b)
     rig.drain()
-    _assert_served(_poll(rig, forged), forged)
+    _assert_served(_poll(rig, forged), video_id)
     assert rig.b.drain() == ()
     assert polled_tasks(rig.a.drain()) == (task,)
 
