@@ -365,6 +365,33 @@ def test_streamed_function_call_namespace_replays_on_next_turn():
     assert [call["namespace"] for call in function_calls] == ["get_weather"]
 
 
+def test_function_level_namespace_replays_when_tool_call_level_is_missing():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    tool_call = {
+        "id": "call-ns",
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+            "provider_specific_fields": {"namespace": "get_weather"},
+        },
+    }
+
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "user", "content": "weather in Paris"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call-ns", "content": "sunny"},
+        ]
+    )
+
+    function_calls = [item for item in input_items if item.get("type") == "function_call"]
+    assert [call["namespace"] for call in function_calls] == ["get_weather"]
+
+
 def test_streamed_tool_search_turn_replays_with_its_reasoning_item():
     import litellm
     from litellm.completion_extras.litellm_responses_transformation.transformation import (

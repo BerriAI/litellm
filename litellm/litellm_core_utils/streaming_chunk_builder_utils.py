@@ -1324,11 +1324,22 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
         setattr(usage, "cost", computed_cost)
 
 
+def _field_of(value: object, name: str) -> object:
+    if isinstance(value, dict):
+        return cast(Mapping[str, object], value).get(name)  # cast-ok: chunk dicts are untyped JSON
+    return getattr(value, name, None)
+
+
 def _delta_reasoning_items(delta: object) -> Sequence[object]:
-    items: Final = (
-        delta.get("reasoning_items") if isinstance(delta, Mapping) else getattr(delta, "reasoning_items", None)
-    )
-    return items if isinstance(items, list) else ()
+    items: Final = _field_of(delta, "reasoning_items")
+    return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
+
+
+def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+    choices: Final = _field_of(chunk, "choices")
+    if not isinstance(choices, list) or not choices:
+        return ()
+    return _delta_reasoning_items(_field_of(cast(Sequence[object], choices)[0], "delta"))  # cast-ok: untyped chunk
 
 
 _NON_TEXT_DELTA_FIELDS: Final = (
@@ -1511,11 +1522,8 @@ def stream_chunk_builder(
                 reasoning_chunks
             )
 
-        reasoning_items: Final = tuple(
-            chain.from_iterable(
-                _delta_reasoning_items(chunk["choices"][0]["delta"]) for chunk in chunks if chunk.get("choices")
-            )
-        )
+        typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
+        reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
         if reasoning_items:
             response["choices"][0]["message"]["reasoning_items"] = list(reasoning_items)
 

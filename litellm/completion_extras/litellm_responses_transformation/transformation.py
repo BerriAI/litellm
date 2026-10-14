@@ -308,6 +308,10 @@ _TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_out
 _TOOL_SEARCH_ITEMS_KEY: Final = "tool_search_items"
 
 
+def _json_field(value: object, key: str) -> object:
+    return cast(Mapping[str, object], value).get(key) if isinstance(value, dict) else None  # cast-ok: untyped JSON
+
+
 def _tool_search_item(item: object) -> Mapping[str, object] | None:
     raw: Final[object] = item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
     if not isinstance(raw, dict):
@@ -318,8 +322,11 @@ def _tool_search_item(item: object) -> Mapping[str, object] | None:
     return {key: value for key, value in fields.items() if value is not None}
 
 
-def _tool_search_items_from_output_items(output_items: Sequence[object]) -> tuple[Mapping[str, object], ...]:
-    return tuple(item for item in (_tool_search_item(output_item) for output_item in output_items) if item is not None)
+def _tool_search_items_from_output_items(output_items: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(output_items, list):
+        return ()
+    entries: Final = cast(Sequence[object], output_items)  # cast-ok: each entry is re-validated
+    return tuple(item for item in (_tool_search_item(entry) for entry in entries) if item is not None)
 
 
 def _tool_search_provider_fields(
@@ -329,18 +336,8 @@ def _tool_search_provider_fields(
 
 
 def _tool_search_input_items(msg: "AllMessageValues") -> tuple[Mapping[str, object], ...]:
-    message_fields: Final = cast(Mapping[str, object], msg)  # cast-ok: message TypedDict union
-    provider_fields: Final[object] = message_fields.get("provider_specific_fields")
-    fields: Final = (
-        cast(Mapping[str, object], provider_fields)  # cast-ok: provider fields round-tripped from our own output
-        if isinstance(provider_fields, dict)
-        else {}
-    )
-    items: Final[object] = fields.get(_TOOL_SEARCH_ITEMS_KEY)
-    return (
-        _tool_search_items_from_output_items(cast(Sequence[object], items))  # cast-ok: entries re-validated per item
-        if isinstance(items, list)
-        else ()
+    return _tool_search_items_from_output_items(
+        _json_field(_json_field(msg, "provider_specific_fields"), _TOOL_SEARCH_ITEMS_KEY)
     )
 
 
@@ -505,14 +502,11 @@ def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Cha
     return tool_call_dict
 
 
-def _tool_call_namespace(tool_call: Mapping[str, object]) -> str | None:
-    function: Final = tool_call.get("function")
-    sources: Final = (
-        tool_call.get("provider_specific_fields"),
-        function.get("provider_specific_fields") if isinstance(function, dict) else None,
-    )
-    namespaces: Final = tuple(source.get("namespace") for source in sources if isinstance(source, dict))
-    return next((namespace for namespace in namespaces if isinstance(namespace, str)), None)
+def _tool_call_namespace(tool_call: object) -> str | None:
+    top_level: Final = _json_field(_json_field(tool_call, "provider_specific_fields"), "namespace")
+    function_fields: Final = _json_field(_json_field(tool_call, "function"), "provider_specific_fields")
+    nested: Final = _json_field(function_fields, "namespace")
+    return top_level if isinstance(top_level, str) else nested if isinstance(nested, str) else None
 
 
 def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFunctionParam | ToolChoiceCustomParam:
@@ -742,8 +736,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             input_tool_call["name"] = function["name"]
                         if "arguments" in function:
                             input_tool_call["arguments"] = function["arguments"]
-                        tool_call_fields: Final = cast(Mapping[str, object], tool_call)  # cast-ok: TypedDict union
-                        if (namespace := _tool_call_namespace(tool_call_fields)) is not None:
+                        if (namespace := _tool_call_namespace(cast(object, tool_call))) is not None:  # cast-ok: untyped
                             input_tool_call["namespace"] = namespace
                         input_items.append(input_tool_call)
                     elif isinstance(custom, dict):
@@ -1934,7 +1927,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                             content="",
                             reasoning_items=terminal_reasoning_items_typed,
                             provider_specific_fields=_tool_search_provider_fields(
-                                _tool_search_items_from_output_items(output_items)
+                                _tool_search_items_from_output_items(cast(object, output_items))  # cast-ok: untyped
                             ),
                         ),
                         finish_reason=finish_reason,
