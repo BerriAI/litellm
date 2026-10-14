@@ -2678,7 +2678,7 @@ async def _resolve_org_filter_for_user_search(
     missed or stale settings sync, then applies role-based access rules when the
     ``scope_user_search_to_org`` flag is ON.
     """
-    from litellm.proxy.config_resolvers.settings_rules import coerce_bool
+    from litellm.proxy.config_resolvers.settings_rules import JsonValue, coerce_bool
     from litellm.proxy.proxy_server import general_settings
     from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
         apply_runtime_general_settings_flags,
@@ -2689,7 +2689,7 @@ async def _resolve_org_filter_for_user_search(
         return None  # proxy admin — see everything
 
     apply_runtime_general_settings_flags(await read_stored_ui_settings(prisma_client, use_writer=True))
-    settings: Final = cast(Mapping[str, object], general_settings)  # cast-ok: general_settings is a bare dict
+    settings: Final = cast(Mapping[str, JsonValue], general_settings)  # cast-ok: general_settings is a bare dict
     if not coerce_bool(settings.get("scope_user_search_to_org", False)):
         return None  # flag OFF — no filtering
 
