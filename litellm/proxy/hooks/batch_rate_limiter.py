@@ -38,7 +38,7 @@ from litellm.batches.batch_utils import (
 from litellm.constants import BATCH_TPD_DESCRIPTOR_SUFFIX, BATCH_TPD_WINDOW_SECONDS
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.token_counter import messages_contain_input_audio_content_blocks
+from litellm.litellm_core_utils.token_counter import batch_entry_contains_input_audio_content_blocks
 from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
@@ -101,6 +101,25 @@ _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
 
 IncrementAmounts: TypeAlias = dict[Literal["requests", "tokens"], int]
+
+
+def _count_entry_tokens_with_audio_floor(entry: Mapping[str, object], raw_line: bytes) -> int:
+    """
+    Count a batch row, flooring a row that carries ``input_audio`` at the
+    size-based estimate.
+
+    An ``input_audio`` block's contribution is a size-derived estimate at a
+    deliberately low assumed bitrate (see
+    ``token_counter._count_input_audio_content_block``), far below the
+    raw-bytes fallback. Before such blocks were countable (#38459) an audio row
+    RAISED inside token_counter and fell back to that size-based estimate;
+    floor it there again so a row carrying a large base64 audio payload cannot
+    slide the batch under the TPM limit.
+    """
+    counted: Final = count_entry_tokens(entry)
+    if batch_entry_contains_input_audio_content_blocks(entry):
+        return max(counted, estimate_batch_entry_tokens(raw_line))
+    return counted
 
 
 class BatchFileUsage(LiteLLMBaseModel):
@@ -974,21 +993,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 output_tokens += entry_output_tokens
 
                 try:
-                    entry_total_tokens = count_entry_tokens(entry)
-                    # An `input_audio` block's contribution is a size-derived
-                    # estimate at a deliberately low assumed bitrate (see
-                    # token_counter._count_input_audio_content_block), far
-                    # below this fallback's raw-bytes estimate. Before such
-                    # blocks were countable (#38459) an audio row RAISED
-                    # inside token_counter and fell back to the size-based
-                    # estimate; floor it there again so a row carrying a
-                    # large base64 audio payload cannot slide the batch
-                    # under the TPM limit.
-                    entry_body = entry.get("body") if isinstance(entry, dict) else None
-                    if isinstance(entry_body, dict) and messages_contain_input_audio_content_blocks(
-                        entry_body.get("messages")
-                    ):
-                        entry_total_tokens = max(entry_total_tokens, estimate_batch_entry_tokens(raw_line))
+                    entry_total_tokens = _count_entry_tokens_with_audio_floor(entry, raw_line)
                 except Exception:
                     entry_total_tokens = estimate_batch_entry_tokens(raw_line)
                 total_tokens += entry_total_tokens

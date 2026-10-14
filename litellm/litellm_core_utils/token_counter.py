@@ -12,6 +12,7 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -944,6 +945,24 @@ def _count_anthropic_content(
     return tokens
 
 
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _object_list(value: object) -> Sequence[object] | None:
+    try:
+        return _OBJECT_LIST.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def _count_input_audio_content_block(c: Mapping[str, object]) -> int:
     """
     Estimate tokens for an OpenAI ``input_audio`` content block (audio
@@ -955,8 +974,8 @@ def _count_input_audio_content_block(c: Mapping[str, object]) -> int:
     per-block floor -- the same numbers ``parallel_request_limiter_v3``
     already uses for its audio reservations (issue #38459).
     """
-    input_audio: Final = c.get("input_audio")
-    b64_data: Final = input_audio.get("data") if isinstance(input_audio, dict) else None
+    input_audio: Final = _object_mapping(c.get("input_audio"))
+    b64_data: Final = input_audio.get("data") if input_audio is not None else None
     if isinstance(b64_data, str) and b64_data:
         decoded_bytes: Final = len(b64_data) * 3 // 4
         return max(decoded_bytes // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
@@ -973,16 +992,20 @@ def messages_contain_input_audio_content_blocks(messages: object) -> bool:
     ``_count_input_audio_content_block``), not a measurement, so the count
     for such a message must not be trusted as an upper bound.
     """
-    if not isinstance(messages, list):
-        return False
-    for message in messages:
-        content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, list):
-            continue
-        for content_item in content:
-            if isinstance(content_item, dict) and content_item.get("type") == "input_audio":
+    for message in _object_list(messages) or ():
+        message_mapping = _object_mapping(message)
+        content = _object_list(message_mapping.get("content")) if message_mapping is not None else None
+        for content_item in content or ():
+            item_mapping = _object_mapping(content_item)
+            if item_mapping is not None and item_mapping.get("type") == "input_audio":
                 return True
     return False
+
+
+def batch_entry_contains_input_audio_content_blocks(entry: Mapping[str, object]) -> bool:
+    """True when a batch input row's ``body.messages`` carries an ``input_audio`` block."""
+    body: Final = _object_mapping(entry.get("body"))
+    return body is not None and messages_contain_input_audio_content_blocks(body.get("messages"))
 
 
 def _count_content_list(
