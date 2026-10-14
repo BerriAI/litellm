@@ -1,8 +1,65 @@
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
+from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter as GeminiCountTokensHandler
+
+_JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
+
+
+class _GeminiCountTokensPeer:
+    def __init__(self) -> None:
+        self.request_body: dict[str, JsonValue] | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_body = _JSON_BODY.validate_json(request.content)
+        return httpx.Response(200, json={"totalTokens": 11}, request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("system_instruction", "tools", "expected_extras"),
+    (
+        (
+            {"parts": [{"text": "Follow the system rule."}]},
+            [{"functionDeclarations": [{"name": "lookup", "parameters": {"type": "OBJECT"}}]}],
+            {
+                "systemInstruction": {"parts": [{"text": "Follow the system rule."}]},
+                "tools": [{"functionDeclarations": [{"name": "lookup", "parameters": {"type": "OBJECT"}}]}],
+            },
+        ),
+        (None, [], {}),
+    ),
+)
+async def test_gemini_count_tokens_sends_optional_request_fields(
+    system_instruction: dict[str, JsonValue] | None,
+    tools: list[dict[str, JsonValue]],
+    expected_extras: dict[str, JsonValue],
+) -> None:
+    peer: Final = _GeminiCountTokensPeer()
+    token_counter: Final = GeminiCountTokensHandler(
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+    )
+
+    result: Final = await token_counter.acount_tokens(
+        contents=[],
+        model="gemini-4-argon",
+        api_key="test-key",
+        api_base="https://count-tokens.test",
+        system_instruction=system_instruction,
+        tools=tools,
+    )
+
+    assert result == {"totalTokens": 11}
+    assert peer.request_body == {
+        "contents": [],
+        **expected_extras,
+    }
 
 
 class TestGeminiModelInfo:

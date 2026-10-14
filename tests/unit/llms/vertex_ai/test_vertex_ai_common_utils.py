@@ -1,11 +1,13 @@
 import time
 from collections.abc import Iterator
+from typing import Final
 from unittest.mock import patch
 
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.vertex_ai.common_utils import (
+    VertexAITokenCounter,
     convert_anyof_null_to_nullable,
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_location_from_url,
@@ -17,6 +19,22 @@ from litellm.llms.vertex_ai.common_utils import (
     validate_vertex_location,
     vertex_request_labels_from_litellm_params,
 )
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_rejects_non_text_system_blocks_before_request() -> None:
+    result: Final = await VertexAITokenCounter().count_tokens(
+        model_to_use="gemini-4-argon",
+        messages=[{"role": "user", "content": "Count this"}],
+        contents=None,
+        request_model="vertex_ai/gemini-4-argon",
+        system=[{"type": "image", "source": {"type": "base64", "data": "AAAA"}}],
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == "Vertex AI Gemini system instructions only support text blocks."
 
 
 @pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
@@ -1181,7 +1199,6 @@ def test_get_token_url():
     assert "v1beta1" not in url
     assert "/v1/" in url
 
-    pass
 
 
 @pytest.mark.asyncio
