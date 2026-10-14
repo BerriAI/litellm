@@ -407,7 +407,7 @@ class CustomStreamWrapper:
         self._restore_consumer_correlation_context(guarded=True)
 
     def close(self) -> None:
-        stream_to_close: Final = self.completion_stream
+        stream_to_close: Final = cast(object, self.completion_stream)  # cast-ok: completion_stream is untyped
         self.completion_stream = None
         self._closed = True
         close_stream: Final = getattr(stream_to_close, "close", None)
