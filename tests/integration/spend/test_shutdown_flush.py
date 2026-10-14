@@ -1,6 +1,5 @@
 import json
 import os
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -163,7 +162,7 @@ class _Shutdown:
 
     def terminate_once(self, blocked: Callable[[], bool], release: Callable[[], None]) -> None:
         eventually(blocked, lambda state: state, seconds=60)
-        self.owned.process.send_signal(signal.SIGTERM)
+        self.owned.begin_shutdown()
         eventually(lambda: self.logged(CANCEL_LOG_LINE), lambda seen: seen, seconds=60)
         release()
         self.owned.process.wait(timeout=120)

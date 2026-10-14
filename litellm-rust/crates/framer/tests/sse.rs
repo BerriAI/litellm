@@ -6,7 +6,7 @@ use std::io;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
-use litellm_framing::{
+use litellm_framer::{
     SseError, frames,
     sse::{SseCodec, SseEvent},
 };
@@ -97,12 +97,11 @@ async fn dispatch_follows_the_data_buffer(#[case] wire: &[u8], #[case] expected:
 }
 
 #[rstest]
-#[case::unterminated_single(b"data: partial\n", vec![])]
-#[case::unterminated_tail_after_complete(b"data: complete\n\ndata: unfinished\n", vec![event(None, "complete")])]
 #[case::lone_cr_terminates_at_eof(b"data: x\r\r", vec![event(None, "x")])]
-#[case::lone_cr_line_then_eof(b"data: x\r", vec![])]
+#[case::trailing_blank_lines(b"data: x\n\n\n", vec![event(None, "x")])]
+#[case::trailing_comment(b"data: x\n\n: bye\n\n", vec![event(None, "x")])]
 #[tokio::test]
-async fn eof_dispatches_only_terminated_events(
+async fn eof_between_events_ends_the_stream_cleanly(
     #[case] wire: &[u8],
     #[case] expected: Vec<SseEvent>,
 ) {
@@ -110,6 +109,19 @@ async fn eof_dispatches_only_terminated_events(
         collect(vec![Bytes::copy_from_slice(wire)]).await.unwrap(),
         expected
     );
+}
+
+#[rstest]
+#[case::unterminated_single(b"data: partial\n", vec![])]
+#[case::unterminated_tail_after_complete(b"data: complete\n\ndata: unfinished\n", vec![event(None, "complete")])]
+#[case::lone_cr_line_then_eof(b"data: x\r", vec![])]
+#[case::partial_bom(b"\xEF\xBB", vec![])]
+#[tokio::test]
+async fn eof_inside_an_event_drops_it_after_the_terminated_events(
+    #[case] wire: &[u8],
+    #[case] expected: Vec<SseEvent>,
+) {
+    assert_eq!(collect(every(wire, 1)).await.unwrap(), expected);
 }
 
 #[rstest]

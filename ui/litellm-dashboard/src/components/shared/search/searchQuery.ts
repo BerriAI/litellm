@@ -1,6 +1,4 @@
-import type { QueryClause } from "./language";
-
-export type FilterOp = "eq" | "neq" | "glob" | "nglob";
+import type { FilterOp, QueryClause } from "./language";
 
 export interface SearchFilter<F extends string> {
   readonly field: F;
@@ -18,18 +16,11 @@ export interface SearchQuery<F extends string> {
   readonly filters: readonly SearchFilter<F>[];
 }
 
-const filterOp = (negated: boolean, value: string): FilterOp => {
-  if (value.includes("*")) return negated ? "nglob" : "glob";
-  return negated ? "neq" : "eq";
-};
-
 /** A key typed without a value yet narrows nothing, so the list does not blank out mid-typing. */
 export function toSearchQuery<F extends string>(clauses: readonly QueryClause<F>[]): SearchQuery<F> {
   const text = clauses.flatMap((clause) => (clause.kind === "text" && clause.value ? [clause.value] : []));
   const filters = clauses.flatMap((clause) =>
-    clause.kind === "field" && clause.value
-      ? [{ field: clause.field, op: filterOp(clause.negated, clause.value), value: clause.value }]
-      : [],
+    clause.kind === "field" && clause.value ? [{ field: clause.field, op: clause.op, value: clause.value }] : [],
   );
   return { text, filters };
 }
