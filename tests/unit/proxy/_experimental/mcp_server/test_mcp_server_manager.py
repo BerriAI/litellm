@@ -19974,6 +19974,74 @@ async def test_disabled_stdio_tools_are_empty_initially_and_reject_continuation(
 
 
 @pytest.mark.asyncio
+async def test_aggregate_bounds_each_paginated_server_by_its_own_listing_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp.types import JSONRPCRequest, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR, get_server_prefix
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "paginated-listing-deadline-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(manager_module, "MCP_TOOL_LISTING_TIMEOUT", 0.0)
+    extended: Final = MCPServer(
+        server_id="extended",
+        name="extended",
+        transport=MCPTransport.http,
+        url="https://extended.example/mcp",
+        timeout=60.0,
+    )
+    global_deadline: Final = MCPServer(
+        server_id="global", name="global", transport=MCPTransport.http, url="https://global.example/mcp"
+    )
+    servers: Final = (extended, global_deadline)
+    manager: Final = MCPServerManager()
+    manager.registry = {server.server_id: server for server in servers}
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    context: Final = operations.prepare_context(UserAPIKeyAuth(api_key="owned-caller", user_id="alice"))
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        result: Final = {
+            "initialize": {
+                "protocolVersion": "2025-03-26",
+                "serverInfo": {"name": "test", "version": "1"},
+                "capabilities": {"tools": {}},
+            },
+            "server/discover": {
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {"tools": {}},
+                "ttlMs": 60000,
+                "cacheScope": "private",
+                "resultType": "complete",
+            },
+            "tools/list": {
+                "tools": [{"name": "echo", "inputSchema": {"type": "object"}}],
+                "ttlMs": 60000,
+                "cacheScope": "private",
+                "resultType": "complete",
+            },
+        }[payload.method]
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+    with _mcp_upstream(respond):
+        listing: Final = await catalog.aggregate_gateway_tools(
+            context, PaginatedRequestParams(), servers, {}, record_listing=True, enforce_rate_limits=False
+        )
+
+    assert [tool.name for tool in listing.tools] == [f"{get_server_prefix(extended)}{MCP_TOOL_PREFIX_SEPARATOR}echo"]
+    assert listing.outcomes["extended"].tag == "ok"
+    assert listing.outcomes["global"].tag == "timeout"
+
+
+@pytest.mark.asyncio
 async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metadata(monkeypatch):
     from mcp.shared.exceptions import MCPError
     from mcp.types import ListToolsResult, PaginatedRequestParams
