@@ -87,6 +87,9 @@ _NAME_VALUE_PREFIX: Final = re.compile(
     r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATTERN + r')"\s*:\s*(?:"(?:[^"\\]|\\.)*\\?)?$'
 )
 _STRING_VALUE_THEN_KEY: Final = re.compile(r'^"(?:[^"\\]|\\.)*"\s*,\s*"((?:[^"\\]|\\.)*)"\s*:')
+_LABEL_THEN_KEY: Final = re.compile(r'"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*:\s*')
+_LEADING_LABELS: Final = re.compile(r'(?:"(?:[^"\\]|\\.)*"\s*,\s*"(?:[^"\\]|\\.)*"\s*:\s*)*')
+_CLOSED_STRING: Final = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _UNDECIDED_PREFIX_LIMIT: Final = 4096
 
 
@@ -97,14 +100,35 @@ def _key_after_a_string_verdict(string_value_start: str, schema: ResponseFormatS
     return "pass_through" if next_key.group(1) in schema.property_names else "hold"
 
 
+def _is_a_label(text: str, schema: ResponseFormatSchema, tool_name: str) -> bool:
+    return text in schema.property_names or text == tool_name
+
+
+def _label_verdict(label: str, next_key: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+    if _is_a_label(label, schema, tool_name):
+        return "hold"
+    return "pass_through" if next_key in schema.property_names else "undecided"
+
+
+def _leading_labels_verdict(string_value_start: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+    last_value_start: Final = _LEADING_LABELS.sub("", string_value_start, count=1)
+    labelled: Final = string_value_start[: len(string_value_start) - len(last_value_start)]
+    verdicts: Final[tuple[_EnvelopeVerdict, ...]] = tuple(
+        _label_verdict(pair.group(1), pair.group(2), schema, tool_name) for pair in _LABEL_THEN_KEY.finditer(labelled)
+    )
+    decided: Final[_EnvelopeVerdict | None] = next((verdict for verdict in verdicts if verdict != "undecided"), None)
+    if decided is not None:
+        return decided
+    last_label: Final = _CLOSED_STRING.match(last_value_start)
+    if last_label is not None and _is_a_label(last_label.group(1), schema, tool_name):
+        return "hold"
+    return "undecided" if not last_value_start or last_value_start.startswith('"') else "pass_through"
+
+
 def _string_value_verdict(string_value_start: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
     if schema.required_names:
         return _key_after_a_string_verdict(string_value_start, schema)
-    text, closing_quote, _ = string_value_start[1:].partition('"')
-    labels: Final = schema.property_names | {tool_name}
-    if closing_quote:
-        return "hold" if text in labels else "pass_through"
-    return "undecided" if any(label.startswith(text) for label in labels) else "pass_through"
+    return _leading_labels_verdict(string_value_start, schema, tool_name)
 
 
 def _first_value_verdict(after_first_key: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:

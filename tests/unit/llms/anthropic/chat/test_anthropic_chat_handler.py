@@ -2865,11 +2865,6 @@ def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
             id="undeclared_first_key_holding_a_number",
         ),
         pytest.param(
-            {"type": "object", "properties": {"score": {"type": "integer"}}},
-            {"note": "read-only window", "meta": {"score": 7}},
-            id="string_first_key_on_a_schema_without_required_keys",
-        ),
-        pytest.param(
             {"type": "object", "properties": {"summary": {"type": "string"}}, "additionalProperties": {"type": "object"}},
             {"user_1": {"summary": "likes tea", "visits": 3}},
             id="undeclared_key_the_schema_allows",
@@ -2885,6 +2880,18 @@ def test_streamed_json_mode_answer_that_cannot_be_an_envelope_streams_as_it_arri
 
     assert "".join(contents) == encoded
     assert contents[2:5] == (encoded[:12], encoded[12:24], encoded[24:])
+
+
+def test_streamed_json_mode_text_label_then_an_object_streams_once_the_object_opens():
+    encoded = json.dumps({"note": "read-only window", "meta": {"score": 7}})
+    object_opens = encoded.index('{"score"') + 1
+
+    contents = _streamed_json_mode_contents(
+        (encoded[:12], encoded[12:object_opens], encoded[object_opens:]),
+        {"type": "object", "properties": {"score": {"type": "integer"}}},
+    )
+
+    assert contents[2:5] == ("", encoded[:object_opens], encoded[object_opens:])
 
 
 @pytest.mark.parametrize(
@@ -3118,6 +3125,8 @@ _STREAMED_OPTIONAL_RISK_SCHEMA: Final = {
     [
         pytest.param({}, id="field_name_label_first"),
         pytest.param({"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME}, id="tool_name_label_first"),
+        pytest.param({"$FUNCTION_NAME": "RiskAssessment"}, id="schema_name_label_first"),
+        pytest.param({"$FUNCTION_NAME": "RiskAssessment", "$CALL": "first"}, id="two_text_labels_first"),
     ],
 )
 def test_streamed_json_mode_split_answer_arrives_as_one_object_when_the_schema_requires_no_key(
