@@ -811,6 +811,7 @@ def test_only_proxy_admin_reads_or_changes_credentials(
         assert credential_for_model.status_code == 200, credential_for_model.text
         assert credential_for_model.json() == {
             "credential_name": f"{model_name}-credential-{model_id}",
+            "display_name": None,
             "credential_values": {"api_base": f"{s.gateway.upstream_url}/v1"},
             "credential_info": {},
         }, credential_for_model.text
