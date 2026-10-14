@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_messages_for_tool_calling,
     THOUGHT_SIGNATURE_SEPARATOR,
 )
-from litellm.types.llms.openai import ChatCompletionToolMessage
+from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     function_setup,
@@ -4204,13 +4204,11 @@ def test_anthropic_messages_pt_drops_a_system_message_with_no_text():
     ),
     ids=("thinking_blocks", "inline_content"),
 )
-def test_anthropic_messages_pt_keeps_empty_but_signed_thinking_block(assistant_message):
-    """
-    Models that default to ``display: omitted`` (Opus 4.7+, the 5 families)
-    return signed thinking blocks with empty text, and Anthropic rejects the next
-    turn when they are not replayed unchanged, so a signed block is kept
-    whatever its text.
-    """
+def test_anthropic_messages_pt_keeps_empty_but_signed_thinking_block(
+    assistant_message: ChatCompletionAssistantMessage,
+) -> None:
+    """``display: omitted`` returns signed thinking blocks with empty text, and they
+    must reach the next turn unchanged."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         anthropic_messages_pt,
     )

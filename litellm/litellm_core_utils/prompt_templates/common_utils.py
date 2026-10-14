@@ -2113,8 +2113,7 @@ def is_unsignable_thinking_block(block: object) -> bool:
     empty, or missing signature (e.g. from an open-source reasoning model) is
     rejected with a 400, and so is a block whose signature or data carries
     another provider's encrypted reasoning. A signed block is kept whatever its
-    text: models that default to ``display: omitted`` return signed blocks with
-    empty ``thinking`` and reject the turn when they are not replayed.
+    text, since ``display: omitted`` returns signed blocks with empty ``thinking``.
     `redacted_thinking` blocks carry no signature and are always kept.
     """
     if is_encrypted_reasoning_block(block):

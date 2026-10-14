@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
@@ -1385,6 +1386,12 @@ class TestPassthroughAuthToken:
         assert url == "https://custom.example.com/v1/messages"
 
 
+_BOUND_THINKING_ERROR: Final = (
+    "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation."
+)
+_NULL_SIGNATURE_ERROR: Final = "messages.1.content.0.thinking.signature.str: Input should be a valid string"
+
+
 class TestAnthropicThinkingSignatureSelfHeal:
     """Helpers for retrying after invalid thinking blocks in replayed history:
     invalid encrypted signatures, and blocks with empty thinking text."""
@@ -2021,31 +2028,41 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert data["messages"] == []
 
     @pytest.mark.parametrize(
-        ("thinking", "expected"),
+        ("thinking", "error_message", "expected"),
         (
-            ({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}, False),
-            ({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}, True),
-            ({"type": "adaptive"}, True),
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+                _BOUND_THINKING_ERROR,
+                False,
+            ),
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}},
+                _NULL_SIGNATURE_ERROR,
+                True,
+            ),
+            (
+                {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+                _BOUND_THINKING_ERROR,
+                True,
+            ),
+            ({"type": "adaptive"}, _BOUND_THINKING_ERROR, True),
         ),
-        ids=("error", "drop_block", "unbound"),
+        ids=("error", "error_on_unrelated_bad_block", "drop_block", "unbound"),
     )
-    def test_anthropic_messages_retry_honors_thinking_block_binding(self, thinking, expected):
-        import httpx
-
+    def test_anthropic_messages_retry_honors_thinking_block_binding(
+        self, thinking: Mapping[str, object], error_message: str, expected: bool
+    ) -> None:
         from litellm.llms.anthropic.pass_through.messages.transformation import (
             AnthropicMessagesConfig,
         )
 
-        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-        resp = httpx.Response(
+        req: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp: Final = httpx.Response(
             400,
             request=req,
-            text=(
-                '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: '
-                'Invalid `signature` in `thinking` block. The block is bound to a different conversation."}}'
-            ),
+            text=json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": error_message}}),
         )
-        err = httpx.HTTPStatusError("bad", request=req, response=resp)
+        err: Final = httpx.HTTPStatusError("bad", request=req, response=resp)
 
         should_retry = AnthropicMessagesConfig().should_retry_anthropic_messages_on_http_error(
             err, {}, request_body={"model": "claude-opus-5-5", "thinking": thinking}
