@@ -474,11 +474,16 @@ def _query(request: Request) -> tuple[str, dict[str, str]]:
     return path, dict(parse_qsl(query, keep_blank_values=True))
 
 
-def _multipart_parts(content_type: str, body: bytes) -> list[tuple[str, str | None, bytes]]:
+def _multipart_parts(content_type: str, body: bytes) -> list[tuple[str, str | None, str | None, bytes]]:
     parsed: Final = BytesParser(policy=HTTP).parsebytes(f"content-type: {content_type}\r\n\r\n".encode() + body)
     assert parsed.is_multipart(), content_type
     return [
-        (str(part.get_param("name", header="content-disposition")), part.get_filename(), part.get_payload(decode=True))
+        (
+            str(part.get_param("name", header="content-disposition")),
+            part.get_filename(),
+            part.get("content-type"),
+            part.get_payload(decode=True),
+        )
         for part in parsed.iter_parts()
     ]
 
@@ -545,10 +550,10 @@ def test_configured_endpoint_forwards_json_multipart_and_query_and_an_update_kee
             assert request.headers["x-static"] == "static-v1", request.headers
         assert [json.loads(request.body) for request in (before[0], before[1], before[3])] == [body] * 3, before
         assert _multipart_parts(before[2].headers["content-type"], before[2].body) == [
-            ("tag", None, b"first"),
-            ("tag", None, b"second"),
-            ("file", "one.bin", b"\x00one"),
-            ("file", "two.bin", b"\x00two"),
+            ("tag", None, None, b"first"),
+            ("tag", None, None, b"second"),
+            ("file", "one.bin", "application/octet-stream", b"\x00one"),
+            ("file", "two.bin", "application/octet-stream", b"\x00two"),
         ], before[2].body
 
         retargeted: Final = candidate.request(
@@ -612,10 +617,10 @@ def test_configured_endpoint_forwards_json_multipart_and_query_and_an_update_kee
             ("POST", "/v2?api-version=2024-01-01")
         ], locked_form
         assert _multipart_parts(locked_form[0].headers["content-type"], locked_form[0].body) == [
-            ("tag", None, b"first"),
-            ("tag", None, b"second"),
-            ("file", "one.bin", b"\x00one"),
-            ("file", "two.bin", b"\x00two"),
+            ("tag", None, None, b"first"),
+            ("tag", None, None, b"second"),
+            ("file", "one.bin", "application/octet-stream", b"\x00one"),
+            ("file", "two.bin", "application/octet-stream", b"\x00two"),
         ], locked_form[0].body
 
 
@@ -640,6 +645,7 @@ def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_n
                 "include_subpath": True,
                 "auth": True,
                 "headers": {"x-static": "v1"},
+                "methods": ["POST"],
             },
         )
         endpoint_id: Final = str(created["id"])
@@ -655,7 +661,7 @@ def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_n
             "auth": True,
             "guardrails": None,
             "is_from_config": False,
-            "methods": None,
+            "methods": ["POST"],
         }
         assert created == expected, created
         assert _readback(candidate, endpoint_id) == [expected]
@@ -699,6 +705,10 @@ def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_n
         renamed_subpath: Final = candidate.request("POST", f"{renamed_path}/sub", body, key=key, headers=caller_headers)
         assert renamed_subpath.status_code == 200, renamed_subpath.text
         assert renamed_subpath.json() == {"received": "/base/sub"}, renamed_subpath.text
+        refused_verbs: Final = tuple(
+            candidate.request("GET", renamed_path, key=key, headers=caller_headers).status_code for _ in range(4)
+        )
+        assert refused_verbs == (405, 405, 405, 405), refused_verbs
         anonymous: Final = candidate.client.post(f"{renamed_path}/sub", json=body, headers=caller_headers)
         assert anonymous.status_code == 401, anonymous.text
         renamed_requests: Final = wire.drain()

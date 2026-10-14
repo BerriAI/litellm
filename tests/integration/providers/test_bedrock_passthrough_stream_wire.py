@@ -5,7 +5,7 @@ import uuid
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Final
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import boto3
 import pytest
@@ -109,11 +109,12 @@ _INVOKE_STREAM_FRAMES: Final = (
 
 _GATED_STREAM_TARGETS: Final = (f"/model/{_MODEL_ID}/converse-stream", "-direct-")
 _BEDROCK_STREAM_GATE: Final = threading.Event()
+_BEDROCK_STREAM_GATE.set()
 
 
 def _full_body_peer(request: Request) -> Reply:
     if request.target.endswith("/converse-stream"):
-        gated: Final = any(marker in request.target for marker in _GATED_STREAM_TARGETS)
+        gated: Final = any(marker in unquote(request.target) for marker in _GATED_STREAM_TARGETS)
         return Reply(
             chunks=_CONVERSE_STREAM_FRAMES,
             content_type=_EVENT_STREAM,
