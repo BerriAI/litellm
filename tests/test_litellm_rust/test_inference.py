@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, Literal, TypeAlias
 
 import pytest
@@ -11,7 +11,7 @@ from litellm.chat_completions import dispatch as chat_dispatch
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.rust_bridge import _native
+from litellm.rust_bridge import _native, execution
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, ModelResponse
@@ -22,12 +22,6 @@ from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, M
 pytestmark = pytest.mark.requires_rust_extension
 Route: TypeAlias = Literal["chat", "responses"]
 _OBJECT: Final = TypeAdapter(dict[str, object])
-NativeResult: TypeAlias = (
-    ModelResponse
-    | ResponsesAPIResponse
-    | Coroutine[object, object, ModelResponse]
-    | Coroutine[object, object, ResponsesAPIResponse]
-)
 RESPONSES_MODEL: Final = "openai/gpt-6-sol"
 RESPONSES_RESPONSE: Final[dict[str, JsonValue]] = {
     "id": "resp_native",
@@ -53,9 +47,11 @@ def route(request: pytest.FixtureRequest) -> Route:
     return TypeAdapter(Route).validate_python(request.param)
 
 
-def native_call(
-    route: Route, asynchronous: bool, server: RecordingServer, options: Mapping[str, object]
-) -> NativeResult:
+def _public(native: Callable[[NativeCall], object], asynchronous: bool) -> Callable[[NativeCall], object]:
+    return execution.asynchronous(native) if asynchronous else execution.synchronous(native)
+
+
+def native_call(route: Route, asynchronous: bool, server: RecordingServer, options: Mapping[str, object]) -> object:
     server.default_response = ResponseSpec(body=MESSAGES_RESPONSE if route == "chat" else RESPONSES_RESPONSE)
     if route == "chat":
         kwargs: Final = {
@@ -67,7 +63,7 @@ def native_call(
             **options,
         }
         request: Final = NativeCall(args=(), kwargs=kwargs, base={})
-        return (_native.acompletion if asynchronous else _native.completion)(request)
+        return _public(_native.acompletion if asynchronous else _native.completion, asynchronous)(request)
     response_kwargs: Final = {
         "model": RESPONSES_MODEL,
         "input": "hello",
@@ -89,7 +85,7 @@ def native_call(
             "extra_headers": None,
         },
     )
-    return (_native.aresponses if asynchronous else _native.responses)(response_request)
+    return _public(_native.aresponses if asynchronous else _native.responses, asynchronous)(response_request)
 
 
 async def execute(route: Route, asynchronous: bool, server: RecordingServer, options: Mapping[str, object]) -> object:
@@ -313,13 +309,13 @@ async def test_native_projection_reads_positional_parameters(route: Route, recor
         args: Final = (MESSAGES_MODEL, list(MESSAGES), 12.0, 0.25)
         request: Final = chat_dispatch.request(args, kwargs)
         assert request is not None
-        await asyncio.to_thread(_native.completion, request)
+        await asyncio.to_thread(execution.synchronous(_native.completion), request)
         assert _OBJECT.validate_python(recording_server.requests[0].body)["temperature"] == 0.25
     else:
         response_args: Final = ("hello", RESPONSES_MODEL, None, "Be brief", 16)
         response_request: Final = responses_dispatch.request(response_args, kwargs)
         assert response_request is not None
-        await asyncio.to_thread(_native.responses, response_request)
+        await asyncio.to_thread(execution.synchronous(_native.responses), response_request)
         body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
         assert body["instructions"] == "Be brief"
         assert body["max_output_tokens"] == 16
@@ -393,7 +389,9 @@ async def test_native_chat_uses_bound_positional_parameters(
     call: Final = chat_dispatch._DISPATCH.request(arguments, supplied)  # pyright: ignore[reportPrivateUsage]  # exercise the native request produced by public binding
     assert call is not None
     result: Final = (
-        await _native.acompletion(call) if asynchronous else await asyncio.to_thread(_native.completion, call)
+        await execution.asynchronous(_native.acompletion)(call)
+        if asynchronous
+        else await asyncio.to_thread(execution.synchronous(_native.completion), call)
     )
     assert isinstance(result, ModelResponse)
     assert result.choices[0].message.content == "Hello from native Messages"

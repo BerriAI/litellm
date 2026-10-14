@@ -12,8 +12,7 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.rust_bridge import bindings, configuration, runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.lifecycle import Complete, StreamChunk
-from litellm.rust_bridge.streams import Stream, SyncStream
+from litellm.rust_bridge.execution import AsyncStream, Complete, StreamChunk, SyncStream
 
 
 class RustBridgeDeclined(Exception):
@@ -296,7 +295,7 @@ async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming
 ) -> None:
     chunks: Final = (b"event: message_start\n\n", b"event: message_stop\n\n")
     execution: Final = ScriptedStreamExecution(chunks)
-    stream: Final[Stream | SyncStream] = Stream(execution) if asynchronous else SyncStream(execution)
+    stream: Final[AsyncStream | SyncStream] = AsyncStream(execution, {}) if asynchronous else SyncStream(execution, {})
     bound: Final[bindings.NativeBinding[Callable[[], object]]] = bindings.NativeBinding(
         "messages", validate=lambda _: None
     )
@@ -321,7 +320,7 @@ async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming
     assert result is stream
     assert get_hidden_params_dict(result) == {"additional_headers": {"x-litellm-rust": "true"}}
     assert not execution.closed
-    delivered: Final = tuple([chunk async for chunk in result]) if isinstance(result, Stream) else tuple(result)
+    delivered: Final = tuple([chunk async for chunk in result]) if isinstance(result, AsyncStream) else tuple(result)
     assert delivered == chunks
     assert execution.closed
 

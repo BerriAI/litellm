@@ -6,7 +6,7 @@ This crate owns CPython execution mechanics for generic `litellm-host` machines 
 
 `src/native.rs` belongs here: it runs a generic machine through the Python runtime and owns its pending execution and abort handle. Keep provider selection, request projection and public exception policy out of it. A rename to `machine_runner.rs` is optional and must not change behavior
 
-The execution handle receives its Python lifecycle binding from its consumer through `PythonLifecycle` rather than import a fixed `litellm.rust_bridge` module. Generic suspension and execution state validation belong here. Public stream wrappers and `_hidden_params` conventions belong to the consumer
+`run_call` returns the unstarted `Execution` and never names a Python stream class or driver. The consumer drives it from Python and supplies the step classes through `StepTypes` rather than have this crate import a fixed `litellm.rust_bridge` module. Generic suspension and execution state validation belong here. Public stream wrappers and `_hidden_params` conventions belong to the consumer
 
 Creating a resolved asyncio Future from an already constructed Python value belongs here, alongside runtime waiting, interpreter detachment and panic containment. Choosing which callable exceptions become a public `RuntimeError` belongs to the consumer. `python-bridge::callable::wrap_failure` owns that policy
 
@@ -37,7 +37,7 @@ Terminal notifications share the selected response or exception. An ordinary not
   - Keep diagnostic counters in the consumer. Wrapper invocations do not measure every interpreter release
   - Release exclusive class borrows/locks before Python calls or decrements that can invoke finalizers. Expose retained Python edges to GC without calling Python during traversal
 - Keep coroutine driving in the shared Python driver and the native handle
-  - Shared driver implementation: `litellm/rust_bridge/lifecycle.py`, handle: `src/handle.rs`, call driver: `src/driver.rs`, native-backed behavior tests: `tests/lifecycle.py`. The consumer supplies the lifecycle binding
+  - Shared driver implementation: `litellm/rust_bridge/execution.py`, handle: `src/handle.rs`, call driver: `src/driver.rs`, native-backed behavior tests: `tests/lifecycle.py`. The consumer supplies the lifecycle binding
   - Every lifecycle suspension is awaited inline in the caller's task. `into_future` creates a separate task and cannot satisfy this contract
 - References: [ownership](https://pyo3.rs/v0.29.2/types.html), [conversions](https://pyo3.rs/v0.29.2/conversions/traits.html), [pythonize errors](https://docs.rs/pythonize/0.29.0/src/pythonize/error.rs.html)
   - [GC](https://pyo3.rs/v0.29.2/class/protocols.html#garbage-collector-integration), [re-entry](https://pyo3.rs/v0.29.2/class/call.html), [parallelism](https://pyo3.rs/v0.29.2/parallelism.html), [async delivery source](https://docs.rs/pyo3-async-runtimes/0.29.0/src/pyo3_async_runtimes/generic.rs.html)

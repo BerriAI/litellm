@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeVar, cast  # noqa: TID251  # trusts the native stub at the binding boundary
+
+_Call = TypeVar("_Call")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +44,10 @@ class Execution(Protocol):
 _REOPENED: Final = "execution opened a stream twice"
 
 
+def _headers(head: object) -> Mapping[str, object]:
+    return cast("Mapping[str, object]", head)  # cast-ok: encode_stream_head always builds a str-keyed dict
+
+
 class StreamClosed(Exception):
     """Tells a streaming execution that its caller stopped reading."""
 
@@ -65,29 +71,53 @@ def _settled(step: Step) -> Settled:
     return step
 
 
+def _hand_off(
+    execution: Execution, step: Settled, open_stream: Callable[[Execution, object], object], cleanup: ExitStack
+) -> object:
+    match step:
+        case Complete(value):
+            return value
+        case StreamOpen(head):
+            stream: Final = open_stream(execution, head)
+            cleanup.pop_all()
+            return stream
+        case StreamChunk():
+            raise RuntimeError("execution yielded a chunk before opening a stream")
+
+
 async def drive(execution: Execution, open_stream: Callable[[Execution, object], object]) -> object:
     with ExitStack() as cleanup:
         cleanup.callback(execution.close)
-        match await _settle(execution, execution.send(None)):
-            case Complete(value):
-                return value
-            case StreamOpen(head):
-                stream: Final = open_stream(execution, head)
-                cleanup.pop_all()
-                return stream
-            case StreamChunk():
-                raise RuntimeError("execution yielded a chunk before opening a stream")
+        return _hand_off(execution, await _settle(execution, execution.send(None)), open_stream, cleanup)
 
 
-class Stream(AsyncIterator[object]):
+def run(execution: Execution, open_stream: Callable[[Execution, object], object]) -> object:
+    with ExitStack() as cleanup:
+        cleanup.callback(execution.close)
+        return _hand_off(execution, _settled(execution.send(None)), open_stream, cleanup)
+
+
+def synchronous(native: Callable[[_Call], object]) -> Callable[[_Call], object]:
+    return lambda call: run(_execution(native(call)), SyncStream)
+
+
+def asynchronous(native: Callable[[_Call], object]) -> Callable[[_Call], Awaitable[object]]:
+    return lambda call: drive(_execution(native(call)), AsyncStream)
+
+
+def _execution(value: object) -> Execution:
+    return cast("Execution", value)  # cast-ok: native entrypoints return Execution per _native.pyi
+
+
+class AsyncStream(AsyncIterator[object]):
     """A streamed native call: each read resumes the execution until its next chunk."""
 
-    def __init__(self, execution: Execution, head: object = None) -> None:
+    def __init__(self, execution: Execution, head: object) -> None:
         self._execution: Final = execution
         self._done = False
-        self.head: Final = head
+        self._hidden_params: dict[str, object] = dict(_headers(head))  # mutable-ok: header writers mutate it
 
-    def __aiter__(self) -> Stream:
+    def __aiter__(self) -> AsyncStream:
         return self
 
     async def __anext__(self) -> object:
@@ -122,12 +152,12 @@ class Stream(AsyncIterator[object]):
 
 
 class SyncStream(Iterator[object]):
-    """The sync form of `Stream`; its execution never suspends on an awaitable."""
+    """The sync form of `AsyncStream`; its execution never suspends on an awaitable."""
 
-    def __init__(self, execution: Execution, head: object = None) -> None:
+    def __init__(self, execution: Execution, head: object) -> None:
         self._execution: Final = execution
         self._done = False
-        self.head: Final = head
+        self._hidden_params: dict[str, object] = dict(_headers(head))  # mutable-ok: header writers mutate it
 
     def __iter__(self) -> SyncStream:
         return self
