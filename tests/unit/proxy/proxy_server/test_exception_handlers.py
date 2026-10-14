@@ -468,6 +468,49 @@ async def test_otel_unhandled_exception_handler_answers_a_db_outage_with_503_no_
 
 
 @pytest.mark.asyncio
+async def test_otel_unhandled_exception_handler_answers_the_control_plane_with_a_500_problem():
+    request = _make_request(path="/management/v1/teams/team-1/members")
+
+    response = await otel_unhandled_exception_handler(request=request, exc=RuntimeError("kaboom"))
+
+    assert response.status_code == 500
+    assert response.media_type == "application/problem+json"
+    assert json.loads(response.body) == {
+        "type": "urn:litellm:error:internal-server-error",
+        "title": "Internal server error",
+        "status": 500,
+        "detail": "An unexpected error occurred.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_otel_unhandled_exception_handler_answers_a_control_plane_db_outage_with_a_503_problem():
+    request = _make_request(path="/management/v1/teams/team-1/members")
+
+    response = await otel_unhandled_exception_handler(
+        request=request, exc=httpx.ConnectError("All connection attempts failed")
+    )
+
+    assert response.status_code == 503
+    assert response.media_type == "application/problem+json"
+    assert json.loads(response.body) == {
+        "type": "urn:litellm:error:database-not-connected",
+        "title": "Database not connected",
+        "status": 503,
+        "detail": _DB_OUTAGE_503_BODY["error"]["message"],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/management", "/v1/management/foo", "/team/info"])
+async def test_otel_unhandled_exception_handler_leaves_other_routes_on_the_openai_error_shape(path):
+    response = await otel_unhandled_exception_handler(request=_make_request(path=path), exc=RuntimeError("kaboom"))
+
+    assert response.status_code == 500
+    assert json.loads(response.body) == {"error": {"message": "Internal server error", "type": "internal_server_error"}}
+
+
+@pytest.mark.asyncio
 async def test_otel_unhandled_exception_handler_reraises_proxy_exception_error():
     """ProxyException / HTTPException / RequestValidationError are re-raised
     so the dedicated handler runs."""

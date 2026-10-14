@@ -84,6 +84,24 @@ def request_validation_problem(raw_errors: Sequence[ValidationErrorDetail]) -> P
     )
 
 
+def internal_server_error_problem() -> ProblemDetail:
+    return ProblemDetail(
+        type=f"{PROBLEM_TYPE_BASE}internal-server-error",
+        title="Internal server error",
+        status=500,
+        detail="An unexpected error occurred.",
+    )
+
+
+def database_unavailable_problem(detail: str) -> ProblemDetail:
+    return ProblemDetail(
+        type=f"{PROBLEM_TYPE_BASE}database-not-connected",
+        title="Database not connected",
+        status=503,
+        detail=detail,
+    )
+
+
 def unknown_query_param_problem(unknown: tuple[str, ...], allowed: tuple[str, ...]) -> ProblemDetail:
     return ProblemDetail(
         type=f"{PROBLEM_TYPE_BASE}unknown-query-parameter",
