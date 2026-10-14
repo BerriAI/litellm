@@ -34,7 +34,7 @@ from litellm._redis_credential_provider import (
 )
 from litellm.caching.redis_cache import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
-from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
+from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL, REDIS_SOCKET_TIMEOUT
 from litellm.proxy._types import CoordinationRedisParams
 
 
@@ -1469,6 +1469,22 @@ def test_async_sentinel_uses_sentinel_password_and_master_password(
         max_connections=17,
         socket_timeout=5,
     )
+
+
+@pytest.mark.parametrize(
+    ("sentinel_cls_path", "factory"),
+    [
+        ("litellm._redis.redis.Sentinel", get_redis_client),
+        ("litellm._redis.async_redis.Sentinel", get_redis_async_client),
+    ],
+)
+def test_sentinel_without_socket_timeout_gets_the_default(clean_redis_environment, sentinel_cls_path, factory):
+    with patch(sentinel_cls_path) as mock_sentinel_cls:
+        factory(sentinel_nodes=[("sentinel-1", 26379)], service_name="mymaster")
+
+    assert mock_sentinel_cls.call_args.kwargs["sentinel_kwargs"]["socket_timeout"] == REDIS_SOCKET_TIMEOUT
+    master_for_kwargs: Final = mock_sentinel_cls.return_value.master_for.call_args.kwargs
+    assert master_for_kwargs["socket_timeout"] == REDIS_SOCKET_TIMEOUT
 
 
 @patch("litellm._redis.init_redis_cluster")
