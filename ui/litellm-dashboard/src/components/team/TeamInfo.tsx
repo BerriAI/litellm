@@ -328,6 +328,8 @@ export interface TeamData {
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
+    access_group_skill_names?: string[];
+    unresolved_access_group_ids?: string[] | null;
     access_group_details?: TeamAccessGroupModelGrant[];
     router_settings?: Record<string, any>;
     guardrails?: string[];
@@ -1311,6 +1313,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           rpm_limit: info.rpm_limit,
           max_budget: info.max_budget,
           soft_budget: info.soft_budget,
+          team_member_budget: info.team_member_budget_table?.max_budget,
+          team_member_budget_duration: info.team_member_budget_table?.budget_duration,
+          team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
+          team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
         }}
         editableFields={teamEditAccess.editableFields}
         mayRaiseMaxBudget={teamEditAccess.mayRaiseMaxBudget}
@@ -1329,6 +1335,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     info.access_group_agent_ids,
     info.access_group_details,
     (grant) => grant.agent_ids,
+  );
+  const inheritedSkills = computeInheritedGrants(
+    info.access_group_skill_names,
+    info.access_group_details,
+    (grant) => grant.skill_names,
   );
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
@@ -1440,6 +1451,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             objectPermission={info.object_permission}
             inheritedMcpServers={inheritedMcpServers}
             inheritedAgents={inheritedAgents}
+            inheritedSkills={inheritedSkills}
+            unresolvedAccessGroupIds={info.unresolved_access_group_ids}
             variant="card"
             accessToken={accessToken}
           />
@@ -2446,6 +2459,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 objectPermission={info.object_permission}
                 inheritedMcpServers={inheritedMcpServers}
                 inheritedAgents={inheritedAgents}
+                inheritedSkills={inheritedSkills}
+                unresolvedAccessGroupIds={info.unresolved_access_group_ids}
                 variant="inline"
                 className="pt-4 border-t border-border"
                 accessToken={accessToken}

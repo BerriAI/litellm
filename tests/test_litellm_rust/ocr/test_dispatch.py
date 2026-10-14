@@ -6,6 +6,7 @@ import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
+from tests.test_litellm_rust.support.served import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -28,8 +29,7 @@ def test_public_ocr_uses_native_route_independently_of_flag(ocr_server: Recordin
 
     assert isinstance(response, OCRResponse)
     assert response.pages[0].markdown == "native OCR response"
-    assert len(ocr_server.requests) == 1
-    assert not ocr_server.requests[0].headers.get("user-agent", "").startswith("python-httpx")
+    assert_served_natively(ocr_server, response)
 
 
 @pytest.mark.asyncio
