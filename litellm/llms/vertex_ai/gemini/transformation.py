@@ -1220,13 +1220,14 @@ def transform_request_body(
         if cached_content is not None:
             data["cachedContent"] = cached_content
 
-        # Vertex AI: skip serviceTier in body — tier routing is via headers
+        # Vertex AI skips serviceTier in the body. Tier routing is via headers
         # set in validate_environment(). See: https://github.com/BerriAI/litellm/issues/34914
-        if service_tier := optional_params.pop("service_tier", None):
-            if custom_llm_provider == LlmProviders.GEMINI and isinstance(service_tier, str):
-                normalized: Final = service_tier.lower().removeprefix("service_tier_")
-                if normalized in ("priority", "flex", "standard"):
-                    data["serviceTier"] = normalized
+        popped_service_tier: Final = optional_params.pop("service_tier", None)
+        normalized_service_tier: Final = (
+            popped_service_tier.lower().removeprefix("service_tier_") if isinstance(popped_service_tier, str) else ""
+        )
+        if custom_llm_provider == LlmProviders.GEMINI and normalized_service_tier in ("priority", "flex", "standard"):
+            data["serviceTier"] = normalized_service_tier
 
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
