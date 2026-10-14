@@ -21,6 +21,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     GATEWAY_AUTH_CODE_TTL_SECONDS,
     MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS,
     MAX_CLIENT_ID_LENGTH,
+    MAX_STATE_LENGTH,
     SUBJECT_TOKEN_TYPES,
     TOKEN_EXCHANGE_GRANT_TYPE,
     ConsentTeam,
@@ -290,6 +291,49 @@ async def test_authorize_validation_failures_never_redirect_to_client():
     ):
         assert response.status_code == 400
         assert json.loads(response.body)["error"] == expected_error
+
+
+@pytest.mark.asyncio
+async def test_authorize_accepts_gemini_length_state_and_echoes_it_back():
+    """Gemini on the web sends an 1112-character state (issue #46414): authorize must
+    accept it and the code redirect must echo it back unchanged."""
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    long_state: Final = "s" * 1112
+    response = aggregate_authorize(
+        request=_request(query=f"client_id={client_id}"),
+        client_id=client_id,
+        redirect_uri=REDIRECT_URI,
+        state=long_state,
+        code_challenge=CODE_CHALLENGE,
+        code_challenge_method="S256",
+        response_type="code",
+        session_user_id="u1",
+    )
+    assert response.status_code == 303
+    handle, cookies = _flow_cookie_from(response)
+    assert len(next(iter(cookies.values()))) < 4096
+    completed = await complete_connect_flow(
+        request=_request("/authorize/complete", cookies=cookies, method="POST"),
+        flow_handle=handle,
+        session_user_id="u1",
+        cache=DualCache(),
+    )
+    assert completed.status_code == 303
+    returned = parse_qs(urlparse(completed.headers["location"]).query)
+    assert returned["state"] == [long_state]
+
+    over_cap = aggregate_authorize(
+        request=_request(query=f"client_id={client_id}"),
+        client_id=client_id,
+        redirect_uri=REDIRECT_URI,
+        state="s" * (MAX_STATE_LENGTH + 1),
+        code_challenge=CODE_CHALLENGE,
+        code_challenge_method="S256",
+        response_type="code",
+        session_user_id="u1",
+    )
+    assert over_cap.status_code == 400
+    assert json.loads(over_cap.body)["error"] == "invalid_request"
 
 
 @pytest.mark.asyncio
@@ -616,7 +660,7 @@ async def test_authorize_rejects_over_long_state():
         request=_request(query=f"client_id={client_id}"),
         client_id=client_id,
         redirect_uri=REDIRECT_URI,
-        state="s" * 2000,
+        state="s" * (MAX_STATE_LENGTH + 1),
         code_challenge=CODE_CHALLENGE,
         code_challenge_method="S256",
         response_type="code",

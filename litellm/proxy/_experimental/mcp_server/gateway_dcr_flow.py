@@ -141,10 +141,13 @@ every session-token claim set. Four 256-character ASCII URIs seal to roughly 1.5
 the encoded client_id is checked against its own cap before registration succeeds.
 VS Code registers four callbacks for its web and desktop environments."""
 
-MAX_STATE_LENGTH: Final = 1024
+MAX_STATE_LENGTH: Final = 2048
 """Bound on the client ``state`` sealed into the flow cookie and echoed on the auth-code
-redirect. An unbounded ``state`` can push the sealed cookie past the browser's ~4KB cap
-(silently dropped, breaking the flow); spec clients send a short opaque value."""
+redirect. RFC 6749 sets no maximum: ``state`` is opaque and must round-trip unchanged,
+and deployed clients send values past 1024 characters (Gemini on the web sends 1112).
+An unbounded ``state`` can still push the sealed cookie past the browser's ~4KB cap
+(silently dropped, breaking the flow); a 2048-character ``state`` alongside typical
+client_id and redirect_uri values seals to roughly 3.5KB, inside that budget."""
 
 MIN_CODE_VERIFIER_LENGTH: Final = 43
 MAX_CODE_VERIFIER_LENGTH: Final = 128
