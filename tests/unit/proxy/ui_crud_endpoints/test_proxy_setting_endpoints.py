@@ -1622,6 +1622,62 @@ class TestProxySettingEndpoints:
         stored_settings = json.loads(create_data["ui_settings"])
         assert stored_settings["disable_model_add_for_internal_users"] is True
 
+    def test_update_ui_settings_works_without_store_model_in_db(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """UI settings persist through prisma alone; the model-storage flag must not block them (issue #46335)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth: Final = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+        mock_prisma: Final = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        payload: Final = {"disable_model_add_for_internal_users": True}
+
+        try:
+            response: Final = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data: Final = response.json()
+        assert data["status"] == "success"
+        assert data["settings"]["disable_model_add_for_internal_users"] is True
+        mock_prisma.db.litellm_uisettings.upsert.assert_called_once()
+
+    def test_update_ui_settings_requires_db_connection(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without a database the update still fails, whatever the model-storage flag says."""
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth: Final = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+        payload: Final = {"disable_model_add_for_internal_users": True}
+
+        try:
+            response: Final = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 500
+        assert "Database not connected" in response.text
+
     def test_update_ui_settings_ignores_non_allowlisted_value(
         self, mock_auth, monkeypatch
     ):
