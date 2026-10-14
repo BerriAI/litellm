@@ -55,7 +55,7 @@ jobs:
       - name: Build the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 20
-        uses: ./.github/actions/build-rust-bridge
+        uses: ./.github/actions/rust-bridge
 
       - name: Upload Rust bridge artifact
         if: steps.changes.outputs.decision != 'skip'
