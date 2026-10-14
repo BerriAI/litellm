@@ -114,6 +114,9 @@ class ControlPlaneSettings(BaseSettings):
     usage_max_window_days: int = Field(default=366, ge=1)
     audit_capacity: int = Field(default=10_000, ge=1)
     api_prefix: str = "/api/v1"
+    otel_enabled: bool | None = None
+    otel_service_name: str = "litellm-control-plane"
+    otel_identity_attributes: bool = True
 
     @field_validator("master_key")
     @classmethod

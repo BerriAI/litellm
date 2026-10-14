@@ -9,6 +9,7 @@ from typing import Final
 
 import httpx
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace import TracerProvider
 
 from litellm.litellm_core_utils.oauth_token_exchange import OAuthTokenExchangeConfig
 from litellm.proxy.control_plane.app import create_app
@@ -83,7 +84,9 @@ class Minter:
 
 
 def rig(
-    routes: Mapping[str, list[httpx.Response | Exception]], **overrides: object
+    routes: Mapping[str, list[httpx.Response | Exception]],
+    tracer_provider: TracerProvider | None = None,
+    **overrides: object,
 ) -> tuple[TestClient, RoutedTransport, Minter]:
     settings: Final = ControlPlaneSettings.model_validate(
         {"LITELLM_MASTER_KEY": MASTER_KEY, "dataplanes": DATAPLANES, **overrides}
@@ -91,6 +94,8 @@ def rig(
     queues: defaultdict[str, Iterator[httpx.Response | Exception]] = defaultdict(lambda: iter(()))
     queues.update({url: iter(outcomes) for url, outcomes in routes.items()})
     transport: Final = RoutedTransport(queues)
-    container: Final = build_container(settings, transport=transport, exchanger=no_exchange)
+    container: Final = build_container(
+        settings, transport=transport, exchanger=no_exchange, tracer_provider=tracer_provider
+    )
     codec: Final = SessionTokenCodec(MASTER_KEY, settings.session_issuer, timedelta(hours=1), container.policy)
     return TestClient(create_app(container, Licensed())), transport, Minter(codec, container.policy)

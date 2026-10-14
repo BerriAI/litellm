@@ -359,7 +359,7 @@ class OpenTelemetryV2Config(BaseSettings):
                     traces_endpoint=self.traces_endpoint,
                     headers=self.headers,
                 )
-                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "headers"))
+                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "traces_endpoint", "headers"))
                 else ExporterSpec()
             ]
         # Ensure ``genai`` is always present and first.
