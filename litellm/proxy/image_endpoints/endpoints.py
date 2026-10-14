@@ -407,7 +407,7 @@ async def image_edit_api(
     openapi_extra=dict[str, object](_IMAGE_VARIATION_OPENAPI_EXTRA),
     response_class=ORJSONResponse,
 )  # azure compatible endpoint
-async def image_variation_api(
+async def image_variation_api(  # noqa: ANN201  # response type mirrors image_edit_api (provider-dependent)
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
@@ -474,7 +474,7 @@ async def image_variation_api(
             user_api_base=user_api_base,
             version=version,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # provider-agnostic error surfacing mirrors image_edit_api
         raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,

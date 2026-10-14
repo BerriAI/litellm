@@ -22693,9 +22693,7 @@
                   "enum": [
                     "low",
                     "medium",
-                    "high",
-                    "xhigh",
-                    "max"
+                    "high"
                   ],
                   "type": "string"
                 },
@@ -22708,18 +22706,12 @@
             "size": {
               "anyOf": [
                 {
-                  "type": "string"
-                },
-                {
                   "enum": [
                     "1024x1024",
                     "1024x1536",
                     "1536x1024"
                   ],
                   "type": "string"
-                },
-                {
-                  "type": "null"
                 }
               ],
               "title": "Size"
