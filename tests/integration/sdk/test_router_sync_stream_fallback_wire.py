@@ -192,11 +192,12 @@ def test_router_retries_configured(client: str) -> None:
             model_list=_router(wire, ("primary", "backup")).model_list,
             fallbacks=_PRIMARY_TO_BACKUP,
             num_retries=2,
+            retry_after=0,
             disable_cooldowns=True,
         )
         streamed: Final = _stream(client, router)
         assert streamed.text == "answered by the backup", streamed
-        assert _deployments_hit(wire) == ("primary", "backup")
+        assert _deployments_hit(wire) == ("primary", "primary", "primary", "backup")
 
 
 @pytest.mark.parametrize("client", _CLIENTS)

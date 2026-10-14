@@ -26135,3 +26135,139 @@ async def test_batch_completion_fastest_response_streams_mocked_chunks() -> None
 
     assert text == "stream answer"
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def _chat_stream_retry_router(**settings: object) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "synthetic", "api_base": "http://127.0.0.1:9"},
+            }
+        ],
+        disable_cooldowns=True,
+        **settings,
+    )
+
+
+def _chat_stream_pre_content_failure():
+    from litellm.exceptions import MidStreamFallbackError
+
+    return MidStreamFallbackError(
+        message="overloaded",
+        model="chat",
+        llm_provider="openai",
+        original_exception=litellm.APIConnectionError(message="overloaded", llm_provider="openai", model="chat"),
+        is_pre_first_chunk=True,
+    )
+
+
+def _chat_stream_chunk(delta):
+    from litellm.types.utils import ModelResponseStream, StreamingChoices
+
+    return ModelResponseStream(choices=[StreamingChoices(index=0, delta=delta, finish_reason=None)])
+
+
+def test_committed_stream_failure_direct_call():
+    """A failure before the first chunk is never committed, a failure after tool-call deltas re-raises the
+    provider's own error instead of handing the stream to a retry or a fallback."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.router import _committed_stream_failure
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Delta, Function
+
+    stream = CustomStreamWrapper(
+        completion_stream=iter([]), model="chat", logging_obj=MagicMock(), custom_llm_provider="cached_response"
+    )
+    assert _committed_stream_failure(_chat_stream_pre_content_failure(), stream) is None
+    provider_error = litellm.APIConnectionError(message="overloaded", llm_provider="openai", model="chat")
+    committed = MidStreamFallbackError(
+        message="overloaded",
+        model="chat",
+        llm_provider="openai",
+        original_exception=provider_error,
+        is_pre_first_chunk=False,
+    )
+    tool_call = ChatCompletionDeltaToolCall(
+        id="call_1", type="function", index=0, function=Function(name="get_weather", arguments="")
+    )
+    stream.chunks = [_chat_stream_chunk(Delta(tool_calls=[tool_call]))]
+    assert _committed_stream_failure(committed, stream) is provider_error
+
+
+def test_retry_chat_stream_before_content_without_budget_direct_call():
+    """num_retries=0 hands the pre-content failure straight to the fallback chain, sync and async."""
+    router = _chat_stream_retry_router(num_retries=0)
+    failure = _chat_stream_pre_content_failure()
+    messages = [{"role": "user", "content": "hi"}]
+
+    outcome = router._retry_chat_stream_before_content(failure, messages, {"model": "chat", "metadata": {}})
+    async_outcome = asyncio.run(
+        router._astream_retry_same_group(
+            failure, {"model": "chat", "metadata": {}}, attempt_function=functools.partial(router._acompletion, messages=messages)
+        )
+    )
+
+    assert outcome.error is failure
+    assert async_outcome.error is failure
+
+
+def test_retry_chat_stream_before_content_opens_on_the_second_attempt_direct_call():
+    """A retriable pre-content failure is retried within the group until an attempt opens a stream, sync and async."""
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.router import _StreamRetryOpened
+
+    router = _chat_stream_retry_router(num_retries=2)
+    failure = _chat_stream_pre_content_failure()
+    messages = [{"role": "user", "content": "hi"}]
+
+    def request_kwargs() -> dict:
+        return {"model": "chat", "metadata": {}, "stream": True}
+
+    def opened_stream() -> CustomStreamWrapper:
+        return CustomStreamWrapper(
+            completion_stream=iter([]), model="chat", logging_obj=MagicMock(), custom_llm_provider="cached_response"
+        )
+
+    overloaded = litellm.InternalServerError(message="overloaded", llm_provider="openai", model="chat")
+    with patch.object(router, "_completion", side_effect=[overloaded, opened_stream()]) as completion:
+        outcome = router._retry_chat_stream_before_content(failure, messages, request_kwargs())
+    attempt_function = AsyncMock(side_effect=[overloaded, opened_stream()])
+    async_outcome = asyncio.run(
+        router._astream_retry_same_group(failure, request_kwargs(), attempt_function=attempt_function)
+    )
+
+    assert isinstance(outcome, _StreamRetryOpened)
+    assert (outcome.attempted_retries, outcome.max_retries) == (2, 2)
+    assert completion.call_count == 2
+    assert completion.call_args.args[:2] == ("chat", messages)
+    assert isinstance(async_outcome, _StreamRetryOpened)
+    assert (async_outcome.attempted_retries, async_outcome.max_retries) == (2, 2)
+    assert attempt_function.await_count == 2
+
+
+def test_retried_chat_stream_items_direct_call():
+    """A retried stream's chunks reach the caller through the wrapper, which carries the retry headers."""
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.router import FallbackAwareStreamWrapper, _StreamRetryOpened
+    from litellm.types.utils import Delta
+
+    def retried_stream() -> CustomStreamWrapper:
+        return CustomStreamWrapper(
+            completion_stream=iter([_chat_stream_chunk(Delta(content="retried answer"))]),
+            model="chat",
+            logging_obj=MagicMock(),
+            custom_llm_provider="cached_response",
+        )
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]), model="chat", logging_obj=MagicMock(), custom_llm_provider="cached_response"
+    )
+    opened = _StreamRetryOpened(retried_stream(), attempted_retries=1, max_retries=2)
+
+    items = list(Router._retried_chat_stream_items(opened, wrapper))
+    prepared = Router._adopt_retried_chat_stream(_StreamRetryOpened(retried_stream(), 2, 2), None)
+
+    assert [chunk.choices[0].delta.content for chunk in items if chunk.choices[0].delta.content] == ["retried answer"]
+    assert wrapper._hidden_params["additional_headers"]["x-litellm-attempted-retries"] == 1
+    assert prepared[1] == {}
