@@ -11,6 +11,7 @@ content frame, restoring per-token cadence on cache hits.
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _split_assembled_content_for_replay,
     convert_to_streaming_response,
@@ -85,6 +86,71 @@ async def test_async_yields_multiple_content_chunks_with_lossless_join():
     assert all(isinstance(c, ModelResponseStream) for c in chunks)
     reassembled = "".join((c.choices[0].delta.content or "") for c in chunks)
     assert reassembled == text
+
+
+@pytest.mark.parametrize("content", ["", "Hello world! How are you?"], ids=["single_frame", "sliced"])
+@pytest.mark.asyncio
+async def test_async_and_sync_replays_carry_the_cached_provider_specific_fields(content):
+    provider_specific_fields = {"stop_reason": "refusal", "stop_details": {"category": "cyber"}}
+
+    def payload():
+        cached = _async_payload(content=content)
+        cached["choices"][0]["message"]["provider_specific_fields"] = provider_specific_fields
+        return cached
+
+    async_chunks = await _collect_async(payload())
+    sync_chunks = list(convert_to_streaming_response(payload()))
+
+    assert [c.choices[0].delta.provider_specific_fields for c in async_chunks] == [
+        c.choices[0].delta.provider_specific_fields for c in sync_chunks
+    ]
+    assert async_chunks[0].choices[0].delta.provider_specific_fields == provider_specific_fields
+
+
+@pytest.mark.parametrize("provider_fields", [{"thought_signatures": ["sig"]}, None], ids=["provider_fields", "text"])
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_keeps_the_cached_completion_tokens_details(replay, provider_fields):
+    cached = _async_payload()
+    cached["choices"][0]["message"]["provider_specific_fields"] = provider_fields
+    cached["usage"]["completion_tokens_details"] = {"reasoning_tokens": 4, "text_tokens": 3}
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+    rebuilt = litellm.stream_chunk_builder(chunks=chunks)
+
+    assert rebuilt.choices[0].message.get("provider_specific_fields") == provider_fields
+    assert rebuilt.usage.completion_tokens_details.reasoning_tokens == 4
+    assert rebuilt.usage.completion_tokens_details.text_tokens == 3
+
+
+@pytest.mark.parametrize("cached_fields", [7, [1, 2], "", "x" * 5000], ids=["int", "list", "empty", "long"])
+@pytest.mark.asyncio
+async def test_the_async_replay_ignores_cached_provider_fields_that_are_not_an_object(cached_fields):
+    cached = _async_payload()
+    cached["choices"][0]["message"]["provider_specific_fields"] = cached_fields
+
+    chunks = await _collect_async(cached)
+
+    assert "".join(c.choices[0].delta.content or "" for c in chunks) == "Hello world! How are you?"
+    assert all(c.choices[0].delta.provider_specific_fields is None for c in chunks)
+
+
+@pytest.mark.parametrize(
+    "details",
+    [{"reasoning_tokens": "abc"}, {"reasoning_tokens": 1.5}, {"reasoning_tokens": {"a": 1}}],
+    ids=["text", "fraction", "object"],
+)
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_skips_cached_completion_tokens_details_that_do_not_validate(replay, details):
+    cached = _async_payload()
+    cached["usage"]["completion_tokens_details"] = details
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+    rebuilt = litellm.stream_chunk_builder(chunks=chunks)
+
+    assert rebuilt.choices[0].message.content == "Hello world! How are you?"
+    assert rebuilt.usage.completion_tokens == 7
 
 
 @pytest.mark.asyncio
@@ -204,9 +270,7 @@ def test_sync_multi_chunk_and_lossless_join():
 
 
 def test_sync_delta_and_choice_metadata_only_on_first_chunk():
-    thinking_blocks = [
-        {"type": "thinking", "thinking": "cached thinking", "signature": "sig"}
-    ]
+    thinking_blocks = [{"type": "thinking", "thinking": "cached thinking", "signature": "sig"}]
     payload = {
         "id": "chatcmpl-test-sync",
         "object": "chat.completion",

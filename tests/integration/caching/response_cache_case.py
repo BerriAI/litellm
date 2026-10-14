@@ -336,6 +336,29 @@ def flip_entry_to_empty(store: Redis, key: str, field: str) -> str:
     return stale_id
 
 
+def rewrite_usage_details(store: Redis, key: str, details: JsonValue) -> str:
+    """Rewrite the stored usage's ``completion_tokens_details`` to ``details`` and stamp the id ``-stale``, keeping the
+    encoding, and return the stale id."""
+    raw: Final = store.get(key)
+    assert raw is not None, key
+    entry, is_json = _decode_entry(raw)
+    response: Final = entry["response"]
+    stored: Final = object_value(json.loads(response) if isinstance(response, str) else response)
+    stale_id: Final = f"{string_value(stored['id'])}{STALE_ID_SUFFIX}"
+    usage: Final = object_value(stored["usage"])
+    rewritten_response: Final[dict[str, JsonValue]] = {
+        **stored,
+        "usage": {**usage, "completion_tokens_details": details},
+        "id": stale_id,
+    }
+    rewritten: Final[dict[str, JsonValue]] = {
+        **entry,
+        "response": json.dumps(rewritten_response) if isinstance(response, str) else rewritten_response,
+    }
+    store.set(key, json.dumps(rewritten) if is_json else str(rewritten), ex=STALE_ENTRY_TTL_SECONDS)
+    return stale_id
+
+
 def chat_body(model: str, text: str, **extra: JsonValue) -> dict[str, JsonValue]:
     return {"model": model, "messages": [{"role": "user", "content": text}], **extra}
 

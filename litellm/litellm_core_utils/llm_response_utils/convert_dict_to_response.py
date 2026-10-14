@@ -6,7 +6,7 @@ import traceback
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, cast
 
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -222,6 +222,9 @@ async def convert_to_streaming_response_async(
             role=choice["message"]["role"],
             function_call=choice["message"].get("function_call", None),
             tool_calls=choice["message"].get("tool_calls", None),
+            provider_specific_fields=_cached_provider_specific_fields(
+                _CACHED_MESSAGE_PROVIDER_FIELDS.validate_python(choice["message"])
+            ),
         )
         finish_reason = choice.get("finish_reason", None)
 
@@ -243,6 +246,9 @@ async def convert_to_streaming_response_async(
                 completion_tokens=response_object["usage"].get("completion_tokens", 0),
                 prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
                 total_tokens=response_object["usage"].get("total_tokens", 0),
+                completion_tokens_details=_cached_completion_tokens_details(
+                    _CACHED_USAGE_DETAILS.validate_python(response_object["usage"])
+                ),
             ),
         )
 
@@ -334,6 +340,9 @@ def convert_to_streaming_response(
         model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
         model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
         model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+        model_response_object.usage.completion_tokens_details = _cached_completion_tokens_details(
+            _CACHED_USAGE_DETAILS.validate_python(response_object["usage"])
+        )
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
@@ -388,6 +397,35 @@ class _ParallelToolUseArgs(TypedDict):
 
 
 _PARALLEL_TOOL_USE_ARGS: Final = TypeAdapter(_ParallelToolUseArgs)
+
+
+class _CachedMessageProviderFields(TypedDict, total=False):
+    provider_specific_fields: ReadOnly[object]
+
+
+class _CachedUsageDetails(TypedDict, total=False):
+    completion_tokens_details: ReadOnly[object]
+
+
+_CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
+_CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
+_FIELD_MAP: Final = TypeAdapter(dict[str, object])
+_COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
+
+
+def _cached_provider_specific_fields(message: _CachedMessageProviderFields) -> Mapping[str, object] | None:
+    fields: Final = message.get("provider_specific_fields")
+    return _FIELD_MAP.validate_python(fields) if isinstance(fields, dict) else None
+
+
+def _cached_completion_tokens_details(usage: _CachedUsageDetails) -> CompletionTokensDetailsWrapper | None:
+    details: Final = usage.get("completion_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    try:
+        return _COMPLETION_TOKENS_DETAILS.validate_python(details)
+    except ValidationError:
+        return None
 
 
 def handle_invalid_parallel_tool_calls(
