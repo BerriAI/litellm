@@ -6,7 +6,7 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, TypedDict
 
@@ -265,6 +265,63 @@ services = (
 )
 
 
+_SERVICES_WITH_DEDICATED_CHECK: Final = frozenset(
+    (
+        "slack_budget_alerts",
+        "email",
+        "langfuse",
+        "slack",
+        "ms_teams",
+        "webhook",
+        "datadog",
+        "datadog_metrics",
+        "arize",
+        "galileo",
+        "newrelic",
+        "pointfive",
+        "sqs",
+        "aws_sqs",
+    )
+)
+_SERVICES_TESTABLE_ONLY_VIA_SUCCESS_CALLBACK: Final = frozenset(("custom_callback_api",))
+
+
+def _testable_services() -> frozenset[str]:
+    return (
+        _SERVICES_WITH_DEDICATED_CHECK
+        | _SERVICES_TESTABLE_ONLY_VIA_SUCCESS_CALLBACK
+        | frozenset(
+            litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # no public alias for the callback Literal's args
+        )
+    )
+
+
+def _is_testable_service(service: str) -> bool:
+    return service in _testable_services()
+
+
+def _callback_matches(service: str, cb: object) -> bool:
+    callback_name: Final = getattr(cb, "callback_name", None)
+    if service in (cb, callback_name, get_callback_identifier(cb)):
+        return True
+    return (
+        not callback_name
+        and service not in _SERVICES_WITH_DEDICATED_CHECK
+        and service in _unnamed_callback_aliases(type(cb))
+    )
+
+
+def _unnamed_callback_aliases(callback_type: type) -> frozenset[str]:
+    """A logger built from a bare config string carries no name, so its class aliases and its package name stand in."""
+    return frozenset(CustomLoggerRegistry.get_all_callback_strs_from_class_type(callback_type)) | frozenset(
+        callback_type.__module__.split(".")
+    )
+
+
+def _service_configured_in(service: str, callbacks: Sequence[object]) -> bool:
+    return any(_callback_matches(service, cb) for cb in callbacks)
+
+
 class _ServiceTestErrorDetail(TypedDict):
     error: ReadOnly[str]
 
@@ -326,53 +383,24 @@ async def health_services_endpoint(
         if service is None:
             raise HTTPException(status_code=400, detail={"error": "Service must be specified."})
 
-        if service not in [
-            "slack_budget_alerts",
-            "email",
-            "langfuse",
-            "langfuse_otel",
-            "slack",
-            "ms_teams",
-            "openmeter",
-            "webhook",
-            "braintrust",
-            "otel",
-            "custom_callback_api",
-            "langsmith",
-            "datadog",
-            "datadog_metrics",
-            "datadog_llm_observability",
-            "generic_api",
-            "arize",
-            "galileo",
-            "newrelic",
-            "pointfive",
-            "signoz",
-            "sqs",
-        ]:
+        if not _is_testable_service(service):
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"Service must be in list. Service={service} not in {services}"},
+                detail={"error": f"Service must be in list. Service={service} not in {sorted(_testable_services())}"},
             )
 
-        service_in_success_callbacks = False
-        if service in litellm.success_callback:
-            service_in_success_callbacks = True
-        else:
-            for cb in litellm.success_callback:
-                if getattr(cb, "callback_name", None) == service:
-                    service_in_success_callbacks = True
-                    break
-                cb_id = get_callback_identifier(cb)
-                if cb_id == service:
-                    service_in_success_callbacks = True
-                    break
+        service_in_success_callbacks: Final = _service_configured_in(service, litellm.success_callback)
+        logger_without_dedicated_check_configured: Final = (
+            service not in _SERVICES_WITH_DEDICATED_CHECK
+            and _service_configured_in(service, litellm.logging_callback_manager.get_all_callbacks())
+        )
 
         if (
             service == "openmeter"
             or service == "braintrust"
             or service == "generic_api"
-            or (service_in_success_callbacks and service not in ("langfuse", "pointfive"))
+            or (service_in_success_callbacks and service not in ("langfuse", "pointfive", "sqs", "aws_sqs"))
+            or logger_without_dedicated_check_configured
         ):
             _ = await litellm.acompletion(
                 model="openai/litellm-mock-response-model",
@@ -506,7 +534,11 @@ async def health_services_endpoint(
                 type="user_budget",
                 user_info=user_info,
             )
-        elif service == "sqs":
+            return {
+                "status": "success",
+                "message": "Mock Webhook Alert sent, verify Webhook Alert Received",
+            }
+        elif service in ("sqs", "aws_sqs"):
             from litellm.integrations.sqs import SQSLogger
 
             sqs_logger: Final = SQSLogger()
@@ -628,6 +660,13 @@ async def health_services_endpoint(
                 "status": "success",
                 "message": "Mock Email Alert sent, verify Email Alert Received",
             }
+
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Service={service} is not configured as a callback, add it to litellm_settings.callbacks."
+            },
+        )
 
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - %s", e)
