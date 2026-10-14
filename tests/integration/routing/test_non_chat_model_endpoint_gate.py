@@ -39,6 +39,7 @@ from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, 
 _PROVIDER_KEY: Final = "integration-provider-key"
 _EMBEDDING_MODEL: Final = "text-embedding-3-small"
 _CHAT_MODEL: Final = "gpt-4o-mini"
+_CHAT_BACKEND_PREFIX: Final = "gate-chat-backend-"
 _SERVED_TEXT: Final = "served by the chat upstream"
 _VECTOR: Final = (0.25, 0.5, 0.75)
 _COUNTED_TOKENS: Final = 17
@@ -150,6 +151,10 @@ def _text_completion_reply() -> Reply:
     )
 
 
+def _serves_chat(model: JsonValue) -> bool:
+    return model == _CHAT_MODEL or (isinstance(model, str) and model.startswith(_CHAT_BACKEND_PREFIX))
+
+
 def _respond(request: Request) -> Reply:
     path: Final = request.target.split("?")[0]
     body: Final = JSON_OBJECT.validate_json(request.body or b"{}")
@@ -158,7 +163,7 @@ def _respond(request: Request) -> Reply:
         return _embedding_reply()
     if path == "/v1/responses/input_tokens":
         return Reply(body=json.dumps({"object": "response.input_tokens", "input_tokens": _COUNTED_TOKENS}).encode())
-    if body.get("model") != _CHAT_MODEL:
+    if not _serves_chat(body.get("model")):
         return _not_a_chat_model()
     if path == "/v1/chat/completions":
         return chat_reply(f"chatcmpl-{uuid.uuid4().hex}", _CHAT_MODEL, _SERVED_TEXT, stream=streamed)
@@ -870,23 +875,50 @@ def test_malformed_request_fallbacks_step_aside_for_the_router(rig: _Rig, shape:
     assert rig.upstream.targets(marker)[:1] == ("/v1/chat/completions",), response.text
 
 
+def _assert_answered_after_one_miss(
+    upstream: _Upstream, response: httpx.Response, marker: str, target: str = "/v1/chat/completions"
+) -> None:
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert upstream.targets(marker) == (target, target), response.text
+
+
+def _assert_the_provider_answered(rig: _Rig, response: httpx.Response, marker: str) -> None:
+    assert response.status_code == 404, response.text
+    assert "scripted: not a chat model" in response.text, response.text
+    assert rig.upstream.targets(marker) == ("/v1/chat/completions",), response.text
+
+
 def _through_a_group_with_no_deployments(rig: _Rig) -> Mapping[str, JsonValue]:
     ghost: Final = f"gate-ghost-{uuid.uuid4().hex}"
     return {"fallbacks": [{rig.names["embedding_only"]: [ghost]}, {ghost: [rig.names["chat_target"]]}]}
 
 
-def _with_a_client_routing_stamp(rig: _Rig) -> Mapping[str, JsonValue]:
-    model, second = rig.names["embedding_only"], rig.names["embedding_only_second"]
-    return {
-        "fallbacks": [{model: [rig.names["chat_target"]]}, {second: [model]}],
-        "metadata": {"model_group": second},
+_ROUTING_STAMPS: Final[Mapping[str, Callable[[JsonValue], Mapping[str, JsonValue]]]] = MappingProxyType(
+    {
+        "a_client_routing_stamp": lambda group: {"metadata": {"model_group": group}},
+        "a_pre_routing_stamp": lambda group: {"metadata": {"pre_routing_selected_model": group}},
+        "a_litellm_metadata_routing_stamp": lambda group: {"litellm_metadata": {"model_group": group}},
+        "a_litellm_metadata_pre_routing_stamp": lambda group: {
+            "litellm_metadata": {"pre_routing_selected_model": group}
+        },
+        "a_routing_stamp_in_both_buckets": lambda group: {
+            "metadata": {"model_group": group},
+            "litellm_metadata": {"model_group": group},
+        },
     }
+)
+
+
+def _with_a_routing_stamp(stamp: Callable[[JsonValue], Mapping[str, JsonValue]], rig: _Rig) -> Mapping[str, JsonValue]:
+    model, second = rig.names["embedding_only"], rig.names["embedding_only_second"]
+    return {"fallbacks": [{model: [rig.names["chat_target"]]}, {second: [model]}], **stamp(second)}
 
 
 _FALLBACKS_THE_CHECK_CANNOT_FOLLOW: Final[Mapping[str, Callable[[_Rig], Mapping[str, JsonValue]]]] = MappingProxyType(
     {
         "a_group_with_no_deployments": _through_a_group_with_no_deployments,
-        "a_client_routing_stamp": _with_a_client_routing_stamp,
+        **{name: partial(_with_a_routing_stamp, stamp) for name, stamp in _ROUTING_STAMPS.items()},
     }
 )
 
@@ -896,8 +928,122 @@ def test_fallbacks_the_check_cannot_follow_step_aside_for_the_router(rig: _Rig, 
     model: Final = rig.names["embedding_only"]
     marker: Final = _marker()
     response: Final = _chat(rig, model, marker, **_FALLBACKS_THE_CHECK_CANNOT_FOLLOW[shape](rig))
-    assert "Supported endpoints" not in response.text, response.text
-    assert rig.upstream.targets(marker)[:1] == ("/v1/chat/completions",), response.text
+    _assert_answered_after_one_miss(rig.upstream, response, marker)
+
+
+_STAMPED_ROUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
+    {
+        "chat_v1": ("metadata", "/v1/chat/completions"),
+        "messages": ("litellm_metadata", "/v1/responses"),
+        "responses_v1": ("litellm_metadata", "/v1/responses"),
+    }
+)
+
+
+@pytest.mark.parametrize("route", tuple(_STAMPED_ROUTES))
+def test_a_client_routing_stamp_steps_aside_on_every_chat_shaped_route(rig: _Rig, route: str) -> None:
+    model, second = rig.names["embedding_only"], rig.names["embedding_only_second"]
+    bucket, target = _STAMPED_ROUTES[route]
+    marker: Final = _marker()
+    spec: Final = _ROUTES[route]
+    response: Final = rig.gateway.request(
+        "POST",
+        spec.path,
+        {
+            **_route_body(spec, model, marker),
+            "fallbacks": [{model: [rig.names["chat_target"]]}, {second: [model]}],
+            bucket: {"model_group": second},
+        },
+    )
+    _assert_answered_after_one_miss(rig.upstream, response, marker, target)
+
+
+_STAMPS_THE_CHECK_IGNORES: Final[Mapping[str, Callable[[_Rig], Mapping[str, JsonValue]]]] = MappingProxyType(
+    {
+        "an_int_routing_stamp": lambda rig: {"metadata": {"model_group": 7}},
+        "a_list_routing_stamp": lambda rig: {"metadata": {"model_group": [rig.names["embedding_only_second"]]}},
+        "an_empty_routing_stamp": lambda rig: {"metadata": {"model_group": ""}},
+        "a_routing_stamp_naming_the_requested_group": lambda rig: {
+            "metadata": {"model_group": rig.names["embedding_only"]}
+        },
+        "an_int_pre_routing_stamp": lambda rig: {"litellm_metadata": {"pre_routing_selected_model": 7}},
+        "an_int_original_group_stamp": lambda rig: {"metadata": {"original_model_group": 7}},
+        "an_original_group_stamp_the_proxy_strips": lambda rig: {
+            "metadata": {"original_model_group": rig.names["embedding_only_second"]}
+        },
+    }
+)
+
+
+@pytest.mark.parametrize("stamp", tuple(_STAMPS_THE_CHECK_IGNORES))
+def test_routing_stamps_that_name_no_other_group_keep_the_rejection(rig: _Rig, stamp: str) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    response: Final = _chat(
+        rig,
+        model,
+        marker,
+        fallbacks=[{rig.names["embedding_only_second"]: [rig.names["chat_target"]]}],
+        **_STAMPS_THE_CHECK_IGNORES[stamp](rig),
+    )
+    _assert_rejected_chat(rig, response, marker, model)
+
+
+def test_a_routing_stamp_without_any_fallbacks_keeps_the_rejection(rig: _Rig) -> None:
+    model: Final = rig.names["embedding_only"]
+    marker: Final = _marker()
+    response: Final = _chat(rig, model, marker, metadata={"model_group": rig.names["embedding_only_second"]})
+    _assert_rejected_chat(rig, response, marker, model)
+
+
+_STAMPS_THE_ROUTER_RESETS: Final[Mapping[str, Callable[[_Rig], Mapping[str, JsonValue]]]] = MappingProxyType(
+    {
+        "a_routing_stamp_naming_a_group_with_a_chat_chain": lambda rig: {
+            "metadata": {"model_group": rig.names["embedding_only_second"]}
+        },
+        "a_pre_routing_stamp_naming_a_group_with_a_chat_chain": lambda rig: {
+            "metadata": {"pre_routing_selected_model": rig.names["embedding_only_second"]}
+        },
+        "a_five_kb_routing_stamp": lambda rig: {"metadata": {"model_group": "g" * 5000}},
+    }
+)
+
+
+@pytest.mark.parametrize("stamp", tuple(_STAMPS_THE_ROUTER_RESETS))
+def test_routing_stamps_the_router_resets_step_aside_and_the_provider_answers(rig: _Rig, stamp: str) -> None:
+    marker: Final = _marker()
+    response: Final = _chat(
+        rig,
+        rig.names["embedding_only"],
+        marker,
+        fallbacks=[{rig.names["embedding_only_second"]: [rig.names["chat_target"]]}],
+        **_STAMPS_THE_ROUTER_RESETS[stamp](rig),
+    )
+    _assert_the_provider_answered(rig, response, marker)
+
+
+def test_request_fallbacks_naming_a_chat_backend_name_answer_for_an_embedding_only_primary(rig: _Rig) -> None:
+    model: Final = rig.names["embedding_only"]
+    backend: Final = f"openai/{_CHAT_BACKEND_PREFIX}{uuid.uuid4().hex[:12]}"
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        identity: Final = _create(
+            rig.gateway, f"gate-backend-{uuid.uuid4().hex[:12]}", {"model": backend, "api_base": rig.api_base}, {}
+        )
+        scenario.cleanups.callback(scenario.delete_model, identity)
+        _served_by_every_worker(rig.gateway, frozenset({identity}))
+        response: Final = _chat(rig, model, marker, fallbacks=[{model: [backend]}])
+    _assert_answered_after_one_miss(rig.upstream, response, marker)
+
+
+@pytest.mark.parametrize("level", ("key", "team"))
+def test_router_settings_fallbacks_through_a_group_with_no_deployments_answer(rig: _Rig, level: str) -> None:
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        settings: Final = {"router_settings": dict(_through_a_group_with_no_deployments(rig))}
+        key: Final = scenario.key(**settings) if level == "key" else scenario.key(team_id=scenario.team(**settings))
+        response: Final = _chat(rig, rig.names["embedding_only"], marker, key=key)
+    _assert_answered_after_one_miss(rig.upstream, response, marker)
 
 
 def test_team_router_settings_fallbacks_answer_for_an_embedding_only_primary(rig: _Rig) -> None:
@@ -1501,8 +1647,25 @@ class _Addressed:
     api_base: str
 
 
-def _addressed_config(directory: Path, api_base: str, names: Mapping[str, str], suffix: str) -> Path:
+def _wildcard_backend_entry(name: str, api_base: str, backend: str) -> dict[str, JsonValue]:
+    entry: Final = _routed_entry(name, api_base, backend, _EMBED_ONLY)
+    return {**entry, "litellm_params": {**object_value(entry["litellm_params"]), "custom_llm_provider": "openai"}}
+
+
+def _addressed_config(
+    directory: Path, api_base: str, names: Mapping[str, str], suffix: str, with_wildcards: bool
+) -> Path:
     shared: Final = _CONFIG.validate_python(yaml.safe_load((_TESTS_ROOT / "integration/proxy_config.yaml").read_text()))
+    wildcard: Final = f"gate-addr-wild-{suffix}"
+    wildcard_entries: Final = (
+        (
+            _routed_entry(f"{wildcard}/*", api_base, "openai/*", {}),
+            _wildcard_backend_entry(names["wildcard_backend"], api_base, f"{wildcard}/{_CHAT_MODEL}"),
+        )
+        if with_wildcards
+        else ()
+    )
+    aliases: Final = {names["wildcard_alias"]: f"{wildcard}/{_CHAT_BACKEND_PREFIX}{suffix}"} if with_wildcards else {}
     config: Final = {
         **shared,
         "model_list": [
@@ -1511,8 +1674,15 @@ def _addressed_config(directory: Path, api_base: str, names: Mapping[str, str], 
             ),
             _routed_entry(names["chat"], api_base, f"openai/{_CHAT_MODEL}", {"mode": "chat", "id": names["chat_id"]}),
             _routed_entry(names["shared_embed"], api_base, f"openai/{_CHAT_MODEL}", _EMBED_ONLY),
+            *wildcard_entries,
+            _routed_entry(names["ghost_primary"], api_base, f"openai/{_EMBEDDING_MODEL}", _EMBED_ONLY),
         ],
-        "router_settings": {**object_value(shared["router_settings"]), "num_retries": 0},
+        "router_settings": {
+            **object_value(shared["router_settings"]),
+            "num_retries": 0,
+            "model_group_alias": aliases,
+            "fallbacks": [{names["ghost_primary"]: [names["ghost"]]}, {names["ghost"]: [names["chat"]]}],
+        },
         "general_settings": {
             **object_value(shared["general_settings"]),
             "proxy_config_reload_interval_seconds": 3600,
@@ -1523,12 +1693,25 @@ def _addressed_config(directory: Path, api_base: str, names: Mapping[str, str], 
     return path
 
 
-@pytest.fixture(scope="module")
-def addressed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Addressed]:
+@contextlib.contextmanager
+def _addressed_proxy(tmp_path_factory: pytest.TempPathFactory, with_wildcards: bool) -> Iterator[_Addressed]:
     directory: Final = tmp_path_factory.mktemp("gate-addressed")
     suffix: Final = uuid.uuid4().hex[:12]
     names: Final = MappingProxyType(
-        {label: f"gate-addr-{label}-{suffix}" for label in ("embed", "embed_id", "chat", "chat_id", "shared_embed")}
+        {
+            label: f"gate-addr-{label}-{suffix}"
+            for label in (
+                "embed",
+                "embed_id",
+                "chat",
+                "chat_id",
+                "shared_embed",
+                "wildcard_backend",
+                "wildcard_alias",
+                "ghost_primary",
+                "ghost",
+            )
+        }
     )
     with (
         wire_server(answering_model_discovery(_respond)) as wire,
@@ -1537,7 +1720,7 @@ def addressed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Addressed]:
             rig_gateway,
             directory,
             {},
-            config=_addressed_config(directory, wire.url + "/v1", names, suffix),
+            config=_addressed_config(directory, wire.url + "/v1", names, suffix, with_wildcards),
             workers=2,
         ) as owned,
     ):
@@ -1552,10 +1735,26 @@ def addressed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Addressed]:
             _Upstream(wire),
             names,
             MappingProxyType(
-                {"deployment_id": names["embed_id"], "backend_name": f"openai/gate-addr-backend-{suffix}"}
+                {
+                    "deployment_id": names["embed_id"],
+                    "backend_name": f"openai/gate-addr-backend-{suffix}",
+                    "wildcard_backend_name": f"gate-addr-wild-{suffix}/{_CHAT_MODEL}",
+                }
             ),
             wire.url + "/v1",
         )
+
+
+@pytest.fixture(scope="module")
+def addressed(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Addressed]:
+    with _addressed_proxy(tmp_path_factory, with_wildcards=True) as proxy:
+        yield proxy
+
+
+@pytest.fixture(scope="module")
+def addressed_without_wildcards(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Addressed]:
+    with _addressed_proxy(tmp_path_factory, with_wildcards=False) as proxy:
+        yield proxy
 
 
 _ADDRESSED_ROUTES: Final = ("chat_v1", "messages", "responses_v1")
@@ -1622,9 +1821,47 @@ def test_request_fallbacks_naming_a_chat_deployment_id_answer_for_an_embedding_o
 
 
 @_ROUTED_TIMEOUT
-def test_an_embedding_only_model_the_read_through_loads_from_the_database_is_rejected_on_every_call(
+def test_chat_sent_to_an_embedding_only_backend_name_a_wildcard_also_matches_is_served_by_the_wildcard(
     addressed: _Addressed,
 ) -> None:
+    marker: Final = _marker()
+    response: Final = addressed.gateway.request(
+        "POST", "/v1/chat/completions", _chat_body(addressed.addresses["wildcard_backend_name"], marker)
+    )
+    assert response.status_code == 200, response.text
+    assert _SERVED_TEXT in response.text, response.text
+    assert [JSON_OBJECT.validate_json(call.body)["model"] for call in addressed.upstream.calls(marker)] == [_CHAT_MODEL]
+
+
+@_ROUTED_TIMEOUT
+def test_request_fallbacks_naming_an_alias_only_a_wildcard_serves_answer_for_an_embedding_only_primary(
+    addressed: _Addressed,
+) -> None:
+    marker: Final = _marker()
+    response: Final = addressed.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {**_chat_body(addressed.names["embed"], marker), "fallbacks": [addressed.names["wildcard_alias"]]},
+    )
+    _assert_answered_after_one_miss(addressed.upstream, response, marker)
+
+
+@_ROUTED_TIMEOUT
+def test_yaml_fallbacks_through_a_group_with_no_deployments_answer_for_an_embedding_only_group(
+    addressed: _Addressed,
+) -> None:
+    marker: Final = _marker()
+    response: Final = addressed.gateway.request(
+        "POST", "/v1/chat/completions", _chat_body(addressed.names["ghost_primary"], marker)
+    )
+    _assert_answered_after_one_miss(addressed.upstream, response, marker)
+
+
+@_ROUTED_TIMEOUT
+def test_an_embedding_only_model_the_read_through_loads_from_the_database_is_rejected_on_every_call(
+    addressed_without_wildcards: _Addressed,
+) -> None:
+    addressed: Final = addressed_without_wildcards
     name: Final = f"gate-addr-loaded-{uuid.uuid4().hex[:12]}"
     markers: Final = tuple(_marker() for _ in range(6))
     with addressed.rig.scenario() as scenario:

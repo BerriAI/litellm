@@ -465,11 +465,7 @@ def _group_deployments(model: str, llm_router: LitellmRouter, team_id: str | Non
 
 
 def _deployments_by_backend_name(model: str, llm_router: LitellmRouter) -> tuple[Mapping[str, object], ...]:
-    if (
-        model not in llm_router.deployment_names
-        or llm_router.router_general_settings.pass_through_all_models
-        or llm_router.pattern_router.get_deployments_by_pattern(model=model)
-    ):
+    if model not in llm_router.deployment_names or llm_router.router_general_settings.pass_through_all_models:
         return ()
     return tuple(
         deployment
