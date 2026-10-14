@@ -2523,9 +2523,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ResponsesAPIResponse):
             result = result.model_copy()
             chat_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(result.usage)
-            chat_usage_dict: Final = (
-                chat_usage.model_dump() if hasattr(chat_usage, "model_dump") else dict(chat_usage)
-            )
+            chat_usage_dict: Final = chat_usage.model_dump() if hasattr(chat_usage, "model_dump") else dict(chat_usage)
             setattr(result, "usage", chat_usage_dict)
             if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
                 response_dict: Final = result.model_dump() if hasattr(result, "model_dump") else dict(result)
