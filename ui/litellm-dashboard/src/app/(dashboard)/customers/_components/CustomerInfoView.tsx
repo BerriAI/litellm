@@ -57,7 +57,7 @@ function CustomerModelFields({ customer }: { customer: EndUser }) {
   return (
     <>
       <OverviewField label="Models">
-        <ModelsCell models={customer.models} />
+        <ModelsCell models={customer.models} unrestrictedLabel="All models the key can use" />
       </OverviewField>
       <OverviewField label="Allowed Model Region">
         {customer.allowed_model_region?.toUpperCase() ?? "Any"}
@@ -107,7 +107,11 @@ function CustomerOverview({ customer, accessToken }: Pick<CustomerInfoViewProps,
           </CardContent>
         </Card>
       </div>
-      <ObjectPermissionsView objectPermission={customer.object_permission} accessToken={accessToken} />
+      <ObjectPermissionsView
+        objectPermission={customer.object_permission}
+        accessToken={accessToken}
+        entityType="customer"
+      />
     </div>
   );
 }
@@ -131,6 +135,7 @@ function CustomerSettings({ customer, accessToken }: Pick<CustomerInfoViewProps,
       </dl>
       <ObjectPermissionsView
         objectPermission={customer.object_permission}
+        entityType="customer"
         variant="inline"
         className="border-t pt-4"
         accessToken={accessToken}

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import Papa from "papaparse";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { toast } from "@/lib/toast";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { chooseSelectOption, renderWithProviders } from "../../../../../tests/test-utils";
 import CustomersTable from "./CustomersTable";
@@ -133,6 +134,9 @@ describe("CustomersTable controls", () => {
     await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
     expect(screen.getByText("26 selected")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Unblock selected" }));
+    const dialog = await screen.findByRole("dialog", { name: "Unblock 26 customers?" });
+    expect(props.onBulkSetBlocked).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Unblock" }));
     expect(props.onBulkSetBlocked).toHaveBeenCalledExactlyOnceWith(
       rows.map((row) => row.user_id),
       false,
@@ -160,7 +164,10 @@ describe("CustomersTable controls", () => {
     expect(props.onSetBlocked).not.toHaveBeenCalled();
   });
 
-  it("exports every matching customer across pages using the active search and filters", async () => {
+  it.each([
+    { search: "matching", count: 26 },
+    { search: "customer-00", count: 1 },
+  ])("exports $count matching customers using search and filters", async ({ search, count }) => {
     const rows = Array.from(
       { length: 28 },
       (_, index): EndUser => ({
@@ -182,9 +189,9 @@ describe("CustomersTable controls", () => {
     const download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     const user = userEvent.setup();
     renderWithProviders(<CustomersTable {...props} data={rows} />, {
-      searchParams: "page_size=25&search=matching&filter_blocked=active&filter_mcp_access=yes",
+      searchParams: `page_size=25&search=${search}&filter_blocked=active&filter_mcp_access=yes`,
     });
-    expect(screen.getByText("Showing 1-25 of 26")).toBeInTheDocument();
+    expect(screen.getByText(`Showing 1-${Math.min(count, 25)} of ${count}`)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Export CSV" }));
     const blob = createObjectURL.mock.calls[0][0] as Blob;
     const csv = await new Promise<string>((resolve, reject) => {
@@ -195,8 +202,9 @@ describe("CustomersTable controls", () => {
     });
     const parsed = Papa.parse<Record<string, string>>(csv, { header: true });
     expect(parsed.errors).toEqual([]);
-    expect(parsed.data.map((row) => row["Customer ID"])).toEqual(rows.slice(0, 26).map((row) => row.user_id));
+    expect(parsed.data.map((row) => row["Customer ID"])).toEqual(rows.slice(0, count).map((row) => row.user_id));
     expect(download).toHaveBeenCalledOnce();
+    expect(toast.success).toHaveBeenCalledWith(`Exported ${count} customer${count === 1 ? "" : "s"}`);
     expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:customers-export");
   });
 

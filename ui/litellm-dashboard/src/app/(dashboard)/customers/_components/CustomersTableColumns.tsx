@@ -1,12 +1,14 @@
 "use client";
 
+import { useId } from "react";
+
 import type { ColumnDef } from "@tanstack/react-table";
-import { Ban, Copy, Layers, MoreHorizontal, Pencil, Server, ShieldCheck, Trash2, Users, Wrench } from "lucide-react";
+import { Ban, Copy, Layers, MoreHorizontal, Pencil, Server, ShieldCheck, Trash2, Network, Wrench } from "lucide-react";
 
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { IdentityCell, ModelsCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
+import { IdentityCell, ModelsCell, SpendBudgetCell, StatusBadge } from "@/components/shared/table_cells";
 import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -61,28 +63,35 @@ export function CustomerBlockAction({
   isBlocking?: boolean;
   onSetBlocked: (customer: EndUser) => void;
 }) {
-  const action = (
-    <DropdownMenuItem
-      disabled={isBlocking || !premiumUser}
-      variant={customer.blocked ? "default" : "destructive"}
-      onClick={() => onSetBlocked(customer)}
-    >
+  const descriptionId = useId();
+  const label = customer.blocked ? "Unblock" : "Block";
+  const content = (
+    <>
       {customer.blocked ? <ShieldCheck /> : <Ban />}
-      {customer.blocked ? "Unblock" : "Block"}
-    </DropdownMenuItem>
+      {label}
+    </>
   );
-  if (premiumUser) return action;
+  if (premiumUser) {
+    return (
+      <DropdownMenuItem
+        disabled={isBlocking}
+        variant={customer.blocked ? "default" : "destructive"}
+        onClick={() => onSetBlocked(customer)}
+      >
+        {content}
+      </DropdownMenuItem>
+    );
+  }
   return (
     <TooltipProvider delay={300}>
       <Tooltip>
         <TooltipTrigger
-          render={
-            <span className="block" aria-label={`${customer.blocked ? "Unblock" : "Block"} requires Enterprise`} />
-          }
+          aria-describedby={descriptionId}
+          render={<DropdownMenuItem aria-disabled="true" closeOnClick={false} className="opacity-50" />}
         >
-          {action}
+          {content}
         </TooltipTrigger>
-        <TooltipContent role="tooltip">
+        <TooltipContent id={descriptionId} role="tooltip">
           This is a LiteLLM Enterprise feature, and requires a valid key to use.
         </TooltipContent>
       </Tooltip>
@@ -95,27 +104,36 @@ const countLabel = (count: number, noun: string): string => (count ? `${count} $
 export function describeMcpGrant(permission: EndUser["object_permission"]): string {
   const servers = permission?.mcp_servers ?? [];
   if (servers.includes(NO_MCP_SERVERS_SENTINEL)) return "No MCP access";
-  const serverLabel = servers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL)
-    ? "All MCP servers"
-    : countLabel(servers.length, "server");
+  const counts = getCustomerResourceCounts({ object_permission: permission });
+  const toolPermissionKeys = Object.keys(permission?.mcp_tool_permissions ?? {}).filter(
+    (server) => server !== ALL_PROXY_MCP_SERVERS_SENTINEL && server !== NO_MCP_SERVERS_SENTINEL,
+  );
   const parts = [
-    serverLabel,
-    countLabel(permission?.mcp_access_groups?.length ?? 0, "group"),
-    countLabel(permission?.mcp_toolsets?.length ?? 0, "toolset"),
-    countLabel(Object.keys(permission?.mcp_tool_permissions ?? {}).length, "tool limit"),
+    countLabel(counts.servers, "server"),
+    countLabel(counts.accessGroups, "group"),
+    countLabel(counts.toolsets, "toolset"),
+    countLabel(toolPermissionKeys.length, "tool limit"),
   ].filter(Boolean);
-  return parts.join(", ") || "No restriction";
+  const hasUnsupportedAll =
+    servers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL) ||
+    Object.hasOwn(permission?.mcp_tool_permissions ?? {}, ALL_PROXY_MCP_SERVERS_SENTINEL);
+  return parts.join(", ") || (hasUnsupportedAll ? "No MCP access" : "No restriction");
 }
 
 const RESOURCE_ITEMS = [
   { key: "models", label: "models", icon: Layers, className: "bg-info/10 text-info ring-sky-600/20" },
-  { key: "servers", label: "MCP servers", icon: Server, className: "bg-success/10 text-success ring-emerald-600/20" },
+  {
+    key: "servers",
+    label: "MCP servers",
+    icon: Server,
+    className:
+      "bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-950 dark:text-violet-300 dark:ring-violet-400/30",
+  },
   {
     key: "accessGroups",
     label: "MCP access groups",
-    icon: Users,
-    className:
-      "bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-950 dark:text-violet-300 dark:ring-violet-400/30",
+    icon: Network,
+    className: "bg-cyan-50 text-cyan-700 ring-cyan-600/20 dark:bg-cyan-950 dark:text-cyan-300 dark:ring-cyan-400/30",
   },
   { key: "toolsets", label: "MCP toolsets", icon: Wrench, className: "bg-warning/10 text-warning ring-amber-600/20" },
 ] as const;
@@ -229,20 +247,23 @@ export function getCustomerTableColumns(actions: CustomerTableActions): ColumnDe
     {
       id: "spend",
       accessorKey: "spend",
-      meta: { title: "Spend (USD)", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" />,
-      size: 130,
-      cell: ({ row }) => <MoneyCell value={row.original.spend} decimals={2} />,
+      meta: { title: "Spend / Budget", skeleton: "meter", numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Spend / Budget" />,
+      size: 200,
+      cell: ({ row }) => (
+        <SpendBudgetCell
+          spend={row.original.spend}
+          maxBudget={row.original.litellm_budget_table?.max_budget}
+          spendDecimals={2}
+          budgetDecimals={2}
+        />
+      ),
     },
     {
       id: "max_budget",
       accessorFn: (customer) => customer.litellm_budget_table?.max_budget,
-      meta: { title: "Budget (USD)", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" />,
-      size: 140,
-      cell: ({ row }) => (
-        <MoneyCell value={row.original.litellm_budget_table?.max_budget} decimals={2} emptyText="Unlimited" showZero />
-      ),
+      enableHiding: false,
+      enableSorting: false,
     },
     {
       id: "models",
@@ -250,7 +271,7 @@ export function getCustomerTableColumns(actions: CustomerTableActions): ColumnDe
       header: "Models",
       size: 240,
       enableSorting: false,
-      cell: ({ row }) => <ModelsCell models={row.original.models} />,
+      cell: ({ row }) => <ModelsCell models={row.original.models} unrestrictedLabel="All models the key can use" />,
     },
     {
       id: "limits",

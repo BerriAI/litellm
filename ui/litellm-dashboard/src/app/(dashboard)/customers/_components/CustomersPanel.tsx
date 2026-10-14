@@ -2,7 +2,7 @@
 
 import { Contact, Plus } from "lucide-react";
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   useCustomer,
@@ -20,10 +20,11 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 import { all_admin_roles, isProxyAdminRole } from "@/utils/roles";
 
+import { CustomerBlockConfirmation } from "./CustomerBlockConfirmation";
 import { CreateCustomerModal } from "./CreateCustomerModal";
 import CustomerInfoView from "./CustomerInfoView";
 import CustomersTable from "./CustomersTable";
-import { hasSharedCustomerBudget } from "./customerPayload";
+import { getCustomerBudgetCounts, hasSharedCustomerBudget } from "./customerPayload";
 
 const CUSTOMER_VIEW_PARSERS = {
   customer: parseAsString,
@@ -38,7 +39,7 @@ function CustomersHeader({ canModify, onCreate }: { canModify: boolean; onCreate
         <Contact />
         Customers
       </PageHeaderTitle>
-      <PageHeaderDescription>Manage end-user spend, budgets, rate limits, model and MCP access</PageHeaderDescription>
+      <PageHeaderDescription>Manage customer spend, budgets, rate limits, model and MCP access</PageHeaderDescription>
       {canModify && (
         <PageHeaderControls>
           <Button onClick={onCreate}>
@@ -59,8 +60,10 @@ export default function CustomersPanel() {
   });
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<EndUser | null>(null);
+  const [blockTarget, setBlockTarget] = useState<EndUser | null>(null);
   const customers = useCustomers();
   const customer = useCustomer(customerId);
+  const budgetCounts = useMemo(() => getCustomerBudgetCounts(customers.data ?? []), [customers.data]);
   const deleteCustomers = useDeleteCustomers();
   const setBlockedState = useSetCustomerBlockedState();
   const setBulkBlockedState = useSetCustomersBlockedState();
@@ -83,6 +86,7 @@ export default function CustomersPanel() {
       try {
         await setBlockedState.mutateAsync({ userId: target.user_id, blocked: !target.blocked });
         toast.success(target.blocked ? "Customer unblocked" : "Customer blocked");
+        setBlockTarget(null);
       } catch (error) {
         toast.fromError(error);
       }
@@ -139,7 +143,7 @@ export default function CustomersPanel() {
           isEdit={edit}
           hasSharedBudget={
             customer.data && customers.data && !customers.isError
-              ? hasSharedCustomerBudget(customer.data, customers.data)
+              ? hasSharedCustomerBudget(customer.data, budgetCounts)
               : undefined
           }
           tab={tab}
@@ -149,7 +153,7 @@ export default function CustomersPanel() {
           onEdit={() => editCustomer(customerId)}
           onCancelEdit={cancelEdit}
           onDelete={setDeleteTarget}
-          onSetBlocked={handleSetBlocked}
+          onSetBlocked={setBlockTarget}
         />
       ) : (
         <>
@@ -167,17 +171,27 @@ export default function CustomersPanel() {
             onView={openCustomer}
             onEdit={editCustomer}
             onDelete={setDeleteTarget}
-            onSetBlocked={handleSetBlocked}
+            onSetBlocked={setBlockTarget}
           />
         </>
       )}
       {canModify && (
         <>
+          <CustomerBlockConfirmation
+            open={blockTarget !== null}
+            count={1}
+            blocked={!blockTarget?.blocked}
+            isPending={isBlocking}
+            onCancel={() => setBlockTarget(null)}
+            onConfirm={() => {
+              if (blockTarget) void handleSetBlocked(blockTarget);
+            }}
+          />
           <CreateCustomerModal open={isCreateOpen} onOpenChange={setIsCreateOpen} onCreated={openCustomer} />
           <DeleteResourceModal
             isOpen={deleteTarget !== null}
             title="Delete Customer?"
-            message="A later request naming the same end user recreates the customer with no restrictions"
+            message="A later request naming the same customer recreates the customer with no restrictions"
             resourceInformationTitle="Customer Information"
             resourceInformation={[{ label: "Customer ID", value: deleteTarget?.user_id, code: true }]}
             requiredConfirmation={deleteTarget?.user_id}

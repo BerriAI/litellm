@@ -64,6 +64,12 @@ const blockedCustomer: EndUser = {
 
 const customers = [activeCustomer, blockedCustomer];
 
+const confirmBlocking = async (user: ReturnType<typeof userEvent.setup>, action: string, count: number) => {
+  const dialog = await screen.findByRole("dialog", { name: `${action} ${count} customer${count === 1 ? "" : "s"}?` });
+  expect(post).not.toHaveBeenCalled();
+  await user.click(within(dialog).getByRole("button", { name: action }));
+};
+
 describe("Customers management", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -105,6 +111,7 @@ describe("Customers management", () => {
     await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
     expect(screen.getByText("2 selected")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Block selected" }));
+    await confirmBlocking(user, "Block", 2);
     await waitFor(() =>
       expect(post).toHaveBeenCalledExactlyOnceWith("/customer/block", {
         accessToken: "sk-test",
@@ -119,13 +126,19 @@ describe("Customers management", () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPanel />);
     await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
-    expect(screen.getByRole("button", { name: "Block selected" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Unblock selected" })).toBeDisabled();
-    await user.hover(screen.getByLabelText(`Bulk ${action} requires Enterprise`));
+    const button = screen.getByRole("button", { name: `${action} selected` });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    await user.tab({ shift: true });
+    await user.tab({ shift: true });
+    if (action === "Block") await user.tab({ shift: true });
+    expect(button).toHaveFocus();
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "This is a LiteLLM Enterprise feature, and requires a valid key to use.",
     );
-    await user.click(screen.getByLabelText(`Bulk ${action} requires Enterprise`));
+    expect(button).toHaveAccessibleDescription(
+      "This is a LiteLLM Enterprise feature, and requires a valid key to use.",
+    );
+    await user.keyboard("{Enter}");
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -135,6 +148,7 @@ describe("Customers management", () => {
     renderWithProviders(<CustomersPanel />);
     await user.click(screen.getByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` }));
     await user.click(screen.getByRole("button", { name: "Unblock selected" }));
+    await confirmBlocking(user, "Unblock", 1);
     await waitFor(() =>
       expect(post).toHaveBeenCalledExactlyOnceWith("/customer/unblock", {
         accessToken: "sk-test",
@@ -156,7 +170,9 @@ describe("Customers management", () => {
     );
     await user.click(screen.getByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` }));
     await user.click(screen.getByRole("button", { name: "Unblock selected" }));
+    await confirmBlocking(user, "Unblock", 1);
     expect(await screen.findByText(message)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` })).toBeChecked();
     expect(within(screen.getByRole("row", { name: /bob@example.test/ })).getByText("Blocked")).toBeInTheDocument();
     expect(screen.queryByText("1 customer unblocked")).not.toBeInTheDocument();
@@ -174,9 +190,7 @@ describe("Customers management", () => {
     });
     renderWithProviders(<CustomersPanel />);
     expect(within(screen.getByRole("row", { name: /alice@example.test/ })).getByText("< $0.01")).toBeInTheDocument();
-    expect(
-      within(screen.getByRole("row", { name: /bob@example.test/ })).queryByText(/\$0\.00/),
-    ).not.toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /bob@example.test/ })).getByText("$0.00")).toBeInTheDocument();
   });
 
   it.each([
@@ -204,7 +218,7 @@ describe("Customers management", () => {
       renderWithProviders(<CustomersPanel />);
 
       const row = screen.getByRole("row", { name: /alice@example.test/ });
-      expect(within(row).getByText(budgetLabel)).toBeInTheDocument();
+      expect(within(row).getByText(maxBudget === null ? "· Unlimited" : `of ${budgetLabel}`)).toBeInTheDocument();
       await user.click(within(row).getByRole("button", { name: /Alice.*alice@example.test/ }));
       expect(await screen.findByText("Budget Status")).toBeInTheDocument();
       expect(screen.getAllByText("$0.00")).toHaveLength(maxBudget === 0 ? 2 : 1);
@@ -215,16 +229,19 @@ describe("Customers management", () => {
     },
   );
 
-  it("keeps MCP access optional while showing each customer status", async () => {
+  it("keeps model and MCP details optional while showing each customer status", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPanel />);
     expect(screen.queryByRole("columnheader", { name: "MCP Access" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Models" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Columns" }));
     await user.click(await screen.findByRole("menuitemcheckbox", { name: "MCP Access" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "Models" }));
     await user.keyboard("{Escape}");
 
     const alice = screen.getByRole("row", { name: /alice@example.test/ });
     expect(within(alice).getByText("Active")).toBeInTheDocument();
+    expect(within(alice).getByText("All models the key can use")).toBeInTheDocument();
     expect(within(alice).getByText("1 group, 1 toolset")).toBeInTheDocument();
     const bob = screen.getByRole("row", { name: /bob@example.test/ });
     expect(within(bob).getByText("Blocked")).toBeInTheDocument();
@@ -247,12 +264,18 @@ describe("Customers management", () => {
         name: surface === "detail" ? "More customer actions" : `Actions for ${customer.user_id}`,
       }),
     );
-    expect(await screen.findByRole("menuitem", { name: action })).toHaveAttribute("aria-disabled", "true");
-    await user.hover(screen.getByLabelText(`${action} requires Enterprise`));
+    const menuAction = await screen.findByRole("menuitem", { name: action });
+    expect(menuAction).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Home}");
+    if (surface === "row") await user.keyboard("{ArrowDown}");
+    expect(menuAction).toHaveFocus();
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "This is a LiteLLM Enterprise feature, and requires a valid key to use.",
     );
-    await user.click(screen.getByLabelText(`${action} requires Enterprise`));
+    expect(menuAction).toHaveAccessibleDescription(
+      "This is a LiteLLM Enterprise feature, and requires a valid key to use.",
+    );
+    await user.keyboard("{Enter}");
     expect(post).not.toHaveBeenCalled();
   });
 
@@ -277,6 +300,7 @@ describe("Customers management", () => {
     const menuAction = await screen.findByRole("menuitem", { name: action });
     expect(menuAction).not.toHaveAttribute("aria-disabled", "true");
     await user.click(menuAction);
+    await confirmBlocking(user, action, 1);
     await waitFor(() =>
       expect(post).toHaveBeenCalledExactlyOnceWith(endpoint, {
         accessToken: "sk-test",
@@ -285,8 +309,37 @@ describe("Customers management", () => {
     );
   });
 
+  it.each(["row", "detail", "bulk"])("allows cancelling a block from the %s surface", async (surface) => {
+    authorization.premiumUser = true;
+    const user = userEvent.setup();
+    renderWithProviders(
+      <CustomersPanel />,
+      surface === "detail" ? { searchParams: "customer=alice%40example.test" } : undefined,
+    );
+    if (surface === "bulk") {
+      await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
+      await user.click(screen.getByRole("button", { name: "Block selected" }));
+    } else {
+      await user.click(
+        screen.getByRole("button", {
+          name: surface === "detail" ? "More customer actions" : `Actions for ${activeCustomer.user_id}`,
+        }),
+      );
+      await user.click(await screen.findByRole("menuitem", { name: "Block" }));
+    }
+    const count = surface === "bulk" ? 2 : 1;
+    const dialog = await screen.findByRole("dialog", { name: `Block ${count} customer${count === 1 ? "" : "s"}?` });
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(post).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it.each([null, activeCustomer.user_id])("shows the customer ID once when alias is %s", (alias) => {
-    useQuery.mockReturnValue({ data: { ...activeCustomer, alias }, isLoading: false, isError: false });
+    useQuery.mockImplementation((_method: string, path: string) => ({
+      data: path === "/customer/list" ? [{ ...activeCustomer, alias }] : { ...activeCustomer, alias },
+      isLoading: false,
+      isError: false,
+    }));
     renderWithProviders(<CustomersPanel />, { searchParams: "customer=alice%40example.test" });
     expect(screen.getAllByText(activeCustomer.user_id)).toHaveLength(1);
     expect(screen.getByRole("heading", { name: /alice@example.test/ })).toBeInTheDocument();
@@ -369,7 +422,11 @@ describe("Customers management", () => {
         mcp_toolsets: [],
       },
     };
-    useQuery.mockReturnValue({ data: directCustomer, isLoading: false, isError: false });
+    useQuery.mockImplementation((_method: string, path: string) => ({
+      data: path === "/customer/list" ? [directCustomer] : directCustomer,
+      isLoading: false,
+      isError: false,
+    }));
     fetchServers.mockResolvedValue([
       {
         server_id: "server-1",
@@ -419,7 +476,11 @@ describe("Customers management", () => {
         vector_stores: [],
       },
     };
-    useQuery.mockReturnValue({ data: directCustomer, isLoading: false, isError: false });
+    useQuery.mockImplementation((_method: string, path: string) => ({
+      data: path === "/customer/list" ? [directCustomer] : directCustomer,
+      isLoading: false,
+      isError: false,
+    }));
     fetchServers.mockRejectedValue(new Error("Catalog unavailable"));
     renderWithProviders(
       <>
@@ -494,7 +555,7 @@ describe("Customers management", () => {
     expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
     expect(post).not.toHaveBeenCalled();
   });
-  it("matches the Organizations money, model and rate-limit columns", () => {
+  it("uses the shared spend/budget cell and hides model details by default", () => {
     const customer: EndUser = {
       ...activeCustomer,
       budget_id: "shared-budget",
@@ -509,16 +570,16 @@ describe("Customers management", () => {
     useQuery.mockReturnValue({ data: [customer], isLoading: false, isError: false });
     renderWithProviders(<CustomersPanel />);
 
-    expect(screen.getByText("Manage end-user spend, budgets, rate limits, model and MCP access")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Spend (USD)" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Budget (USD)" })).toBeInTheDocument();
+    expect(screen.getByText("Manage customer spend, budgets, rate limits, model and MCP access")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Spend / Budget" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Models" })).not.toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "TPM / RPM Limits" })).toBeInTheDocument();
     const row = screen.getByRole("row", { name: /alice@example.test/ });
     expect(within(row).getByText("$12.50")).toBeInTheDocument();
-    expect(within(row).getByText("$100.00")).toBeInTheDocument();
+    expect(within(row).getByText("of $100.00")).toBeInTheDocument();
     expect(within(row).getByText("TPM: 600")).toBeInTheDocument();
     expect(within(row).getByText("RPM: 6")).toBeInTheDocument();
-    expect(within(row).getByText("All Proxy Models")).toBeInTheDocument();
+    expect(within(row).queryByText("All models the key can use")).not.toBeInTheDocument();
   });
 
   it("shows Overview cards and shared permissions before entering Settings", async () => {
@@ -536,7 +597,11 @@ describe("Customers management", () => {
         created_at: "2026-01-01T00:00:00Z",
       },
     };
-    useQuery.mockReturnValue({ data: customer, isLoading: false, isError: false });
+    useQuery.mockImplementation((_method: string, path: string) => ({
+      data: path === "/customer/list" ? [customer] : customer,
+      isLoading: false,
+      isError: false,
+    }));
     renderWithProviders(<CustomersPanel />, { searchParams: "customer=alice%40example.test", onUrlUpdate });
 
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
@@ -545,7 +610,7 @@ describe("Customers management", () => {
     expect(screen.getByText("Reset: monthly")).toBeInTheDocument();
     expect(screen.getByText("Rate Limits")).toBeInTheDocument();
     expect(screen.getByText("Object Permissions")).toBeInTheDocument();
-    expect(screen.getByText("All Proxy Models")).toBeInTheDocument();
+    expect(screen.getByText("All models the key can use")).toBeInTheDocument();
     expect(screen.getByText("EU")).toBeInTheDocument();
     expect(screen.getByText("default-model")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
@@ -661,6 +726,7 @@ describe("Customers management", () => {
         }),
       );
       await user.click(await screen.findByRole("menuitem", { name: "Unblock" }));
+      await confirmBlocking(user, "Unblock", 1);
 
       expect(await screen.findByText(message)).toBeInTheDocument();
       expect(screen.getByText("Request Error")).toBeInTheDocument();

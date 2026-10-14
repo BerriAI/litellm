@@ -163,7 +163,11 @@ export function CustomerForm({
           control={form.control}
           name="max_budget"
           label="Max Budget (USD)"
-          description={isEdit ? "Leave empty to keep the maximum. Updates require more than zero" : undefined}
+          description={
+            isEdit
+              ? "Leave empty to keep the maximum. Budgets shared with other resources cannot be changed here. Updates require more than zero"
+              : undefined
+          }
         >
           {({ ref, ...control }) => (
             <Input

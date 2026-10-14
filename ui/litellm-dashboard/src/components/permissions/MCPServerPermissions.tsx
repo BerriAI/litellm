@@ -10,6 +10,7 @@ import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
+  entityType?: "key" | "customer";
   mcpAccessGroups?: string[];
   mcpToolPermissions?: Record<string, string[]>;
   mcpToolsets?: string[];
@@ -19,6 +20,7 @@ interface MCPServerPermissionsProps {
 
 export function MCPServerPermissions({
   mcpServers,
+  entityType = "key",
   mcpAccessGroups = [],
   mcpToolPermissions = {},
   mcpToolsets = [],
@@ -144,7 +146,11 @@ export function MCPServerPermissions({
       {blocksAllMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
           <ServerIcon className="h-4 w-4 text-destructive" />
-          <p className="text-destructive text-sm">No MCP servers. Access to all MCP servers is blocked</p>
+          <p className="text-destructive text-sm">
+            {entityType === "key"
+              ? "No MCP servers. This key is blocked from all MCP servers, including its team's servers"
+              : "No MCP servers. This customer is blocked from all MCP servers"}
+          </p>
         </div>
       ) : grantsAllProxyMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20">

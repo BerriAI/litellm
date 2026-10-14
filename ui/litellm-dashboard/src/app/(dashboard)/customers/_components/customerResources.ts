@@ -8,7 +8,9 @@ export type CustomerResourceCounts = {
   toolsets: number;
 };
 
-export function getCustomerResourceCounts(customer: EndUser): CustomerResourceCounts {
+export function getCustomerResourceCounts(
+  customer: Pick<EndUser, "models" | "object_permission">,
+): CustomerResourceCounts {
   const models = customer.models ?? [];
   const permission = customer.object_permission;
   const servers = permission?.mcp_servers ?? [];

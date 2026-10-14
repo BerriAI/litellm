@@ -464,7 +464,14 @@ describe("MCPServerPermissions", () => {
       />,
     );
     await waitFor(() => expect(screen.getByText("Blocked")).toHaveAttribute("data-variant", "destructive"));
-    expect(screen.getByText("No MCP servers. Access to all MCP servers is blocked")).toBeInTheDocument();
+    expect(
+      screen.getByText("No MCP servers. This key is blocked from all MCP servers, including its team's servers"),
+    ).toBeInTheDocument();
+  });
+
+  it("uses customer-specific blocked copy without implying a team relationship", () => {
+    render(<MCPServerPermissions mcpServers={[NO_MCP_SERVERS_SENTINEL]} entityType="customer" />);
+    expect(screen.getByText("No MCP servers. This customer is blocked from all MCP servers")).toBeInTheDocument();
   });
 
   it("lists servers inherited from access groups, counts them, and names the group on hover", async () => {
