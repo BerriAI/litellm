@@ -112,7 +112,7 @@ from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
-from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
+from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO, LiteLLMGoogleSSO, create_generic_sso_provider
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap,
 )
@@ -1559,7 +1559,6 @@ async def get_generic_sso_response(
 ]:  # (result, received_response, access_token_payload, sso_assertion)
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
-    from fastapi_sso.sso.generic import create_provider
 
     received_response: dict | None = None
     sso_assertion: SSOIdentityAssertion | None = None
@@ -1614,7 +1613,7 @@ async def get_generic_sso_response(
             team_mappings=team_mappings,
         )
 
-    SSOProvider: Final = create_provider(
+    SSOProvider: Final = create_generic_sso_provider(
         name="oidc",
         discovery_document=discovery,
         response_convertor=response_convertor,
@@ -3071,8 +3070,6 @@ class SSOAuthenticationHandler:
         """
         # Google SSO Auth
         if google_client_id is not None:
-            from fastapi_sso.sso.google import GoogleSSO
-
             google_client_secret: Final = os.getenv("GOOGLE_CLIENT_SECRET", None)
             if google_client_secret is None:
                 raise ProxyException(
@@ -3081,7 +3078,7 @@ class SSOAuthenticationHandler:
                     param="GOOGLE_CLIENT_SECRET",
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            google_sso: Final = GoogleSSO(
+            google_sso: Final = LiteLLMGoogleSSO(
                 client_id=google_client_id,
                 client_secret=google_client_secret,
                 redirect_uri=redirect_url,
@@ -4796,7 +4793,6 @@ class GoogleSSOHandler:
         Args:
             return_raw_sso_response: If True, return the raw SSO response
         """
-        from fastapi_sso.sso.google import GoogleSSO
 
         google_client_secret: Final = os.getenv("GOOGLE_CLIENT_SECRET", None)
         if google_client_secret is None:
@@ -4806,7 +4802,7 @@ class GoogleSSOHandler:
                 param="GOOGLE_CLIENT_SECRET",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        google_sso: Final = GoogleSSO(
+        google_sso: Final = LiteLLMGoogleSSO(
             client_id=google_client_id,
             redirect_uri=redirect_url,
             client_secret=google_client_secret,
