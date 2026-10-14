@@ -306,18 +306,26 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
         deployment_repeats_prefix: Final = litellm_params is not None and litellm_params.model.endswith(
             f"/{wildcard_suffix}"
         )
+        # Cost-map ids are provider-prefixed for many providers ("cloudflare/@cf/...") and bare
+        # for others ("gemini-2.5-flash"). The wildcard suffix is relative to the provider, so
+        # compare against the id without its "<provider>/" prefix, keeping the original id.
+        provider_id_prefix: Final = f"{provider}/"
+
+        def _matches_partial_filter(wc_model: str) -> bool:
+            return wc_model.removeprefix(provider_id_prefix).startswith(model_prefix)
+
         is_partial_filter: Final = deployment_repeats_prefix or any(
-            wc_model.startswith(model_prefix) for wc_model in wildcard_models
+            _matches_partial_filter(wc_model) for wc_model in wildcard_models
         )
         if is_partial_filter:
-            filtered_wildcard_models = [wc_model for wc_model in wildcard_models if wc_model.startswith(model_prefix)]
+            filtered_wildcard_models = [wc_model for wc_model in wildcard_models if _matches_partial_filter(wc_model)]
             wildcard_models = filtered_wildcard_models
         else:
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
 
     known_providers: Final = {provider.value for provider in LlmProviders}
-    suffix_appended_wildcard_models: Final = []
+    suffix_appended_wildcard_models: Final[list[str]] = []
     for model in wildcard_models:
         if not model.startswith(f"{wildcard_provider_prefix}/"):
             # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
@@ -332,7 +340,9 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
             else:
                 model = f"{wildcard_provider_prefix}/{model}"
         suffix_appended_wildcard_models.append(model)
-    return suffix_appended_wildcard_models or []
+    # A model keyed both bare and prefixed ("gemini-2.5-flash", "gemini/gemini-2.5-flash")
+    # normalizes to one id; list it once (/model/info does not de-dupe downstream).
+    return list(dict.fromkeys(suffix_appended_wildcard_models))
 
 
 def expand_wildcard_deployments_for_model_info(
