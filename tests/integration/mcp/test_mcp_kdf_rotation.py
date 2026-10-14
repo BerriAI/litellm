@@ -536,8 +536,8 @@ def test_session_refresh_token_minted_under_legacy_scrypt_key_revokes_cleanly_wi
         assert "invalid_grant" in response.text, response.text
 
 
-@pytest.mark.parametrize(("kdf", "active"), (("hkdf", True), ("scrypt", False)))
-def test_session_access_token_introspects_by_its_kdf_without_grace(gateway: Gateway, kdf: str, active: bool) -> None:
+@pytest.mark.parametrize("kdf", ("hkdf", "scrypt"))
+def test_session_access_token_introspects_active_by_default_whatever_its_kdf(gateway: Gateway, kdf: str) -> None:
     with gateway.scenario() as scenario:
         keys: Final = _hkdf_session_keys(gateway.key) if kdf == "hkdf" else _scrypt_session_keys(gateway.key)
         key: Final = scenario.key(user_id=scenario.user())
@@ -547,7 +547,21 @@ def test_session_access_token_introspects_by_its_kdf_without_grace(gateway: Gate
             data=_IntrospectForm(token=_session(scenario.user(), keys)),
         )
         assert response.status_code == 200, response.text
-        assert response.json()["active"] is active, response.text
+        assert response.json()["active"] is True, response.text
+
+
+def test_session_access_token_minted_under_legacy_scrypt_key_introspects_inactive_when_grace_is_explicitly_disabled(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with owned_proxy(gateway, tmp_path, NO_GRACE) as strict, strict.scenario() as scenario:
+        key: Final = scenario.key(user_id=scenario.user())
+        response: Final = strict.client.post(
+            "/introspect",
+            headers=(("x-litellm-api-key", key),),
+            data=_IntrospectForm(token=_session(scenario.user(), _scrypt_session_keys(strict.key))),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["active"] is False, response.text
 
 
 def test_session_access_token_minted_under_legacy_scrypt_key_introspects_active_during_grace(
