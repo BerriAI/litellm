@@ -214,6 +214,7 @@ from litellm.router_utils.common_utils import (
     MID_STREAM_CONTINUATION_KWARG,
     deployments_the_caller_may_use,
     filter_team_based_models,
+    filter_tool_protocol_deployments,
     filter_web_search_deployments,
     format_fallback_outcome_message,
     format_no_fallback_group_message,
@@ -15038,6 +15039,10 @@ class Router:
                 model,
             )
         )
+        healthy_deployments = filter_tool_protocol_deployments(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -16348,6 +16353,11 @@ class Router:
 
         healthy_deployments = continuation_deployments(
             self._filter_blocked_deployments(healthy_deployments), routing_kwargs
+        )
+
+        healthy_deployments = filter_tool_protocol_deployments(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
         )
 
         # filter pre-call checks
