@@ -1,5 +1,3 @@
-SET LOCAL lock_timeout = '10s';
-
 CREATE TABLE IF NOT EXISTS "LiteLLM_TelemetryReport" (
     "id" TEXT NOT NULL,
     "window_start" DOUBLE PRECISION NOT NULL,
