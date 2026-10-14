@@ -3571,11 +3571,6 @@ class TestDropParamsWithPromptCacheKey:
 
 
 class TestGetOptionalParamsSpeedGate:
-    """``speed`` (Anthropic fast mode) rides in as a provider-specific kwarg, so the
-    per-provider ``map_openai_params`` never sees it. The gate has to live in
-    ``get_optional_params`` so every provider that cannot take it drops it or rejects
-    it cleanly instead of forwarding it to a 400."""
-
     UNSUPPORTED_LEGS: Final = (
         ("bedrock", "anthropic.claude-opus-4-8-v1:0"),
         ("bedrock", "invoke/anthropic.claude-opus-4-8-v1:0"),
@@ -3586,29 +3581,27 @@ class TestGetOptionalParamsSpeedGate:
     )
 
     @staticmethod
-    def _speed_anywhere(optional_params: dict) -> bool:
+    def _speed_anywhere(optional_params: Mapping[str, object]) -> bool:
         extra_body: Final = optional_params.get("extra_body")
         return "speed" in optional_params or (isinstance(extra_body, dict) and "speed" in extra_body)
 
+    @pytest.mark.parametrize("global_drop_params", [True, False])
     @pytest.mark.parametrize(("custom_llm_provider", "model"), UNSUPPORTED_LEGS)
     def test_drop_params_strips_speed_on_providers_without_fast_mode(
-        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str, global_drop_params: bool
     ) -> None:
-        monkeypatch.setattr(litellm, "drop_params", False)
+        monkeypatch.setattr(litellm, "drop_params", global_drop_params)
         result = litellm.get_optional_params(
-            model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=True
+            model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=not global_drop_params
         )
         assert not self._speed_anywhere(result), result
 
-    @pytest.mark.parametrize(("custom_llm_provider", "model"), UNSUPPORTED_LEGS)
-    def test_speed_without_drop_params_raises_clean_400_on_providers_without_fast_mode(
-        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
-    ) -> None:
+    def test_drop_params_keeps_speed_for_a_downstream_litellm_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, "drop_params", False)
-        with pytest.raises(litellm.utils.UnsupportedParamsError, match="speed"):
-            litellm.get_optional_params(
-                model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=False
-            )
+        result = litellm.get_optional_params(
+            model="claude-opus-4-8", custom_llm_provider="litellm_proxy", speed="fast", drop_params=True
+        )
+        assert self._speed_anywhere(result), result
 
     def test_speed_survives_on_a_direct_anthropic_fast_mode_model(
         self, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
