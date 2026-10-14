@@ -60,7 +60,7 @@ def get_nested_value(data: Mapping[str, object], key_path: str, default: T | Non
     # Use a temporary placeholder, split on unescaped dots, then restore
     placeholder: Final = "\x00"
 
-    def _resolve(path: str) -> Any:
+    def _resolve(path: str) -> object:
         parts = path.replace("\\.", placeholder).split(".")
         current: Any = data
         for part in parts:
