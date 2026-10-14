@@ -59,6 +59,15 @@ const (
 	endpointModelDelete = "/model/delete"
 )
 
+// secretFromResource reads a secret that can be configured either in state
+// (attr) or write-only (attr + "_wo"); the schema forbids setting both.
+func secretFromResource(d *schema.ResourceData, attr string) string {
+	if v := writeOnlyString(d, attr+"_wo"); v != "" {
+		return v
+	}
+	return d.Get(attr).(string)
+}
+
 func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) error {
 	client, ok := m.(*Client)
 	if !ok {
@@ -114,7 +123,7 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	if outputCostPerMillion := d.Get("output_cost_per_million_tokens").(float64); outputCostPerMillion > 0 {
 		litellmParams["output_cost_per_token"] = outputCostPerMillion / 1000000.0
 	}
-	if apiKey := d.Get("model_api_key").(string); apiKey != "" {
+	if apiKey := secretFromResource(d, "model_api_key"); apiKey != "" {
 		litellmParams["api_key"] = apiKey
 	}
 	if apiBase := d.Get("model_api_base").(string); apiBase != "" {
@@ -138,7 +147,7 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	if awsAccessKeyID := d.Get("aws_access_key_id").(string); awsAccessKeyID != "" {
 		litellmParams["aws_access_key_id"] = awsAccessKeyID
 	}
-	if awsSecretAccessKey := d.Get("aws_secret_access_key").(string); awsSecretAccessKey != "" {
+	if awsSecretAccessKey := secretFromResource(d, "aws_secret_access_key"); awsSecretAccessKey != "" {
 		litellmParams["aws_secret_access_key"] = awsSecretAccessKey
 	}
 	if awsRegionName := d.Get("aws_region_name").(string); awsRegionName != "" {
@@ -156,7 +165,7 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	if vertexLocation := d.Get("vertex_location").(string); vertexLocation != "" {
 		litellmParams["vertex_location"] = vertexLocation
 	}
-	if vertexCredentials := d.Get("vertex_credentials").(string); vertexCredentials != "" {
+	if vertexCredentials := secretFromResource(d, "vertex_credentials"); vertexCredentials != "" {
 		litellmParams["vertex_credentials"] = vertexCredentials
 	}
 	if reasoningEffort := d.Get("reasoning_effort").(string); reasoningEffort != "" {
