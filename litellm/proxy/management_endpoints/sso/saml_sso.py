@@ -34,8 +34,11 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.management_endpoints.sso_helper_utils import SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.types import CustomOpenID, get_litellm_user_role
 from litellm.proxy.utils import get_custom_url
 
@@ -131,7 +134,7 @@ class SAMLAuthHandler:
 
     @staticmethod
     def _is_https(request: Request) -> bool:
-        return SAMLAuthHandler._base_url(request).startswith("https")
+        return IPAddressUtils.is_request_https(request)
 
     @staticmethod
     def _acs_url(request: Request) -> str:
@@ -146,6 +149,7 @@ class SAMLAuthHandler:
         return SAMLAuthHandler._env("SAML_SP_ENTITY_ID") or SAMLAuthHandler._metadata_url(request)
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def _load_idp_settings(cache: DualCache) -> dict[str, object]:
         metadata_url: Final = SAMLAuthHandler._env("SAML_IDP_METADATA_URL")
         metadata_xml: Final = SAMLAuthHandler._env("SAML_IDP_METADATA_XML")
@@ -240,6 +244,7 @@ class SAMLAuthHandler:
             )
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def build_login_redirect(
         request: Request, cache: DualCache, relay_state: str | None = None
     ) -> RedirectResponse:
@@ -357,6 +362,7 @@ class SAMLAuthHandler:
         return None
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def _enforce_response_binding(
         auth: "OneLogin_Saml2_Auth",
         cache: DualCache,
@@ -442,7 +448,9 @@ class SAMLAuthHandler:
         last_name: Final = SAMLAuthHandler._attribute_value(
             attributes, "SAML_ATTRIBUTE_LAST_NAME", _LAST_NAME_ATTRIBUTE_CANDIDATES
         )
-        role_value = SAMLAuthHandler._attribute_value(attributes, "SAML_ATTRIBUTE_ROLE", _ROLE_ATTRIBUTE_CANDIDATES)
+        role_values: Final = SAMLAuthHandler._attribute_values(
+            attributes, "SAML_ATTRIBUTE_ROLE", _ROLE_ATTRIBUTE_CANDIDATES
+        )
         team_ids: Final = SAMLAuthHandler._attribute_values(
             attributes, "SAML_ATTRIBUTE_TEAM_IDS", _TEAM_IDS_ATTRIBUTE_CANDIDATES
         )
@@ -463,7 +471,7 @@ class SAMLAuthHandler:
                 picture=None,
                 provider="saml",
                 team_ids=team_ids,
-                user_role=get_litellm_user_role(role_value) if role_value else None,
+                user_role=get_litellm_user_role(role_values),
             )
         except ValidationError as e:
             raise HTTPException(

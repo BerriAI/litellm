@@ -28,6 +28,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 from fastapi.exceptions import HTTPException
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -76,6 +78,12 @@ _DEFAULT_POLICIES: Final = [
     "Default_Policy_GeneralPromptAttackProtection",
 ]
 
+_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    supported_event_hooks: ReadOnly[list[GuardrailEventHooks]]
+
 
 class XecGuardMissingCredentials(Exception):
     pass
@@ -90,7 +98,7 @@ class XecGuardGuardrail(CustomGuardrail):
         policy_names: list[str] | None = None,
         block_on_error: bool | None = None,
         grounding_strictness: str | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         self.api_key = api_key or os.environ.get("XECGUARD_API_KEY")
         if not self.api_key:
@@ -122,9 +130,12 @@ class XecGuardGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        forwarded: Final[_CustomGuardrailOptions] = {
+            "supported_event_hooks": list(self.get_supported_event_hooks()),
+            **kwargs,
+        }
 
-        super().__init__(**kwargs)
+        super().__init__(**forwarded)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -196,9 +207,9 @@ class XecGuardGuardrail(CustomGuardrail):
     async def async_logging_hook(
         self,
         kwargs: dict,
-        result: Any,
+        result: object,
         call_type: str,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, object]:
         """Observe-only scan for logging_only mode.
 
         Never blocks, never raises - all errors are swallowed. Records a
@@ -275,9 +286,9 @@ class XecGuardGuardrail(CustomGuardrail):
     def logging_hook(
         self,
         kwargs: dict,
-        result: Any,
+        result: object,
         call_type: str,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict, object]:
         """Sync counterpart to ``async_logging_hook``.
 
         Runs the async version on an available loop, swallowing every
@@ -310,7 +321,7 @@ class XecGuardGuardrail(CustomGuardrail):
         scan_type: str,
         suppress_errors: bool = False,
     ) -> dict | None:
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "model": self.xecguard_model,
             "scan_type": scan_type,
             "messages": messages,
@@ -345,7 +356,7 @@ class XecGuardGuardrail(CustomGuardrail):
         path: str,
         payload: dict,
         suppress_errors: bool = False,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         endpoint: Final = f"{self.api_base}{path}"
         verbose_proxy_logger.debug(
             "XecGuard: POST %s payload_keys=%s",
@@ -360,10 +371,10 @@ class XecGuardGuardrail(CustomGuardrail):
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=10.0,
+                timeout=self.timeout if self.timeout is not None else 10.0,
             )
             response.raise_for_status()
-            return response.json()
+            return _RESPONSE_BODY.validate_python(response.json(), strict=True)
         except Exception as exc:
             verbose_proxy_logger.error("XecGuard API error: %s", str(exc))
             if suppress_errors:
@@ -385,7 +396,7 @@ class XecGuardGuardrail(CustomGuardrail):
     def _build_full_history(
         self,
         request_data: dict,
-        inputs: Any,
+        inputs: GenericGuardrailAPIInputs,
         input_type: str,
     ) -> list[dict]:
         """Assemble the full message list that will be sent to XecGuard.
@@ -433,7 +444,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return {"role": role, "content": ""}
 
     @staticmethod
-    def _synthesize_user_from_inputs(inputs: Any) -> dict | None:
+    def _synthesize_user_from_inputs(inputs: object) -> dict | None:
         if not isinstance(inputs, dict):
             return None
         texts: Final = inputs.get("texts")
@@ -474,7 +485,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return "\n".join(text_parts) or None
 
     @staticmethod
-    def _extract_choice_content(choice: Any) -> Any:
+    def _extract_choice_content(choice: Any) -> object:
         if hasattr(choice, "message"):
             message = choice.message
         elif isinstance(choice, dict):
@@ -490,7 +501,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return None
 
     @staticmethod
-    def _content_to_text(content: Any) -> str | None:
+    def _content_to_text(content: object) -> str | None:
         if isinstance(content, str) and content:
             return content
         if isinstance(content, list):

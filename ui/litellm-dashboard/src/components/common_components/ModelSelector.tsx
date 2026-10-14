@@ -9,9 +9,9 @@ const MODEL_SELECT_DEBOUNCE_MS = 500;
 
 interface ModelSelectorProps {
   accessToken: string;
-  value?: string;
+  value?: string | null;
   placeholder?: string;
-  onChange?: (value: string) => void;
+  onChange?: (value: string | null) => void;
   disabled?: boolean;
   style?: React.CSSProperties;
   className?: string;
@@ -30,12 +30,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   showLabel = true,
   labelText = "Select Model",
 }) => {
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(value);
+  const [selectedModel, setSelectedModel] = useState<string | null>(value ?? null);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
 
   useEffect(() => {
-    setSelectedModel(value);
+    setSelectedModel(value ?? null);
   }, [value]);
 
   useEffect(() => {
@@ -56,13 +56,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     loadModels();
   }, [accessToken]);
 
-  const onModelChange = (value: string) => {
+  const onModelChange = (value: string | null) => {
     if (value === "custom") {
       setShowCustomModelInput(true);
-      setSelectedModel(undefined);
+      setSelectedModel(null);
     } else {
       setShowCustomModelInput(false);
-      setSelectedModel(value);
+      setSelectedModel(value ?? null);
       if (onChange) {
         onChange(value);
       }
@@ -71,7 +71,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const debouncedSelect = useDebouncedCallback(
     (value: string) => {
-      setSelectedModel(value);
+      setSelectedModel(value ?? null);
       onChange?.(value);
     },
     { wait: MODEL_SELECT_DEBOUNCE_MS },

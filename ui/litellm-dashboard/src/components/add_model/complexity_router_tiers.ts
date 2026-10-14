@@ -1,5 +1,6 @@
 import type { ComplexityTier } from "./KeywordTierRules";
-import { TIER_ORDER } from "./tier_rows";
+import type { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { ALL_BUILT_IN_TIERS, TIER_ORDER } from "./tier_rows";
 
 export type TierModelParams = Record<string, unknown>;
 
@@ -17,6 +18,23 @@ export const REASONING_EFFORT_OPTIONS = ["none", "minimal", "low", "medium", "hi
  * hand-authored configs can carry any level, so the known literals only add autocompletion.
  */
 export type ReasoningEffort = (typeof REASONING_EFFORT_OPTIONS)[number] | (string & {});
+
+export const tierEffortOptionsForModels = (modelInfo: ModelGroup[]): Record<string, string[]> =>
+  Object.fromEntries(
+    modelInfo.map((model) => [
+      model.model_group,
+      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
+    ]),
+  );
+
+/**
+ * Stricter than the tier variant on purpose: classifier overrides are new in this release, so an
+ * unknown capability list stays unknown instead of inventing provider levels.
+ */
+export const classifierEffortOptionsForModels = (
+  modelInfo: ModelGroup[],
+): Record<string, string[] | null | undefined> =>
+  Object.fromEntries(modelInfo.map((model) => [model.model_group, model.supported_reasoning_efforts]));
 
 const asRecord = (raw: unknown): Record<string, unknown> | undefined =>
   typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
@@ -96,14 +114,16 @@ export const serializeTierModelConfigs = (
   return serialized.length > 0 ? Object.fromEntries(serialized) : undefined;
 };
 
-export const setTierModelReasoningEffort = (
+export type TierModelParamChange = ["reasoning_effort", ReasoningEffort | undefined] | ["speed", "fast" | undefined];
+
+export const setTierModelParam = (
   current: TierModelParamsByTier | undefined,
   tier: string,
   model: string,
-  effort: ReasoningEffort | undefined,
+  [key, value]: TierModelParamChange,
 ): TierModelParamsByTier | undefined => {
-  const { reasoning_effort: _dropped, ...rest } = current?.[tier]?.[model] ?? {};
-  const params = effort === undefined ? rest : { ...rest, reasoning_effort: effort };
+  const { [key]: _dropped, ...rest } = current?.[tier]?.[model] ?? {};
+  const params = value === undefined ? rest : { ...rest, [key]: value };
   const byModel = Object.fromEntries(
     Object.entries({ ...current?.[tier], [model]: params }).filter(([, value]) => Object.keys(value).length > 0),
   );
@@ -112,6 +132,13 @@ export const setTierModelReasoningEffort = (
   );
   return Object.keys(next).length > 0 ? next : undefined;
 };
+
+export const setTierModelReasoningEffort = (
+  current: TierModelParamsByTier | undefined,
+  tier: string,
+  model: string,
+  effort: ReasoningEffort | undefined,
+): TierModelParamsByTier | undefined => setTierModelParam(current, tier, model, ["reasoning_effort", effort]);
 
 export const pruneTierModelParams = (
   current: TierModelParamsByTier | undefined,
@@ -127,13 +154,14 @@ export const pruneTierModelParams = (
 };
 
 export const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
+  NON_REASONING: "Non-reasoning",
   SIMPLE: "Simple",
   MEDIUM: "Medium",
   COMPLEX: "Complex",
   REASONING: "Reasoning",
 };
 
-const isBuiltInTier = (tier: string): tier is ComplexityTier => (TIER_ORDER as string[]).includes(tier);
+const isBuiltInTier = (tier: string): tier is ComplexityTier => (ALL_BUILT_IN_TIERS as string[]).includes(tier);
 
 const builtInTierLabel = (
   tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
@@ -146,7 +174,7 @@ export const tierRowLabel = (
   row: { id: string; name: string },
   tierLabels?: Partial<Record<ComplexityTier, string>>,
 ): string => {
-  const builtIn = TIER_ORDER.find((tier) => tier === row.id);
+  const builtIn = ALL_BUILT_IN_TIERS.find((tier) => tier === row.id);
   const named = row.name.trim();
   if (!builtIn || named !== builtIn) return named || "New";
   return builtInTierLabel(tierLabels, builtIn);

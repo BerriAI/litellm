@@ -12,7 +12,9 @@ vi.mock("@/components/networking", () => ({
 }));
 
 vi.mock("./prompt_editor_view/PromptCodeSnippets", () => ({
-  default: () => <div data-testid="prompt-code-snippets" />,
+  default: ({ environment }: { environment?: string }) => (
+    <div data-testid="prompt-code-snippets" data-environment={environment} />
+  ),
 }));
 
 const promptWithoutTemplate = {
@@ -28,6 +30,67 @@ const promptWithoutTemplate = {
   raw_prompt_template: null,
   environments: [],
 };
+
+describe("PromptInfoView environment scoping", () => {
+  beforeEach(() => {
+    vi.mocked(networking.getPromptInfo).mockReset().mockResolvedValue(promptWithoutTemplate);
+    vi.mocked(networking.getPromptVersions).mockReset().mockResolvedValue({ prompts: [] });
+  });
+
+  it("fetches the initial environment it was opened with", async () => {
+    render(
+      <PromptInfoView
+        promptId="support-reply"
+        initialEnvironment="staging"
+        onClose={vi.fn()}
+        accessToken="sk-test"
+        isAdmin={true}
+      />,
+    );
+
+    await screen.findByRole("tab", { name: "Raw JSON" });
+    expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply", "staging");
+  });
+
+  it("fetches the serve default when opened without an environment", async () => {
+    render(<PromptInfoView promptId="support-reply" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    await screen.findByRole("tab", { name: "Raw JSON" });
+    expect(networking.getPromptInfo).toHaveBeenCalledWith("sk-test", "support-reply", undefined);
+  });
+});
+
+describe("PromptInfoView code snippets", () => {
+  beforeEach(() => {
+    vi.mocked(networking.getPromptVersions).mockReset().mockResolvedValue({ prompts: [] });
+  });
+
+  it.each([
+    ["a prompt with several environments", "staging", ["development", "staging"]],
+    ["a config prompt with no environment list", "development", []],
+  ])("hands the viewed environment of %s to the code snippets", async (_label, environment, environments) => {
+    vi.mocked(networking.getPromptInfo)
+      .mockReset()
+      .mockResolvedValue({
+        ...promptWithoutTemplate,
+        prompt_spec: { ...promptWithoutTemplate.prompt_spec, environment },
+        environments,
+      });
+
+    render(
+      <PromptInfoView
+        promptId="support-reply"
+        initialEnvironment={environment}
+        onClose={vi.fn()}
+        accessToken="sk-test"
+        isAdmin={true}
+      />,
+    );
+
+    await screen.findByRole("tab", { name: "Raw JSON" });
+    expect(screen.getByTestId("prompt-code-snippets")).toHaveAttribute("data-environment", environment);
+  });
+});
 
 describe("PromptInfoView tabs", () => {
   beforeEach(() => {

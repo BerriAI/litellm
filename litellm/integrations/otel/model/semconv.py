@@ -110,6 +110,8 @@ class GenAI:
     # usage
     USAGE_INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
     USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"
+    USAGE_CACHE_CREATION_INPUT_TOKENS: Final = "gen_ai.usage.cache_creation.input_tokens"
+    USAGE_CACHE_READ_INPUT_TOKENS: Final = "gen_ai.usage.cache_read.input_tokens"
     # content (opt-in, gated by capture mode)
     INPUT_MESSAGES: Final = "gen_ai.input.messages"
     OUTPUT_MESSAGES: Final = "gen_ai.output.messages"
@@ -202,6 +204,9 @@ class Error:
 
     TYPE: Final = "error.type"
     MESSAGE: Final = "error.message"
+    # The same text under the bare key the semconv-ai / Traceloop vocabulary uses
+    # (see ``LegacyMapper``), so anything reading or redacting error text covers both.
+    MESSAGE_LEGACY: Final = "error"
 
 
 class LiteLLMError:
@@ -240,6 +245,7 @@ class GenAIEvent:
     details, unlike the deprecated ``error.message`` span attribute.
     """
 
+    NAME_KEY: Final = "event.name"
     OPERATION_EXCEPTION: Final = "gen_ai.client.operation.exception"
 
 
@@ -260,6 +266,8 @@ class DB:
     # still infers a span's database type from this key.
     SYSTEM_LEGACY: Final = "db.system"
     OPERATION_NAME: Final = "db.operation.name"
+    COLLECTION_NAME: Final = "db.collection.name"
+    QUERY_SUMMARY: Final = "db.query.summary"
     NAMESPACE: Final = "db.namespace"
 
 
@@ -293,6 +301,10 @@ class LiteLLM:
     # ``litellm_params.model``), distinct from the user-facing ``gen_ai.request.model``.
     PROVIDER_MODEL: Final = "litellm.provider.model"
     REQUEST_STREAMING: Final = "litellm.request.streaming"
+    REQUEST_ROUTE: Final = "litellm.request.route"
+    # Which litellm feature made this LLM call when it is not the caller's own
+    # provider attempt (e.g. ``autorouter_classifier``); absent on the real call.
+    REQUEST_PURPOSE: Final = "litellm.request.purpose"
     TOOLS_DECLARED: Final = "litellm.request.tools.declared"
     GUARDRAIL_NAME: Final = "litellm.guardrail.name"
     GUARDRAIL_MODE: Final = "litellm.guardrail.mode"
@@ -319,6 +331,10 @@ class LiteLLM:
     GUARDRAIL_COST_IN_SPEND: Final = "litellm.guardrail.cost_in_spend"
     SERVICE_NAME: Final = "litellm.service.name"
     SERVICE_CALL_TYPE: Final = "litellm.service.call_type"
+    SERVICE_CALLER: Final = "litellm.service.caller"
+    SERVICE_TARGET: Final = "litellm.service.target"
+    # The sorted, comma-joined key families one Redis pipeline carried ops for; bounded, unlike the keys.
+    REDIS_FAMILIES: Final = "litellm.redis.families"
     PREPROCESSING_MS: Final = "litellm.preprocessing.duration_ms"
     # The logical name of the MCP server a tool call was routed to. There is no
     # semconv key for an MCP server's *name* (the convention uses ``server.address``

@@ -3,6 +3,7 @@ import concurrent.futures
 import contextlib
 import os
 import ssl
+import sys
 import typing
 import urllib.request
 from collections.abc import Callable, Generator
@@ -13,15 +14,16 @@ import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class HttpxTimeoutExtension(BaseModel):
+class HttpxTimeoutExtension(LiteLLMBaseModel):
     connect: float | None = None
     read: float | None = None
     write: float | None = None
@@ -75,10 +77,22 @@ except ImportError:
     pass
 
 
+def _current_task_is_cancelling() -> bool:
+    task: Final = asyncio.current_task()
+    if task is None or sys.version_info < (3, 11):
+        return True
+    return task.cancelling() > 0
+
+
 @contextlib.contextmanager
 def map_aiohttp_exceptions() -> Generator[None, None, None]:
     try:
         yield
+    except asyncio.CancelledError as exc:
+        # a closing connector cancels its shielded DNS task; that surfaces here without the request task being cancelled
+        if _current_task_is_cancelling():
+            raise
+        raise httpx.ConnectError("aiohttp transport cancelled the request internally") from exc
     except Exception as exc:
         mapped_exc: type[Exception] | None = None
 
@@ -275,7 +289,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
 
-    def _get_valid_client_session(self) -> ClientSession:
+    def get_valid_client_session(self) -> ClientSession:
         """
         Helper to get a valid ClientSession for the current event loop.
 
@@ -325,6 +339,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             verbose_logger.debug("Error checking session loop, created new session: %s", e)
 
         return self.client
+
+    _get_valid_client_session = get_valid_client_session
 
     async def _make_aiohttp_request(
         self,
@@ -393,7 +409,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         sni_hostname: Final[str | None] = request.extensions.get("sni_hostname")
 
         # Use helper to ensure we have a valid session for the current event loop
-        client_session = self._get_valid_client_session()
+        client_session = self.get_valid_client_session()
 
         # Resolve proxy settings from environment variables
         proxy: Final = await self._get_proxy_settings(request)

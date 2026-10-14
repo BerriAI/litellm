@@ -2,9 +2,10 @@ import json
 import traceback
 from collections.abc import Coroutine
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +23,8 @@ from litellm.types.llms.vertex_ai import (
     ResponseTuningJob,
 )
 from litellm.types.utils import LiteLLMFineTuningJob
+
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 class VertexFineTuningAPI(VertexLLM):
@@ -207,7 +210,7 @@ class VertexFineTuningAPI(VertexLLM):
         timeout: float | httpx.Timeout,
         kwargs: dict | None = None,
         original_hyperparameters: dict | None = {},
-    ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
+    ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         verbose_logger.debug("creating fine tuning job, args= %s", create_fine_tuning_job_data)
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -280,7 +283,7 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_location: str,
         vertex_credentials: str,
         request_route: str,
-    ):
+    ) -> object:
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -341,5 +344,4 @@ class VertexFineTuningAPI(VertexLLM):
                 f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
             )
 
-        response_json: Final = response.json()
-        return response_json
+        return _JSON_VALUE.validate_python(response.json())

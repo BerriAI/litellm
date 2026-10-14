@@ -7,6 +7,10 @@ import Navbar from "./navbar";
 // Mock the hooks and utilities
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
+  getProxyUISettings: vi.fn().mockResolvedValue({
+    PROXY_BASE_URL: "",
+    PROXY_LOGOUT_URL: "https://example.com/logout",
+  }),
   serverRootPath: "",
 }));
 
@@ -69,13 +73,6 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
     },
   };
 });
-
-vi.mock("@/utils/proxyUtils", () => ({
-  fetchProxySettings: vi.fn().mockResolvedValue({
-    PROXY_BASE_URL: "",
-    PROXY_LOGOUT_URL: "https://example.com/logout",
-  }),
-}));
 
 // Mock CommunityEngagementButtons component
 vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => ({
@@ -146,7 +143,7 @@ describe("Navbar", () => {
   it("should render without crashing", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    expect(screen.getByRole("button", { name: /^notifications$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^notifications/i })).toBeInTheDocument();
     expect(screen.getByText("Docs")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
   });
@@ -269,7 +266,7 @@ describe("Navbar", () => {
     renderWithProviders(<Navbar {...publicPageProps} />);
 
     expect(screen.queryByRole("button", { name: /open account menu/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^notifications/i })).not.toBeInTheDocument();
   });
 
   it("should handle hide new feature indicators toggle", async () => {

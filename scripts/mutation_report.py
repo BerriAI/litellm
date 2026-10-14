@@ -18,12 +18,16 @@ import json
 import re
 import subprocess
 import sys
-import tomllib
 from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Final, NamedTuple
 from textwrap import dedent
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 MUTMUT_INVOCATION = ["uv", "run", "--no-sync", "--with", "mutmut==3.5.0", "mutmut"]
