@@ -61,13 +61,24 @@ def _client_extra_headers(data: Mapping[str, object], litellm_params: Mapping[st
     return {name: value for name, value in headers.items() if not name.lower().startswith(_PROXY_HEADER_PREFIX)}
 
 
-def _agent_keys_over_client(client_value: object, agent_value: object) -> object:
+def _mappings(client_value: object, agent_value: object) -> tuple[Mapping[str, object], Mapping[str, object]] | None:
     try:
-        client: Final = _OBJECT_MAPPING.validate_python(client_value)
-        agent: Final = _OBJECT_MAPPING.validate_python(agent_value)
+        return _OBJECT_MAPPING.validate_python(client_value), _OBJECT_MAPPING.validate_python(agent_value)
     except ValidationError:
+        return None
+
+
+def _agent_entries_over_client(client_value: object, agent_value: object) -> object:
+    mappings: Final = _mappings(client_value, agent_value)
+    return agent_value if mappings is None else {**mappings[0], **mappings[1]}
+
+
+def _agent_keys_over_client(client_value: object, agent_value: object) -> object:
+    mappings: Final = _mappings(client_value, agent_value)
+    if mappings is None:
         return agent_value
-    return {**client, **{key: _agent_keys_over_client(client.get(key), value) for key, value in agent.items()}}
+    client, agent = mappings
+    return {**client, **{key: _agent_entries_over_client(client.get(key), value) for key, value in agent.items()}}
 
 
 def _with_headers(data: Mapping[str, object], extra_headers: Mapping[str, str] | None) -> Mapping[str, object]:
