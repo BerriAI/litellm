@@ -1000,6 +1000,10 @@ def runtime_stream_scope(
 LoggingOnlyScope = Literal["input", "output"]
 
 
+def _is_blank(value: object) -> bool:
+    return isinstance(value, str) and not value.strip()
+
+
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
@@ -1288,6 +1292,14 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    @model_validator(mode="before")  # pyright: ignore[reportUntypedFunctionDecorator]  # pydantic decorators are untyped
+    @classmethod
+    def drop_blank_values(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        fields: Final = cast(Mapping[str, object], data)  # cast-ok: pydantic hands a before-validator the raw mapping
+        return {key: value for key, value in fields.items() if not _is_blank(value)}
+
     @field_validator(
         "mode",
         "default_action",
@@ -1398,9 +1410,9 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             )
         return self
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
         default_on: Final = kwargs.pop("default_on", None)
-        if default_on is not None:
+        if default_on is not None and not _is_blank(default_on):
             kwargs["default_on"] = default_on
         else:
             kwargs["default_on"] = False
