@@ -2,9 +2,10 @@ mod support;
 
 use litellm_host::{hooks::CallHooks, lifecycle::Timing};
 use litellm_host_python::{
-    Execution, ExecutionBody, ExecutionStep, HookStep, PythonCallEvent, PythonOwned, PythonRuntime,
+    Awaiter, Execution, ExecutionBody, ExecutionStep, PythonCallEvent, PythonOwned, PythonRuntime,
     Suspension, run_call,
 };
+use parking_lot::Mutex;
 use pyo3::{
     exceptions::PyBaseException,
     gc::{PyTraverseError, PyVisit},
@@ -114,55 +115,59 @@ enum Holder {
 }
 
 struct PausingHooks {
-    retained: Option<Py<PyAny>>,
-    pause: Option<Py<PyAny>>,
+    retained: Mutex<Option<Py<PyAny>>>,
+    pause: Mutex<Option<Py<PyAny>>>,
     holder: Holder,
 }
 
 impl CallHooks<PythonRuntime> for PausingHooks {
-    fn transform_response(
-        &mut self,
-        py: Python<'_>,
+    async fn transform_response<'a>(
+        &'a self,
+        _: &'a dyn Awaiter,
         response: Py<PyAny>,
         _: Timing,
-    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
+    ) -> PyResult<Py<PyAny>> {
+        let retained = || self.retained.lock().take().unwrap();
         match self.holder {
-            Holder::Hooks => Ok(HookStep::Ready(response)),
-            Holder::Response => Ok(HookStep::Ready(self.retained.take().unwrap())),
-            Holder::Exception => Err(PyErr::from_value(
-                self.retained.take().unwrap().into_bound(py),
-            )),
+            Holder::Hooks => Ok(response),
+            Holder::Response => Ok(retained()),
+            Holder::Exception => Err(Python::attach(|py| {
+                PyErr::from_value(retained().into_bound(py))
+            })),
         }
     }
 
-    fn on_event(
-        &mut self,
-        _: Python<'_>,
+    async fn on_event<'a>(
+        &'a self,
+        task: &'a dyn Awaiter,
         event: PythonCallEvent<'_>,
-    ) -> PyResult<HookStep<Self, ()>> {
+    ) -> PyResult<()> {
         let pauses_here = match self.holder {
             Holder::Hooks => true,
             Holder::Response => matches!(event, PythonCallEvent::Succeeded { .. }),
             Holder::Exception => matches!(event, PythonCallEvent::Failed { .. }),
         };
-        Ok(match self.pause.take_if(|_| pauses_here) {
-            Some(pause) => {
-                HookStep::Await(pause, |_, _, answer| answer.map(|_| HookStep::Ready(())))
-            }
-            None => HookStep::Ready(()),
-        })
+        let pause = self.pause.lock().take_if(|_| pauses_here);
+        if let Some(pause) = pause {
+            task.awaited(pause).await?;
+        }
+        Ok(())
     }
 }
 
 impl PythonOwned for PausingHooks {
     fn close(&mut self, _: Python<'_>) {
-        self.retained = None;
-        self.pause = None;
+        *self.retained.get_mut() = None;
+        *self.pause.get_mut() = None;
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.retained)?;
-        visit.call(&self.pause)
+        for slot in [&self.retained, &self.pause] {
+            if let Some(value) = slot.try_lock() {
+                visit.call(&*value)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -180,8 +185,8 @@ fn paused_call(
             move |_, _, request| Ok(machine(request)),
             binding(&Log::default(), OpScript::Answer),
             PausingHooks {
-                retained: Some(retained),
-                pause: Some(pause),
+                retained: Mutex::new(Some(retained)),
+                pause: Mutex::new(Some(pause)),
                 holder,
             },
             PyDict::new(py).unbind(),
