@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  rust-bridge:
-    name: rust-bridge
+  setup:
+    name: setup
     permissions:
       contents: read
       pull-requests: read
@@ -117,8 +117,7 @@ jobs:
         run: python3 .github/scripts/assert_ci_coverage.py --shards
   unit:
     name: ${{ matrix.shard }}
-    needs: [rust-bridge, assert-shard-coverage]
-    if: ${{ !cancelled() }}
+    needs: [setup, assert-shard-coverage]
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
@@ -965,25 +964,17 @@ jobs:
         timeout-minutes: 5
         uses: ./.github/actions/rust-bridge
         with:
-          artifact: ${{ needs.rust-bridge.outputs.artifact }}
+          artifact: ${{ needs.setup.outputs.artifact }}
 
       - name: Install dependencies and check schema
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
         env:
-          RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
           UNIT_SHARD: ${{ matrix.shard }}
           SCHEMA_BASE_REF: origin/${{ github.event.repository.default_branch }}
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
-          if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_rust_bridge.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
-          else
-            uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
-            uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
-            cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
-            uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
-          fi
+          .github/scripts/uv_sync_with_rust_bridge.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
           if [ "$UNIT_SHARD" = "db-and-spend" ]; then
             uv run --no-sync python scripts/check_schema_compatibility.py --base-ref "$SCHEMA_BASE_REF"
@@ -1159,6 +1150,7 @@ jobs:
             --pool forks --maxWorkers=14
   docs:
     name: docs
+    needs: setup
     permissions:
       contents: read
       pull-requests: read
@@ -1218,6 +1210,8 @@ jobs:
       - name: Set up the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
         uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.setup.outputs.artifact }}
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
@@ -1353,8 +1347,7 @@ jobs:
         run: uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json
   redis-compat:
     name: redis-py ${{ matrix.redis-py }} compatibility
-    needs: rust-bridge
-    if: ${{ !cancelled() }}
+    needs: setup
     permissions:
       contents: read
       id-token: write
@@ -1406,21 +1399,13 @@ jobs:
         timeout-minutes: 5
         uses: ./.github/actions/rust-bridge
         with:
-          artifact: ${{ needs.rust-bridge.outputs.artifact }}
+          artifact: ${{ needs.setup.outputs.artifact }}
 
       - name: Install dependencies with redis-py ${{ matrix.redis-py }}
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
-        env:
-          RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
         run: |
-          if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            .github/scripts/uv_sync_with_rust_bridge.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
-          else
-            uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
-            uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
-            cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
-          fi
+          .github/scripts/uv_sync_with_rust_bridge.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
           uv pip install --python .venv/bin/python "redis==${REDIS_PY_VERSION:?}"
           uv run --no-sync python -c 'import os, redis; assert redis.__version__ == os.environ["REDIS_PY_VERSION"], redis.__version__'
 
@@ -1518,7 +1503,7 @@ jobs:
   unit-passed:
     name: unit passed
     permissions: {}
-    needs: [rust-bridge, assert-shard-coverage, unit, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
+    needs: [setup, assert-shard-coverage, unit, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
