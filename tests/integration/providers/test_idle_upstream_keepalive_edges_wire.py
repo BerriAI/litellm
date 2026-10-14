@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.process import graceful_stop_seconds, refused_boot_log
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration.providers._idle_upstream_support import (
     QUIET_STREAM_SECONDS,
     REUSE_IDLE_SECONDS,
@@ -84,6 +84,14 @@ def test_stream_quiet_for_longer_than_the_keepalive_completes_on_each_worker(edg
 
 
 @pytest.mark.parametrize("value", ["fifteen", ""], ids=["word", "empty"])
-def test_malformed_keepalive_timeout_refuses_to_boot(gateway: Gateway, tmp_path: Path, value: str) -> None:
-    log: Final = refused_boot_log(gateway, tmp_path, {"AIOHTTP_KEEPALIVE_TIMEOUT": value})
-    assert f"invalid literal for int() with base 10: {value!r}" in log, log
+def test_malformed_keepalive_timeout_boots_on_the_default(gateway: Gateway, tmp_path: Path, value: str) -> None:
+    with owned_proxy_process(gateway, tmp_path, {"AIOHTTP_KEEPALIVE_TIMEOUT": value}, workers=1) as owned:
+        readiness: Final = owned.gateway.request("GET", "/health/readiness")
+        assert readiness.status_code == 200, readiness.text
+        log: Final = owned.log.read_text()
+    if value == "fifteen":
+        assert "AIOHTTP_KEEPALIVE_TIMEOUT='fifteen' is not a valid int. Treating it as unset." in log, log
+    else:
+        warning_lines: Final = tuple(line for line in log.splitlines() if "WARNING" in line)
+        assert all("AIOHTTP_KEEPALIVE_TIMEOUT" not in line for line in warning_lines), warning_lines
+        assert "invalid literal for int()" not in log, log

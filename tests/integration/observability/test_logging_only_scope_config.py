@@ -833,10 +833,10 @@ def test_G6_database_guardrail_polling_normalizes_invalid_scope_without_reinitia
             "generic_guardrail_api",
             "logging_only",
             "",
-            422,
+            200,
             None,
-            "logging_only_scope",
-            id="H2-post-rejects-invalid-empty-string",
+            "",
+            id="H2-post-blank-string-means-unset",
         ),
         pytest.param(
             "H2",
