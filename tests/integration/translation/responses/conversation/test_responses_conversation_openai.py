@@ -1,6 +1,5 @@
 from dataclasses import replace
 from typing import Final
-from unittest.mock import ANY
 
 import pytest
 from integration._support.client import Gateway
