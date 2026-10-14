@@ -465,7 +465,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_url: Final = self._extract_video_url_from_response(response_data)
 
         # Download the video from the CloudFront URL synchronously
-        httpx_client: Final[HTTPHandler] = client if client is not None else get_httpx_client()
+        httpx_client: Final[HTTPHandler] = get_httpx_client()
         video_response: Final = httpx_client.get(video_url)
         video_response.raise_for_status()
 
@@ -495,12 +495,8 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_url: Final = self._extract_video_url_from_response(response_data)
 
         # Download the video from the CloudFront URL asynchronously
-        async_httpx_client: Final[AsyncHTTPHandler] = (
-            client
-            if client is not None
-            else get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.RUNWAYML,
-            )
+        async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.RUNWAYML,
         )
         video_response: Final = await async_httpx_client.get(video_url)
         video_response.raise_for_status()

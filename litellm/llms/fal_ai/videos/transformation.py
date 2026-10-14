@@ -578,7 +578,7 @@ class FalAIVideoConfig(BaseVideoConfig):
                 response=raw_response,
             )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
-        httpx_client: Final[HTTPHandler] = client if client is not None else self._sync_client_factory()
+        httpx_client: Final[HTTPHandler] = self._sync_client_factory()
         video_response: Final[httpx.Response] = httpx_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
             video_url
         )
@@ -601,7 +601,7 @@ class FalAIVideoConfig(BaseVideoConfig):
                 response=raw_response,
             )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
-        async_httpx_client: Final[AsyncHTTPHandler] = client if client is not None else self._async_client_factory()
+        async_httpx_client: Final[AsyncHTTPHandler] = self._async_client_factory()
         video_response: Final[httpx.Response] = await async_httpx_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
             video_url
         )

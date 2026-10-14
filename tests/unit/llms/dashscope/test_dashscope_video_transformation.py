@@ -120,6 +120,42 @@ class TestDashScopeVideoCreateRequest:
         assert data["input"]["negative_prompt"] == "blurry"
         assert data["parameters"] == {"seed": 7}
 
+    def test_input_video_is_rejected_because_its_seconds_cannot_be_billed(self):
+        """DashScope bills a reference video's own seconds on top of the output, and
+        that length is unknown when the create call is billed, so an edit or extend
+        would record a fraction of what DashScope charges."""
+        media = [{"type": "reference_video", "url": "https://x/v.mp4"}]
+
+        with pytest.raises(UnsupportedParamsError, match="reference_video") as raised:
+            _create({"media": media, "duration": 5})
+
+        assert raised.value.status_code == 400
+
+    @pytest.mark.parametrize("model", ["wan2.7-t2v", "happyhorse-1.0-t2v"])
+    def test_a_tier_the_model_is_not_offered_at_raises_unless_dropped(self, model):
+        """Regression: 480P on a model with no 480P tier was sent, failed on DashScope's
+        side after the create succeeded, and was billed at the 1080P rate."""
+        with pytest.raises(UnsupportedParamsError, match="720P, 1080P") as raised:
+            _create({"resolution": "480P", "duration": 5}, model=model)
+
+        assert raised.value.status_code == 400
+
+        dropped, _, _ = DashScopeVideoConfig().transform_video_create_request(
+            model=model,
+            prompt="a cat on a roof",
+            api_base=API_BASE,
+            video_create_optional_request_params={"resolution": "480P", "duration": 5},
+            litellm_params=GenericLiteLLMParams(drop_params=True),
+            headers={},
+        )
+        assert dropped["parameters"] == {"duration": 5}
+
+    @pytest.mark.parametrize("model", ["wan3.0-video", "happyhorse-1.1-t2v", "a-model-not-in-the-cost-map"])
+    def test_a_tier_the_model_is_priced_at_is_sent(self, model):
+        data, _, _ = _create({"resolution": "480P"}, model=model)
+
+        assert data["parameters"] == {"resolution": "480P"}
+
 
 class TestDashScopeVideoInputReference:
     @pytest.mark.parametrize(
@@ -192,7 +228,7 @@ class TestDashScopeVideoInputReference:
     def test_explicit_media_array_wins_over_input_reference(self):
         """Only the full media array can express multi-role references, so a
         caller-supplied one must not be clobbered by input_reference."""
-        media = [{"type": "reference_video", "url": "https://x/v.mp4"}]
+        media = [{"type": "reference_image", "url": "https://x/subject.png"}]
         data, _, _ = _create({"media": media, "input_reference": "https://x/first.png"})
 
         assert data["input"]["media"] == media
@@ -273,17 +309,48 @@ class TestDashScopeVideoMapOpenAIParams:
 
     def test_request_metadata_is_never_sent_as_a_body_field(self):
         mapped = DashScopeVideoConfig().map_openai_params(
-            video_create_optional_params={
-                "user": "u1",
-                "prompt": "p",
-                "model": "wan3.0-video",
-                "extra_body": {"seed": 1},
-            },
+            video_create_optional_params={"user": "u1", "prompt": "p", "model": "wan3.0-video"},
             model="wan3.0-video",
             drop_params=False,
         )
 
-        assert mapped == {}
+        assert _create(mapped)[0] == {"model": "wan3.0-video", "input": {"prompt": "a cat on a roof"}}
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"seconds": "10s"},
+            {"seconds": "5.7"},
+            {"seconds": True},
+            {"size": "big"},
+            {"size": "a:b"},
+            {"size": 1280},
+            {"parameters": ["not", "an", "object"]},
+        ],
+    )
+    def test_malformed_seconds_or_size_raise_unless_dropped(self, params):
+        """Regression: these were dropped or truncated without a word, so the caller
+        got and paid for a default 5 second 1080P video instead of the one asked for."""
+        with pytest.raises(UnsupportedParamsError, match="drop_params=True") as raised:
+            DashScopeVideoConfig().map_openai_params(
+                video_create_optional_params=params, model="wan3.0-video", drop_params=False
+            )
+
+        assert raised.value.status_code == 400
+        assert (
+            DashScopeVideoConfig().map_openai_params(
+                video_create_optional_params=params, model="wan3.0-video", drop_params=True
+            )
+            == {}
+        )
+
+    @pytest.mark.parametrize("seconds,expected", [("8", 8), ("8.0", 8), (8, 8)])
+    def test_whole_seconds_are_accepted_in_any_spelling(self, seconds, expected):
+        mapped = DashScopeVideoConfig().map_openai_params(
+            video_create_optional_params={"seconds": seconds}, model="wan3.0-video", drop_params=False
+        )
+
+        assert mapped == {"duration": expected}
 
     @pytest.mark.parametrize("params", [{"characters": [{"id": "c"}]}, {"image": {"gcsUri": "gs://b/i.png"}}])
     def test_fields_dashscope_cannot_express_raise_unless_dropped(self, params):
@@ -299,22 +366,16 @@ class TestDashScopeVideoMapOpenAIParams:
             == {}
         )
 
-    def test_parameters_block_is_merged(self):
+    def test_parameters_block_reaches_dashscope_as_sent(self):
+        """Regression: only a fixed list of parameter names was copied into the body,
+        so a field DashScope documents but litellm did not list was silently dropped."""
         mapped = DashScopeVideoConfig().map_openai_params(
-            video_create_optional_params={"parameters": {"prompt_extend": True, "audio": False}},
+            video_create_optional_params={"parameters": {"prompt_extend": True, "audio": False, "shot_type": "multi"}},
             model="wan3.0-video",
             drop_params=False,
         )
 
-        assert mapped == {"prompt_extend": True, "audio": False}
-
-    def test_parameters_block_must_be_an_object(self):
-        with pytest.raises(ValueError, match="parameters must be an object"):
-            DashScopeVideoConfig().map_openai_params(
-                video_create_optional_params={"parameters": ["not", "an", "object"]},
-                model="wan3.0-video",
-                drop_params=False,
-            )
+        assert _create(mapped)[0]["parameters"] == {"prompt_extend": True, "audio": False, "shot_type": "multi"}
 
     @pytest.mark.parametrize("params", [{"seconds": "-1"}, {"parameters": {"duration": -1}}])
     def test_smart_duration_is_rejected_because_it_cannot_be_billed(self, params):
@@ -384,6 +445,21 @@ class TestDashScopeVideoCreateResponse:
         )
 
         assert video_obj.usage == expected_usage
+
+    def test_a_model_group_the_id_format_cannot_carry_falls_back_to_the_model(self):
+        """The id joins its fields with ';', so a group name holding one would decode
+        to a truncated model id that no deployment matches."""
+        logging_obj = Mock(litellm_params={"litellm_metadata": {"deployment_model_name": "wan3;beijing"}})
+
+        video_obj = DashScopeVideoConfig().transform_video_create_response(
+            model="wan3.0-video",
+            raw_response=_mock_response({"output": {"task_status": "PENDING", "task_id": "t1"}}),
+            logging_obj=logging_obj,
+            custom_llm_provider="dashscope",
+            request_data={},
+        )
+
+        assert decode_video_id_with_provider(video_obj.id)["model_id"] == "wan3.0-video"
 
     def test_in_body_error_on_a_200_is_raised(self):
         """DashScope reports create failures as a 200 with top-level code and no
@@ -536,7 +612,6 @@ class TestDashScopeVideoStatus:
             ("SUCCEEDED", "completed"),
             ("FAILED", "failed"),
             ("CANCELED", "cancelled"),
-            ("UNKNOWN", "failed"),
         ],
     )
     def test_status_mapping(self, task_status, expected):
@@ -598,6 +673,19 @@ class TestDashScopeVideoStatus:
         assert decoded["model_id"] == "wan3-prod-deployment"
         assert decoded["video_id"] == "17ed7e50"
         assert video_obj.model == "wan3-prod-deployment"
+
+    def test_unknown_task_is_not_found_rather_than_a_failed_video(self):
+        """Regression: UNKNOWN mapped to a terminal failed status, so a poll that reached
+        the wrong region, or came after the 24 hour window, told the caller a running and
+        billed video had failed and to stop polling."""
+        with pytest.raises(DashScopeVideoError, match="24 hours") as raised:
+            DashScopeVideoConfig().transform_video_status_retrieve_response(
+                raw_response=_mock_response({"output": {"task_id": "t1", "task_status": "UNKNOWN"}}),
+                logging_obj=None,
+                custom_llm_provider="dashscope",
+            )
+
+        assert raised.value.status_code == 404
 
     def test_in_body_lookup_error_is_raised_instead_of_a_queued_video(self):
         """An unknown or expired task id comes back as a 200 with top-level code
@@ -684,15 +772,15 @@ class TestDashScopeVideoContent:
 
     @pytest.mark.parametrize("task_status", ["PENDING", "RUNNING"])
     def test_pending_task_raises_still_processing(self, task_status):
-        """404, which is what the OpenAI videos API documents for content that is not
-        ready, and which litellm's retry predicate leaves alone. A 409 also reads as a
-        client error but is retried, so the proxy would poll twice more."""
+        """400, which litellm neither retries nor counts toward a deployment cooldown.
+        A 404 put the deployment in cooldown, so a client downloading early took the
+        model out of rotation for everyone else."""
         response = _mock_response({"output": {"task_id": "t1", "task_status": task_status}})
 
         with pytest.raises(DashScopeVideoError, match="still processing") as raised:
             _video_url_from_task(_parse_task_response(response), response)
 
-        assert raised.value.status_code == 404
+        assert raised.value.status_code == 400
 
     def test_failed_task_surfaces_the_upstream_message(self):
         response = _mock_response(
@@ -761,10 +849,10 @@ class TestDashScopeVideoContentDownload:
             handler: Final = AsyncHTTPHandler()
             await handler.close()
             handler.client = http_client
-            with pytest.raises(litellm.NotFoundError) as raised:
+            with pytest.raises(litellm.BadRequestError) as raised:
                 await avideo_content(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
 
-        assert raised.value.status_code == 404
+        assert raised.value.status_code == 400
 
     def test_sync_download_reuses_the_client_that_served_the_task_lookup(self):
         encoded = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3.0-video")
@@ -1084,7 +1172,7 @@ class TestDashScopeVideoEndToEndRequest:
     @pytest.mark.asyncio
     async def test_multi_role_media_array_reaches_the_body_intact(self):
         media = [
-            {"type": "reference_video", "url": "https://x/v.mp4"},
+            {"type": "reference_image", "url": "https://x/subject.png"},
             {"type": "reference_audio", "url": "https://x/a.mp3"},
         ]
         captured = await self._wire_request(
@@ -1093,3 +1181,23 @@ class TestDashScopeVideoEndToEndRequest:
 
         assert captured["serialized"]["input"]["media"] == media
         assert captured["serialized"]["parameters"]["duration"] == 15
+
+    @pytest.mark.asyncio
+    async def test_extra_body_fields_reach_dashscope_but_litellm_call_options_do_not(self):
+        """Regression: extra_body fields were silently dropped from the body. Unlisted
+        kwargs still stay behind, since litellm's own call options arrive the same way."""
+        captured = await self._wire_request(
+            model="dashscope/wan3.0-video",
+            prompt="p",
+            seconds="5",
+            extra_body={"shot_type": "multi", "negative_prompt": "blurry"},
+            drop_params=True,
+        )
+
+        assert captured["serialized"]["parameters"] == {"duration": 5, "shot_type": "multi"}
+        assert captured["serialized"]["input"] == {"prompt": "p", "negative_prompt": "blurry"}
+
+    @pytest.mark.asyncio
+    async def test_a_size_in_a_tier_the_model_lacks_never_reaches_dashscope(self):
+        with pytest.raises(UnsupportedParamsError, match="480P"):
+            await self._wire_request(model="dashscope/wan2.7-t2v", prompt="p", size="854x480")
