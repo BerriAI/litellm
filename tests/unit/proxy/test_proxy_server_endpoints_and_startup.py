@@ -6032,6 +6032,47 @@ async def test_get_v1_model_info_allowed_names_does_not_broaden_empty_access_gro
 
 
 @pytest.mark.asyncio
+async def test_get_v1_model_info_allowed_names_falls_back_when_access_group_lookup_fails(monkeypatch):
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a"]
+    router.get_model_access_groups.return_value = {}
+    monkeypatch.setattr(
+        "litellm.proxy.utils.get_available_models_for_user",
+        AsyncMock(side_effect=RuntimeError("access group lookup failed")),
+    )
+
+    result = await proxy_server_module._get_v1_model_info_allowed_model_names_with_access_groups(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=["model-a"]),
+        llm_router=router,
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert result == {"model-a"}
+
+
+@pytest.mark.asyncio
+async def test_get_v1_model_info_allowed_names_skips_lookup_for_unrestricted_key(monkeypatch):
+    router = MagicMock()
+    router.get_model_names.return_value = ["model-a"]
+    router.get_model_access_groups.return_value = {}
+    available_models = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.utils.get_available_models_for_user", available_models)
+
+    result = await proxy_server_module._get_v1_model_info_allowed_model_names_with_access_groups(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", models=[], team_models=[]),
+        llm_router=router,
+        prisma_client=MagicMock(),
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert result is None
+    available_models.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_model_info_v1_oci_secrets_not_leaked():
     """
     Test that model_info_v1 endpoint properly masks OCI sensitive parameters and does not leak secrets.

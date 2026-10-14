@@ -16207,7 +16207,9 @@ async def _get_v1_model_info_allowed_model_names_with_access_groups(
     if fallback_allowed_models is None:
         return None
 
-    from litellm.proxy.utils import get_available_models_for_user
+    from litellm.proxy.utils import (
+        get_available_models_for_user,  # pyright: ignore[reportUnknownVariableType]  # untyped settings parameter
+    )
 
     try:
         return set(
@@ -16215,7 +16217,7 @@ async def _get_v1_model_info_allowed_model_names_with_access_groups(
                 user_api_key_dict=user_api_key_dict,
                 llm_router=llm_router,
                 general_settings=general_settings,
-                user_model=user_model,
+                user_model=cast(str | None, user_model),  # cast-ok: legacy untyped proxy setting
                 prisma_client=prisma_client,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_cache=user_api_key_cache,
