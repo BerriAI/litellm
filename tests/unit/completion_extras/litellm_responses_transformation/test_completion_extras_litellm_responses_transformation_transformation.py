@@ -3867,6 +3867,10 @@ def test_search_only_turn_keeps_tool_search_items_for_the_next_request(status, i
     assert choice.message.provider_specific_fields == {"tool_search_items": search_items}
     assert [item["id"] for item in choice.message.reasoning_items] == ["rs_raw", "rs_incomplete"]
     assert choice.finish_reason == finish_reason
+    replayed, _ = LiteLLMResponsesTransformationHandler()._convert_chat_completion_messages_to_responses_input(
+        [choice.message.model_dump()]
+    )
+    assert [item["type"] for item in replayed] == ["reasoning", "reasoning", "tool_search_call", "tool_search_output"]
 
 
 def test_transform_response_incomplete_content_filter_maps_finish_reason():

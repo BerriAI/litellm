@@ -1116,7 +1116,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if summary_block.get("text")
         )
         message: Final = Message(
-            content="",
+            content=None if tool_search_items else "",
             reasoning_content=reasoning_content if reasoning_content else None,
             reasoning_items=_as_chat_reasoning_items(reasoning_items),
             provider_specific_fields=_tool_search_provider_fields(tool_search_items),
