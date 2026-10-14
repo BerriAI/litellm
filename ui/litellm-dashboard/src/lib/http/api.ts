@@ -28,7 +28,7 @@ const carriesJson = async (response: Response): Promise<boolean> => {
   }
 };
 
-const middleware: Middleware = {
+const jsonMiddleware = (report: (message: string) => void): Middleware => ({
   onRequest({ request }) {
     if (!request.headers.has("Accept")) {
       request.headers.set("Accept", "application/json");
@@ -43,7 +43,7 @@ const middleware: Middleware = {
       if (await carriesJson(response)) return response;
       const contentType = response.headers.get("content-type") ?? "an unknown content type";
       const message = `Expected JSON from ${new URL(request.url).pathname} but the server returned ${contentType}`;
-      reportError(message);
+      report(message);
       throw new ApiError(message, response.status, await response.clone().text());
     }
     const raw = await response.clone().text();
@@ -55,10 +55,10 @@ const middleware: Middleware = {
     } catch {
       message = raw || `HTTP ${response.status}`;
     }
-    reportError(message);
+    report(message);
     throw new ApiError(message, response.status, body, retryAfterMs(response.headers));
   },
-};
+});
 
 /**
  * The typed, schema-bound HTTP client. Use it inside TanStack Query hooks
@@ -76,7 +76,13 @@ export const fetchClient = createFetchClient<paths>({
   Request: BaseAwareRequest,
   fetch: (request) => globalThis.fetch(request),
 });
-fetchClient.use(middleware);
+fetchClient.use(jsonMiddleware(reportError));
+
+export const backgroundFetchClient = createFetchClient<paths>({
+  Request: BaseAwareRequest,
+  fetch: (request) => globalThis.fetch(request),
+});
+backgroundFetchClient.use(jsonMiddleware(() => {}));
 
 /**
  * TanStack Query bound to the typed client. Callers write
