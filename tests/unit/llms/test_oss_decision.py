@@ -17,7 +17,7 @@ pytestmark: Final = pytest.mark.parametrize("provider", ["laya", "bespoke"])
         ("http://decision.test/root", None, "http://decision.test/root", "oss-env-key"),
         ("http://decision.test/root/", "", "http://decision.test/root", "oss-env-key"),
         ("http://decision.test/root", "explicit-key", "http://decision.test/root", "explicit-key"),
-        ("http://decision.test/root/v1/", None, "http://decision.test/root/v1", "oss-env-key"),
+        ("http://decision.test/root/v1/", None, "http://decision.test/root", "oss-env-key"),
         ("http://decision.test/root/v2", None, "http://decision.test/root/v2", None),
     ],
 )

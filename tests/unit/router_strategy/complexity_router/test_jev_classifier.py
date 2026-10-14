@@ -496,6 +496,7 @@ def test_oss_requires_its_own_checkpoint(provider: str, model: str | None) -> No
     [
         (None, "{env}", "Bearer oss-env-key"),
         ("{env}/", "{env}", "Bearer oss-env-key"),
+        ("{env}/v1", "{env}", "Bearer oss-env-key"),
         ("https://another-classifier.test", "https://another-classifier.test", None),
     ],
 )

@@ -46,11 +46,15 @@ def validate_oss_api_base(provider: OssDecisionProvider, value: str) -> str:
     return str(url).rstrip("/")
 
 
+def _server_root(provider: OssDecisionProvider, base: str) -> str:
+    return validate_oss_api_base(provider, base).removesuffix("/v1")
+
+
 def _is_env_server(provider: OssDecisionProvider, server: str, env_base: str | None) -> bool:
     if not env_base:
         return False
     try:
-        return validate_oss_api_base(provider, env_base).removesuffix("/v1") == server.removesuffix("/v1")
+        return _server_root(provider, env_base) == server
     except ValueError:
         return False
 
@@ -62,7 +66,7 @@ def oss_connection(
     base: Final = api_base if api_base is not None else env_base
     if not base:
         raise ValueError(f"{provider} requires api_base or {provider.upper()}_API_BASE pointing to its server")
-    server: Final = validate_oss_api_base(provider, base)
+    server: Final = _server_root(provider, base)
     env_key: Final = (
         get_secret_str(f"{provider.upper()}_API_KEY") if _is_env_server(provider, server, env_base) else None
     )
