@@ -154,12 +154,12 @@ def _named_route(router: Router, deployment_id: str) -> bool:
     return all("*" not in name for name in public_names)
 
 
-def _served_without_a_team(router: Router, model: str, teamless_route: frozenset[str]) -> bool:
+def _served_without_a_team(router: Router, model: str) -> bool:
     """Whether a caller without a team reaches a model under `model`: the SDK knows the name,
     a deployment is listed under it, or a wildcard turns it into a name the SDK knows."""
     names: Final = (model, *router.resolved_litellm_models(model))
     return any(_provider_qualified(name) is not None for name in names) or any(
-        _named_route(router, deployment_id) for deployment_id in teamless_route
+        _named_route(router, deployment_id) for deployment_id in router.get_candidate_model_ids_for_route(model)
     )
 
 
@@ -167,20 +167,16 @@ def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | No
     """The team a guardrail call for the caller behind `auth` resolves `model` under, or None.
 
     It is the caller's team only when a caller without a team reaches no model under
-    `model`, the router's route to `model` for that team reaches a deployment of the team's
-    own, and every deployment on that route is listed under a name rather than a wildcard
-    pattern. A name a shared deployment or the SDK already serves keeps resolving exactly as
-    it does without a team, so a team model given that name cannot take over the guardrail's
-    calls.
+    `model`, and the router's route to `model` for that team reaches deployments that are
+    each listed under a name rather than a wildcard pattern. A name a shared deployment or
+    the SDK already serves keeps resolving exactly as it does without a team, so a team model
+    given that name cannot take over the guardrail's calls.
     """
     team_id: Final = auth.team_id if auth is not None else None
-    if team_id is None or router is None:
+    if team_id is None or router is None or _served_without_a_team(router, model):
         return None
-    teamless_route: Final = router.get_candidate_model_ids_for_route(model)
     team_route: Final = router.get_candidate_model_ids_for_route(model, team_id)
-    if _served_without_a_team(router, model, teamless_route) or team_route <= teamless_route:
-        return None
-    return team_id if all(_named_route(router, deployment_id) for deployment_id in team_route) else None
+    return team_id if team_route and all(_named_route(router, deployment_id) for deployment_id in team_route) else None
 
 
 async def judge_acompletion(

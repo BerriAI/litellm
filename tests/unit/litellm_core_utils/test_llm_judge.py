@@ -184,6 +184,16 @@ _TEAM_UNDER_SHARED_PREFIX: dict[str, object] = {
     "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"},
     "model_info": {"team_id": "owner", "team_public_model_name": "wc/gpt-4o"},
 }
+_TEAM_PREFIX_WILDCARD: dict[str, object] = {
+    "model_name": "owner-wc-wildcard",
+    "litellm_params": {"model": "openai/*", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "wc/*"},
+}
+_TEAM_FIXED_UNDER_PREFIX_WILDCARD: dict[str, object] = {
+    "model_name": "owner-wc-fixed",
+    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "fake"},
+    "model_info": {"team_id": "owner", "team_public_model_name": "wc/*"},
+}
 _TEAM_PUBLIC_WILDCARD: dict[str, object] = {
     "model_name": "owner-openai-wildcard",
     "litellm_params": {"model": "openai/*", "api_key": "fake"},
@@ -258,6 +268,9 @@ def test_attached_auth_reads_only_the_instance_the_proxy_attached(
         ((_TEAM_PUBLIC_WILDCARD, _SHARED_JUDGE), "openai/gpt-4o", "owner", None),
         ((_TEAM_PUBLIC_WILDCARD, _TEAM_FIXED_UNDER_PUBLIC_WILDCARD), "openai/gpt-4o-mini", "owner", None),
         ((_TEAM_FIXED_UNDER_PUBLIC_WILDCARD,), "openai/gpt-4o-mini", "owner", None),
+        ((_TEAM_PREFIX_WILDCARD,), "wc/gpt-4o", "owner", None),
+        ((_TEAM_FIXED_UNDER_PREFIX_WILDCARD,), "wc/gpt-4o", "owner", None),
+        ((_TEAM_UNDER_SHARED_PREFIX, _TEAM_PREFIX_WILDCARD), "wc/gpt-4o", "owner", "owner"),
     ],
     ids=[
         "team-model",
@@ -278,6 +291,9 @@ def test_attached_auth_reads_only_the_instance_the_proxy_attached(
         "team-wildcard-over-a-shared-deployments-model",
         "team-wildcard-beside-a-fixed-team-model",
         "team-wildcard-name-over-a-fixed-model",
+        "team-wildcard-over-a-name-nothing-else-serves",
+        "team-wildcard-name-over-a-fixed-model-nothing-else-serves",
+        "team-name-beside-its-own-wildcard",
     ],
 )
 def test_caller_team_for_uses_the_team_only_where_it_has_its_own_deployment(
