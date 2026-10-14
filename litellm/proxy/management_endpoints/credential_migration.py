@@ -528,7 +528,7 @@ async def _scan_one_table(
         return report
     for row in rows or []:
         for col in json_columns:
-            raw = getattr(row, col, None)
+            raw: object = getattr(row, col, None)
             if raw is None:
                 continue
             if db_attr == "litellm_mcpservertable" and col in ("static_headers", "env"):

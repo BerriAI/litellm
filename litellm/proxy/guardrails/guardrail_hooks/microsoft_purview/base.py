@@ -6,7 +6,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from typing_extensions import NotRequired, TypedDict
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -33,6 +34,16 @@ SCOPE_CACHE_TTL_SECONDS: Final = 3600.0
 class GraphTokenResponse(TypedDict):
     access_token: str
     expires_in: NotRequired[int]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GraphTokenPayload(TypedDict, total=False):
+    access_token: Required[ReadOnly[str]]
+    expires_in: NotRequired[ReadOnly[int | float | str | bool]]
+
+
+_GRAPH_TOKEN_RESPONSE_VALIDATOR: Final = TypeAdapter(_GraphTokenPayload)
+_GRAPH_RESPONSE_VALIDATOR: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class PurviewGuardrailBase:
@@ -112,7 +123,7 @@ class PurviewGuardrailBase:
             timeout=self.timeout,
         )
         response.raise_for_status()
-        token_data: Final[GraphTokenResponse] = response.json()
+        token_data: Final = _GRAPH_TOKEN_RESPONSE_VALIDATOR.validate_python(response.json())
         access_token: Final = token_data["access_token"]
         expires_in: Final = int(token_data.get("expires_in", 3599))
         # Recompute ``now`` after the await so the expiry reflects when the
@@ -148,7 +159,7 @@ class PurviewGuardrailBase:
         verbose_proxy_logger.debug("Purview Graph POST %s", url)
         response: Final = await self.async_handler.post(url=url, headers=headers, json=json_body, timeout=self.timeout)
         response.raise_for_status()
-        response_json: Final[dict[str, object]] = response.json()
+        response_json: Final = _GRAPH_RESPONSE_VALIDATOR.validate_python(response.json())
         response_headers: Final = dict(response.headers)
         verbose_proxy_logger.debug("Purview Graph response: %s", response_json)
         return response_json, response_headers

@@ -13,6 +13,7 @@ from typing import Any, Final, TypedDict
 from urllib.parse import quote
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -175,6 +176,9 @@ def load_openapi_spec(filepath: str) -> dict[str, object]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
+_OBJECT_MAP: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+
+
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -184,14 +188,14 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
             else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
         )
         r.raise_for_status()
-        return r.json()
+        return dict(_OBJECT_MAP.validate_python(r.json()))
 
     # fallback: local file
     # Local filesystem path
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return dict(_OBJECT_MAP.validate_python(json.load(f)))
 
 
 def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:

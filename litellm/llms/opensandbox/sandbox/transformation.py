@@ -491,7 +491,7 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         if not data:
             return None
         try:
-            parsed: Final = json.loads(data)
+            parsed: Final = _JSON_VALUE.validate_python(json.loads(data))
         except json.JSONDecodeError:
             return None
         if not isinstance(parsed, dict):

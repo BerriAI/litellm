@@ -27,10 +27,10 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
-import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import redact_string, verbose_logger
@@ -464,6 +464,8 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
+_UPLOAD_RESPONSE_VALIDATOR: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_UPLOAD_URL_VALIDATOR: Final = TypeAdapter(str, config=ConfigDict(strict=True))
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -3480,7 +3482,7 @@ class BaseLLMHTTPHandler:
         response: httpx.Response,
         upload_url_location: str,
         upload_url_key: str = "upload_url",
-    ) -> tuple[str | None, dict | None]:
+    ) -> tuple[str | None, Mapping[str, object] | None]:
         """
         Extract upload URL from initial file creation response.
 
@@ -3502,8 +3504,8 @@ class BaseLLMHTTPHandler:
         else:
             # Response body style (e.g., Manus, S3 presigned URLs)
             try:
-                response_data: Final = response.json()
-                upload_url = response_data.get(upload_url_key)
+                response_data: Final = _UPLOAD_RESPONSE_VALIDATOR.validate_python(response.json())
+                upload_url = _UPLOAD_URL_VALIDATOR.validate_python(response_data.get(upload_url_key))
                 return upload_url, response_data if upload_url else None
             except Exception:
                 return None, None

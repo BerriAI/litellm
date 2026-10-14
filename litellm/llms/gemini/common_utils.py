@@ -6,7 +6,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -95,6 +96,19 @@ GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO: Final[dict[tuple[int, int], str]] = {
     (1280, 896): "4:3",
     (896, 1280): "3:4",
 }
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiModelEntry(TypedDict):
+    name: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiModelResponse(TypedDict):
+    models: ReadOnly[list[_GeminiModelEntry]]
+
+
+_GEMINI_MODEL_RESPONSE: Final = TypeAdapter(_GeminiModelResponse)
 
 
 def map_openai_size_to_gemini_image_config(size: str, model: str) -> dict[str, str] | None:
@@ -387,7 +401,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> str | None:
         return model.replace("gemini/", "")
 
-    def process_model_name(self, models: list[dict[str, str]]) -> list[str]:
+    def process_model_name(self, models: Sequence[Mapping[str, str] | _GeminiModelEntry]) -> list[str]:
         litellm_model_names: Final = []
         for model in models:
             stripped_model_name = model["name"].replace("models/", "")
@@ -414,7 +428,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Gemini. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models: Final[list[dict[str, str]]] = response.json()["models"]
+        models: Final = _GEMINI_MODEL_RESPONSE.validate_python(response.json())["models"]
 
         litellm_model_names: Final = self.process_model_name(models)
         return litellm_model_names

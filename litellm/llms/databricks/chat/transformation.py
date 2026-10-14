@@ -185,9 +185,16 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         stop: list[str] | str | None = None,
         n: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
+        config_values: Final = (
+            ("max_tokens", max_tokens),
+            ("temperature", temperature),
+            ("top_p", top_p),
+            ("top_k", top_k),
+            ("stop", stop),
+            ("n", n),
+        )
+        for key, value in config_values:
+            if value is not None:
                 setattr(self.__class__, key, value)
 
     @property

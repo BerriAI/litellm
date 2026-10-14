@@ -3,15 +3,19 @@ from enum import Enum
 from typing import Final, Literal
 
 from pydantic import (
+    ConfigDict,
     Field,
     SerializationInfo,
     SerializerFunctionWrapHandler,
+    TypeAdapter,
     field_validator,
     model_serializer,
     model_validator,
 )
 
 from litellm.types.llms.base import LiteLLMBaseModel
+
+_SERIALIZED_MODEL: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class CacheControl(LiteLLMBaseModel):
@@ -22,7 +26,7 @@ class CacheControl(LiteLLMBaseModel):
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
     ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
-        result = handler(self)
+        result: Final = _SERIALIZED_MODEL.validate_python(handler(self))
         if result.get("ttl") is None:
             result.pop("ttl", None)
         return result
@@ -37,7 +41,7 @@ class TextContent(LiteLLMBaseModel):
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
     ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
-        result = handler(self)
+        result: Final = _SERIALIZED_MODEL.validate_python(handler(self))
         if result.get("cache_control") is None:
             result.pop("cache_control", None)
         return result
@@ -57,7 +61,7 @@ class ImageContent(LiteLLMBaseModel):
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
     ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
-        result = handler(self)
+        result: Final = _SERIALIZED_MODEL.validate_python(handler(self))
         if result.get("cache_control") is None:
             result.pop("cache_control", None)
         return result

@@ -31,7 +31,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 import copy
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, repeat
 from types import MappingProxyType
@@ -1156,7 +1156,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _sync_stream_events_with_rewrites(
         self,
-        stream_events: Sequence[Any],
+        stream_events: Sequence[object],
         rewrites_by_position: Mapping[tuple[int, int], str],
     ) -> None:
         """Sync pre-completion stream events with the rewritten completed
@@ -1170,25 +1170,33 @@ class OpenAIResponsesHandler(BaseTranslation):
             {position: chain((rewritten,), repeat("")) for position, rewritten in rewrites_by_position.items()}
         )
         for event in stream_events:
-            if not (isinstance(event, dict) or hasattr(event, "get")):
-                continue
-            event_type = event.get("type")
-            output_index = event.get("output_index")
-            content_index = event.get("content_index")
-            if event_type == "response.output_item.done" and isinstance(output_index, int):
-                self._sync_output_item_done_event(event.get("item"), output_index, rewrites_by_position)
-                continue
-            if not isinstance(output_index, int) or not isinstance(content_index, int):
-                continue
-            position = (output_index, content_index)
-            if event_type == "response.output_text.delta" and position in delta_replacements:
-                self._write_event_field(event, "delta", next(delta_replacements[position]))
-            elif event_type == "response.output_text.done" and position in rewrites_by_position:
-                self._write_event_field(event, "text", rewrites_by_position[position])
-            elif event_type == "response.content_part.done" and position in rewrites_by_position:
-                part = event.get("part")
-                if isinstance(part, dict) or hasattr(part, "text"):
-                    self._write_event_field(part, "text", rewrites_by_position[position])
+            self._sync_stream_event_with_rewrites(event, delta_replacements, rewrites_by_position)
+
+    def _sync_stream_event_with_rewrites(
+        self,
+        event: object,
+        delta_replacements: Mapping[tuple[int, int], Iterator[str]],
+        rewrites_by_position: Mapping[tuple[int, int], str],
+    ) -> None:
+        if not hasattr(event, "get"):
+            return
+        event_type: Final = stream_item_field(event, "type")
+        output_index: Final = stream_item_field(event, "output_index")
+        content_index: Final = stream_item_field(event, "content_index")
+        if event_type == "response.output_item.done" and isinstance(output_index, int):
+            self._sync_output_item_done_event(stream_item_field(event, "item"), output_index, rewrites_by_position)
+            return
+        if not isinstance(output_index, int) or not isinstance(content_index, int):
+            return
+        position: Final = (output_index, content_index)
+        if event_type == "response.output_text.delta" and position in delta_replacements:
+            self._write_event_field(event, "delta", next(delta_replacements[position]))
+        elif event_type == "response.output_text.done" and position in rewrites_by_position:
+            self._write_event_field(event, "text", rewrites_by_position[position])
+        elif event_type == "response.content_part.done" and position in rewrites_by_position:
+            part: Final = stream_item_field(event, "part")
+            if isinstance(part, dict) or hasattr(part, "text"):
+                self._write_event_field(part, "text", rewrites_by_position[position])
 
     @staticmethod
     def _sync_output_item_done_event(

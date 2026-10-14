@@ -276,7 +276,7 @@ async def _a2a_sse_event_source(
     request_id: str | int | None = None,
     extra_headers: Mapping[str, str] | None = None,
     served_version: A2AVersion = "0.3",
-) -> AsyncGenerator[Mapping[str, object], None]:
+) -> AsyncGenerator[object, None]:
     """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
 
     Upstream HTTP/JSON-RPC errors are surfaced as a single JSON-RPC error event
@@ -322,11 +322,13 @@ async def _a2a_sse_event_source(
             if not payload:
                 continue
             try:
-                event = json.loads(payload)
+                event = _DECODED_JSON.validate_python(json.loads(payload))
             except Exception:
                 continue
             if isinstance(event, dict):
-                event = normalize_stream_event(event, served_version, request_id=request_id)
+                normalized_event = normalize_stream_event(event, served_version, request_id=request_id)
+                yield normalized_event
+                continue
             yield event
     finally:
         await resp.aclose()

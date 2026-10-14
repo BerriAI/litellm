@@ -51,7 +51,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     coerce_stream_holdback_value,
 )
 from litellm.types.utils import (
+    ChatCompletionDeltaCustomToolCall,
     ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     Delta,
@@ -965,7 +967,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Determine content source and tool calls based on choice type
         content = None
-        tool_calls: Sequence[object] | None = None
+        tool_calls: (
+            Sequence[
+                ChatCompletionMessageToolCall
+                | ChatCompletionMessageCustomToolCall
+                | ChatCompletionDeltaToolCall
+                | ChatCompletionDeltaCustomToolCall
+                | Mapping[str, object]
+            ]
+            | None
+        ) = None
         if isinstance(choice, litellm.Choices):
             content = choice.message.content
             tool_calls = choice.message.tool_calls
@@ -1008,7 +1019,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     tool_calls_to_check.append(tool_call_dict)
                     tool_call_task_mappings.append((choice_idx, int(tool_call_idx)))
 
-    def _convert_tool_call_to_dict(self, tool_call: dict[str, Any] | Any) -> dict[str, Any] | None:
+    def _convert_tool_call_to_dict(self, tool_call: dict[str, Any] | Any) -> dict[str, object] | None:
         """
         Convert a tool call object to dictionary format.
 
@@ -1019,18 +1030,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         elif hasattr(tool_call, "id") and hasattr(tool_call, "function"):
             # Convert object to dict
             function: Final = tool_call.function
-            function_dict: Final = {}
-            if hasattr(function, "name"):
-                function_dict["name"] = function.name
-            if hasattr(function, "arguments"):
-                function_dict["arguments"] = function.arguments
+            function_dict: Final[Mapping[str, object]] = {
+                **({"name": function.name} if hasattr(function, "name") else {}),
+                **({"arguments": function.arguments} if hasattr(function, "arguments") else {}),
+            }
 
-            tool_call_dict: Final = {
+            return {
                 "id": tool_call.id if hasattr(tool_call, "id") else None,
                 "type": tool_call.type if hasattr(tool_call, "type") else "function",
                 "function": function_dict,
             }
-            return tool_call_dict
         return None
 
     async def _apply_guardrail_responses_to_output_texts(

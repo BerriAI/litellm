@@ -74,7 +74,7 @@ import os
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
 import jwt
@@ -279,7 +279,7 @@ class MCPJWTSigner(CustomGuardrail):
         debug_headers: bool = False,
         # FR-10: Configurable scopes
         allowed_scopes: list[str] | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> None:
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         base_kwargs: Final[GuardrailBaseInitKwargs] = kwargs

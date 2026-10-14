@@ -1,8 +1,11 @@
 import json
 import os
+from collections.abc import Sequence
 from typing import Final, Literal, Protocol, get_args
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -21,6 +24,15 @@ config: Final = HuggingFaceEmbeddingConfig()
 
 HF_HUB_URL: Final = "https://huggingface.co"
 
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _HuggingFaceModelInfo(TypedDict):
+    pipeline_tag: NotRequired[ReadOnly[str | None]]
+
+
+_HUGGINGFACE_MODEL_INFO_ADAPTER: Final = TypeAdapter(_HuggingFaceModelInfo)
+
+
 hf_tasks_embeddings: Final = (
     Literal[  # pipeline tags + hf tei endpoints - https://huggingface.github.io/text-embeddings-inference/#/
         "sentence-similarity", "feature-extraction", "rerank", "embed", "similarity"
@@ -32,6 +44,7 @@ class _SupportsTokenEncode(Protocol):
     """Token encoder handle. Only ``encode`` is ever called on it here."""
 
     def encode(self, text: str) -> list[int]: ...
+    def encode_ordinary(self, text: str) -> Sequence[int]: ...
 
 
 def get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base: str) -> str | None:
@@ -44,11 +57,8 @@ def get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base:
 
     model_info: Final = http_client.get(url=f"{api_base}/api/models/{model}")
 
-    model_info_dict: Final = model_info.json()
-
-    pipeline_tag: Final[str | None] = model_info_dict.get("pipeline_tag", None)
-
-    return pipeline_tag
+    model_info_dict: Final = _HUGGINGFACE_MODEL_INFO_ADAPTER.validate_python(model_info.json())
+    return model_info_dict.get("pipeline_tag")
 
 
 async def async_get_hf_task_embedding_for_model(model: str, task_type: str | None, api_base: str) -> str | None:
@@ -63,11 +73,8 @@ async def async_get_hf_task_embedding_for_model(model: str, task_type: str | Non
 
     model_info: Final = await http_client.get(url=f"{api_base}/api/models/{model}")
 
-    model_info_dict: Final = model_info.json()
-
-    pipeline_tag: Final[str | None] = model_info_dict.get("pipeline_tag", None)
-
-    return pipeline_tag
+    model_info_dict: Final = _HUGGINGFACE_MODEL_INFO_ADAPTER.validate_python(model_info.json())
+    return model_info_dict.get("pipeline_tag")
 
 
 class HuggingFaceEmbedding(BaseLLM):

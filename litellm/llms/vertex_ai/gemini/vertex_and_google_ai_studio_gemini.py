@@ -261,7 +261,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         presence_penalty: float | None = None,
         seed: int | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict[str, object](locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

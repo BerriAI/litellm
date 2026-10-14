@@ -3,9 +3,11 @@ Response Polling Handler for Background Responses with Cache
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sized
 from datetime import datetime, timezone
 from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -14,6 +16,7 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStatus
 
 _RESPONSE_POLLING_TARGET: Final = "response_polling"
+_CACHED_RESPONSE_STATE_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
 
 
 class ResponsePollingHandler:
@@ -153,7 +156,7 @@ class ResponsePollingHandler:
             return
 
         # Parse existing ResponsesAPIResponse from cache
-        state: Final = json.loads(cached_state)
+        state: Final = _CACHED_RESPONSE_STATE_ADAPTER.validate_python(json.loads(cached_state), strict=True)
 
         # Update status (using OpenAI native status values)
         if status:
@@ -215,7 +218,10 @@ class ResponsePollingHandler:
             ttl=self.ttl,
         )
 
-        output_count: Final = len(state.get("output", []))
+        cached_output: Final = state.get("output", [])
+        if not isinstance(cached_output, Sized):
+            raise TypeError(f"object of type '{type(cached_output).__name__}' has no len()")
+        output_count: Final = len(cached_output)
         verbose_proxy_logger.debug(
             "Updated polling state for %s: status=%s, output_items=%s", polling_id, state["status"], output_count
         )
@@ -230,7 +236,7 @@ class ResponsePollingHandler:
         cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
 
         if cached_state:
-            return json.loads(cached_state)
+            return _CACHED_RESPONSE_STATE_ADAPTER.validate_python(json.loads(cached_state), strict=True)
 
         return None
 

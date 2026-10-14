@@ -30,7 +30,7 @@ def _normalize_litellm_params(
 ) -> LiteLLM_ManagedVectorStore:
     litellm_params: Final = vector_store.get("litellm_params")
     if isinstance(litellm_params, str):
-        normalized: Final = LiteLLM_ManagedVectorStore(**dict(vector_store))
+        normalized: Final = LiteLLM_ManagedVectorStore(**vector_store)
         try:
             normalized["litellm_params"] = _JSON_OBJECT.validate_python(json.loads(litellm_params))
         except (TypeError, ValueError):

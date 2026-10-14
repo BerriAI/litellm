@@ -1,10 +1,12 @@
 import base64
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -31,6 +33,35 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiInlineData(TypedDict, total=False):
+    data: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiImageEditPart(TypedDict, total=False):
+    inlineData: ReadOnly[_GeminiInlineData | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiImageEditContent(TypedDict, total=False):
+    parts: ReadOnly[Sequence[_GeminiImageEditPart]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiImageEditCandidate(TypedDict, total=False):
+    content: ReadOnly[_GeminiImageEditContent]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiImageEditResponseDoc(TypedDict, total=False):
+    candidates: ReadOnly[Sequence[_GeminiImageEditCandidate]]
+    usageMetadata: ReadOnly[dict[str, object]]
+
+
+_GEMINI_IMAGE_EDIT_RESPONSE: Final = TypeAdapter(_GeminiImageEditResponseDoc)
 
 
 class GeminiImageEditConfig(BaseImageEditConfig):
@@ -125,7 +156,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _GEMINI_IMAGE_EDIT_RESPONSE.validate_python(raw_response.json())
         except Exception as exc:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {exc}",
@@ -144,7 +175,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                 if inline_data and inline_data.get("data"):
                     data_list.append(
                         ImageObject(
-                            b64_json=inline_data["data"],
+                            b64_json=inline_data.get("data"),
                             url=None,
                         )
                     )

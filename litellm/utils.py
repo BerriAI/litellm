@@ -8510,11 +8510,14 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
     return stop
 
 
+_BUNDLED_MODEL_COST_MAP: Final = TypeAdapter(Mapping[str, Mapping[str, object]], config=ConfigDict(strict=True))
+
+
 @lru_cache(maxsize=1)
-def get_bundled_model_cost_map() -> dict[str, Any]:
+def get_bundled_model_cost_map() -> Mapping[str, Mapping[str, object]]:
     try:
         model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
+        return _BUNDLED_MODEL_COST_MAP.validate_python(json.loads(model_cost_path.read_text()))
     except Exception:
         return {}
 
@@ -8525,7 +8528,7 @@ _get_bundled_model_cost_map = get_bundled_model_cost_map
 def _get_model_cost_entry_for_provider_config(
     model: str,
     provider: LlmProviders,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     candidate_keys: Final = (model, f"{provider.value}/{model}")
     for model_key in candidate_keys:
         model_info = litellm.model_cost.get(model_key)

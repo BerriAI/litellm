@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -21,6 +23,15 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _NLPCloudTokenUsage(TypedDict):
+    nb_input_tokens: ReadOnly[int]
+    nb_generated_tokens: ReadOnly[int]
+
+
+_NLP_CLOUD_TOKEN_USAGE_ADAPTER: Final = TypeAdapter(_NLPCloudTokenUsage)
 
 
 class NLPCloudConfig(BaseConfig):
@@ -208,8 +219,9 @@ class NLPCloudConfig(BaseConfig):
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens: Final = completion_response["nb_input_tokens"]
-        completion_tokens: Final = completion_response["nb_generated_tokens"]
+        token_usage: Final = _NLP_CLOUD_TOKEN_USAGE_ADAPTER.validate_python(completion_response)
+        prompt_tokens: Final = token_usage["nb_input_tokens"]
+        completion_tokens: Final = token_usage["nb_generated_tokens"]
 
         model_response.created = int(time.time())
         model_response.model = model

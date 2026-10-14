@@ -3,6 +3,8 @@ import os
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -32,6 +34,20 @@ if TYPE_CHECKING:
 
 class PangeaGuardrailMissingSecrets(Exception):
     """Custom exception for missing Pangea secrets."""
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PangeaGuardResult(TypedDict):
+    blocked: NotRequired[ReadOnly[object]]
+    detectors: NotRequired[ReadOnly[object]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PangeaGuardResponse(TypedDict):
+    result: NotRequired[ReadOnly[_PangeaGuardResult]]
+
+
+_PANGEA_GUARD: Final = TypeAdapter(_PangeaGuardResponse)
 
 
 class _TextCompletionRequest:
@@ -136,7 +152,7 @@ class PangeaHandler(CustomGuardrail):
         )
         response.raise_for_status()
 
-        result: Final = response.json()
+        result: Final = _PANGEA_GUARD.validate_python(response.json())
 
         if result.get("result", {}).get("blocked"):
             verbose_proxy_logger.warning("Pangea Guardrail (%s): Request blocked. Response: %s", hook_name, result)
@@ -151,7 +167,7 @@ class PangeaHandler(CustomGuardrail):
             "Pangea Guardrail (%s): Request passed. Response: %s", hook_name, result.get("result", {}).get("detectors")
         )
 
-        return result
+        return dict(result)
 
     async def _async_pre_call_hook(
         self,

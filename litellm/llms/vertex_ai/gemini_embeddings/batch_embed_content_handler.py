@@ -6,6 +6,8 @@ import json
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, Required, TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -33,6 +35,29 @@ from .batch_embed_content_transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiFileMetadata(TypedDict, total=False):
+    mimeType: ReadOnly[str]
+    uri: ReadOnly[str]
+
+
+_GEMINI_FILE_METADATA_VALIDATOR: Final = TypeAdapter(_GeminiFileMetadata)
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiEmbeddingValues(TypedDict, total=False):
+    values: Required[ReadOnly[list[int | float]]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiEmbedContentResponse(TypedDict, total=False):
+    embedding: ReadOnly[_GeminiEmbeddingValues]
+    usageMetadata: ReadOnly[object]
+
+
+_GEMINI_EMBED_CONTENT_RESPONSE_VALIDATOR: Final = TypeAdapter(_GeminiEmbedContentResponse)
 
 
 class GoogleBatchEmbeddings(VertexLLM):
@@ -74,7 +99,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 if response.status_code != 200:
                     raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
-                file_data = response.json()
+                file_data = _GEMINI_FILE_METADATA_VALIDATOR.validate_python(response.json())
                 resolved_files[element] = {
                     "mime_type": file_data.get("mimeType", ""),
                     "uri": file_data.get("uri", element),
@@ -111,7 +136,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 if response.status_code != 200:
                     raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
-                file_data = response.json()
+                file_data = _GEMINI_FILE_METADATA_VALIDATOR.validate_python(response.json())
                 resolved_files[element] = {
                     "mime_type": file_data.get("mimeType", ""),
                     "uri": file_data.get("uri", element),
@@ -265,17 +290,17 @@ class GoogleBatchEmbeddings(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        _json_response: Final = response.json()
-
         if use_embed_content:
+            embed_content_response: Final = _GEMINI_EMBED_CONTENT_RESPONSE_VALIDATOR.validate_python(response.json())
             return process_embed_content_response(
                 input=input,
                 model_response=model_response,
                 model=model,
-                response_json=_json_response,
+                response_json=dict(embed_content_response),
                 resolved_files=resolved_files,
             )
         else:
+            _json_response: Final = response.json()
             _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,
@@ -372,17 +397,17 @@ class GoogleBatchEmbeddings(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        _json_response: Final = response.json()
-
         if use_embed_content:
+            embed_content_response: Final = _GEMINI_EMBED_CONTENT_RESPONSE_VALIDATOR.validate_python(response.json())
             return process_embed_content_response(
                 input=input,
                 model_response=model_response,
                 model=model,
-                response_json=_json_response,
+                response_json=dict(embed_content_response),
                 resolved_files=resolved_files,
             )
         else:
+            _json_response: Final = response.json()
             _predictions: Final = VertexAIBatchEmbeddingsResponseObject(**_json_response)
             return process_response(
                 model=model,

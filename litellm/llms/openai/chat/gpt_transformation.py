@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
@@ -74,6 +74,21 @@ else:
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+class _OpenAIModelEntry(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True)
+
+    id: str
+
+
+class _OpenAIModelsList(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True)
+
+    data: Sequence[_OpenAIModelEntry]
+
+
+_MODELS_LIST: Final = TypeAdapter(_OpenAIModelsList)
 
 
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -851,7 +866,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
-        return [model["id"] for model in response.json()["data"]]
+        models: Final = _MODELS_LIST.validate_python(response.json())
+        return [model.id for model in models.data]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:

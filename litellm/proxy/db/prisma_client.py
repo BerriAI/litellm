@@ -15,6 +15,8 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+from typing_extensions import ReadOnly, TypedDict
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_url_settings import add_missing_query_params, token_refresh_params_from_url
@@ -33,6 +35,7 @@ from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma.types import DatasourceOverride, HttpConfig
 
 __all__ = (
     "IAMEndpoint",
@@ -40,6 +43,18 @@ __all__ = (
     "PrismaWrapper",
     "parse_iam_endpoint_from_url",
 )
+
+
+class _PrismaHttpKwargs(TypedDict, total=False):
+    http: ReadOnly["HttpConfig"]
+
+
+class _PrismaDatasourceKwargs(TypedDict, total=False):
+    datasource: ReadOnly["DatasourceOverride"]
+
+
+class _PrismaInitKwargs(_PrismaHttpKwargs, _PrismaDatasourceKwargs, total=False):
+    pass
 
 
 class _PrismaProcess(Protocol):
@@ -530,7 +545,7 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self,
         new_db_url: str,
-        http_client: object | None = None,
+        http_client: "HttpConfig | None" = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -568,7 +583,7 @@ class PrismaWrapper:
     async def _recreate_prisma_client_locked(
         self,
         new_db_url: str,
-        http_client: object | None = None,
+        http_client: "HttpConfig | None" = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -579,6 +594,7 @@ class PrismaWrapper:
         lock) don't re-acquire it — `asyncio.Lock` is not reentrant.
         """
         from prisma import Prisma
+        from prisma.types import DatasourceOverride
 
         if expected_generation is not None and expected_generation != self._engine_generation:
             verbose_proxy_logger.info(
@@ -605,11 +621,11 @@ class PrismaWrapper:
             self._expected_engine_deaths.add(old_engine_pid)
             await self._kill_engine_process(old_engine_pid)
 
-        kwargs: Final[dict[str, Any]] = {}
-        if http_client is not None:
-            kwargs["http"] = http_client
-        if self._recreate_uses_datasource:
-            kwargs["datasource"] = {"url": new_db_url}
+        http_kwargs: Final[_PrismaHttpKwargs] = {"http": http_client} if http_client is not None else {}
+        datasource_kwargs: Final[_PrismaDatasourceKwargs] = (
+            {"datasource": DatasourceOverride(url=new_db_url)} if self._recreate_uses_datasource else {}
+        )
+        kwargs: Final[_PrismaInitKwargs] = {**http_kwargs, **datasource_kwargs}
         self._original_prisma = Prisma(**kwargs)
 
         await self._original_prisma.connect()

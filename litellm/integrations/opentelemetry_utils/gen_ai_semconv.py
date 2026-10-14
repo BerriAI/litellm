@@ -29,21 +29,50 @@ Events:
   included only when content capture is enabled).
 """
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
 
-    Span = _Span | Any
-else:
-    Span = Any
+
+class Span(Protocol):
+    def set_attribute(self, key: str, value: Sequence[str]) -> None: ...
+
+
+class _SpanContext(Protocol):
+    @property
+    def trace_id(self) -> int: ...
+
+    @property
+    def span_id(self) -> int: ...
+
+    @property
+    def trace_flags(self) -> int: ...
+
+
+class _LogRecordFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        timestamp: int,
+        trace_id: int,
+        span_id: int,
+        trace_flags: int,
+        severity_number: object,
+        severity_text: str,
+        body: None,
+        attributes: Mapping[str, object],
+    ) -> object: ...
+
+
+class _SeverityNumbers(Protocol):
+    INFO: object
 
 
 # OTEL_SEMCONV_STABILITY_OPT_IN is a comma-separated list of category-specific
@@ -128,7 +157,7 @@ class OTELGenAISemconvMixin:
 
         def _to_ns(self, dt: datetime) -> int: ...
 
-        def _otel_log_types(self) -> tuple[Any, Any]: ...
+        def _otel_log_types(self) -> tuple[_LogRecordFactory, _SeverityNumbers]: ...
 
     @property
     def _gen_ai_semconv_latest_experimental(self) -> bool:
@@ -227,7 +256,7 @@ class OTELGenAISemconvMixin:
         response_obj: dict,
         provider: str | None,
         otel_logger,
-        parent_ctx,
+        parent_ctx: _SpanContext,
     ) -> None:
         """Emit the consolidated ``gen_ai.client.inference.operation.details``
         log event, correlated to the request span via ``parent_ctx``.

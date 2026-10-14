@@ -12,6 +12,9 @@ import uuid
 from collections.abc import Mapping
 from typing import Final
 
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -24,6 +27,14 @@ from .authenticator import get_access_token, get_access_token_async
 
 # Simple in-memory cache for file IDs
 _file_cache: Final[dict[str, str]] = {}
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _GigaChatUploadedFile(TypedDict):
+    id: NotRequired[ReadOnly[str | None]]
+
+
+_UPLOADED_FILE: Final = TypeAdapter(_GigaChatUploadedFile)
 
 
 def _get_url_hash(url: str) -> str:
@@ -137,7 +148,7 @@ def upload_file_sync(
             timeout=60,
         )
         response.raise_for_status()
-        result: Final = response.json()
+        result: Final = _UPLOADED_FILE.validate_python(response.json())
 
         file_id: Final = result.get("id")
         if file_id:
@@ -206,7 +217,7 @@ async def upload_file_async(
             timeout=60,
         )
         response.raise_for_status()
-        result: Final = response.json()
+        result: Final = _UPLOADED_FILE.validate_python(response.json())
 
         file_id: Final = result.get("id")
         if file_id:

@@ -1688,14 +1688,16 @@ class AmazonConverseConfig(BaseConfig):
         # Filter out non-serializable objects (exceptions, callables, logging objects, etc.)
         # from additional_request_params to prevent JSON serialization errors
         # This filters: Exception objects, callable objects (functions), Logging objects, etc.
-        additional_request_params = filter_exceptions_from_params(additional_request_params)
+        filtered_additional_request_params: Final = filter_exceptions_from_params(additional_request_params)
+        if not isinstance(filtered_additional_request_params, dict):
+            raise TypeError("Filtered Bedrock parameters must remain a dictionary")
 
         if anthropic_output_config is not None and isinstance(anthropic_output_config, dict):
             # Application inference profile ARNs hide the underlying model, so the
             # effort ceiling and capability gates below cannot run; forward
             # verbatim (like ``thinking``) and let Bedrock enforce.
             if is_bedrock_application_inference_profile_arn(model):
-                additional_request_params["output_config"] = anthropic_output_config
+                filtered_additional_request_params["output_config"] = anthropic_output_config
             elif base_model.startswith("anthropic"):
                 if litellm.drop_params is True and not AnthropicConfig.model_supports_effort_param(model, "bedrock"):
                     litellm.verbose_logger.warning(
@@ -1711,11 +1713,11 @@ class AmazonConverseConfig(BaseConfig):
                     effort: Final = anthropic_output_config.get("effort")
                     if effort is not None:
                         self._validate_anthropic_adaptive_effort(model=model, effort=effort)
-                    additional_request_params["output_config"] = anthropic_output_config
+                    filtered_additional_request_params["output_config"] = anthropic_output_config
 
         return (
             inference_params,
-            additional_request_params,
+            filtered_additional_request_params,
             request_metadata,
             output_config,
         )

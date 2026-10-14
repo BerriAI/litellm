@@ -126,6 +126,7 @@ class _ResponsesInputItem(LiteLLMBaseModel):
 
 _ResponsesInput: TypeAlias = str | tuple[_ResponsesInputItem, ...] | None
 _RESPONSES_INPUT: Final[TypeAdapter[_ResponsesInput]] = TypeAdapter(_ResponsesInput)
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 if TYPE_CHECKING:
@@ -640,7 +641,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # If the original args were structured, preserve the type.
         if isinstance(original_args, (dict, list)):
             try:
-                parsed: Final[object] = json.loads(masked_text)
+                parsed: Final = _JSON_VALUE.validate_python(json.loads(masked_text))
             except (json.JSONDecodeError, TypeError):
                 raise HTTPException(
                     status_code=400,
@@ -893,7 +894,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             if not line.startswith("data: "):
                 continue
             try:
-                data = json.loads(line[6:])
+                data = _JSON_VALUE.validate_python(json.loads(line[6:]))
             except (json.JSONDecodeError, ValueError):
                 continue
             if not isinstance(data, dict):

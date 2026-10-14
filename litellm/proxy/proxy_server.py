@@ -1077,7 +1077,7 @@ def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] 
         return None
     if isinstance(worker_config, dict):
         return _redact_secret_values_in_obj(worker_config)
-    parsed: Final = safe_json_loads(worker_config, default=None)
+    parsed: Final = _JSON_VALUE_ADAPTER.validate_python(safe_json_loads(worker_config, default=None), strict=True)
     if isinstance(parsed, dict):
         return safe_dumps(_redact_secret_values_in_obj(parsed))
     return worker_config
@@ -1267,6 +1267,7 @@ _LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
 _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 class _AiohttpConnectorKwargs(TypedDict, total=False):
@@ -1417,9 +1418,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             await initialize_from_worker_config(worker_config)
         else:
             # if not, assume it's a json string
-            worker_config = json.loads(worker_config)
-            if isinstance(worker_config, dict):
-                await initialize_from_worker_config(worker_config)
+            parsed_worker_config: Final = _JSON_VALUE_ADAPTER.validate_python(json.loads(worker_config), strict=True)
+            if isinstance(parsed_worker_config, dict):
+                await initialize_from_worker_config(parsed_worker_config)
 
     enforce_fips_boot_verdict(
         fips_boot_verdict(

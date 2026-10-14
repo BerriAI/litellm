@@ -6,7 +6,8 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Optional
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
@@ -38,6 +39,22 @@ else:
     Route = Any
     SemanticRouter = Any
     LiteLLMRouterEncoder = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AutoRouterRoute(TypedDict, total=False):
+    name: ReadOnly[str]
+    description: ReadOnly[str | None]
+    utterances: ReadOnly[Sequence[object]]
+    score_threshold: ReadOnly[int | float | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AutoRouterConfig(TypedDict, total=False):
+    routes: ReadOnly[Sequence[_AutoRouterRoute]]
+
+
+_AUTO_ROUTER_CONFIG: Final = TypeAdapter(_AutoRouterConfig)
 
 
 class _CallerMetadata(LiteLLMBaseModel):
@@ -120,7 +137,7 @@ class AutoRouter(CustomLogger):
         if self.auto_router_config is None:
             raise ValueError("No auto router config provided")
         auto_router_routes: Final[list[Route]] = []
-        loaded_config: Final = json.loads(self.auto_router_config)
+        loaded_config: Final = _AUTO_ROUTER_CONFIG.validate_python(json.loads(self.auto_router_config))
         for route in loaded_config.get("routes", []):
             auto_router_routes.append(
                 Route(

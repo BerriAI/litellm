@@ -111,6 +111,9 @@ from ..common_utils import (
     strip_advisor_blocks_from_messages,
 )
 
+_OBJECT_MAP: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_DECODED_JSON: Final = TypeAdapter(object)
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -2552,7 +2555,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         code_by_id: Final[dict[str, str]] = {}
         for tc in tool_calls:
             try:
-                args: object = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                args: object = _DECODED_JSON.validate_python(json.loads(tc.get("function", {}).get("arguments", "{}")))
                 if not isinstance(args, Mapping):
                     continue
                 call_id = tc.get("id")
@@ -2814,7 +2817,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = dict(_OBJECT_MAP.validate_python(raw_response.json()))
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise AnthropicError(
@@ -2857,7 +2860,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if json_mode_content_str is None:
             return None
         try:
-            payload: Final[object] = json.loads(json_mode_content_str)
+            payload: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
         except (json.JSONDecodeError, RecursionError):
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)

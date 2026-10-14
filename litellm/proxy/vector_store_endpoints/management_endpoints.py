@@ -13,6 +13,7 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -51,6 +52,9 @@ router: Final = APIRouter()
 
 def _vector_store_table(prisma_client: "PrismaClient") -> "TableActions[_VectorStoreRow]":
     return ManagedVectorStoresRepository(prisma_client).table
+
+
+_OPTIONAL_OBJECT_DICT: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None)
 
 
 def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
@@ -569,7 +573,7 @@ async def get_vector_store_info(
                 # Parse metadata if it's a JSON string
                 parsed_metadata: dict | None = None
                 if isinstance(vector_store_metadata, str):
-                    parsed_metadata = json.loads(vector_store_metadata)
+                    parsed_metadata = _OPTIONAL_OBJECT_DICT.validate_python(json.loads(vector_store_metadata))
                 elif isinstance(vector_store_metadata, dict):
                     parsed_metadata = vector_store_metadata
 

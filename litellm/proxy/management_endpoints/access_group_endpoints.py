@@ -633,22 +633,26 @@ async def update_access_group(
     _require_proxy_admin(user_api_key_dict)
     prisma_client: Final = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    update_fields: Final = data.model_dump(exclude_unset=True)
-    update_data: Final[dict] = {"updated_by": user_api_key_dict.user_id}
-    for field, value in update_fields.items():
-        if (
-            field
-            in (
-                "assigned_team_ids",
-                "assigned_key_ids",
-                "access_model_names",
-                "access_mcp_server_ids",
-                "access_agent_ids",
+    update_fields: Final[Mapping[str, object]] = data.model_dump(exclude_unset=True)
+    update_data: Final = {
+        "updated_by": user_api_key_dict.user_id,
+        **{
+            field: (
+                []
+                if field
+                in (
+                    "assigned_team_ids",
+                    "assigned_key_ids",
+                    "access_model_names",
+                    "access_mcp_server_ids",
+                    "access_agent_ids",
+                )
+                and value is None
+                else value
             )
-            and value is None
-        ):
-            value = []
-        update_data[field] = value
+            for field, value in update_fields.items()
+        },
+    }
 
     # Initialize delta lists before the try block so they remain accessible
     # for cache updates after the transaction, even if an error path is added later.
@@ -674,10 +678,10 @@ async def update_access_group(
             old_team_ids: Final[set[str]] = set(attached[access_group_id])
             old_key_ids: Final[set[str]] = set(existing.assigned_key_ids or [])
             new_team_ids: Final[set[str]] = (
-                set(update_fields["assigned_team_ids"] or []) if "assigned_team_ids" in update_fields else old_team_ids
+                set(data.assigned_team_ids or []) if "assigned_team_ids" in update_fields else old_team_ids
             )
             new_key_ids: Final[set[str]] = (
-                set(update_fields["assigned_key_ids"] or []) if "assigned_key_ids" in update_fields else old_key_ids
+                set(data.assigned_key_ids or []) if "assigned_key_ids" in update_fields else old_key_ids
             )
 
             teams_to_add = list(new_team_ids - old_team_ids)

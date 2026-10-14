@@ -6,10 +6,12 @@ Why separate file? Make it easy to see how transformation works
 
 import math
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -25,6 +27,20 @@ from litellm.types.rerank import (
     RerankResponseMeta,
     RerankResponseResult,
 )
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _VertexRerankRecord(TypedDict):
+    id: ReadOnly[str | int]
+    score: ReadOnly[NotRequired[int | float]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _VertexRerankBody(TypedDict):
+    records: ReadOnly[NotRequired[Sequence[_VertexRerankRecord]]]
+
+
+_VERTEX_RERANK_BODY: Final = TypeAdapter(_VertexRerankBody)
 
 
 class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
@@ -172,12 +188,12 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Transform Vertex AI Discovery Engine response to Cohere format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            body: Final = _VERTEX_RERANK_BODY.validate_python(raw_response.json())
         except Exception as e:
             raise ValueError(f"Failed to parse response: {e}")
 
         # Extract records from response
-        records: Final = raw_response_json.get("records", [])
+        records: Final = body.get("records", ())
 
         # Convert to Cohere format
         results: Final = []

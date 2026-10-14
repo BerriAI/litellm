@@ -22,10 +22,13 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 """
 
 import base64
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -43,6 +46,15 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _BedrockStabilityResponse(TypedDict):
+    finish_reasons: NotRequired[ReadOnly[Sequence[object]]]
+    images: NotRequired[ReadOnly[Sequence[str | None]]]
+
+
+_STABILITY_RESPONSE: Final = TypeAdapter(_BedrockStabilityResponse)
 
 
 class BedrockStabilityImageEditConfig(BaseImageEditConfig):
@@ -315,8 +327,10 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
+        stability_response: Final = _STABILITY_RESPONSE.validate_python(response_data)
+
         # Check finish_reasons
-        finish_reasons: Final = response_data.get("finish_reasons", [])
+        finish_reasons: Final = stability_response.get("finish_reasons", [])
         if finish_reasons and finish_reasons[0]:
             raise self.get_error_class(
                 error_message=f"Bedrock Stability error: {finish_reasons[0]}",
@@ -329,7 +343,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
             model_response.data = []
 
         # Extract images from response
-        images: Final = response_data.get("images", [])
+        images: Final = stability_response.get("images", [])
         if images:
             for image_b64 in images:
                 if image_b64:

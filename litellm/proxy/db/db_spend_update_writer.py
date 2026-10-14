@@ -2072,7 +2072,7 @@ class DBSpendUpdateWriter:
             n_retry_times,
             e,
         )
-        await asyncio.sleep(random.uniform(2**attempt, 2 ** (attempt + 1)))
+        await asyncio.sleep(random.uniform(1 << attempt, 1 << (attempt + 1)))
 
     _handle_spend_update_failure = handle_spend_update_failure
 
@@ -2623,7 +2623,7 @@ class DBSpendUpdateWriter:
                             # and thus they are more likely to deadlock again.
                             # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
                             # repeated deadlocks, and therefore of exceeding the retry limit.
-                            random.uniform(2**i, 2 ** (i + 1))
+                            random.uniform(1 << i, 1 << (i + 1))
                         )
 
         except Exception as e:

@@ -636,7 +636,7 @@ def independent_snapshot(
     return {key: _copied_value(key, value) for key, value in sanitized.items()}
 
 
-def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
+def filter_exceptions_from_params(data: object, max_depth: int = 20) -> object | None:
     """
     Recursively filter out Exception objects and callable objects from dicts/lists.
 

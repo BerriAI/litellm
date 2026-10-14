@@ -4,7 +4,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from openai.types.image import Image
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -20,6 +21,14 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _PREDICTIONS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _VertexImageResponse(TypedDict):
+    predictions: ReadOnly[NotRequired[object]]
+
+
+_VERTEX_IMAGE_RESPONSE: Final = TypeAdapter(_VertexImageResponse)
 
 
 class VertexImageGeneration(VertexLLM):
@@ -168,7 +177,7 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = response.json()
+        json_response: Final = _VERTEX_IMAGE_RESPONSE.validate_python(response.json())
         return self.process_image_generation_response(json_response, model_response, model)
 
     async def aimage_generation(
@@ -272,7 +281,7 @@ class VertexImageGeneration(VertexLLM):
         if response.status_code != 200:
             raise Exception(f"Error: {response.status_code} {response.text}")
 
-        json_response: Final = response.json()
+        json_response: Final = _VERTEX_IMAGE_RESPONSE.validate_python(response.json())
         return self.process_image_generation_response(json_response, model_response, model)
 
     def is_image_generation_response(self, json_response: dict[str, Any]) -> bool:

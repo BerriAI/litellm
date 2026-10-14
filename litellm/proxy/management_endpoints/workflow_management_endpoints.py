@@ -147,6 +147,34 @@ class _MessageCreateData(TypedDict, total=False):
     session_id: str
 
 
+class _WorkflowEventTable(Protocol):
+    async def create(self, *, data: _EventCreateData) -> object: ...
+
+
+class _WorkflowRunTable(Protocol):
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+
+
+class _WorkflowTx(Protocol):
+    litellm_workflowevent: _WorkflowEventTable
+    litellm_workflowrun: _WorkflowRunTable
+
+
+async def _append_event_tx(
+    tx: _WorkflowTx,
+    event_data: _EventCreateData,
+    run_id: str,
+    new_status: str | None,
+) -> object:
+    event: Final[object] = await tx.litellm_workflowevent.create(data=event_data)
+    if new_status:
+        await tx.litellm_workflowrun.update(
+            where={"run_id": run_id},
+            data={"status": new_status},
+        )
+    return event
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -387,14 +415,12 @@ async def append_workflow_event(
                 event_data["data"] = _json(data.data)
 
             async with prisma_client.db.tx() as tx:
-                event: object = await tx.litellm_workflowevent.create(data=event_data)
-                if new_status:
-                    await tx.litellm_workflowrun.update(
-                        where={"run_id": run_id},
-                        data={"status": new_status},
-                    )
-
-            return event
+                return await _append_event_tx(
+                    tx=tx,
+                    event_data=event_data,
+                    run_id=run_id,
+                    new_status=new_status,
+                )
 
         except Exception as e:
             if UniqueViolationError is not None and isinstance(e, UniqueViolationError):

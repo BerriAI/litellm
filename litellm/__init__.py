@@ -195,7 +195,7 @@ argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
 gcs_pub_sub_use_v1: Optional[bool] = False  # if you want to use v1 gcs pubsub logged payload
 generic_api_use_v1: Optional[bool] = False  # if you want to use v1 generic api logged payload
-argilla_transformation_object: Optional[Dict[str, Any]] = None
+argilla_transformation_object: Optional[Dict[str, str]] = None
 _async_input_callback: List[Union[str, Callable[..., object], "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
@@ -353,7 +353,7 @@ in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
 enable_azure_ad_token_refresh: Optional[bool] = False
 # Proxy Authentication - auto-obtain/refresh OAuth2/JWT tokens for LiteLLM Proxy
-proxy_auth: Optional[Any] = None
+proxy_auth: Optional[ProxyAuthHandler] = None
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2025-02-01-preview"  # this is updated to the latest
 ### DEFAULT WATSONX API VERSION ###
@@ -521,7 +521,7 @@ skill_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)
-public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
+public_model_groups_links: Dict[str, Union[str, Dict[str, object]]] = {}
 #### REQUEST PRIORITIZATION #######
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
@@ -1591,6 +1591,7 @@ def set_global_gitlab_config(config: Mapping[str, object]) -> None:
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.types.utils import PriorityReservationSettings
+    from litellm.proxy_auth.credentials import ProxyAuthHandler
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
 

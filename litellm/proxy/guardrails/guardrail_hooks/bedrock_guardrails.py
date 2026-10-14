@@ -126,6 +126,7 @@ _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
 _BEDROCK_CHECKS_MAX_CONTENT_BLOCKS: Final = 10
 _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES: Final = 20
 _BEDROCK_CHECKS_KNOWN_KEYS: Final = frozenset({"contentFilter", "promptAttack", "sensitiveInformation"})
+_JSON_VALUE: Final = TypeAdapter(object)
 # Keys in a sensitiveInformation result that pinpoint the PII location. They are
 # stripped before the response is handed to standard logging / telemetry so the
 # detected PII span cannot be reconstructed from logs.
@@ -2158,11 +2159,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             try:
                 raw: Final = getattr(response, "content", None)
                 if isinstance(raw, (bytes, bytearray)):
-                    payload = json.loads(raw.decode("utf-8"))
+                    payload = _JSON_VALUE.validate_python(json.loads(raw.decode("utf-8")))
                 else:
                     text: Final = getattr(response, "text", None)
                     if isinstance(text, str):
-                        payload = json.loads(text)
+                        payload = _JSON_VALUE.validate_python(json.loads(text))
             except Exception:
                 # Can't parse -> assume no explicit Exception marker
                 return False

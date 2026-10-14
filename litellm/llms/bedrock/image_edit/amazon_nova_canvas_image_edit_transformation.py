@@ -17,6 +17,8 @@ import os
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -36,6 +38,10 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_NOVA_CANVAS_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_NOVA_CANVAS_IMAGES: Final = TypeAdapter(list[str], config=ConfigDict(strict=True))
 
 
 def _nova_canvas_task_body(
@@ -319,7 +325,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, Any]:
+    ) -> tuple[dict[str, object], RequestFiles]:
         op: Final = dict(image_edit_optional_request_params)
         image_b64: Final = _file_types_to_b64(image)
 
@@ -415,18 +421,19 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        images: Final[list[str]] = response_data.get("images") or []
+        validated_response_data: Final = _NOVA_CANVAS_RESPONSE.validate_python(response_data)
+        images: Final[list[str]] = _NOVA_CANVAS_IMAGES.validate_python(validated_response_data.get("images") or [])
 
-        if "errors" in response_data and not images:
+        if "errors" in validated_response_data and not images:
             raise self.get_error_class(
-                error_message=f"Nova Canvas image edit error: {response_data['errors']}",
+                error_message=f"Nova Canvas image edit error: {validated_response_data['errors']}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
         # Nova Canvas InvokeModel success body uses "images" and optional "error" (AWS docs);
         # it does not use Stability-style "finish_reasons".
-        error_msg = response_data.get("message") or response_data.get("error")
+        error_msg = validated_response_data.get("message") or validated_response_data.get("error")
         if error_msg and not images:
             if not isinstance(error_msg, str):
                 error_msg = str(error_msg)

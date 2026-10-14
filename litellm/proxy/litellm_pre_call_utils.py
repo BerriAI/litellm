@@ -523,18 +523,22 @@ def _normalized_metadata_slot(
 
 
 def _strip_untrusted_request_header_controls(
-    headers: Any,
+    headers: object,
     *,
     allow_client_message_redaction_opt_out: bool = False,
 ) -> None:
     if not isinstance(headers, dict):
         return
+    if allow_client_message_redaction_opt_out:
+        return
 
-    for header_name in list(headers.keys()):
-        if isinstance(header_name, str) and header_name.lower() in UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
-            if allow_client_message_redaction_opt_out:
-                continue
-            headers.pop(header_name, None)
+    strip_names: Final = tuple(
+        header_name
+        for header_name in headers
+        if isinstance(header_name, str) and header_name.lower() in UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
+    )
+    for header_name in strip_names:
+        headers.pop(header_name, None)
 
 
 def _is_false_like(value: object) -> bool:

@@ -8,19 +8,46 @@ sensitive information like SSNs, credit cards, API keys, etc.
 import json
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
 from re import Pattern
-from typing import Any, Final
+from typing import Final
+
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS, category_dirs
 
 
-def _load_patterns_from_json() -> dict:
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PatternDefinition(TypedDict):
+    name: ReadOnly[str]
+    pattern: ReadOnly[str]
+    category: ReadOnly[str]
+    display_name: ReadOnly[str]
+    description: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PatternsData(TypedDict):
+    patterns: ReadOnly[Sequence[_PatternDefinition]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PatternExtraConfig(TypedDict):
+    keyword_pattern: NotRequired[ReadOnly[str]]
+    allow_word_numbers: NotRequired[ReadOnly[object]]
+
+
+_PATTERNS_DATA_ADAPTER: Final = TypeAdapter(_PatternsData)
+_PATTERN_EXTRA_CONFIG_ADAPTER: Final = TypeAdapter(_PatternExtraConfig)
+
+
+def _load_patterns_from_json() -> _PatternsData:
     """Load pattern definitions from patterns.json file"""
     json_path: Final = os.path.join(os.path.dirname(__file__), "patterns.json")
     with open(json_path, "r") as f:
-        return json.load(f)
+        return _PATTERNS_DATA_ADAPTER.validate_python(json.load(f))
 
 
 # Load patterns from JSON
@@ -52,10 +79,12 @@ KNOWN_PATTERN_KEYS: Final = {
     "description",
 }
 
-PATTERN_EXTRA_CONFIG: Final[dict[str, dict[str, Any]]] = {}
-for pattern_data in _PATTERNS_DATA["patterns"]:
-    extra_config = {key: value for key, value in pattern_data.items() if key not in KNOWN_PATTERN_KEYS}
-    PATTERN_EXTRA_CONFIG[pattern_data["name"]] = extra_config
+PATTERN_EXTRA_CONFIG: Final[Mapping[str, _PatternExtraConfig]] = {
+    pattern_data["name"]: _PATTERN_EXTRA_CONFIG_ADAPTER.validate_python(
+        {key: value for key, value in pattern_data.items() if key not in KNOWN_PATTERN_KEYS}
+    )
+    for pattern_data in _PATTERNS_DATA["patterns"]
+}
 
 
 def get_compiled_pattern(pattern_name: str) -> Pattern[str]:

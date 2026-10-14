@@ -1,8 +1,10 @@
+from collections.abc import Iterable, Mapping
 from io import BufferedReader
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -19,6 +21,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class RecraftImageEditConfig(BaseImageEditConfig):
@@ -164,7 +169,8 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         if not model_response.data:
             model_response.data = []
 
-        for image_data in response_data["data"]:
+        payload: Final = _JSON_OBJECT.validate_python(response_data)
+        for image_data in _JSON_OBJECTS.validate_python(payload["data"]):
             model_response.data.append(
                 ImageObject(
                     url=image_data.get("url", None),

@@ -26,6 +26,7 @@ from collections.abc import AsyncIterator, Awaitable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
@@ -80,17 +81,20 @@ class _AzureMessagesData(TypedDict, total=False):
     data: ReadOnly[list[_AzureMessage]]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _CreatedObject(TypedDict):
     id: ReadOnly[str]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _RunError(TypedDict, total=False):
     message: ReadOnly[str]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _RunStatus(TypedDict, total=False):
     status: ReadOnly[str]
-    last_error: ReadOnly[_RunError]
+    last_error: ReadOnly[_RunError | None]
 
 
 class _SSEDelta(TypedDict, total=False):
@@ -101,6 +105,10 @@ class _SSEEventData(TypedDict, total=False):
     id: ReadOnly[str]
     content: ReadOnly[list[_AzureContentItem]]
     delta: ReadOnly[_SSEDelta]
+
+
+_AZURE_CREATED_OBJECT: Final = TypeAdapter(_CreatedObject)
+_AZURE_RUN_STATUS: Final = TypeAdapter(_RunStatus)
 
 
 class _SyncAgentRequest(Protocol):
@@ -365,7 +373,7 @@ class AzureAIAgentsHandler:
             verbose_logger.debug("Creating thread at: %s", self._build_thread_url(api_base, api_version))
             response = make_request("POST", self._build_thread_url(api_base, api_version), {})
             self._check_response(response, [200, 201], "Failed to create thread")
-            thread_data: Final[_CreatedObject] = response.json()
+            thread_data: Final = _AZURE_CREATED_OBJECT.validate_python(response.json())
             thread_id = thread_data["id"]
             verbose_logger.debug("Created thread: %s", thread_id)
 
@@ -386,7 +394,7 @@ class AzureAIAgentsHandler:
 
         response = make_request("POST", self._build_runs_url(api_base, thread_id, api_version), run_payload)
         self._check_response(response, [200, 201], "Failed to create run")
-        run_data: Final[_CreatedObject] = response.json()
+        run_data: Final = _AZURE_CREATED_OBJECT.validate_python(response.json())
         run_id: Final = run_data["id"]
         verbose_logger.debug("Created run: %s", run_id)
 
@@ -396,15 +404,17 @@ class AzureAIAgentsHandler:
             response = make_request("GET", status_url)
             self._check_response(response, [200], "Failed to get run status")
 
-            status_data: _RunStatus = response.json()
+            status_data = _AZURE_RUN_STATUS.validate_python(response.json())
             status = status_data.get("status")
             verbose_logger.debug("Run status: %s", status)
 
             if status == "completed":
                 break
             elif status in ["failed", "cancelled", "expired"]:
-                error_data: _RunStatus = response.json()
-                error_msg = error_data.get("last_error", {}).get("message", "Unknown error")
+                last_error_obj = status_data.get("last_error", {})
+                if last_error_obj is None:
+                    raise AttributeError("'NoneType' object has no attribute 'get'")
+                error_msg = last_error_obj.get("message", "Unknown error")
                 raise AzureAIAgentsError(status_code=500, message=f"Run {status}: {error_msg}")
 
             time.sleep(self.config.POLL_INTERVAL_SECONDS)
@@ -493,7 +503,7 @@ class AzureAIAgentsHandler:
             verbose_logger.debug("Creating thread at: %s", self._build_thread_url(api_base, api_version))
             response = await make_request("POST", self._build_thread_url(api_base, api_version), {})
             self._check_response(response, [200, 201], "Failed to create thread")
-            thread_data: Final[_CreatedObject] = response.json()
+            thread_data: Final = _AZURE_CREATED_OBJECT.validate_python(response.json())
             thread_id = thread_data["id"]
             verbose_logger.debug("Created thread: %s", thread_id)
 
@@ -514,7 +524,7 @@ class AzureAIAgentsHandler:
 
         response = await make_request("POST", self._build_runs_url(api_base, thread_id, api_version), run_payload)
         self._check_response(response, [200, 201], "Failed to create run")
-        run_data: Final[_CreatedObject] = response.json()
+        run_data: Final = _AZURE_CREATED_OBJECT.validate_python(response.json())
         run_id: Final = run_data["id"]
         verbose_logger.debug("Created run: %s", run_id)
 
@@ -524,15 +534,17 @@ class AzureAIAgentsHandler:
             response = await make_request("GET", status_url)
             self._check_response(response, [200], "Failed to get run status")
 
-            status_data: _RunStatus = response.json()
+            status_data = _AZURE_RUN_STATUS.validate_python(response.json())
             status = status_data.get("status")
             verbose_logger.debug("Run status: %s", status)
 
             if status == "completed":
                 break
             elif status in ["failed", "cancelled", "expired"]:
-                error_data: _RunStatus = response.json()
-                error_msg = error_data.get("last_error", {}).get("message", "Unknown error")
+                last_error_obj = status_data.get("last_error", {})
+                if last_error_obj is None:
+                    raise AttributeError("'NoneType' object has no attribute 'get'")
+                error_msg = last_error_obj.get("message", "Unknown error")
                 raise AzureAIAgentsError(status_code=500, message=f"Run {status}: {error_msg}")
 
             await asyncio.sleep(self.config.POLL_INTERVAL_SECONDS)

@@ -111,7 +111,7 @@ except ImportError:
     raise ImportError("backoff is not installed. Please install it via 'pip install backoff'")
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 import litellm.litellm_core_utils
@@ -314,6 +314,7 @@ _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
+_RAW_QUERY_ROWS: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(strict=True))
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
@@ -4656,6 +4657,12 @@ class _StaleReadEngine:
         return self.wrapper is current and self.generation == current.engine_generation
 
 
+async def _query_rows(
+    db: "PrismaWrapper | RoutingPrismaWrapper", adapter: TypeAdapter[_T], query: str, /, *args: object
+) -> _T:
+    return adapter.validate_python(await db.query_raw(query, *args))
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -5305,7 +5312,7 @@ class PrismaClient:
                         LIMIT $1
                         OFFSET $2
                         """
-                        response = await self.db.query_raw(sql_query, limit, offset)
+                        response = await _query_rows(self.db, _RAW_QUERY_ROWS, sql_query, limit, offset)
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug("PrismaClient: get_data: table_name == 'spend'")
@@ -6910,8 +6917,11 @@ class PrismaClient:
         )
 
     async def _view_setup_gate_table_present(self) -> bool:
-        rows: Final = _VIEW_SETUP_GATE_PROBE_ROWS.validate_python(
-            await self.db.query_raw("SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
+        rows: Final = await _query_rows(
+            self.db,
+            _VIEW_SETUP_GATE_PROBE_ROWS,
+            "SELECT to_regclass($1) IS NOT NULL AS present",
+            _VIEW_SETUP_GATE_TABLE,
         )
         return rows[0]["present"]
 
@@ -6980,9 +6990,7 @@ class PrismaClient:
 
     async def _writer_is_read_only(self, writer: PrismaWrapper) -> bool:
         """True iff the pooled writer session answers reads but rejects writes (SQLSTATE 25006)."""
-        rows: Final = _WRITER_WRITABILITY_PROBE_ROWS.validate_python(
-            await writer.query_raw(_WRITER_WRITABILITY_PROBE_SQL)
-        )
+        rows: Final = await _query_rows(writer, _WRITER_WRITABILITY_PROBE_ROWS, _WRITER_WRITABILITY_PROBE_SQL)
         return any(row.get("transaction_read_only") == "on" for row in rows)
 
     def _probe_target_wrapper(self) -> PrismaWrapper:

@@ -8,11 +8,11 @@ Handles the custom request/response format:
 The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI-compatible format.
 """
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -37,6 +37,10 @@ def parse_vertex_gemma_container_error(predictions: object) -> VertexGemmaContai
         return VertexGemmaContainerError.model_validate(predictions)
     except ValidationError:
         return None
+
+
+_GEMMA_BODY: Final = TypeAdapter(dict[str, object])
+_GEMMA_PREDICTIONS: Final = TypeAdapter(dict[str, object])
 
 
 class VertexGemmaConfig(OpenAIGPTConfig):
@@ -142,7 +146,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def _unwrap_predictions_response(
         self,
-        response_json: dict[str, Any],
+        response_json: Mapping[str, object],
     ) -> dict[str, object]:
         """
         Unwrap the Vertex Gemma predictions format to OpenAI format.
@@ -161,7 +165,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         predictions: Final = response_json["predictions"]
         container_error: Final = parse_vertex_gemma_container_error(predictions)
         if container_error is None:
-            return predictions
+            return _GEMMA_PREDICTIONS.validate_python(predictions)
         raise BaseLLMException(status_code=container_error.code, message=container_error.message)
 
     @staticmethod
@@ -354,7 +358,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json: Final = response.json()
+        response_json: Final = _GEMMA_BODY.validate_python(response.json())
 
         # Unwrap predictions to get OpenAI-compatible response
         openai_response: Final = self._unwrap_predictions_response(response_json)
@@ -449,7 +453,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json: Final = response.json()
+        response_json: Final = _GEMMA_BODY.validate_python(response.json())
 
         # Unwrap predictions to get OpenAI-compatible response
         openai_response: Final = self._unwrap_predictions_response(response_json)

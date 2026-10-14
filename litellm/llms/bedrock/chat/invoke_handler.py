@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -76,6 +76,7 @@ NOVA_INVOKE_STREAM_EVENT_TYPES: Final = (
     "metadata",
 )
 NOVA_INVOKE_STREAM_EVENT_PAYLOAD: Final = TypeAdapter(dict[str, object])
+_INVOKE_STREAM_CHUNK_DATA: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class AmazonCohereChatConfig:
@@ -115,16 +116,32 @@ class AmazonCohereChatConfig:
         stop_sequences: str | None = None,
         raw_prompting: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
+        config_values: Final = {
+            "documents": documents,
+            "search_queries_only": search_queries_only,
+            "preamble": preamble,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "p": p,
+            "k": k,
+            "prompt_truncation": prompt_truncation,
+            "frequency_penalty": frequency_penalty,
+            "presence_penalty": presence_penalty,
+            "seed": seed,
+            "return_prompt": return_prompt,
+            "stop_sequences": stop_sequences,
+            "raw_prompting": raw_prompting,
+        }
+        for key, value in config_values.items():
+            if value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
+        class_values: Final[Mapping[str, object]] = cls.__dict__
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_values.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -178,6 +195,10 @@ class AmazonCohereChatConfig:
 
 
 _REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+def _validated_invoke_stream_chunk_data(message: str) -> dict[str, object]:
+    return _INVOKE_STREAM_CHUNK_DATA.validate_python(json.loads(message))
 
 
 def response_format_schema_from_request(data: str, json_mode: bool | None) -> ResponseFormatSchema | None:
@@ -830,8 +851,7 @@ class AWSEventStreamDecoder:
                 message = self._decode_event(event, tally)
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
-                    _data = json.loads(message)
-                    yield self.chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_validated_invoke_stream_chunk_data(message))
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
@@ -850,8 +870,7 @@ class AWSEventStreamDecoder:
             for event in event_stream_buffer:
                 message = self._decode_event(event, tally)
                 if message:
-                    _data = json.loads(message)
-                    yield self.chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_validated_invoke_stream_chunk_data(message))
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
