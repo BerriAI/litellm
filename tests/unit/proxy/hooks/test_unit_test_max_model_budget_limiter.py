@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final
@@ -1755,6 +1756,48 @@ async def test_a_window_that_ends_past_the_calendar_reports_no_reset():
             "budget_reset_at": None,
         }
     }
+
+
+@pytest.fixture
+def host_timezone(request, monkeypatch):
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield request.param
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_timezone", ["UTC", "Europe/Amsterdam", "America/Los_Angeles"], indirect=True)
+async def test_a_monthly_reset_is_the_same_on_every_host_timezone(host_timezone):
+    """
+    Replicas behind one load balancer can run with different TZ settings, and they
+    must agree on when a monthly window ends.
+
+    Regression: months were counted on the host's local calendar, so a window opened
+    late on January 30 UTC ended a day earlier on a host in Amsterdam.
+    """
+    dual_cache = DualCache()
+    opened_at: Final = datetime(2027, 1, 30, 23, 30, tzinfo=timezone.utc)
+    model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}}
+    window: Final = {
+        "entity_type": Litellm_EntityType.KEY,
+        "entity_id": "vk-anywhere",
+        "budget_model": "gpt-4",
+        "budget_duration": "1mo",
+    }
+    await dual_cache.async_set_cache(model_budget_spend_cache_key(**window), 0.25)
+    await dual_cache.async_set_cache(model_budget_start_time_cache_key(**window), opened_at.timestamp())
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="vk-anywhere",
+        model_max_budget=model_max_budget,
+        cache=dual_cache,
+        now=datetime(2027, 2, 10, tzinfo=timezone.utc),
+    )
+
+    assert usage["gpt-4"]["budget_reset_at"] == "2027-02-28T23:30:00+00:00"
 
 
 def _log_success(limiter, **kwargs):

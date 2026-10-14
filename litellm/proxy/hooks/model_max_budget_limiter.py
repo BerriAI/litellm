@@ -230,7 +230,8 @@ async def build_model_max_budget_usage(
 
     `budget_reset_at` is when the open window ends and its spend counter
     expires, which is the window's start plus its period. It is None when no
-    window is open, because nothing has been charged since the last one ended.
+    window is open, because nothing has been charged since the last one ended,
+    and when the window ends after year 9999, so it never resets.
     """
     if cache is None or entity_id is None or not model_max_budget:
         return {}

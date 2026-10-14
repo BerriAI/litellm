@@ -37,7 +37,7 @@ from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds, duration_in_seconds_from
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
 from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
     get_prometheus_logger_from_callbacks,
@@ -106,9 +106,7 @@ def _sum_increments_by_key(operations: Sequence[RedisPipelineIncrementOperation]
 
 
 def budget_window_seconds(started_at: float, budget_duration: str) -> int:
-    return duration_in_seconds_from(
-        start=datetime.fromtimestamp(started_at, tz=timezone.utc).astimezone(), duration=budget_duration
-    )
+    return duration_in_seconds_from(start=datetime.fromtimestamp(started_at, tz=timezone.utc), duration=budget_duration)
 
 
 class RouterBudgetLimiting(CustomLogger):
@@ -806,14 +804,15 @@ class RouterBudgetLimiting(CustomLogger):
 
         spend_key: Final = f"provider_spend:{provider}:{budget_config.budget_duration}"
         start_time_key: Final = f"provider_budget_start_time:{provider}"
-        ttl_seconds: int | None = None
-        if budget_config.budget_duration is not None:
-            ttl_seconds = duration_in_seconds(budget_config.budget_duration)
+        current_time: Final = self._clock()
+        ttl_seconds: Final = (
+            budget_window_seconds(current_time, budget_config.budget_duration)
+            if budget_config.budget_duration is not None
+            else None
+        )
 
-        budget_start = await self.dual_cache.async_get_cache(start_time_key)
-        if budget_start is None:
-            budget_start = datetime.now(timezone.utc).timestamp()
-            await self.dual_cache.async_set_cache(key=start_time_key, value=budget_start, ttl=ttl_seconds)
+        if await self.dual_cache.async_get_cache(start_time_key) is None:
+            await self.dual_cache.async_set_cache(key=start_time_key, value=current_time, ttl=ttl_seconds)
 
         _spend_key: Final = await self.dual_cache.async_get_cache(spend_key)
         if _spend_key is None:
