@@ -1,5 +1,6 @@
 """Tests for attaching PTU-hours to a daily activity response."""
 
+from datetime import date
 from typing import Final
 
 import pytest
@@ -21,6 +22,10 @@ _ROW: Final = PTUCapacity(input_tpm_per_ptu=1_000, output_to_input_ratio=4.0)
 _CACHED_ROW: Final = PTUCapacity(input_tpm_per_ptu=1_000, output_to_input_ratio=4.0, cached_input_ratio=0.1)
 _CAPACITY: Final = {"gpt-4.1-ptu": _ROW, "gpt-6-ptu": _CACHED_ROW}
 _ONE_PTU_HOUR_OF_INPUT: Final = AZURE_PTU_CAPACITY["gpt-4.1"].normalized_tokens_per_ptu_hour
+
+
+def _capacity_every_day(model_group: str, _day: date) -> PTUCapacity | None:
+    return _CAPACITY.get(model_group)
 
 
 def _metrics(prompt: int, completion: int, cached: int = 0) -> SpendMetrics:
@@ -58,7 +63,7 @@ def test_a_ptu_model_groups_tokens_become_ptu_hours_on_the_group_the_day_and_the
     """60,000 normalized tokens on a 1,000 input-TPM row is one PTU-hour."""
     day: Final = _day("2026-09-23", {"gpt-4.1-ptu": _bucket(_metrics(prompt=40_000, completion=5_000))})
 
-    attached: Final = attach_ptu_hours(_response(day), _CAPACITY.get)
+    attached: Final = attach_ptu_hours(_response(day), _capacity_every_day)
 
     group: Final = attached.results[0].breakdown.model_groups["gpt-4.1-ptu"]
     assert group.metrics.ptu_hours == pytest.approx(1.0)
@@ -75,7 +80,7 @@ def test_a_model_group_without_a_sizing_row_keeps_zero_ptu_hours_and_the_rest_of
         },
     )
 
-    attached: Final = attach_ptu_hours(_response(day), _CAPACITY.get)
+    attached: Final = attach_ptu_hours(_response(day), _capacity_every_day)
 
     groups: Final = attached.results[0].breakdown.model_groups
     assert groups["gpt-4o-mini"].metrics.ptu_hours == 0.0
@@ -88,7 +93,7 @@ def test_a_model_group_without_a_sizing_row_keeps_zero_ptu_hours_and_the_rest_of
 def test_cached_input_is_charged_at_the_rows_cached_ratio():
     day: Final = _day("2026-09-23", {"gpt-6-ptu": _bucket(_metrics(prompt=60_000, completion=0, cached=60_000))})
 
-    attached: Final = attach_ptu_hours(_response(day), _CAPACITY.get)
+    attached: Final = attach_ptu_hours(_response(day), _capacity_every_day)
 
     assert attached.results[0].breakdown.model_groups["gpt-6-ptu"].metrics.ptu_hours == pytest.approx(0.1)
 
@@ -104,7 +109,7 @@ def test_each_api_key_under_a_ptu_group_gets_its_own_ptu_hours():
         },
     )
 
-    attached: Final = attach_ptu_hours(_response(day), _CAPACITY.get)
+    attached: Final = attach_ptu_hours(_response(day), _capacity_every_day)
 
     breakdown: Final = attached.results[0].breakdown.model_groups["gpt-4.1-ptu"].api_key_breakdown
     assert breakdown["key-a"].metrics.ptu_hours == pytest.approx(0.75)
@@ -115,7 +120,7 @@ def test_the_total_sums_every_day_on_the_page():
     first: Final = _day("2026-09-22", {"gpt-4.1-ptu": _bucket(_metrics(prompt=60_000, completion=0))})
     second: Final = _day("2026-09-23", {"gpt-4.1-ptu": _bucket(_metrics(prompt=0, completion=15_000))})
 
-    attached: Final = attach_ptu_hours(_response(first, second), _CAPACITY.get)
+    attached: Final = attach_ptu_hours(_response(first, second), _capacity_every_day)
 
     assert [day.metrics.ptu_hours for day in attached.results] == [pytest.approx(1.0), pytest.approx(1.0)]
     assert attached.metadata.total_ptu_hours == pytest.approx(2.0)
@@ -125,7 +130,7 @@ def test_a_page_with_no_ptu_group_is_returned_unchanged():
     day: Final = _day("2026-09-23", {"gpt-4o-mini": _bucket(_metrics(prompt=100, completion=100))})
     response: Final = _response(day)
 
-    attached: Final = attach_ptu_hours(response, _CAPACITY.get)
+    attached: Final = attach_ptu_hours(response, _capacity_every_day)
 
     assert attached.results[0] is day
     assert attached.metadata.total_ptu_hours == 0.0
@@ -165,6 +170,39 @@ def test_rows_keyed_by_an_alias_a_deployment_id_or_a_provider_model_are_sized_li
     assert [groups[name].metrics.ptu_hours for name in names] == [pytest.approx(1.0)] * len(names)
     assert attached.results[0].metrics.ptu_hours == pytest.approx(float(len(names)))
     assert attached.metadata.total_ptu_hours == pytest.approx(float(len(names)))
+
+
+@pytest.mark.parametrize("team_id", ["team-a", None], ids=["one-team", "all-teams"])
+def test_only_the_days_a_reservation_covers_read_ptu_hours(monkeypatch, team_id):
+    """Tokens a team sent before its reservation started or after it ended were pay-as-you-go,
+    so only the days inside the window convert to PTU-hours."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-09-23T12:00:00Z",
+                    "ptu_effective_to": "2026-09-24T00:00:00Z",
+                    "ptu_shares": {"team-a": 30, "team-b": 20},
+                },
+            }
+        ]
+    )
+    days: Final = tuple(
+        _day(day, {"gpt-4.1-ptu": _bucket(_metrics(prompt=_ONE_PTU_HOUR_OF_INPUT, completion=0))})
+        for day in ("2026-09-22", "2026-09-23", "2026-09-24")
+    )
+
+    attached: Final = with_ptu_consumption(_response(*days), router, team_id)
+
+    assert [day.metrics.ptu_hours for day in attached.results] == [0.0, pytest.approx(1.0), 0.0]
+    assert attached.metadata.total_ptu_hours == pytest.approx(1.0)
 
 
 def test_rows_keyed_by_a_name_a_wildcard_route_serves_are_sized_by_its_shared_deployment(monkeypatch):

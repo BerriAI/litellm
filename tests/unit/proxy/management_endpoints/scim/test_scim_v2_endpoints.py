@@ -3067,6 +3067,52 @@ async def test_delete_group_recomputes_roles_for_members(mocker):
 
 
 @pytest.mark.asyncio
+async def test_delete_group_is_refused_while_the_team_holds_a_ptu_share(mocker, monkeypatch):
+    """A SCIM group is a team, so an identity provider deleting one that still holds a PTU share is
+    refused like /team/delete, with the team and its members' team lists left as they were."""
+    from litellm import Router
+
+    shared_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-azure", "api_base": "https://x"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"test-team-123": 30, "team-2": 20},
+                },
+            }
+        ]
+    )
+    existing_team = mocker.MagicMock()
+    existing_team.members_with_roles = [Member(user_id="user1", role="user")]
+    member = mocker.MagicMock()
+    member.teams = ["test-team-123"]
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+    mock_prisma_client.db.litellm_teamtable.delete = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=member)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock()
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", shared_router)
+
+    with pytest.raises(ProxyException) as refused:
+        await delete_group(group_id="test-team-123")
+
+    assert refused.value.code == "400"
+    assert "test-team-123" in str(refused.value.message) and "shared-ptu" in str(refused.value.message)
+    mock_prisma_client.db.litellm_teamtable.delete.assert_not_called()
+    mock_prisma_client.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_handle_existing_user_by_email_applies_role_when_admin_group_set(mocker):
     """When admin_group is configured, re-upserting an existing email persists the
     resolved role so a now-non-admin user can't keep a stale PROXY_ADMIN."""

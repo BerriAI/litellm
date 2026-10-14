@@ -64,6 +64,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_add,
     team_member_delete,
 )
+from litellm.proxy.management_helpers.ptu_share_guard import raise_if_teams_hold_ptu_shares
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     PrismaClient,
     _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2690,8 +2691,11 @@ async def delete_group(
     """
     verbose_proxy_logger.debug("SCIM DELETE GROUP request for group_id=%s", group_id)
     try:
+        from litellm.proxy.proxy_server import llm_router
+
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         existing_team: Final = await _check_team_exists(group_id)
+        raise_if_teams_hold_ptu_shares((group_id,), llm_router)
 
         member_ids: Final = await _get_team_member_user_ids_from_team(existing_team)
 

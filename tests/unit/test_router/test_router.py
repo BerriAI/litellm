@@ -8916,6 +8916,44 @@ async def test_team_scoped_model_fallback_cross_team_blocked():
         )
 
 
+@pytest.mark.asyncio
+def _shared_ptu_deployment(model_name: str, deployment_id: str, **litellm_params: str) -> dict[str, object]:
+    """A one-PTU Azure deployment whose whole reservation is team-a's share."""
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "azure/gpt-4.1", "api_key": "fake", "api_base": "https://ptu.example", **litellm_params},
+        "model_info": {
+            "id": deployment_id,
+            "base_model": "azure/gpt-4.1",
+            "ptu_count": 1,
+            "cost_per_ptu_per_hour": 1.0,
+            "ptu_effective_from": "2026-01-01T00:00:00Z",
+            "ptu_shares": {"team-a": 1},
+        },
+    }
+
+
+async def test_a_ptu_share_holders_failed_call_is_retried_on_its_shared_deployment(monkeypatch):
+    """A shared PTU deployment is only servable to the teams holding a share, so the retry loop
+    has to look it up as the calling team; looked up with no team it finds no healthy deployment
+    and gives up after the first failure."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "true")
+    router = litellm.Router(
+        model_list=[_shared_ptu_deployment("gpt-4.1-ptu", "shared-ptu", mock_response="litellm.InternalServerError")],
+        num_retries=2,
+        retry_after=0,
+    )
+
+    with pytest.raises(litellm.InternalServerError) as failed:
+        await router.acompletion(
+            model="gpt-4.1-ptu",
+            messages=[{"role": "user", "content": "Hello"}],
+            metadata={"user_api_key_team_id": "team-a"},
+        )
+
+    assert failed.value.num_retries == 2
+
+
 def test_get_all_deployments_with_team_id():
     """
     Test that _get_all_deployments with team_id can find deployments
@@ -15976,6 +16014,28 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
 
 
 @pytest.mark.asyncio
+async def test_a_ptu_share_holders_messages_stream_dropped_before_content_is_retried_on_its_shared_group(monkeypatch):
+    """The same-group retry has to look the group's health up as the calling team; looked up with no
+    team a shared PTU group looks empty, so the share holder's dropped stream is never retried."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "true")
+    router: Final = Router(
+        model_list=[_shared_ptu_deployment("glm", f"shared-ptu-{i}") for i in (1, 2)],
+        num_retries=2,
+    )
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content, _anthropic_messages_retried_stream
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(
+        router, provider, litellm_metadata={"user_api_key_team_id": "team-a"}
+    )
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_stream_dropped_after_content_keeps_the_error_and_is_not_retried():
     """A drop once content reached the client cannot be retried without a second overlapping message
     lifecycle, so it keeps surfacing the provider's error after a single attempt."""
@@ -20438,6 +20498,27 @@ async def test_prioritized_request_leaves_queue_when_it_stops_waiting(stop_waiti
         await waiting
 
     assert await router.scheduler.get_queue("sched-model") == [(0, "head-of-queue")]
+
+
+@pytest.mark.asyncio
+async def test_a_ptu_share_holders_prioritized_request_is_admitted_while_its_shared_deployment_is_healthy(monkeypatch):
+    """The scheduler has to look the group's health up as the calling team; looked up with no team a
+    shared PTU deployment looks unhealthy, so the share holder waits behind the queue until it times out."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "true")
+    router: Final = Router(
+        model_list=[_shared_ptu_deployment("sched-ptu", "shared-ptu", mock_response="hi")],
+        timeout=0.5,
+    )
+    await router.scheduler.add_request(FlowItem(priority=0, request_id="head-of-queue", model_name="sched-ptu"))
+
+    response: Final = await router.acompletion(
+        model="sched-ptu",
+        messages=[{"role": "user", "content": "hi"}],
+        priority=5,
+        metadata={"user_api_key_team_id": "team-a"},
+    )
+
+    assert response.choices[0].message.content == "hi"
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,7 @@ router prices at zero serves its traffic for free.
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 from time import monotonic
 from types import MappingProxyType
@@ -86,6 +86,13 @@ class PTUTerms:
     cost_per_ptu_per_hour: float
     effective_from: datetime
     effective_to: datetime | None
+
+    def is_active_on(self, day: date) -> bool:
+        """Whether the reservation covers any part of ``day`` (UTC)."""
+        day_start: Final = datetime.combine(day, time.min, tzinfo=timezone.utc)
+        return self.effective_from < day_start + timedelta(days=1) and (
+            self.effective_to is None or self.effective_to > day_start
+        )
 
 
 def _to_utc(parsed: datetime) -> datetime:

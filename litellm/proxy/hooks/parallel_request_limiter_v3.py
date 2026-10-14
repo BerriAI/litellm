@@ -141,9 +141,10 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
 def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -> PTUTeamCeiling | None:
     from litellm.proxy.proxy_server import llm_router
 
-    if llm_router is None or not is_ptu_cost_attribution_enabled():
+    if llm_router is None:
         return None
-    return llm_router.team_ptu_ceiling(team_id, model_group)
+    ceiling: Final = llm_router.team_ptu_ceiling(team_id, model_group)
+    return ceiling if ceiling is not None and is_ptu_cost_attribution_enabled() else None
 
 
 FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING: Final = "fail_closed_rate_limit_enforcement"

@@ -6,6 +6,7 @@ a PTU-hour it consumed, reported next to the raw token counts.
 """
 
 from collections.abc import Callable, Sequence
+from datetime import date
 from functools import cache
 from types import MappingProxyType
 from typing import Final
@@ -55,13 +56,13 @@ def _model_group_with_ptu_hours(bucket: MetricWithMetadata, capacity: PTUCapacit
 
 
 def _day_with_ptu_hours(
-    day: DailySpendData, capacity_for_model_group: Callable[[str], PTUCapacity | None]
+    day: DailySpendData, capacity_for_model_group: Callable[[str, date], PTUCapacity | None]
 ) -> DailySpendData:
     priced: Final = MappingProxyType(
         {
             model_group: _model_group_with_ptu_hours(bucket, capacity)
             for model_group, bucket in day.breakdown.model_groups.items()
-            if (capacity := capacity_for_model_group(model_group)) is not None
+            if (capacity := capacity_for_model_group(model_group, day.date)) is not None
         }
     )
     if not priced:
@@ -83,12 +84,12 @@ def _day_with_ptu_hours(
 
 
 def attach_ptu_hours(
-    response: SpendAnalyticsPaginatedResponse, capacity_for_model_group: Callable[[str], PTUCapacity | None]
+    response: SpendAnalyticsPaginatedResponse, capacity_for_model_group: Callable[[str, date], PTUCapacity | None]
 ) -> SpendAnalyticsPaginatedResponse:
     """The response with ``ptu_hours`` filled in on every PTU model group and its api keys,
     on each day, and on the total, from the tokens already on the page.
 
-    A model group the resolver has no sizing row for keeps ``ptu_hours`` at zero.
+    A model group the resolver has no sizing row for on that day keeps ``ptu_hours`` at zero.
     """
     days: Final = tuple(_day_with_ptu_hours(day, capacity_for_model_group) for day in response.results)
     results: Final = list(days)
@@ -104,17 +105,18 @@ def attach_ptu_hours(
     )
 
 
-def capacity_by_requested_name(llm_router: Router, team_id: str | None) -> Callable[[str], PTUCapacity | None]:
+def capacity_by_requested_name(llm_router: Router, team_id: str | None) -> Callable[[str, date], PTUCapacity | None]:
     """The sizing row behind the name a usage row is keyed by, resolved the way the ceiling
     resolves a request: an alias to its group, then a group, a routing group, a deployment id,
     the wildcard route the router picks for the name, or a provider model to the deployments it
     is served from. For one team those are narrowed to the deployments it can be served from,
     its shared one first, so a team with no share on a name reads no PTU-hours for it; a page
-    spanning teams keeps every deployment behind the name."""
+    spanning teams keeps every deployment behind the name. Only a reservation covering the row's
+    day sizes it, so tokens before a reservation starts or after it ends read no PTU-hours."""
     listed_rows: Final = llm_router.get_model_list() or ()
     aliases: Final = llm_router.model_group_alias
 
-    def capacity_for(requested_model: str) -> PTUCapacity | None:
+    def capacity_for(requested_model: str, day: date) -> PTUCapacity | None:
         model_group: Final = resolve_model_group_alias(aliases, requested_model) or requested_model
         routed: Final = routed_deployments(
             listed_rows,
@@ -122,7 +124,7 @@ def capacity_by_requested_name(llm_router: Router, team_id: str | None) -> Calla
             model_group,
             lambda name: llm_router.wildcard_route_deployments(name, team_id),
         )
-        return model_group_ptu_capacity(routed if team_id is None else team_servable_deployments(routed, team_id))
+        return model_group_ptu_capacity(routed if team_id is None else team_servable_deployments(routed, team_id), day)
 
     return cache(capacity_for)
 

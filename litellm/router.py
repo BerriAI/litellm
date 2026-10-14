@@ -197,6 +197,7 @@ from litellm.router_utils.common_utils import (
     get_request_team_id,
     is_proxy_admin_request,
     provider_for_generic_call,
+    request_user_api_key_auth,
     resolve_model_group_alias,
     team_may_use_deployment,
     truncate_fallback_error_detail,
@@ -4612,7 +4613,10 @@ class Router:
         **kwargs,
     ):
         await self._wait_for_scheduler_turn(
-            model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+            model=model,
+            priority=priority,
+            parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
+            request_kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: kwargs keys are param names
         )
         try:
             _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
@@ -4636,7 +4640,10 @@ class Router:
         kwargs: dict[str, object],
     ):
         await self._wait_for_scheduler_turn(
-            model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+            model=model,
+            priority=priority,
+            parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
+            request_kwargs=kwargs,
         )
         try:
             _response: Final = await original_function(*args, **kwargs)
@@ -4651,9 +4658,13 @@ class Router:
             setattr(e, "priority", priority)
             raise e
 
-    async def _wait_for_scheduler_turn(self, model: str, priority: int, parent_otel_span: Span | None) -> None:
+    async def _wait_for_scheduler_turn(
+        self, model: str, priority: int, parent_otel_span: Span | None, request_kwargs: Mapping[str, object]
+    ) -> None:
         async def healthy_deployments() -> Sequence[object]:
-            deployments, _ = await self._async_get_healthy_deployments(model=model, parent_otel_span=parent_otel_span)
+            deployments, _ = await self._async_get_healthy_deployments(
+                model=model, parent_otel_span=parent_otel_span, request_kwargs=request_kwargs
+            )
             return deployments
 
         await self.scheduler.wait_for_turn(
@@ -5952,7 +5963,9 @@ class Router:
         model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
         retry_kwargs: Final = mid_stream_retry_kwargs(initial_kwargs)
         healthy_deployments, all_deployments = await self._async_get_healthy_deployments(
-            model=model_group, parent_otel_span=get_parent_otel_span_from_kwargs(retry_kwargs)
+            model=model_group,
+            parent_otel_span=get_parent_otel_span_from_kwargs(retry_kwargs),
+            request_kwargs=initial_kwargs,
         )
         budget, policy_applies = self._anthropic_messages_retry_budget(_mid_stream_retry_trigger(e), initial_kwargs)
         last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
@@ -8093,6 +8106,7 @@ class Router:
             ) = await self._async_get_healthy_deployments(
                 model=kwargs.get("model") or "",
                 parent_otel_span=parent_otel_span,
+                request_kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: kwargs keys are param names
             )
 
             # Check retry policy FIRST, before should_retry_this_error
@@ -8185,6 +8199,7 @@ class Router:
                         ) = await self._async_get_healthy_deployments(
                             model=_model,
                             parent_otel_span=parent_otel_span,
+                            request_kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: kwargs keys are param names
                         )
                     else:
                         _healthy_deployments = []
@@ -8998,18 +9013,19 @@ class Router:
         return healthy_deployments, _all_deployments
 
     async def _async_get_healthy_deployments(
-        self, model: str, parent_otel_span: Span | None
+        self, model: str, parent_otel_span: Span | None, request_kwargs: Mapping[str, object] | None = None
     ) -> tuple[list[dict], list[dict]]:
         """
         Returns Tuple of:
         - Tuple[List[Dict], List[Dict]]:
-            1. healthy_deployments: list of healthy deployments
-            2. all_deployments: list of all deployments
+            1. healthy_deployments: list of healthy deployments the caller of ``request_kwargs`` may use
+            2. all_deployments: list of all deployments that caller may use
         """
         _all_deployments: list = []
         try:
             _, _all_deployments = self._common_checks_available_deployment(
                 model=model,
+                request_kwargs=request_kwargs,
             )
             if isinstance(_all_deployments, dict):
                 return [], _all_deployments
@@ -13287,7 +13303,7 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> tuple[str, list | dict]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
@@ -13496,7 +13512,7 @@ class Router:
         self,
         model: str,
         healthy_deployments: list,
-        request_kwargs: dict | None,
+        request_kwargs: Mapping[str, object] | None,
         request_team_id: str | None,
     ) -> list:
         """
@@ -13510,9 +13526,7 @@ class Router:
         if not healthy_deployments or request_kwargs is None:
             return healthy_deployments
 
-        metadata: Final = request_kwargs.get("metadata") or {}
-        litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
-        user_api_key_auth: Final = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
+        user_api_key_auth: Final = request_user_api_key_auth(request_kwargs)
         if user_api_key_auth is None:
             return healthy_deployments
 

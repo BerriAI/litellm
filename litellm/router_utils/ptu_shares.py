@@ -8,6 +8,7 @@ converting PTUs to ``model_tpm_limit``.
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Final, Generic, TypeAlias, TypeVar
 
 from litellm.litellm_core_utils.ptu_pricing import parsed_ptu_shares, ptu_terms
@@ -225,15 +226,16 @@ def team_servable_deployments(deployments: Sequence[_DeploymentT], team_id: str)
     )
 
 
-def model_group_ptu_capacity(deployments: Sequence[Mapping[str, object]]) -> PTUCapacity | None:
-    """The sizing row of the group's first reserved deployment, single-team or shared, so a
-    team's tokens on that group convert to PTU-hours."""
+def model_group_ptu_capacity(deployments: Sequence[Mapping[str, object]], day: date) -> PTUCapacity | None:
+    """The sizing row of the group's first deployment reserved on ``day``, single-team or shared,
+    so a team's tokens on that group that day convert to PTU-hours."""
     return next(
         (
             capacity
             for deployment in deployments
             if is_str_keyed_mapping(model_info := deployment.get("model_info"))
-            and ptu_terms(model_info) is not None
+            and (terms := ptu_terms(model_info)) is not None
+            and terms.is_active_on(day)
             and (capacity := deployment_ptu_capacity(deployment)) is not None
         ),
         None,

@@ -1,5 +1,6 @@
 """Tests for per-team PTU shares: who a shared deployment is served to and what a share is worth."""
 
+from datetime import date
 from typing import Final
 
 import pytest
@@ -232,10 +233,24 @@ def test_a_provider_model_draws_on_the_group_where_the_team_holds_its_share():
 
 
 def test_a_groups_capacity_comes_from_its_first_reserved_deployment_with_a_row():
-    assert model_group_ptu_capacity([_OPEN, _single_team()]) is _GPT41
-    assert model_group_ptu_capacity([_shared(model="azure/unknown"), _shared(model="azure/gpt-4o")]) is _GPT4O
-    assert model_group_ptu_capacity([_OPEN]) is None
-    assert model_group_ptu_capacity([]) is None
+    day: Final = date(2026, 9, 23)
+    assert model_group_ptu_capacity([_OPEN, _single_team()], day) is _GPT41
+    assert model_group_ptu_capacity([_shared(model="azure/unknown"), _shared(model="azure/gpt-4o")], day) is _GPT4O
+    assert model_group_ptu_capacity([_OPEN], day) is None
+    assert model_group_ptu_capacity([], day) is None
+
+
+def test_a_groups_capacity_on_a_day_comes_from_the_reservation_covering_that_day():
+    ended: Final = {**_shared(), "model_info": {**_shared()["model_info"], "ptu_effective_to": "2026-06-01T00:00:00Z"}}
+    current: Final = {
+        **_shared(model="azure/gpt-4o", deployment_id="current"),
+        "model_info": {**_shared(deployment_id="current")["model_info"], "ptu_effective_from": "2026-06-01T00:00:00Z"},
+    }
+
+    assert model_group_ptu_capacity([ended, current], date(2026, 5, 31)) is _GPT41
+    assert model_group_ptu_capacity([ended, current], date(2026, 6, 1)) is _GPT4O
+    assert model_group_ptu_capacity([ended], date(2026, 6, 1)) is None
+    assert model_group_ptu_capacity([current], date(2025, 12, 31)) is None
 
 
 def test_a_reserved_deployment_without_a_sizing_row_is_warned_about_by_name():

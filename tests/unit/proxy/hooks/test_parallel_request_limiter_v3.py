@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Final, List, Optional
 from unittest.mock import patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -21,6 +22,8 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.integrations.custom_secret_manager import CustomSecretManager
+from litellm.litellm_core_utils import ptu_pricing
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -48,6 +51,7 @@ from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import MCPPreCallRequestObject, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     EmbeddingResponse,
     ModelResponse,
@@ -7927,6 +7931,65 @@ async def test_the_proxy_router_turns_a_teams_share_into_its_ceiling_when_attrib
 
     assert exc.value.status_code == 429
     assert "model_per_team_ptu" in str(exc.value.detail)
+
+
+class _SecretManagerHoldingThePTUFlag(CustomSecretManager):
+    def __init__(self) -> None:
+        super().__init__(secret_manager_name="ptu_flag_holder")
+        self.flag_reads = 0
+
+    async def async_read_secret(
+        self,
+        secret_name: str,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
+        return self.sync_read_secret(secret_name, optional_params, timeout)
+
+    def sync_read_secret(
+        self,
+        secret_name: str,
+        optional_params: dict | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
+        if secret_name != PTU_COST_ATTRIBUTION_ENV_VAR:
+            return None
+        self.flag_reads += 1
+        return "true"
+
+
+@pytest.fixture
+def ptu_flag_in_secret_manager(monkeypatch: pytest.MonkeyPatch) -> Iterator[_SecretManagerHoldingThePTUFlag]:
+    manager = _SecretManagerHoldingThePTUFlag()
+    monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
+    monkeypatch.setattr(litellm, "secret_manager_client", manager)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    ptu_pricing._enabled_in_secret_manager.cache_clear()
+    yield manager
+    ptu_pricing._enabled_in_secret_manager.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_id", "reads_the_flag"), [("u", False), ("t", True)], ids=["no-share", "share-holder"])
+async def test_only_a_share_holders_request_asks_the_secret_manager_for_the_ptu_flag(
+    ptu_flag_in_secret_manager: _SecretManagerHoldingThePTUFlag, team_id: str, reads_the_flag: bool
+):
+    """A proxy keeping its secrets in a secret manager pays for a flag read only on the requests a
+    PTU share could limit, so every other team's traffic never reaches the manager."""
+    router: Final = _shared_ptu_router("test-model")
+    ptu_pricing._enabled_in_secret_manager.cache_clear()
+    reads_at_boot: Final = ptu_flag_in_secret_manager.flag_reads
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id=team_id)
+
+    with patch("litellm.proxy.proxy_server.llm_router", router):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=_ptu_request(), call_type="acompletion"
+        )
+
+    assert (ptu_flag_in_secret_manager.flag_reads > reads_at_boot) is reads_the_flag
 
 
 @pytest.mark.asyncio
