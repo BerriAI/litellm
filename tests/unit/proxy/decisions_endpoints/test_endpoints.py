@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 from starlette.routing import Match
 
 import litellm
+from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
 from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features
 from litellm.proxy.decisions_endpoints.endpoints import decisions, router, systemone
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import SafeRouteAdder
@@ -615,6 +616,16 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gpt-6-luna",
+        {
+            **litellm.model_cost["gpt-6-luna"],
+            "input_cost_per_token_decisions": 1e-07,
+            "cache_read_input_token_cost_decisions": 1e-07,
+            "output_cost_per_token_decisions": 0.0,
+        },
+    )
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
@@ -666,11 +677,9 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     body: Final = response.json()
     assert body["answers"] == _OPENAI_FORMAT_ANSWERS
     assert body["usage"] == upstream_usage
-    luna_cost: Final = litellm.model_cost["gpt-6-luna"]
-    expected_cost: Final = (
-        (_INPUT_TOKENS - cached_tokens) * float(luna_cost["input_cost_per_token"])
-        + cached_tokens * float(luna_cost["cache_read_input_token_cost"])
-        + _OUTPUT_TOKENS * float(luna_cost["output_cost_per_token"])
+    luna_decisions_cost: Final = apply_decisions_pricing(litellm.model_cost["gpt-6-luna"])
+    expected_cost: Final = _INPUT_TOKENS * float(luna_decisions_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        luna_decisions_cost["output_cost_per_token"]
     )
     assert expected_cost > 0
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)

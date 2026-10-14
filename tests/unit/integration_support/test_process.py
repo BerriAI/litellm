@@ -239,6 +239,35 @@ def test_only_live_readable_workers_can_satisfy_readiness(
             process_module._wait_until_ready(launch)
 
 
+def test_readiness_never_sends_a_request_to_a_port_the_launch_does_not_own(
+    process_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter(()))
+    parent: Final = MagicMock()
+    parent.pid = 99
+    parent.poll.return_value = None
+    launch: Final = process_module._Launch(parent, 8123, tmp_path / "unused.log", 0.0)
+    original_client: Final = httpx.Client
+
+    def foreign_listener(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"probed a listener another process owns: {request.url}")
+
+    def client(*, base_url: str, timeout: float, trust_env: bool, limits: httpx.Limits) -> httpx.Client:
+        return original_client(
+            base_url=base_url,
+            timeout=timeout,
+            trust_env=trust_env,
+            limits=limits,
+            transport=httpx.MockTransport(foreign_listener),
+        )
+
+    monkeypatch.setattr(httpx, "Client", client)
+    monkeypatch.setattr(time, "monotonic", lambda: 0.0)
+    monkeypatch.setenv("INTEGRATION_PROXY_READY_SECONDS", "-1")
+    with pytest.raises(AssertionError, match="readiness deadline"):
+        process_module._wait_until_ready(launch)
+
+
 def test_boot_phases_mark_when_prisma_ran_the_port_bound_and_each_worker_answered(
     process_module: ModuleType,
 ) -> None:
