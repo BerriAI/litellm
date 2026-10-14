@@ -761,6 +761,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if custom_llm_provider is not None and custom_llm_provider != "openai":
                 model_response.model = f"{custom_llm_provider}/{model}"
 
+            ssl_verify: Final = _get_ssl_verify(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # legacy params use an unparameterized dict
             for _ in range(2):  # if call fails due to alternating messages, retry with reformatted message
                 try:
                     max_retries = inference_params.pop("max_retries", 2)
@@ -815,7 +816,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         headers=headers or {},
                     )
                     if stream is True and fake_stream is False:
-                        stream_ssl_verify: VerifyTypes | None = _get_ssl_verify(litellm_params)
                         return self.streaming(
                             logging_obj=logging_obj,
                             headers=headers,
@@ -830,12 +830,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             organization=organization,
                             stream_options=stream_options,
                             litellm_params=litellm_params,
-                            ssl_verify=stream_ssl_verify,
+                            ssl_verify=ssl_verify,
                         )
                     else:
                         if not isinstance(max_retries, int):
                             raise OpenAIError(status_code=422, message="max retries must be an int")
-                        ssl_verify: VerifyTypes | None = _get_ssl_verify(litellm_params)
                         openai_client: OpenAI = self._get_openai_client(
                             is_async=False,
                             api_key=api_key,
@@ -979,9 +978,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             litellm_params=litellm_params,
             headers=headers or {},
         )
+        ssl_verify: Final = _get_ssl_verify(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # legacy params use an unparameterized dict
         for _ in range(2):  # if call fails due to alternating messages, retry with reformatted message
             try:
-                ssl_verify: VerifyTypes | None = _get_ssl_verify(litellm_params)
                 openai_aclient: AsyncOpenAI = self._get_openai_client(
                     is_async=True,
                     api_key=api_key,
@@ -1169,9 +1168,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         )
         data["stream"] = True
         data.update(self.get_stream_options(stream_options=stream_options, api_base=api_base))
+        ssl_verify: Final = _get_ssl_verify(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # legacy params use an unparameterized dict
         for _ in range(2):
             try:
-                ssl_verify: VerifyTypes | None = _get_ssl_verify(litellm_params)
                 openai_aclient: AsyncOpenAI = self._get_openai_client(
                     is_async=True,
                     api_key=api_key,
