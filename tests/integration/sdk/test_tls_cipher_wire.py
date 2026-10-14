@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -184,7 +185,7 @@ def test_handlers_accept_pfs_gcm_peer_in_default_and_fips_modes(
         assert {record.cipher for record in peer.received()} == {PFS_GCM}
 
 
-def _override_exchange(url: str, cert_file: Path, overrides: Mapping[str, str]) -> str:
+def _override_exchange(url: str, cert_file: Path, overrides: Mapping[str, str]) -> subprocess.CompletedProcess[str]:
     completed: Final = subprocess.run(
         [sys.executable, "-P", "-c", OVERRIDE_EXCHANGE, url, str(cert_file)],
         env={**os.environ, **overrides},
@@ -193,25 +194,27 @@ def _override_exchange(url: str, cert_file: Path, overrides: Mapping[str, str]) 
         timeout=60,
         check=False,
     )
-    assert completed.returncode == 0, completed.stderr
-    return completed.stdout.strip()
+    return completed
 
 
 def test_ssl_ciphers_env_override_keeps_chacha20(tls_cert: tuple[Path, Path]) -> None:
     cert_file, key_file = tls_cert
     with tls_peer(CHACHA20, cert_file, key_file) as peer:
-        assert _override_exchange(peer.url, cert_file, {"LITELLM_SSL_CIPHERS": CHACHA20}) == "chatcmpl-u-override"
+        result: Final = _override_exchange(peer.url, cert_file, {"LITELLM_SSL_CIPHERS": CHACHA20})
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "chatcmpl-u-override"
         assert [record.cipher for record in peer.received()] == [CHACHA20]
 
 
-def test_ssl_ciphers_override_wins_over_fips_mode(tls_cert: tuple[Path, Path]) -> None:
+def test_ssl_ciphers_override_ignored_under_fips_mode(tls_cert: tuple[Path, Path]) -> None:
     cert_file, key_file = tls_cert
     with tls_peer(CHACHA20, cert_file, key_file) as peer:
         result: Final = _override_exchange(
             peer.url, cert_file, {"LITELLM_SSL_CIPHERS": CHACHA20, "LITELLM_FIPS_MODE": "true"}
         )
-        assert result == "chatcmpl-u-override"
-        assert [record.cipher for record in peer.received()] == [CHACHA20]
+        assert result.returncode != 0, result.stdout
+        assert re.search(r"(?i)ssl|handshake", result.stderr), result.stderr
+        assert peer.received() == (), peer.received()
 
 
 def test_cipher_list_follows_fips_mode_toggle_in_one_process(
