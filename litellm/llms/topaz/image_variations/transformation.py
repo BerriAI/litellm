@@ -23,7 +23,7 @@ from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ..common_utils import TopazException, TopazModelInfo
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
@@ -139,7 +139,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:
         image_content: Final = await raw_response.read()
@@ -158,7 +158,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:
         image_content: Final = raw_response.content

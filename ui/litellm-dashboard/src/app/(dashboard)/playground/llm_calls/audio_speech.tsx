@@ -1,5 +1,6 @@
 import openai from "openai";
 import { getProxyBaseUrl } from "@/components/networking";
+import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
 import { toast } from "@/lib/toast";
 import type { OpenAIVoice } from "../components/chat_ui/chatConstants";
 
@@ -14,6 +15,7 @@ export async function makeOpenAIAudioSpeechRequest(
   responseFormat?: string,
   speed?: number,
   customBaseUrl?: string,
+  customHeaders?: CustomHeaders,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -25,7 +27,7 @@ export async function makeOpenAIAudioSpeechRequest(
     apiKey: accessToken,
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: tags && tags.length > 0 ? { "x-litellm-tags": tags.join(",") } : undefined,
+    defaultHeaders: buildPlaygroundHeaders(tags, customHeaders),
   });
 
   try {

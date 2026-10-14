@@ -1,13 +1,111 @@
-from collections.abc import Iterator, Mapping
-from typing import Final
-from pathlib import Path
+import asyncio
+import json
+import os
 import uuid
+from collections.abc import Iterator, Mapping
+from hashlib import sha256
+from pathlib import Path
+from typing import Final
 
+import httpx
 import pytest
 import yaml
+from pydantic import JsonValue
 
-from integration._support.client import Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows
+from litellm import get_model_info
+from tests.integration._support.client import Gateway, eventually, object_value, string_value
+from tests.integration._support.database import read_rows
+from tests.integration._support.process import owned_proxy
+from tests.integration._support.upstream import delete_scenario, register_scenario
+from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
+from tests.integration.pricing.test_realtime_cached_audio_pricing import one_realtime_turn
+
+REALTIME_MODEL: Final = "gpt-realtime-2"
+REALTIME_INPUT_TEXT_TOKENS: Final = 10
+REALTIME_INPUT_AUDIO_TOKENS: Final = 20
+REALTIME_OUTPUT_TEXT_TOKENS: Final = 5
+REALTIME_OUTPUT_AUDIO_TOKENS: Final = 7
+
+
+def _realtime_response_done() -> RealtimeResponse:
+    return RealtimeResponse(
+        content_type="application/x-realtime",
+        events=(
+            {
+                "type": "response.done",
+                "event_id": "evt_$REQUEST_ID",
+                "response": {
+                    "id": "resp_$REQUEST_ID",
+                    "object": "realtime.response",
+                    "status": "completed",
+                    "output": [],
+                    "usage": {
+                        "total_tokens": REALTIME_INPUT_TEXT_TOKENS
+                        + REALTIME_INPUT_AUDIO_TOKENS
+                        + REALTIME_OUTPUT_TEXT_TOKENS
+                        + REALTIME_OUTPUT_AUDIO_TOKENS,
+                        "input_tokens": REALTIME_INPUT_TEXT_TOKENS + REALTIME_INPUT_AUDIO_TOKENS,
+                        "output_tokens": REALTIME_OUTPUT_TEXT_TOKENS + REALTIME_OUTPUT_AUDIO_TOKENS,
+                        "input_token_details": {
+                            "text_tokens": REALTIME_INPUT_TEXT_TOKENS,
+                            "audio_tokens": REALTIME_INPUT_AUDIO_TOKENS,
+                            "cached_tokens": 0,
+                        },
+                        "output_token_details": {
+                            "text_tokens": REALTIME_OUTPUT_TEXT_TOKENS,
+                            "audio_tokens": REALTIME_OUTPUT_AUDIO_TOKENS,
+                        },
+                    },
+                },
+            },
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("input_text_rate", "input_audio_rate", "output_text_rate", "output_audio_rate"),
+    ((0.001, 0.002, 0.003, 0.004), (0.0, 0.0, 0.0, 0.0)),
+    ids=("custom_rates", "zero_rated"),
+)
+def test_realtime_session_is_charged_at_the_deployment_configured_rates(
+    gateway: Gateway,
+    input_text_rate: float,
+    input_audio_rate: float,
+    output_text_rate: float,
+    output_audio_rate: float,
+) -> None:
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"realtime-configured-price-{uuid.uuid4().hex[:12]}"
+        handle: Final = register_scenario(scenario_id, _realtime_response_done())
+        scenario.cleanups.callback(delete_scenario, handle)
+        key: Final = scenario.key()
+        model: Final = scenario.model(
+            model=f"openai/{REALTIME_MODEL}",
+            api_key=scenario_id,
+            api_base=gateway.upstream_url.rstrip("/"),
+            input_cost_per_token=input_text_rate,
+            input_cost_per_audio_token=input_audio_rate,
+            output_cost_per_token=output_text_rate,
+            output_cost_per_audio_token=output_audio_rate,
+        )
+        session: Final = asyncio.run(one_realtime_turn(os.environ["INTEGRATION_PROXY_URL"].rstrip("/"), key, model))
+        assert session.get("type") == "session.created", session
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend, call_type FROM "LiteLLM_SpendLogs" WHERE api_key = %s',
+                (sha256(key.encode()).hexdigest(),),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert rows[0]["call_type"] == "_arealtime", rows
+        assert float(str(rows[0]["spend"])) == pytest.approx(
+            REALTIME_INPUT_TEXT_TOKENS * input_text_rate
+            + REALTIME_INPUT_AUDIO_TOKENS * input_audio_rate
+            + REALTIME_OUTPUT_TEXT_TOKENS * output_text_rate
+            + REALTIME_OUTPUT_AUDIO_TOKENS * output_audio_rate,
+            abs=1e-9,
+        ), rows
 
 
 @pytest.mark.covers("quota_management.spend_tracking.custom_price.matches_input_rates")
@@ -26,6 +124,31 @@ def test_custom_price_is_reported_and_charged(gateway: Gateway) -> None:
         params: Final = object_value(matching[0]["litellm_params"])
         assert params["input_cost_per_token"] == 0.001
         assert params["output_cost_per_token"] == 0.002
+
+
+@pytest.mark.covers("quota_management.cost_estimate.configured_price.reported_for_model_absent_from_cost_map")
+def test_cost_estimate_reports_configured_prices_for_model_absent_from_cost_map(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"openai/integration-on-prem-{uuid.uuid4().hex}",
+            input_cost_per_token=0.003,
+            output_cost_per_token=0.007,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/cost/estimate",
+            {"model": model, "input_tokens": 1000, "output_tokens": 500, "num_requests_per_day": 10},
+        )
+        assert response.status_code == 200, response.text
+        body: Final = object_value(response.json())
+        assert body["input_cost_per_token"] == pytest.approx(0.003), response.text
+        assert body["output_cost_per_token"] == pytest.approx(0.007), response.text
+        assert body["input_cost_per_request"] == pytest.approx(1000 * 0.003), response.text
+        assert body["output_cost_per_request"] == pytest.approx(500 * 0.007), response.text
+        margin: Final = body["margin_cost_per_request"]
+        assert isinstance(margin, float), response.text
+        assert body["cost_per_request"] == pytest.approx(1000 * 0.003 + 500 * 0.007 + margin), response.text
+        assert body["daily_cost"] == pytest.approx(10 * (1000 * 0.003 + 500 * 0.007 + margin)), response.text
 
 
 @pytest.mark.covers("quota_management.spend_tracking.default_prices.survive_nullable_sibling_reload")
@@ -103,11 +226,93 @@ def test_default_prices_survive_nullable_sibling_and_reload(gateway: Gateway) ->
                 assert float(rows[0]["spend"]) == pytest.approx(expected, rel=1e-6)
 
 
+COST_MAP_DISPLAY_PRICING_KEYS: Final = frozenset(
+    {
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+    }
+)
+
+
+def persisted_model_info(identity: str) -> dict[str, JsonValue]:
+    rows: Final = read_rows('SELECT model_info FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,))
+    assert len(rows) == 1, f"Deployment {identity} has {len(rows)} rows"
+    stored: Final = rows[0]["model_info"]
+    return object_value(json.loads(stored) if isinstance(stored, str) else stored)
+
+
+@pytest.mark.covers("pricing.model_update.echoed_cost_map_price_is_not_persisted_as_override")
+def test_saving_echoed_model_info_does_not_freeze_cost_map_price_into_deployment(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        entries: Final = gateway.get("/model/info")["data"]
+        assert isinstance(entries, list)
+        target: Final = next(object_value(entry) for entry in entries if object_value(entry)["model_name"] == model)
+        displayed: Final = object_value(target["model_info"])
+        identity: Final = string_value(displayed["id"])
+        assert isinstance(displayed["input_cost_per_token"], float), displayed
+        assert isinstance(displayed["output_cost_per_token"], float), displayed
+        fresh: Final = persisted_model_info(identity)
+        assert {key: value for key, value in fresh.items() if key in COST_MAP_DISPLAY_PRICING_KEYS} == {}, fresh
+        saved: Final = gateway.request(
+            "PATCH", f"/model/{identity}/update", {"model_info": {**displayed, "description": "echoed ui save"}}
+        )
+        assert saved.status_code == 200, saved.text
+        stored: Final = persisted_model_info(identity)
+        assert stored["description"] == "echoed ui save", stored
+        assert {key: value for key, value in stored.items() if key in COST_MAP_DISPLAY_PRICING_KEYS} == {}, stored
+
+
+def displayed_model_info(gateway: Gateway, model: str) -> dict[str, JsonValue]:
+    entries: Final = gateway.get("/model/info")["data"]
+    assert isinstance(entries, list)
+    target: Final = next(object_value(entry) for entry in entries if object_value(entry)["model_name"] == model)
+    return object_value(target["model_info"])
+
+
+@pytest.mark.covers("pricing.model_update.echoed_cost_map_metadata_is_not_persisted_as_override")
+def test_saving_echoed_model_info_does_not_persist_cost_map_metadata_as_overrides(gateway: Gateway) -> None:
+    catalog_entry: Final = get_model_info("openai/gpt-4o-mini")
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        displayed: Final = displayed_model_info(gateway, model)
+        identity: Final = string_value(displayed["id"])
+        assert displayed["key"] == catalog_entry["key"], displayed
+        assert displayed["max_input_tokens"] == catalog_entry["max_input_tokens"], displayed
+        saved: Final = gateway.request(
+            "PATCH", f"/model/{identity}/update", {"model_info": {**displayed, "description": "echoed ui save"}}
+        )
+        assert saved.status_code == 200, saved.text
+        stored: Final = persisted_model_info(identity)
+        assert stored["description"] == "echoed ui save", stored
+        assert {key: value for key, value in stored.items() if key in catalog_entry} == {}, stored
+
+
+@pytest.mark.covers("pricing.model_update.echoing_cost_map_value_back_clears_stored_override")
+def test_saving_the_cost_map_value_back_over_a_stored_override_clears_it(gateway: Gateway, tmp_path: Path) -> None:
+    catalog_limit: Final = get_model_info("openai/gpt-4o-mini")["max_input_tokens"]
+    assert isinstance(catalog_limit, int) and catalog_limit != 4321, catalog_limit
+    with owned_proxy(gateway, tmp_path, {}) as candidate, candidate.scenario() as scenario:
+        overridden: Final = scenario.model(model_info={"max_input_tokens": 4321})
+        displayed: Final = displayed_model_info(candidate, overridden)
+        identity: Final = string_value(displayed["id"])
+        assert displayed["max_input_tokens"] == 4321, displayed
+        assert persisted_model_info(identity)["max_input_tokens"] == 4321
+        saved: Final = candidate.request(
+            "PATCH", f"/model/{identity}/update", {"model_info": {**displayed, "max_input_tokens": catalog_limit}}
+        )
+        assert saved.status_code == 200, saved.text
+        stored: Final = persisted_model_info(identity)
+        assert "max_input_tokens" not in stored, stored
+
+
 @pytest.mark.covers("quota_management.spend_tracking.default_prices.loaded_router_preserves_cached_defaults")
 def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: Gateway, tmp_path: Path) -> None:
     from litellm import Router
 
-    aliases: Final = (f"pricing-{uuid.uuid4().hex}", f"pricing-{uuid.uuid4().hex}")
+    aliases: Final = tuple(f"pricing-{uuid.uuid4().hex}" for _ in range(3))
     path: Final = tmp_path / "models.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -123,7 +328,13 @@ def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: G
                         "model_info": {"id": alias, **pricing},
                     }
                     for alias, pricing in zip(
-                        aliases, ({}, {"input_cost_per_token": None, "output_cost_per_token": None}), strict=True
+                        aliases,
+                        (
+                            {},
+                            {"input_cost_per_token": None, "output_cost_per_token": None},
+                            {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+                        ),
+                        strict=True,
                     )
                 ]
             }
@@ -139,10 +350,110 @@ def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: G
                 )
                 assert result.usage.prompt_tokens == 20
                 assert result.usage.completion_tokens == 20
+                expected_cost: Final = 0.0 if alias == aliases[2] else 20 * 0.00000015 + 20 * 0.0000006
+                assert result._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-6)
                 deployment: Final = router.get_deployment(model_id=alias)
                 assert deployment is not None
                 info: Final = router.get_router_model_info(deployment=deployment, received_model_name=alias)
-                assert info["input_cost_per_token"] == 0.00000015
-                assert info["output_cost_per_token"] == 0.0000006
+                assert info["input_cost_per_token"] == (0.0 if alias == aliases[2] else 0.00000015)
+                assert info["output_cost_per_token"] == (0.0 if alias == aliases[2] else 0.0000006)
         finally:
             router.reset()
+
+
+def _bounded_chat(gateway: Gateway, model: str, key: str, content: str) -> httpx.Response:
+    return gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "max_tokens": 20, "messages": [{"role": "user", "content": content}]},
+        key=key,
+    )
+
+
+def _observed(upstream: httpx.Client) -> list[JsonValue]:
+    response: Final = upstream.get("/__observations")
+    response.raise_for_status()
+    requests: Final = object_value(response.json())["requests"]
+    assert isinstance(requests, list), response.text
+    return requests
+
+
+def _upstream_chat(upstream_model: str, content: str) -> dict[str, JsonValue]:
+    return {
+        "path": "/v1/chat/completions",
+        "authorization": "Bearer integration-provider-key",
+        "body": {"model": upstream_model, "max_tokens": 20, "messages": [{"role": "user", "content": content}]},
+        "method": "POST",
+        "api_key": "",
+    }
+
+
+def _block_unpriced(gateway: Gateway, enabled: bool) -> httpx.Response:
+    return gateway.request("PATCH", "/config/block_requests_for_models_without_pricing", {"enabled": enabled})
+
+
+def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        original: Final = gateway.get("/config/block_requests_for_models_without_pricing")["enabled"]
+        scenario.cleanups.callback(_block_unpriced, gateway, bool(original))
+        enabled: Final = _block_unpriced(gateway, True)
+        assert enabled.status_code == 200, enabled.text
+        assert enabled.json() == {"enabled": True}, enabled.text
+        assert gateway.get("/config/block_requests_for_models_without_pricing") == {"enabled": True}
+        settings_rows: Final = read_rows(
+            'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s', ("litellm_settings",)
+        )
+        settings: Final = object_value(settings_rows[0]["param_value"])
+        assert settings["block_requests_for_models_without_pricing"] is True, settings
+
+        unpriced_upstream_model: Final = f"integration-unpriced-{uuid.uuid4().hex}"
+        unpriced: Final = scenario.model(model=f"openai/{unpriced_upstream_model}")
+        priced: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(models=[unpriced, priced])
+        entries: Final = gateway.get("/model/info")["data"]
+        assert isinstance(entries, list)
+        unpriced_info: Final = next(
+            object_value(entry) for entry in entries if object_value(entry)["model_name"] == unpriced
+        )
+        unpriced_model_info: Final = object_value(unpriced_info["model_info"])
+        assert unpriced_model_info["input_cost_per_token"] is None, unpriced_model_info
+        assert unpriced_model_info["output_cost_per_token"] is None, unpriced_model_info
+
+        _observed(upstream)
+        blocked: Final = _bounded_chat(gateway, unpriced, key, f"unpriced {uuid.uuid4().hex}")
+        assert blocked.status_code == 403, blocked.text
+        assert blocked.json() == {
+            "error": {
+                "message": f"Model '{unpriced}' has no pricing in the cost map, so litellm cannot price the request. "
+                "Requests for unpriced models are blocked because 'block_requests_for_models_without_pricing' is "
+                "enabled. Add pricing (input_cost_per_token/output_cost_per_token) to allow the request.",
+                "type": "model_cost_map_missing",
+                "param": "model",
+                "code": "403",
+            }
+        }, blocked.text
+        assert _observed(upstream) == [], blocked.text
+
+        priced_content: Final = f"priced {uuid.uuid4().hex}"
+        served: Final = _bounded_chat(gateway, priced, key, priced_content)
+        assert served.status_code == 200, served.text
+        assert float(served.headers["x-litellm-response-cost"]) == pytest.approx(0.06), served.text
+        assert _observed(upstream) == [_upstream_chat("gpt-4o-mini", priced_content)], served.text
+
+        disabled: Final = _block_unpriced(gateway, False)
+        assert disabled.status_code == 200, disabled.text
+        assert disabled.json() == {"enabled": False}, disabled.text
+        assert gateway.get("/config/block_requests_for_models_without_pricing") == {"enabled": False}
+        settings_rows: Final = read_rows(
+            'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s', ("litellm_settings",)
+        )
+        disabled_settings: Final = object_value(settings_rows[0]["param_value"])
+        assert disabled_settings["block_requests_for_models_without_pricing"] is False, disabled_settings
+        _observed(upstream)
+        unpriced_content: Final = f"unpriced {uuid.uuid4().hex}"
+        now_served: Final = _bounded_chat(gateway, unpriced, key, unpriced_content)
+        assert now_served.status_code == 200, now_served.text
+        assert _observed(upstream) == [_upstream_chat(unpriced_upstream_model, unpriced_content)], now_served.text

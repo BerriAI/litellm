@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._experimental.mcp_server.catalog import public_catalog_operation
 from litellm.proxy._experimental.mcp_server.db import store_user_credential
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     BYOK_RESOURCE_METADATA_PATH,
@@ -82,9 +83,18 @@ def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": code}, headers=TOKEN_NO_CACHE_HEADERS)
 
 
-def _user_id_from_session_cookie(request: Request) -> str | None:
-    """Return user_id from the UI ``token`` cookie (HS256-signed with
-    ``master_key``), or None if missing/invalid.
+def user_id_from_session_cookie(request: Request) -> str | None:
+    """Return user_id from the UI ``token`` cookie, or None if missing/invalid."""
+    user_id, _ = _session_identity_from_cookie(request)
+    return user_id
+
+
+_user_id_from_session_cookie: Final = user_id_from_session_cookie
+
+
+def _session_identity_from_cookie(request: Request) -> tuple[str | None, str | None]:
+    """Return ``(user_id, session_key)`` from the UI ``token`` cookie
+    (HS256-signed with ``master_key``), or ``(None, None)`` if missing/invalid.
 
     The /token endpoint in this file ALSO issues master-key-signed JWTs
     (type="byok_session") for MCP-client-side use. They must not be
@@ -98,10 +108,10 @@ def _user_id_from_session_cookie(request: Request) -> str | None:
     from litellm.proxy.proxy_server import master_key
 
     if not master_key:
-        return None
+        return None, None
     token: Final = request.cookies.get("token")
     if not token:
-        return None
+        return None, None
     try:
         payload: Final = jwt.decode(
             token,
@@ -113,20 +123,103 @@ def _user_id_from_session_cookie(request: Request) -> str | None:
             options={"require": ["exp"]},
         )
     except jwt.InvalidTokenError:
-        return None
+        return None, None
     if payload.get("type") == "byok_session":
-        return None
+        return None, None
     if payload.get("login_method") not in ("sso", "username_password"):
-        return None
+        return None, None
     user_id: Final = payload.get("user_id")
-    return user_id if isinstance(user_id, str) and user_id else None
+    if not isinstance(user_id, str) or not user_id:
+        return None, None
+    session_key: Final = payload.get("key")
+    return user_id, session_key if isinstance(session_key, str) and session_key else None
+
+
+async def _session_key_is_live(session_key: str | None) -> bool:
+    """Whether the session key embedded in the UI cookie still resolves.
+
+    The cookie JWT stays signature-valid until ``exp``; the DB-backed session
+    key inside it is what ``POST /session/logout`` and password-change
+    revocation actually kill. Trusting the signature alone would let a
+    logged-out cookie keep authorizing BYOK credential writes, so re-resolve
+    the key here.
+
+    EXPERIMENTAL_UI_LOGIN blob tokens (non-``sk-``) have no DB row and are
+    unrevocable by construction (scoped out of revocation); they pass through
+    on their bounded 10-minute lifetime, as before.
+    """
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.auth.auth_checks import get_key_object
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if session_key is None:
+        # Older cookies predating the ``key`` claim: nothing to resolve.
+        return True
+    if not session_key.startswith("sk-"):
+        return True
+    if prisma_client is None:
+        return True
+    try:
+        await get_key_object(
+            hashed_token=hash_token(session_key),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception:
+        return False
+    return True
+
+
+async def get_authenticated_browser_user_id(request: Request) -> str | None:
+    from datetime import datetime, timezone
+
+    from pydantic import TypeAdapter, ValidationError
+
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_key_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    user_id, session_key = _session_identity_from_cookie(request)
+    if not user_id or not session_key or prisma_client is None:
+        return None
+    try:
+        auth: Final = (
+            await get_key_object(
+                hash_token(session_key),
+                prisma_client,
+                user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=True,
+            )
+            if session_key.startswith("sk-")
+            else ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(session_key)
+        )
+    except Exception:
+        return None
+    if auth is None or auth.user_id != user_id or auth.blocked or auth.expires is None:
+        return None
+    try:
+        expiration: Final = TypeAdapter(datetime).validate_python(auth.expires)
+    except ValidationError:
+        return None
+    expires: Final = expiration.replace(tzinfo=timezone.utc) if expiration.tzinfo is None else expiration
+    return user_id if expires > datetime.now(timezone.utc) else None
 
 
 async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:
-    """Require the UI session cookie. Programmatic BYOK management uses
+    """Require the UI session cookie, with the embedded session key
+    re-resolved against the DB so a revoked (logged-out) session cannot
+    authorize BYOK writes. Programmatic BYOK management uses
     ``POST /v1/mcp/server/{id}/user-credential`` instead."""
-    user_id: Final = _user_id_from_session_cookie(request)
+    user_id, session_key = _session_identity_from_cookie(request)
     if not user_id:
+        raise HTTPException(status_code=401, detail="login_required")
+    if not await _session_key_is_live(session_key):
         raise HTTPException(status_code=401, detail="login_required")
     return UserAPIKeyAuth(api_key="byok_session_cookie", user_id=user_id)
 
@@ -453,7 +546,7 @@ def _build_authorize_html(
     <button class="close-btn" type="button" onclick="doCancel()" title="Close">&times;</button>
 
     <div class="logos">
-      <img src="/ui/assets/logos/litellm_logo.jpg" class="logo-img" alt="LiteLLM">
+      <img src="/get_image?variant=monogram" class="logo-img" alt="LiteLLM">
       <span class="logo-arrow">&#8594;</span>
       <div class="logo logo-s">{server_initial}</div>
     </div>
@@ -649,6 +742,7 @@ async def byok_protected_resource_metadata(request: Request) -> JSONResponse:
 
 
 @router.get("/v1/mcp/oauth/authorize", include_in_schema=False)
+@public_catalog_operation
 async def byok_authorize_get(
     request: Request,
     client_id: str | None = None,
@@ -689,7 +783,7 @@ async def byok_authorize_get(
                 global_mcp_server_manager,
             )
 
-            registry: Final = global_mcp_server_manager.get_registry()
+            registry: Final = await global_mcp_server_manager.catalog.list()
             if server_id in registry:
                 srv: Final = registry[server_id]
                 server_name = srv.server_name or srv.name
@@ -865,7 +959,7 @@ async def byok_token(
                 _invalidate_byok_cred_cache,
             )
 
-            _invalidate_byok_cred_cache(user_id, server_id)
+            await _invalidate_byok_cred_cache(user_id, server_id)
         except Exception as exc:
             verbose_proxy_logger.error(
                 "byok_token: failed to store user credential for user=%s server=%s: %s",

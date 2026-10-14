@@ -4,6 +4,7 @@ import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
 import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
+import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
 import { getClaudeCodePluginsList } from "@/components/networking";
 import { Plugin } from "@/components/claude_code_plugins/types";
@@ -15,6 +16,7 @@ import {
   fetchMCPServers,
   getAgentsList,
   getConfigFieldSetting,
+  getGlobalLitellmHeaderName,
   getProxyBaseUrl,
   getUiConfig,
   modelHubCall,
@@ -41,12 +43,43 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
+import { uiHref } from "@/utils/uiHref";
+import {
+  DECISIONS_DOCS_URL,
+  DECISIONS_MODE,
+  SYSTEM_ONE_PLAYGROUND_ROUTE,
+  displayMode,
+  isDecisionMode,
+} from "@/lib/decisionModels";
+import DecisionModelGarden from "@/components/AIHub/DecisionModelGarden";
 
 interface ModelHubTableProps {
   accessToken: string | null;
   publicPage: boolean;
   premiumUser: boolean;
   userRole: string | null;
+  canOpenPlayground: boolean;
+  canAddModels: boolean;
+}
+
+function isMCPHubVisibilityDisabled(isLoading: boolean, servers: readonly MCPServerData[] | null): boolean {
+  return isLoading || servers === null;
+}
+
+function modelTableEmptyState(
+  models: readonly ModelHubData[],
+  showsDecisionGarden: boolean,
+  selectedMode: string,
+): { title: string; body: string } {
+  if (showsDecisionGarden && selectedMode === DECISIONS_MODE && !models.some((model) => isDecisionMode(model.mode))) {
+    return {
+      title: "No model on this proxy uses the decisions mode",
+      body: "The decision models LiteLLM supports are listed below.",
+    };
+  }
+  return models.length > 0
+    ? { title: "No matching models", body: "Adjust the filters to see more models." }
+    : { title: "No models yet", body: "Models added to this proxy will appear here." };
 }
 
 function HubEmptyState({ title, body }: { title: string; body: string }) {
@@ -61,7 +94,14 @@ function HubEmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
+const ModelHubTable: React.FC<ModelHubTableProps> = ({
+  accessToken,
+  publicPage,
+  premiumUser,
+  userRole,
+  canOpenPlayground,
+  canAddModels,
+}) => {
   const syntaxTheme = useSyntaxTheme(prism);
   // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
   // cannot toggle public visibility (write).
@@ -73,6 +113,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
   const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
+  const [selectedMode, setSelectedMode] = useState<string>("");
+  const showDecisionGarden = !publicPage && (selectedMode === "" || selectedMode === DECISIONS_MODE);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
@@ -359,10 +401,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
     if (accessToken) {
       const fetchMcpData = async () => {
         try {
+          setMcpLoading(true);
           const response = await fetchMCPServers(accessToken);
           setMcpHubData(response);
         } catch (error) {
+          setMcpHubData(null);
           console.error("Error refreshing MCP server data:", error);
+        } finally {
+          setMcpLoading(false);
         }
       };
       fetchMcpData();
@@ -460,7 +506,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   )}
 
                   {/* Filters */}
-                  <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
+                  <ModelFilters
+                    modelHubData={modelHubData || []}
+                    onFilteredDataChange={handleFilteredDataChange}
+                    extraModes={publicPage ? [] : [DECISIONS_MODE]}
+                    onModeChange={setSelectedMode}
+                  />
 
                   {/* Model Table */}
                   <DataTable
@@ -474,14 +525,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     isLoading={loading}
                     loadingMessage="Loading models…"
                     noDataMessage={
-                      <HubEmptyState
-                        title={modelHubData?.length ? "No matching models" : "No models yet"}
-                        body={
-                          modelHubData?.length
-                            ? "Adjust the filters to see more models."
-                            : "Models added to this proxy will appear here."
-                        }
-                      />
+                      <HubEmptyState {...modelTableEmptyState(modelHubData ?? [], showDecisionGarden, selectedMode)} />
                     }
                     size="compact"
                   />
@@ -492,6 +536,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     Showing {filteredData.length} of {modelHubData?.length || 0} models
                   </p>
                 </div>
+
+                {showDecisionGarden && <DecisionModelGarden accessToken={accessToken} canAddModels={canAddModels} />}
               </TabsContent>
 
               {/* Agent Hub Tab */}
@@ -567,7 +613,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakeMcpPublicPage()}>Select MCP Servers to Make Public</Button>
+                      <Button
+                        onClick={() => handleMakeMcpPublicPage()}
+                        disabled={isMCPHubVisibilityDisabled(mcpLoading, mcpHubData)}
+                      >
+                        Manage MCP Hub Visibility
+                      </Button>
                     </div>
                   )}
 
@@ -648,7 +699,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   </div>
                   <div>
                     <p className="font-medium">Mode:</p>
-                    <p>{selectedModel.mode || "Not specified"}</p>
+                    <p>{displayMode(selectedModel.mode) ?? "Not specified"}</p>
                   </div>
                   <div>
                     <p className="font-medium">Providers:</p>
@@ -660,6 +711,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                       ))}
                     </div>
                   </div>
+                  {selectedModel.description && (
+                    <div className="col-span-2">
+                      <p className="font-medium">Description:</p>
+                      <p className="mt-1">{selectedModel.description}</p>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -750,28 +807,32 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                 </div>
               )}
 
-              {/* Usage Example */}
               <div>
                 <p className="text-lg font-semibold mb-4">Usage Example</p>
+                {isDecisionMode(selectedModel.mode) && (
+                  <p className="mb-2 text-sm text-muted-foreground">
+                    Decision models answer on <code>/v1/decisions</code> and <code>/v1/systemone</code>, not{" "}
+                    <code>/chat/completions</code>.{" "}
+                    <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
+                      How to call decision models
+                    </a>
+                    {canOpenPlayground && (
+                      <>
+                        {" · "}
+                        <a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} className="underline">
+                          Try it in the Playground
+                        </a>
+                      </>
+                    )}
+                  </p>
+                )}
                 <SyntaxHighlighter language="python" className="text-sm" style={syntaxTheme}>
-                  {`import openai
-
-client = openai.OpenAI(
-    api_key="your_api_key",
-    base_url="${getProxyBaseUrl()}"  # Your LiteLLM Proxy URL
-)
-
-response = client.chat.completions.create(
-    model="${selectedModel.model_group}",
-    messages=[
-        {
-            "role": "user",
-            "content": "Hello, how are you?"
-        }
-    ]
-)
-
-print(response.choices[0].message.content)`}
+                  {modelUsageExample(
+                    selectedModel.mode,
+                    getProxyBaseUrl(),
+                    selectedModel.model_group,
+                    getGlobalLitellmHeaderName(),
+                  )}
                 </SyntaxHighlighter>
               </div>
             </div>
@@ -1084,7 +1145,7 @@ config = {
         "${selectedMcpServer.server_name}": {
             "url": "${getProxyBaseUrl()}/${selectedMcpServer.server_name}/mcp",
             "headers": {
-                "x-litellm-api-key": "Bearer sk-1234"
+                "x-litellm-api-key": "Bearer <your-master-key>"
             }
         }
     }
