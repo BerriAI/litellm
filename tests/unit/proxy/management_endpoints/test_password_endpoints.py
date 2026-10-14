@@ -5,6 +5,7 @@ HIBP is served by an AsyncHTTPHandler wrapping an httpx.MockTransport that is
 injected straight into change_password; no test here touches the network.
 """
 
+import base64
 import hashlib
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -30,6 +31,12 @@ def _make_user_row(password: str | None) -> MagicMock:
     user.user_id = "user-123"
     user.password = password
     return user
+
+
+def _legacy_scrypt_row(password: str) -> str:
+    salt = b"\x01" * 16
+    derived = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+    return "scrypt:" + base64.b64encode(salt + derived).decode()
 
 
 def _make_prisma(user: MagicMock | None) -> MagicMock:
@@ -131,6 +138,57 @@ async def test_change_password_rejects_wrong_current_password():
     assert exc_info.value.status_code == 400
     assert "Current password is incorrect" in exc_info.value.detail["error"]
     prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_change_password_kdf_runs_off_event_loop_thread(monkeypatch):
+    """The change-password endpoint's verify/hash are CPU-bound PBKDF2 calls
+    (~240ms each); they must run on a worker thread, not the event loop thread
+    that serves the rest of the proxy."""
+    import threading
+
+    from litellm.proxy._types import ChangePasswordRequest
+    from litellm.proxy.management_endpoints import password_endpoints as endpoints_module
+
+    seen_threads: dict[str, int] = {}
+    real_verify = endpoints_module.verify_password
+    real_hash = endpoints_module.hash_password
+
+    def recording_verify(password: str, stored: str) -> bool:
+        seen_threads.setdefault("verify", threading.get_ident())
+        return real_verify(password, stored)
+
+    def recording_hash(password: str) -> str:
+        seen_threads.setdefault("hash", threading.get_ident())
+        return real_hash(password)
+
+    monkeypatch.setattr(endpoints_module, "verify_password", recording_verify)
+    monkeypatch.setattr(endpoints_module, "hash_password", recording_hash)
+
+    prisma = _make_prisma(_make_user_row(_legacy_scrypt_row(CURRENT_PASSWORD)))
+
+    with (
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+    ):
+        response = await change_password(
+            data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
+            user_api_key_dict=_caller(),
+            hibp_client=_hibp_client_never_called(),
+        )
+
+    assert response.user_id == "user-123"
+    loop_thread: Final = threading.get_ident()
+    assert seen_threads.get("verify") is not None, "change_password never called verify_password"
+    assert seen_threads["verify"] != loop_thread
+    assert seen_threads.get("hash") is not None, "change_password never hashed the new password"
+    assert seen_threads["hash"] != loop_thread
+    stored = prisma.db.litellm_usertable.update.call_args.kwargs["data"]["password"]
+    assert verify_password(NEW_PASSWORD, stored)
 
 
 @pytest.mark.asyncio

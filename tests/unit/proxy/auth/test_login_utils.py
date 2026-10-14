@@ -596,6 +596,102 @@ async def test_authenticate_user_database_login_with_non_ascii_password():
             assert result.user_email == user_email
 
 
+@pytest.mark.asyncio
+async def test_login_password_kdf_runs_off_event_loop_thread(monkeypatch):
+    """PBKDF2 at 600k iterations is CPU-bound (~240ms per verify, plus a full
+    rehash on legacy rows). If it runs on the event loop thread, every concurrent
+    request on that worker stalls for the duration of a login. The async login
+    path must execute the KDF on a worker thread instead."""
+    import base64
+    import threading
+
+    from litellm.proxy.auth import login_utils as login_module
+
+    def _scrypt_row(password: str) -> str:
+        salt = b"\x01" * 16
+        derived = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+        return "scrypt:" + base64.b64encode(salt + derived).decode()
+
+    user_email = "kdf-thread@example.com"
+    password = "correct-password"
+    # Legacy scrypt row: exercises both the verify and the transparent rehash path.
+    stored_password = _scrypt_row(password)
+
+    mock_user = MagicMock()
+    mock_user.user_id = "test-user-kdf"
+    mock_user.user_email = user_email
+    mock_user.password = stored_password
+    mock_user.user_role = LitellmUserRoles.INTERNAL_USER
+
+    def mock_find_first(**kwargs):
+        where = kwargs.get("where", {})
+        user_email_filter = where.get("user_email", {})
+        if str(user_email_filter.get("equals", "")).lower() == user_email.lower():
+            return mock_user
+        return None
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(side_effect=mock_find_first)
+
+    seen_threads: dict[str, int] = {}
+    real_verify = login_module.verify_password
+    real_hash = login_module.hash_password
+
+    def recording_verify(password: str, stored: str) -> bool:
+        seen_threads.setdefault("verify", threading.get_ident())
+        return real_verify(password, stored)
+
+    def recording_hash(password: str) -> str:
+        seen_threads.setdefault("hash", threading.get_ident())
+        return real_hash(password)
+
+    monkeypatch.setattr(login_module, "verify_password", recording_verify)
+    monkeypatch.setattr(login_module, "hash_password", recording_hash)
+
+    mock_user_repository = MagicMock()
+    mock_user_repository.table.find_first = AsyncMock(side_effect=mock_find_first)
+    mock_user_repository.table.update_many = AsyncMock(return_value=None)
+    monkeypatch.setattr(login_module, "UserRepository", lambda client: mock_user_repository)
+
+    with patch.dict(
+        os.environ,
+        {"DATABASE_URL": "postgresql://test:test@localhost/test"},
+    ):
+        with (
+            patch(  # test-quality-ok: _rehash_password_if_needed reads the proxy_server global
+                "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+            ),
+            patch(
+                "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+                new_callable=AsyncMock,
+            ) as mock_generate_key,
+        ):
+            mock_generate_key.return_value = {"token": "token-123"}
+
+            result = await authenticate_user(
+                username=user_email,
+                password=password,
+                master_key="sk-1234",
+                prisma_client=mock_prisma_client,
+                throttle=_unlimited_throttle(),
+                general_settings=_POLICY_NO_BREACH_CHECK,
+            )
+
+    assert isinstance(result, LoginResult)
+    assert result.user_id == "test-user-kdf"
+    # The KDF calls made during the async login must not run on the thread
+    # hosting the event loop.
+    loop_thread: Final = threading.get_ident()
+    assert seen_threads.get("verify") is not None, "login never called verify_password"
+    assert seen_threads["verify"] != loop_thread
+    assert seen_threads.get("hash") is not None, "login never rehashed the legacy row"
+    assert seen_threads["hash"] != loop_thread
+    # The rehash still wrote a pbkdf2 row (non-fatal path stays functional).
+    rehash_kwargs = mock_user_repository.table.update_many.call_args.kwargs
+    assert rehash_kwargs["where"] == {"user_id": "test-user-kdf", "password": stored_password}
+    assert rehash_kwargs["data"]["password"].startswith("pbkdf2:sha256:")
+
+
 class TestEncodeUiSessionJwt:
     """The UI session cookie must carry a bounded exp so it does not stay
     signature-valid until the master key rotates, and so the session-cookie readers

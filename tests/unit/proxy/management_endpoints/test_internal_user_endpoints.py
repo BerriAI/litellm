@@ -4795,3 +4795,33 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hash_password_in_dict_runs_kdf_off_event_loop_thread(monkeypatch):
+    """_hash_password_in_dict runs inside async request handlers (/user/update,
+    invitation onboarding); its PBKDF2 hash is CPU-bound and must not run on the
+    event loop thread."""
+    import threading
+
+    from litellm.proxy.management_endpoints import internal_user_endpoints as endpoints_module
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _hash_password_in_dict
+
+    seen_thread: dict[str, int] = {}
+    real_hash = endpoints_module.hash_password
+
+    def recording_hash(password: str) -> str:
+        seen_thread.setdefault("hash", threading.get_ident())
+        return real_hash(password)
+
+    monkeypatch.setattr(endpoints_module, "hash_password", recording_hash)
+
+    data: dict = {"user_id": "u1", "password": "some-new-password"}
+    await _hash_password_in_dict(data, general_settings={}, password_prevalidated=True)
+
+    assert data["password"].startswith("pbkdf2:sha256:")
+    assert data["password_reset_required"] is True
+    assert data["last_breach_check_at"] is None
+    loop_thread: Final = threading.get_ident()
+    assert seen_thread.get("hash") is not None, "_hash_password_in_dict never hashed the password"
+    assert seen_thread["hash"] != loop_thread

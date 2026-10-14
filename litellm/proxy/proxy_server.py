@@ -17564,7 +17564,8 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
 
     validate_password_policy(data.password, general_settings)
     await validate_password_not_breached(data.password, general_settings)
-    hashed_pw: Final = hash_password(data.password)
+    # PBKDF2 at 600k iterations is CPU-bound (~240ms); hash off the event loop.
+    hashed_pw: Final = await asyncio.to_thread(hash_password, data.password)
     current_time = litellm.utils.get_utc_datetime()
     async with prisma_client.db.tx() as tx:
         updated_count: Final = await tx.litellm_invitationlink.update_many(

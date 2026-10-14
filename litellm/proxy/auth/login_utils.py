@@ -5,6 +5,7 @@ This module contains the core login logic that can be reused across different
 login endpoints (e.g., /login and /v2/login).
 """
 
+import asyncio
 import os
 import secrets
 from collections.abc import Mapping
@@ -114,9 +115,12 @@ async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -
 
     if prisma_client is not None:
         try:
+            # PBKDF2 at 600k iterations is CPU-bound (~240ms); hash it off the
+            # event loop so concurrent requests do not stall behind a rehash.
+            rehashed: Final = await asyncio.to_thread(hash_password, password)
             await UserRepository(prisma_client).table.update_many(
                 where={"user_id": user_id, "password": stored},
-                data={"password": hash_password(password)},
+                data={"password": rehashed},
             )
         except Exception as e:  # noqa: BLE001  # a failed rehash must never surface into the login
             verbose_proxy_logger.warning("Login-time password rehash could not update user %s: %s", user_id, e)
@@ -415,7 +419,9 @@ async def _sign_in(
                 code=401,
             )
 
-        if verify_password(password, _password):
+        # PBKDF2 at 600k iterations is CPU-bound (~240ms); run the KDF on a
+        # worker thread so the event loop keeps serving requests during login.
+        if await asyncio.to_thread(verify_password, password, _password):
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
             breached_now: Final = prisma_client is not None and await screen_login_password_for_breach(
                 user_id=_user_row.user_id,

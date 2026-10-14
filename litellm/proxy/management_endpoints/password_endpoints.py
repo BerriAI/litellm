@@ -8,6 +8,7 @@ request kwargs to OTEL spans, which would log plaintext passwords. The audit
 signal is emitted by hand below, with field names only, never values.
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -129,7 +130,9 @@ async def change_password(
             ),
         )
 
-    if not verify_password(data.current_password, stored_password):
+    # PBKDF2 at 600k iterations is CPU-bound (~240ms); run the KDF on a worker
+    # thread so the event loop keeps serving requests during the checks.
+    if not await asyncio.to_thread(verify_password, data.current_password, stored_password):
         raise HTTPException(status_code=400, detail=_error_detail("Current password is incorrect."))
 
     if data.new_password == data.current_password:
@@ -141,8 +144,9 @@ async def change_password(
     validate_password_policy(data.new_password, general_settings)
     await validate_password_not_breached(data.new_password, general_settings, hibp_client)
 
+    new_hash: Final = await asyncio.to_thread(hash_password, data.new_password)
     password_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {
-        "password": hash_password(data.new_password),
+        "password": new_hash,
         "password_reset_required": False,
         "last_breach_check_at": None,
     }

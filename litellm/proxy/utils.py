@@ -7242,9 +7242,11 @@ async def migrate_plaintext_passwords_async(prisma_client) -> str:
         return "No plaintext passwords found"
 
     for user_id, plaintext_password in plaintext_users:
+        # PBKDF2 at 600k iterations is CPU-bound (~240ms per row); hash off
+        # the event loop so startup does not stall other async work.
         await UserRepository(prisma_client).table.update(
             where={"user_id": user_id},
-            data={"password": hash_password(plaintext_password)},
+            data={"password": await asyncio.to_thread(hash_password, plaintext_password)},
         )
     return f"Migrated {len(plaintext_users)} plaintext passwords to pbkdf2"
 

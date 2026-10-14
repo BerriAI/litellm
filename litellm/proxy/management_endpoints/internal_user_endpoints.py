@@ -200,7 +200,9 @@ async def _hash_password_in_dict(
         if not password_prevalidated:
             validate_password_policy(data["password"], general_settings)
             await validate_password_not_breached(data["password"], general_settings, hibp_client)
-        data["password"] = hash_password(data["password"])
+        # PBKDF2 at 600k iterations is CPU-bound (~240ms); hash off the event
+        # loop so concurrent requests do not stall behind this write path.
+        data["password"] = await asyncio.to_thread(hash_password, data["password"])
         data["password_reset_required"] = True
         data["last_breach_check_at"] = None
 
