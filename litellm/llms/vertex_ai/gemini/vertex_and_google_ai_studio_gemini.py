@@ -115,6 +115,7 @@ from .long_decode import (
     next_hop_token,
     output_tokens_of,
     parse_body,
+    per_hop,
     sum_usage_metadata,
     url_for,
     with_initial_prompt_tokens,
@@ -2207,11 +2208,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             safety_ratings.append(candidate["safetyRatings"])
 
         if "citationMetadata" in candidate:
-            citation_metadata.append(candidate["citationMetadata"])
+            citation_metadata.extend(per_hop(candidate["citationMetadata"]))
 
         if "urlContextMetadata" in candidate:
-            # Add URL context metadata to grounding metadata
-            url_context_metadata.append(cast(dict, candidate["urlContextMetadata"]))
+            url_context_metadata.extend(cast(tuple[dict, ...], per_hop(candidate["urlContextMetadata"])))
 
         return (
             grounding_metadata,

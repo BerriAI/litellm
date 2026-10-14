@@ -1,8 +1,8 @@
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
-from typing import Final, TypeAlias, cast  # noqa: TID251  # sum_usage_metadata builds a TypedDict from computed keys
+from itertools import accumulate, chain
+from typing import Final, TypeAlias, TypeVar, cast  # noqa: TID251  # sum_usage_metadata casts computed keys
 
 import httpx
 
@@ -10,10 +10,15 @@ from litellm._logging import verbose_logger
 from litellm.exceptions import Timeout
 from litellm.types.llms.vertex_ai import (
     Candidates,
+    Citation,
+    CitationMetadata,
     GenerateContentResponseBody,
     GroundingMetadata,
+    GroundingSegment,
+    GroundingSupport,
     HttpxPartType,
     RequestBody,
+    UrlContextMetadata,
     UsageMetadata,
 )
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
@@ -49,6 +54,7 @@ _VERTEX_PATH_ACCEPTING_CONTINUATION_TOKEN: Final = "/v1beta1/projects/"
 LongDecodeHops: TypeAlias = tuple[GenerateContentResponseBody, ...]
 AsyncHopPost: TypeAlias = Callable[[RequestBody], Awaitable[httpx.Response]]
 SyncHopPost: TypeAlias = Callable[[RequestBody], httpx.Response]
+_Metadata: Final = TypeVar("_Metadata", bound=Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,16 +148,86 @@ def _candidate_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
     return content.get("parts", ()) if content is not None else ()
 
 
+def per_hop(metadata: _Metadata | tuple[_Metadata, ...]) -> tuple[_Metadata, ...]:
+    return (metadata,) if isinstance(metadata, Mapping) else metadata
+
+
 def _candidate_grounding(candidate: Candidates) -> tuple[GroundingMetadata, ...]:
     grounding: Final = candidate.get("groundingMetadata")
-    if grounding is None:
+    return () if grounding is None else per_hop(grounding)
+
+
+def _answer_bytes(candidate: Candidates) -> int:
+    return sum(
+        len(part["text"].encode()) for part in _candidate_parts(candidate) if "text" in part and not part.get("thought")
+    )
+
+
+def _shifted_support(support: GroundingSupport, offset: int) -> GroundingSupport:
+    segment: Final = support.get("segment")
+    if segment is None:
+        return support
+    shifted: Final[GroundingSegment] = {
+        **segment,
+        "startIndex": segment.get("startIndex", 0) + offset,
+        "endIndex": segment.get("endIndex", 0) + offset,
+    }
+    return {**support, "segment": shifted}
+
+
+def _shifted_grounding(grounding: GroundingMetadata, offset: int) -> GroundingMetadata:
+    if not offset or "groundingSupports" not in grounding:
+        return grounding
+    return {
+        **grounding,
+        "groundingSupports": tuple(_shifted_support(support, offset) for support in grounding["groundingSupports"]),
+    }
+
+
+def _hop_grounding(candidate: Candidates, offset: int) -> tuple[GroundingMetadata, ...]:
+    return tuple(_shifted_grounding(grounding, offset) for grounding in _candidate_grounding(candidate))
+
+
+def _shifted_citation(citation: Citation, offset: int) -> Citation:
+    return {**citation, "startIndex": citation.get("startIndex", 0) + offset, "endIndex": citation["endIndex"] + offset}
+
+
+def _shifted_citation_metadata(metadata: CitationMetadata, offset: int) -> CitationMetadata:
+    citations: Final = metadata.get("citations")
+    sources: Final = metadata.get("citationSources")
+    with_citations: Final[CitationMetadata] = (
+        metadata
+        if citations is None
+        else {**metadata, "citations": tuple(_shifted_citation(c, offset) for c in citations)}
+    )
+    return (
+        with_citations
+        if sources is None
+        else {**with_citations, "citationSources": tuple(_shifted_citation(c, offset) for c in sources)}
+    )
+
+
+def _hop_citations(candidate: Candidates, offset: int) -> tuple[CitationMetadata, ...]:
+    metadata: Final = candidate.get("citationMetadata")
+    if metadata is None:
         return ()
-    return grounding if isinstance(grounding, tuple) else (grounding,)
+    return tuple(_shifted_citation_metadata(item, offset) for item in per_hop(metadata))
 
 
-def _with_hop_grounding(candidate: Candidates, hop_candidates: Sequence[Candidates]) -> Candidates:
-    grounding: Final = tuple(chain.from_iterable(map(_candidate_grounding, hop_candidates)))
-    return {**candidate, "groundingMetadata": grounding} if grounding else candidate
+def _hop_url_context(candidate: Candidates) -> tuple[UrlContextMetadata, ...]:
+    return per_hop(candidate["urlContextMetadata"]) if "urlContextMetadata" in candidate else ()
+
+
+def _with_hop_metadata(candidate: Candidates, hop_candidates: Sequence[Candidates]) -> Candidates:
+    offsets: Final = tuple(accumulate(map(_answer_bytes, hop_candidates[:-1]), initial=0))
+    grounding: Final = tuple(chain.from_iterable(map(_hop_grounding, hop_candidates, offsets)))
+    with_grounding: Final[Candidates] = {**candidate, "groundingMetadata": grounding} if grounding else candidate
+    citations: Final = tuple(chain.from_iterable(map(_hop_citations, hop_candidates, offsets)))
+    with_citations: Final[Candidates] = (
+        {**with_grounding, "citationMetadata": citations} if citations else with_grounding
+    )
+    url_context: Final = tuple(chain.from_iterable(map(_hop_url_context, hop_candidates)))
+    return {**with_citations, "urlContextMetadata": url_context} if url_context else with_citations
 
 
 def merge_hops(hops: LongDecodeHops) -> GenerateContentResponseBody:
@@ -165,7 +241,7 @@ def merge_hops(hops: LongDecodeHops) -> GenerateContentResponseBody:
     }
     merged: Final[GenerateContentResponseBody] = {
         **last,
-        "candidates": [_with_hop_grounding(merged_first, hop_candidates), *(last.get("candidates") or [])[1:]],
+        "candidates": [_with_hop_metadata(merged_first, hop_candidates), *(last.get("candidates") or [])[1:]],
         "usageMetadata": sum_usage_metadata(*(hop.get("usageMetadata", UsageMetadata()) for hop in hops)),
     }
     first_response_id: Final = hops[0].get("responseId")

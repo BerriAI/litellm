@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
@@ -398,8 +399,9 @@ class Citation(TypedDict):
     publicationDate: Date
 
 
-class CitationMetadata(TypedDict):
-    citations: list[Citation]
+class CitationMetadata(TypedDict, total=False):
+    citations: ReadOnly[Sequence[Citation]]
+    citationSources: ReadOnly[Sequence[Citation]]
 
 
 class SearchEntryPoint(TypedDict, total=False):
@@ -407,10 +409,24 @@ class SearchEntryPoint(TypedDict, total=False):
     sdkBlob: str
 
 
+class GroundingSegment(TypedDict, total=False):
+    partIndex: ReadOnly[int]
+    startIndex: ReadOnly[int]
+    endIndex: ReadOnly[int]
+    text: ReadOnly[str]
+
+
+class GroundingSupport(TypedDict, total=False):
+    segment: ReadOnly[GroundingSegment]
+    groundingChunkIndices: ReadOnly[Sequence[int]]
+    confidenceScores: ReadOnly[Sequence[float]]
+
+
 class GroundingMetadata(TypedDict, total=False):
     webSearchQueries: list[str]
     searchEntryPoint: SearchEntryPoint
     groundingAttributions: list[dict]
+    groundingSupports: ReadOnly[Sequence[GroundingSupport]]
 
 
 class LogprobsCandidate(TypedDict):
@@ -468,11 +484,11 @@ class Candidates(TypedDict, total=False):
     content: HttpxContentType
     finishReason: GeminiFinishReason
     safetyRatings: list[SafetyRatings]
-    citationMetadata: CitationMetadata
+    citationMetadata: CitationMetadata | tuple[CitationMetadata, ...]
     groundingMetadata: GroundingMetadata | tuple[GroundingMetadata, ...]
     finishMessage: str
     logprobsResult: LogprobsResult
-    urlContextMetadata: UrlContextMetadata
+    urlContextMetadata: UrlContextMetadata | tuple[UrlContextMetadata, ...]
     continuationToken: ReadOnly[str]
 
 

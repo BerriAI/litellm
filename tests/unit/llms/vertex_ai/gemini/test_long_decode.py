@@ -221,6 +221,104 @@ async def test_unary_long_decode_bills_the_searches_of_every_hop(is_async: bool,
     ]
 
 
+HOP_1_GROUNDED: Final = "Kórnik Arboretum reached Level IV."
+HOP_1_CITED: Final = " Python is easy to learn."
+HOP_2_GROUNDED: Final = " The garden opened in 1826."
+URL_CONTEXT: Final = {
+    "urlMetadata": [
+        {"retrievedUrl": "https://www.python.org/about/", "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS"}
+    ]
+}
+
+
+def _byte_span(text: str, part: str) -> tuple[int, int]:
+    start: Final = text.encode().index(part.encode())
+    return start, start + len(part.encode())
+
+
+def _support(text: str, part: str) -> dict[str, object]:
+    start, end = _byte_span(text, part)
+    segment: Final = {"startIndex": start, "endIndex": end, "text": part} if start else {"endIndex": end, "text": part}
+    return {"segment": segment, "groundingChunkIndices": [0]}
+
+
+def _citation(text: str, part: str) -> dict[str, object]:
+    start, end = _byte_span(text, part)
+    return {"startIndex": start, "endIndex": end, "uri": f"https://example.com/{len(part)}"}
+
+
+def _citing(
+    body: Mapping[str, object], parts: Sequence[Mapping[str, object]], metadata: Mapping[str, object]
+) -> dict[str, object]:
+    candidates: Final = body["candidates"]
+    assert isinstance(candidates, list)
+    return {**body, "candidates": [{**candidates[0], "content": {"role": "model", "parts": list(parts)}, **metadata}]}
+
+
+def _hops_citing_sources(citation_key: str) -> tuple[httpx.Response, httpx.Response]:
+    hop_1_text: Final = HOP_1_GROUNDED + HOP_1_CITED
+    hop_1: Final = _citing(
+        HOP_1,
+        [{"text": "Planning the report", "thought": True}, {"text": hop_1_text}],
+        {
+            "groundingMetadata": {
+                "groundingChunks": [{"web": {"uri": "https://example.com/arboretum", "title": "arboretum"}}],
+                "groundingSupports": [_support(hop_1_text, HOP_1_GROUNDED)],
+            },
+            "citationMetadata": {citation_key: [_citation(hop_1_text, HOP_1_CITED.strip())]},
+            "urlContextMetadata": URL_CONTEXT,
+        },
+    )
+    hop_2: Final = _citing(
+        HOP_2,
+        [{"text": HOP_2_GROUNDED}],
+        {
+            "groundingMetadata": {
+                "groundingChunks": [{"web": {"uri": "https://example.com/garden", "title": "garden"}}],
+                "groundingSupports": [_support(HOP_2_GROUNDED, HOP_2_GROUNDED)],
+            },
+            "citationMetadata": {citation_key: [_citation(HOP_2_GROUNDED, "1826")]},
+        },
+    )
+    return httpx.Response(200, json=hop_1), httpx.Response(200, json=hop_2)
+
+
+def _supported_spans(grounding: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
+    return [support["segment"] for support in chain.from_iterable(item["groundingSupports"] for item in grounding)]
+
+
+def _cited_spans(citation_metadata: Sequence[Mapping[str, object]], citation_key: str) -> list[Mapping[str, object]]:
+    return list(chain.from_iterable(item[citation_key] for item in citation_metadata))
+
+
+def _bytes_at(answer: str, span: Mapping[str, object]) -> str:
+    return answer.encode()[span.get("startIndex", 0) : span["endIndex"]].decode()
+
+
+@pytest.mark.parametrize("citation_key", ["citations", "citationSources"])
+@pytest.mark.asyncio
+async def test_unary_long_decode_keeps_every_hops_citations_and_points_them_into_the_whole_answer(citation_key: str):
+    sent: Final[list[dict[str, object]]] = []
+
+    response: Final = await litellm.acompletion(
+        model=MODEL,
+        messages=list(MESSAGES),
+        max_tokens=100_000,
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(_hops_citing_sources(citation_key), sent))),
+    )
+    answer: Final = response.choices[0].message.content
+    supported: Final = _supported_spans(response.vertex_ai_grounding_metadata)
+    cited: Final = _cited_spans(response.vertex_ai_citation_metadata, citation_key)
+
+    assert len(sent) == 2
+    assert answer == HOP_1_GROUNDED + HOP_1_CITED + HOP_2_GROUNDED
+    assert [_bytes_at(answer, span) for span in supported] == [span["text"] for span in supported]
+    assert [span["text"] for span in supported] == [HOP_1_GROUNDED, HOP_2_GROUNDED]
+    assert [_bytes_at(answer, span) for span in cited] == [HOP_1_CITED.strip(), "1826"]
+    assert response.vertex_ai_url_context_metadata == [URL_CONTEXT]
+
+
 @pytest.mark.parametrize(
     "max_tokens, expected_requests, expected_token",
     [(None, 1, "dG9rLTE="), (30, 1, "dG9rLTE="), (50, 2, "dG9rLTI=")],
