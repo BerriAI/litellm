@@ -53,9 +53,15 @@ class _CachedContentListBody(TypedDict):
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _CachedContentUsageMetadata(TypedDict):
+    totalTokenCount: ReadOnly[NotRequired[int | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _CreatedCachedContent(TypedDict):
     name: ReadOnly[NotRequired[str | None]]
     expireTime: ReadOnly[NotRequired[str | None]]
+    usageMetadata: ReadOnly[NotRequired[_CachedContentUsageMetadata | None]]
 
 
 class _CachedContentListBodyRoot(RootModel[_CachedContentListBody]):
@@ -114,6 +120,11 @@ def maybe_invalidate_stale_context_cache(logging_obj: Logging, status_code: int,
     if served_id not in response_text and served_name not in response_text:
         return
     invalidate_cache_id(key)
+
+
+def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
+    tokens: Final = (created.get("usageMetadata") or {}).get("totalTokenCount") or 0
+    logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -514,6 +525,7 @@ class ContextCachingEndpoints(VertexBase):
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         created_name: Final = raw_response_cached.get("name")
         store_cache_id(id_cache_key, created_name, raw_response_cached.get("expireTime"))
+        _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,
@@ -686,6 +698,7 @@ class ContextCachingEndpoints(VertexBase):
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         created_name: Final = raw_response_cached.get("name")
         store_cache_id(id_cache_key, created_name, raw_response_cached.get("expireTime"))
+        _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,

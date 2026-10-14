@@ -1,12 +1,21 @@
+import threading
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
 import pytest
 
 from tests.integration._support.client import Gateway
-from tests.integration._support.workers import GatewayProfile, gateway_profile, readiness_failure
+from tests.integration._support.workers import (
+    GatewayProfile,
+    WorkerStack,
+    gateway_profile,
+    readiness_failure,
+    start_worker_stacks,
+)
 from tests.integration.run import worker_settings
 
 HEALTHY: Final = {
@@ -82,3 +91,43 @@ def test_replica_runs_and_coverage_runs_reach_every_worker_gateway() -> None:
     assert profile == GatewayProfile(
         peer=True, replica=True, cost_map=False, coverage_file=Path("/results/coverage/data")
     )
+
+
+def _stack(name: str, closed: threading.Event) -> WorkerStack:
+    resources: Final = ExitStack()
+    resources.callback(closed.set)
+    return WorkerStack(resources, MappingProxyType({"INTEGRATION_RESULTS_DIR": name}))
+
+
+def test_worker_stacks_start_together_and_return_in_worker_order(tmp_path: Path) -> None:
+    directories: Final = tuple(tmp_path / f"gw{index}" for index in range(3))
+    closed: Final = MappingProxyType({directory: threading.Event() for directory in directories})
+    together: Final = threading.Barrier(len(directories), timeout=10)
+
+    def build(directory: Path) -> WorkerStack:
+        together.wait()
+        return _stack(directory.name, closed[directory])
+
+    with ExitStack() as resources:
+        environments: Final = start_worker_stacks(directories, build, resources, len(directories))
+        assert [environment["INTEGRATION_RESULTS_DIR"] for environment in environments] == ["gw0", "gw1", "gw2"]
+        assert not any(event.is_set() for event in closed.values())
+    assert all(event.is_set() for event in closed.values())
+
+
+def test_a_failed_worker_stack_stops_every_sibling_that_started(tmp_path: Path) -> None:
+    directories: Final = tuple(tmp_path / f"gw{index}" for index in range(3))
+    closed: Final = MappingProxyType({directory: threading.Event() for directory in directories})
+    together: Final = threading.Barrier(len(directories), timeout=10)
+
+    def build(directory: Path) -> WorkerStack:
+        together.wait()
+        if directory.name == "gw1":
+            raise RuntimeError("gw1 gateway never became ready")
+        return _stack(directory.name, closed[directory])
+
+    with ExitStack() as resources:
+        with pytest.raises(RuntimeError, match="gw1 gateway never became ready"):
+            start_worker_stacks(directories, build, resources, len(directories))
+        assert closed[directories[0]].is_set()
+        assert closed[directories[2]].is_set()
