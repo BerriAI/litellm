@@ -37,6 +37,7 @@ MANAGED_FILE_ROW: Final = (
 _BatchUploadSpelling = Literal["sdk_list", "repeated_bracket", "indexed", "comma_joined", "repeated_plain"]
 _ModelRoutedSpelling = Literal[
     "sdk_extra_body",
+    "sdk_proxy_fields",
     "multipart_field",
     "query_param",
     "model_header",
@@ -252,12 +253,12 @@ def _multiplexed_openai_backends(
 
 
 def _managed_upload(
-    gateway: Gateway, spelling: _BatchUploadSpelling, fields: Mapping[str, object]
+    gateway: Gateway, spelling: _BatchUploadSpelling, fields: Mapping[str, object], sdk_base_url: str
 ) -> _FileObject:
     key: Final = gateway.key
     match spelling:
         case "sdk_list":
-            with OpenAI(base_url=_sdk_base_url(gateway), api_key=key, max_retries=0) as client:
+            with OpenAI(base_url=sdk_base_url, api_key=key, max_retries=0) as client:
                 response: Final = client.files.with_raw_response.create(
                     file=(INPUT_FILENAME, _jsonl("uploaded-model"), "application/jsonl"),
                     purpose="batch",
@@ -286,7 +287,9 @@ def _managed_upload(
             assert_never(spelling)
 
 
-def _assert_upload_reaches_both_target_models(gateway: Gateway, spelling: _BatchUploadSpelling) -> None:
+def _assert_upload_reaches_both_target_models(
+    gateway: Gateway, spelling: _BatchUploadSpelling, sdk_base_url: str
+) -> None:
     key_a: Final = "provider-key-a-" + uuid.uuid4().hex[:8]
     key_b: Final = "provider-key-b-" + uuid.uuid4().hex[:8]
     with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
@@ -300,7 +303,7 @@ def _assert_upload_reaches_both_target_models(gateway: Gateway, spelling: _Batch
             "comma_joined": {"target_model_names": f"{model_a},{model_b}"},
             "repeated_plain": {"target_model_names": [model_a, model_b]},
         }[spelling]
-        managed_file: Final = _managed_upload(gateway, spelling, fields)
+        managed_file: Final = _managed_upload(gateway, spelling, fields, sdk_base_url)
         assert managed_file.created_at > 0, managed_file.model_dump()
         managed: Final = managed_file.id
 
@@ -353,7 +356,19 @@ def _assert_upload_reaches_both_target_models(gateway: Gateway, spelling: _Batch
 def test_batch_upload_to_two_target_models_reaches_each_deployment(
     gateway: Gateway, spelling: _BatchUploadSpelling
 ) -> None:
-    _assert_upload_reaches_both_target_models(gateway, spelling)
+    _assert_upload_reaches_both_target_models(gateway, spelling, _sdk_base_url(gateway))
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/files", "/openai/v1/files"],
+    ids=["files-alias", "openai-v1-files-alias"],
+)
+def test_batch_upload_to_two_target_models_through_a_route_alias_reaches_each_deployment(
+    gateway: Gateway, route: str
+) -> None:
+    sdk_base_url: Final = str(gateway.client.base_url).rstrip("/") + route.removesuffix("/files")
+    _assert_upload_reaches_both_target_models(gateway, "sdk_list", sdk_base_url)
 
 
 def test_batch_upload_with_repeated_plain_target_model_names_reaches_each_deployment(gateway: Gateway) -> None:
@@ -376,6 +391,7 @@ def test_batch_upload_to_two_target_models_keeps_the_jsonl_content_type(gateway:
             gateway,
             "repeated_bracket",
             {"target_model_names[]": [model_a, model_b]},
+            _sdk_base_url(gateway),
         )
         uploads: Final = {
             request.headers["authorization"]: request for request in _drained_other_than_model_list_probes(wire)
@@ -391,15 +407,28 @@ def test_batch_upload_to_two_target_models_keeps_the_jsonl_content_type(gateway:
 
 
 def _model_routed_upload(
-    gateway: Gateway, spelling: _ModelRoutedSpelling, alias: str, uploaded: bytes
+    gateway: Gateway, spelling: _ModelRoutedSpelling, alias: str, uploaded: bytes, sdk_base_url: str
 ) -> _FileObject:
     match spelling:
         case "sdk_extra_body":
-            with OpenAI(base_url=_sdk_base_url(gateway), api_key=gateway.key, max_retries=0) as client:
+            with OpenAI(base_url=sdk_base_url, api_key=gateway.key, max_retries=0) as client:
                 response: Final = client.files.with_raw_response.create(
                     file=(INPUT_FILENAME, uploaded, "application/jsonl"),
                     purpose="batch",
                     extra_body={"model": alias},
+                )
+            assert response.status_code == 200, response.text
+            return _FileObject.model_validate_json(response.content)
+        case "sdk_proxy_fields":
+            with OpenAI(base_url=sdk_base_url, api_key=gateway.key, max_retries=0) as client:
+                response: Final = client.files.with_raw_response.create(
+                    file=(INPUT_FILENAME, uploaded, "application/jsonl"),
+                    purpose="batch",
+                    extra_body={
+                        "model": alias,
+                        "custom_llm_provider": "openai",
+                        "target_model_names": alias,
+                    },
                 )
             assert response.status_code == 200, response.text
             return _FileObject.model_validate_json(response.content)
@@ -437,6 +466,7 @@ def _model_routed_upload(
                     "purpose": "batch",
                     "model": alias,
                     "target_model_names": alias,
+                    "custom_llm_provider": "openai",
                     "litellm_metadata[tag]": "x",
                 },
                 files={"file": (INPUT_FILENAME, uploaded, "application/jsonl")},
@@ -445,7 +475,7 @@ def _model_routed_upload(
             assert posted.status_code == 200, posted.text
             return _FileObject.model_validate_json(posted.content)
         case "sdk_expires_after":
-            with OpenAI(base_url=_sdk_base_url(gateway), api_key=gateway.key, max_retries=0) as client:
+            with OpenAI(base_url=sdk_base_url, api_key=gateway.key, max_retries=0) as client:
                 response: Final = client.files.with_raw_response.create(
                     file=(INPUT_FILENAME, uploaded, "application/jsonl"),
                     purpose="batch",
@@ -475,6 +505,7 @@ def _model_routed_upload(
     "spelling",
     [
         "sdk_extra_body",
+        "sdk_proxy_fields",
         "multipart_field",
         "query_param",
         "model_header",
@@ -484,6 +515,7 @@ def _model_routed_upload(
     ],
     ids=[
         "sdk-extra-body-model",
+        "sdk-extra-body-with-proxy-fields",
         "multipart-model-field",
         "query-model",
         "x-litellm-model-header",
@@ -492,15 +524,15 @@ def _model_routed_upload(
         "multipart-bracketed-expires-after",
     ],
 )
-def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
-    gateway: Gateway, spelling: _ModelRoutedSpelling
+def _assert_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
+    gateway: Gateway, spelling: _ModelRoutedSpelling, sdk_base_url: str
 ) -> None:
     key: Final = "provider-key-" + uuid.uuid4().hex[:8]
     uploaded: Final = _jsonl("uploaded-model")
     with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
         alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key)
         _wait_until_every_worker_serves(gateway, alias)
-        uploaded_file: Final = _model_routed_upload(gateway, spelling, alias, uploaded)
+        uploaded_file: Final = _model_routed_upload(gateway, spelling, alias, uploaded, sdk_base_url)
 
         expected_encoded: Final = encode_file_id_with_model(file_id=f"file-{key}", model=alias)
         assert uploaded_file == _expected_file_object(expected_encoded, len(uploaded)), uploaded_file.model_dump()
@@ -515,6 +547,7 @@ def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_bac
             "query_param": {"purpose": "batch"},
             "model_header": {"purpose": "batch"},
             "multipart_proxy_fields": {"purpose": "batch"},
+            "sdk_proxy_fields": {"purpose": "batch"},
             "sdk_expires_after": {
                 "purpose": "batch",
                 "expires_after[anchor]": "created_at",
@@ -540,6 +573,51 @@ def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_bac
         assert (fetched.method, fetched.target) == ("GET", f"/v1/files/file-{key}"), fetched.target
         assert fetched.headers["authorization"] == f"Bearer {key}", fetched.headers
         assert fetched.body == b""
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "sdk_extra_body",
+        "sdk_proxy_fields",
+        "multipart_field",
+        "query_param",
+        "model_header",
+        "multipart_proxy_fields",
+        "sdk_expires_after",
+        "multipart_expires_after",
+    ],
+    ids=[
+        "sdk-extra-body-model",
+        "sdk-extra-body-with-proxy-fields",
+        "multipart-model-field",
+        "query-model",
+        "x-litellm-model-header",
+        "multipart-model-with-proxy-fields",
+        "sdk-expires-after",
+        "multipart-bracketed-expires-after",
+    ],
+)
+def test_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
+    gateway: Gateway, spelling: _ModelRoutedSpelling
+) -> None:
+    _assert_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
+        gateway, spelling, _sdk_base_url(gateway)
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/files", "/openai/v1/files"],
+    ids=["files-alias", "openai-v1-files-alias"],
+)
+def test_model_routed_upload_through_a_route_alias_reaches_one_deployment(
+    gateway: Gateway, route: str
+) -> None:
+    sdk_base_url: Final = str(gateway.client.base_url).rstrip("/") + route.removesuffix("/files")
+    _assert_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
+        gateway, "sdk_extra_body", sdk_base_url
+    )
 
 
 AZURE_API_VERSION: Final = "2024-10-21"

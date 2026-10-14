@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import hashlib
 import json
 import socket
 import socketserver
@@ -17,6 +18,9 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 import pytest
+from botocore.auth import S3SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
@@ -41,6 +45,9 @@ VERTEX_MODEL: Final = "vertex_ai/gemini-2.5-flash"
 GCS_HOST: Final = "storage.googleapis.com"
 GCS_AUTHORITY: Final = f"{GCS_HOST}:443"
 VERTEX_ACCESS_TOKEN: Final = "ya29.scripted-delete-token"
+AWS_ACCESS_KEY_ID: Final = "AKIAIOSFODNN7EXAMPLE"
+AWS_SECRET_ACCESS_KEY: Final = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+AWS_REGION: Final = "us-east-1"
 _ForbiddenSurface = Literal[
     "upload_sdk_extra_body",
     "upload_form",
@@ -597,7 +604,7 @@ def test_plain_target_model_upload_cannot_use_a_forbidden_deployment(gateway: Ga
 
 def _s3_backend() -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
-        if request.method == "DELETE":
+        if request.method in {"DELETE", "GET"}:
             return Reply(status=204, body=b"")
         return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
 
@@ -609,9 +616,9 @@ def _bedrock_model(scenario: Scenario, wire: Wire) -> str:
         model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
         api_key=None,
         api_base=None,
-        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
-        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        aws_region_name="us-east-1",
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        aws_region_name=AWS_REGION,
         s3_bucket_name=BUCKET,
         s3_endpoint_url=wire.url,
     )
@@ -713,10 +720,30 @@ def test_proxy_admin_deletes_a_raw_s3_uri_with_one_signed_delete(gateway: Gatewa
         parsed: Final = _FileDeleted.model_validate_json(deleted.content)
         assert parsed.deleted is True and parsed.id == object_uri, deleted.text
         (request,) = _drained_other_than_model_list_probes(wire)
-        assert request.method == "DELETE" and request.target == f"/{BUCKET}/litellm-bedrock-files-obj.jsonl", (
-            request.target
+        assert request.target == f"/{BUCKET}/litellm-bedrock-files-obj.jsonl", request.target
+        request_date: Final = request.headers["x-amz-date"]
+        content_hash: Final = hashlib.sha256(b"").hexdigest()
+        assert request.headers["x-amz-content-sha256"] == content_hash, request.headers
+        aws_request: Final = AWSRequest(
+            method="DELETE",
+            url=wire.url + request.target,
+            headers={
+                "host": request.headers["host"],
+                "x-amz-date": request_date,
+                "x-amz-content-sha256": content_hash,
+            },
         )
-        assert request.headers["authorization"].startswith("AWS4-HMAC-SHA256 "), request.headers
+        aws_request.context["timestamp"] = request_date
+        auth: Final = S3SigV4Auth(Credentials(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), "s3", AWS_REGION)
+        signature: Final = auth.signature(
+            auth.string_to_sign(aws_request, auth.canonical_request(aws_request)), aws_request
+        )
+        expected_authorization: Final = (
+            f"AWS4-HMAC-SHA256 Credential={AWS_ACCESS_KEY_ID}/{request_date[:8]}/{AWS_REGION}/s3/aws4_request, "
+            f"SignedHeaders={auth.signed_headers(auth.headers_to_sign(aws_request))}, Signature={signature}"
+        )
+        assert request.headers["authorization"] == expected_authorization, request.headers["authorization"]
+        assert request.method == "DELETE", request.method
 
 
 def _granting_vertex_token_backend(request: Request) -> Reply:
