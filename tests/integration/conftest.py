@@ -285,6 +285,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 @pytest.fixture
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
+        httpx.get(f"{value.upstream_url}/__observations", timeout=5, trust_env=False).raise_for_status()
         yield value
 
 

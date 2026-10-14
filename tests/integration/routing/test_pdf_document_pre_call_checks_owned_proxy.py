@@ -1,5 +1,4 @@
 import os
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -50,17 +49,12 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 class _Rig:
     owned: OwnedProxy
     wire: Wire
-    held_port: int
+    held: Wire
+    release: threading.Event
 
 
 def _marker() -> str:
     return uuid.uuid4().hex
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return int(reserve.getsockname()[1])
 
 
 def _deployment(
@@ -86,7 +80,8 @@ def _peer(request: Request) -> Reply:
 
 def _held(release: threading.Event) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
-        assert release.wait(timeout=120), "Held peer was never released"
+        if request.method == "POST":
+            assert release.wait(timeout=120), "Held peer was never released"
         return _peer(request)
 
     return respond
@@ -107,14 +102,14 @@ def _request(surface: str, model: str, pages: int, marker: str) -> tuple[str, di
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("pdf-pre-call")
-    held_port: Final = _free_port()
-    with gateway_from_environment() as gateway, wire_server(_peer) as wire:
+    release: Final = threading.Event()
+    with gateway_from_environment() as gateway, wire_server(_peer) as wire, wire_server(_held(release)) as held:
         config: Final = owned_config(
             directory,
             [
                 _deployment(_WINDOW, "claude-haiku-5-5", wire.url, model_info={"max_input_tokens": _LIMIT}),
                 _deployment(_ITPM, "claude-sonnet-4-6", wire.url, itpm=_LIMIT),
-                _deployment(_BUDGET, "claude-opus-4-8", f"http://127.0.0.1:{held_port}"),
+                _deployment(_BUDGET, "claude-opus-4-8", held.url),
             ],
             litellm_settings={"cache": False},
             router_settings={
@@ -122,8 +117,11 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
                 "optional_pre_call_checks": ["enforce_model_rate_limits"],
             },
         )
-        with owned_proxy_process(gateway, directory, {}, config=config, workers=2) as owned:
-            yield _Rig(owned, wire, held_port)
+        try:
+            with owned_proxy_process(gateway, directory, {}, config=config, workers=2) as owned:
+                yield _Rig(owned, wire, held, release)
+        finally:
+            release.set()
 
 
 def _spend_row(call_id: str) -> dict[str, JsonValue]:
@@ -168,9 +166,10 @@ def test_model_itpm_check_rejects_a_pdf_whose_pages_exceed_the_limit(rig: _Rig) 
 
 
 def test_key_budget_reservation_rejects_the_second_concurrent_pdf_request(rig: _Rig) -> None:
-    release: Final = threading.Event()
     requests: Final = tuple(_request("messages", _BUDGET, _PAGE_COUNT, _marker()) for _ in range(2))
-    with wire_server(_held(release), port=rig.held_port) as wire, rig.owned.gateway.scenario() as scenario:
+    wire: Final = rig.held
+    wire.drain()
+    with rig.owned.gateway.scenario() as scenario:
         key: Final = scenario.key(max_budget=0.01)
         headers: Final = {"Authorization": f"Bearer {key}"}
         with (
@@ -187,7 +186,7 @@ def test_key_budget_reservation_rejects_the_second_concurrent_pdf_request(rig: _
                     seconds=60,
                 )
             finally:
-                release.set()
+                rig.release.set()
             responses: Final = tuple(future.result(timeout=90) for future in futures)
         received: Final = wire.drain()
     assert sorted(response.status_code for response in responses) == [200, 422], [
