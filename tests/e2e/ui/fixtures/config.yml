@@ -9,6 +9,11 @@ model_list:
       model: openai/fake-claude
       api_base: os.environ/MOCK_LLM_URL
       api_key: fake-key
+  - model_name: fake-decisions-model
+    litellm_params:
+      model: typesafe/jev-latest
+      api_base: os.environ/MOCK_LLM_URL
+      api_key: fake-key
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
