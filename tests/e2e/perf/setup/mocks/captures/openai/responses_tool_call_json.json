@@ -1,0 +1,352 @@
+{
+ "provider": "openai",
+ "route": "responses",
+ "shape": "tool_call",
+ "marker": "perfreq-003450-c",
+ "captured_at": "2026-10-14T18:45:21Z",
+ "stream": false,
+ "model": "gpt-6-luna",
+ "request_bytes": 270859,
+ "request_tokens_estimate": 67714,
+ "status": 200,
+ "ttfb_s": 12.7747,
+ "total_s": 12.8722,
+ "body": {
+  "id": "resp_05e43d22b6a929eb006acfcdb4584887d0947eabfad142af45",
+  "object": "response",
+  "created_at": 1792003508,
+  "status": "completed",
+  "access_programs": {
+   "cyber": "daybreak_blue"
+  },
+  "background": false,
+  "billing": {
+   "payer": "developer"
+  },
+  "completed_at": 1792003520,
+  "error": null,
+  "frequency_penalty": 0.0,
+  "incomplete_details": null,
+  "instructions": "You are an interactive CLI tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.\n\nIMPORTANT: Assist with defensive security tasks only. Refuse to create, modify, or improve code that may be used maliciously. Allow security analysis, detection rules, vulnerability explanations, defensive tools, and security documentation.\nIMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.\n\nIf the user asks for help or wants to give feedback inform them of the following:\n- /help: Get help with using the tool\n- To give feedback, users should report the issue at the project's issue tracker\n\nWhen the user directly asks about the tool (eg 'can the tool do...', 'does the tool have...') or asks in second person (eg 'are you able...', 'can you do...'), first use the WebFetch tool to gather information to answer the question from the documentation.\n\n# Tone and style\nYou should be concise, direct, and to the point. When you run a non-trivial bash command, you should explain what the command does and why you are running it, to make sure the user understands what you are doing (this is especially important when you are running a command that will make changes to the user's system).\nRemember that your output will be displayed on a command line interface. Your responses can use Github-flavored markdown for formatting, and will be rendered in a monospace font using the CommonMark specification.\nOutput text to communicate with the user; all text you output outside of tool use is displayed to the user. Only use tools to complete tasks. Never use tools like Bash or code comments as means to communicate with the user during the session.\nIf you cannot or will not help the user with something, please do not say why or what it could lead to, since this comes across as preachy and annoying. Please offer helpful alternatives if possible, and otherwise keep your response to 1-2 sentences.\nOnly use emojis if the user explicitly requests it. Avoid using emojis in all communication unless asked.\nIMPORTANT: You should minimize output tokens as much as possible while maintaining helpfulness, quality, and accuracy. Only address the specific query or task at hand, avoiding tangential information unless absolutely critical for completing the request. If you can answer in 1-3 sentences or a short paragraph, please do.\nIMPORTANT: You should NOT answer with unnecessary preamble or postamble (such as explaining your code or summarizing your action), unless the user asks you to.\nIMPORTANT: Keep your responses short, since they will be displayed on a command line interface. You MUST answer concisely with fewer than 4 lines (not including tool use or code generation), unless user asks for detail. Answer the user's question directly, without elaboration, explanation, or details. One word answers are best. Avoid introductions, conclusions, and explanations. You MUST avoid text before/after your response, such as \"The answer is <answer>.\", \"Here is the content of the file...\" or \"Based on the information provided, the answer is...\" or \"Here is what I will do next...\". Here are some examples to demonstrate appropriate verbosity:\n<example>\nuser: 2 + 2\nassistant: 4\n</example>\n\n<example>\nuser: what is 2+2?\nassistant: 4\n</example>\n\n<example>\nuser: is 11 a prime number?\nassistant: Yes\n</example>\n\n<example>\nuser: what command should I run to list files in the current directory?\nassistant: ls\n</example>\n\n<example>\nuser: what command should I run to watch files in the current directory?\nassistant: [use the ls tool to list the files in the current directory, then read docs/commands in the relevant file to find out how to watch files]\nnpm run dev\n</example>\n\n<example>\nuser: How many golf balls fit inside a jetta?\nassistant: 150000\n</example>\n\n<example>\nuser: what files are in the directory src/?\nassistant: [runs ls and sees foo.c, bar.c, baz.c]\nuser: which file contains the implementation of foo?\nassistant: src/foo.c\n</example>\n\n<example>\nuser: write tests for new feature\nassistant: [uses grep and glob search tools to find where similar tests are defined, uses concurrent read file tool use blocks in one single message to read relevant files at the same time, uses edit file tool to write new tests]\n</example>\n\n# Proactiveness\nYou are allowed to be proactive, but only when the user asks you to do something. You should strive to strike a balance between:\n1. Doing the right thing when asked, including taking actions and follow-up actions\n2. Not surprising the user with actions you take without asking\nFor example, if the user asks you how to approach something, you should do your best to answer their question first, and not immediately jump into taking actions.\n3. Do not add additional code explanation summary unless requested by the user. After working on a file, just stop, rather than providing an explanation of what you did.\n\n# Following conventions\nWhen making changes to files, first understand the file's code conventions. Mimic code style, use existing libraries and utilities, and follow existing patterns.\n- NEVER assume that a given library is available, even if it is well known. Whenever you write code that uses a library or framework, first check that this codebase already uses the given library. For example, you might look at neighboring files, or check the package.json (or cargo.toml, and so on depending on the language).\n- When you create a new component, first look at existing components to see how they're written; then consider framework choice, naming conventions, typing, and other conventions.\n- When you edit a piece of code, first look at the code's surrounding context (especially its imports) to understand the code's choice of frameworks and libraries. Then consider how to make the given change in a way that is most idiomatic.\n- Always follow security best practices. Never introduce code that exposes or logs secrets and keys. Never commit secrets or keys to the repository.\n\n# Code style\n- IMPORTANT: DO NOT ADD ***ANY*** COMMENTS unless asked\n\n# Task Management\nYou have access to the TodoWrite and TodoRead tools to help you manage and plan tasks. Use these tools VERY frequently to ensure that you are tracking your tasks and giving the user visibility into your progress.\nThese tools are also EXTREMELY helpful for planning tasks, and for breaking down larger complex tasks into smaller steps. If you do not use this tool when planning, you may forget to do important tasks - and that is unacceptable.\nIt is critical that you mark todos as completed as soon as you are done with a task. Do not batch up multiple tasks before marking them as completed.\n\n# Doing tasks\nThe user will primarily request you perform software engineering tasks. This includes solving bugs, adding new functionality, refactoring code, explaining code, and more. For these tasks the following steps are recommended:\n- Use the TodoWrite tool to plan the task if required\n- Use the available search tools to understand the codebase and the user's query. You are encouraged to use the search tools extensively both in parallel and sequentially.\n- Implement the solution using all tools available to you\n- Verify the solution if possible with tests. NEVER assume specific test framework or test script. Check the README or search codebase to determine the testing approach.\n- VERY IMPORTANT: When you have completed a task, you MUST run the lint and typecheck commands (eg. npm run lint, npm run typecheck, ruff, etc.) with Bash if they were provided to you to ensure your code is correct. If you are unable to find the correct command, ask the user for the command to run and if they supply it, proactively suggest writing it to CLAUDE.md so that you will know to run it next time.\nNEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only commit when explicitly asked, otherwise the user will feel that you are committing without their permission.\n\n- Tool results and user messages may include <system-reminder> tags. <system-reminder> tags contain useful information and reminders. They are NOT part of the user's provided input or the tool result.\n\n# Tool usage policy\n- When doing file search, prefer to use the Task tool in order to reduce context usage.\n- You should proactively use the Task tool with specialized agents when the task at hand matches the agent's description.\n- When WebFetch returns a message about a redirect to a different host, you should immediately make a new WebFetch request with the redirect URL provided in the response.\n- You have the capability to call multiple tools in a single response. When multiple independent pieces of information are requested, batch your tool calls together for optimal performance. When making multiple bash tool calls, you MUST send a single message with multiple tools calls to run the calls in parallel. For example, if you need to run \"git status\" and \"git diff\", send a single message with two tool calls to run the calls in parallel.\n\nYou MUST answer concisely with fewer than 4 lines of text (not including tool use or code generation), unless user asks for detail.\n\nHere is useful information about the environment you are running in:\n<env>\nWorking directory: /workspace/litellm\nIs directory a git repo: Yes\nPlatform: linux\nOS Version: Linux 6.8.0\nToday's date: 2026-10-14\n</env>\nYou are powered by the model named the configured model. The exact model ID is the one the gateway routes this request to.\n\nIMPORTANT: Assist with defensive security tasks only. Refuse to create, modify, or improve code that may be used maliciously. Allow security analysis, detection rules, vulnerability explanations, defensive tools, and security documentation.\n\n# Code References\nWhen referencing specific functions or pieces of code include the pattern `file_path:line_number` to allow the user to easily navigate to the source code location.\n\n<example>\nuser: Where are errors from the client handled?\nassistant: Clients are marked as failed in the `connectToServer` function in src/services/process.ts:712.\n</example>\n\ngitStatus: This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.\nCurrent branch: main\nMain branch (you will usually use this for PRs): main\nStatus: (clean)\nRecent commits:\nabcdef0 fix(router): keep the stream retry inside the same deployment group\n1234567 docs: router_settings reference for the new fallback flag\n89abcde test(e2e): perf cases on an out-of-process rig\n",
+  "max_output_tokens": 8192,
+  "max_tool_calls": null,
+  "model": "gpt-6-luna",
+  "moderation": null,
+  "output": [
+   {
+    "id": "rs_05e43d22b6a929eb006acfcdb98ba087d0837db939203f408a",
+    "type": "reasoning",
+    "content": [],
+    "encrypted_content": "gAAAAABqz83AN8dBSlVIAPYOoOwNpwYJzCF2Ykf_fcHiQ7oQ4JdhmorWZixYEZE7Mhg37P8eCjaK0V8K_TmZaFvmJaZ1GkLTVvsxgy3siyx-IrEXkN5TLamysLmExmMHLkqFo5GrDxwndIqCuzbz7wmXLTbz0oZ9-GHZgawxbBeug3LCNZMYSMx5Qs8L5A3a0FRyBhj8r39y87xi6_t186iGzlOYLXcVNDTox9Um4HBOdacWCO90fRNx2-gIX3OZLOpjI78xPNpkaKk6qn1LPNqAE3drYK7pJCRjxePbUVhLZG5SQnUL-qaTGaNrNFXIt90AlIUZmNzdsNTue4qoP3TlmHcN6epr-YPqv01xj180v9Yl59iHJNB55nK9IPdh9eIDZQzEgXVNlzn7pdF7utU_ib5eRfH9qjs5SKF1PPav_YzQoqDEOhRnzoZa0-sgnfQcqz0f-0mcZie-2pakOPtR5UMf4bfCcJSqzGSrjV2XR6yPfdxWSVLspMeaQXdqDY0MMx_GQ9Wdwggogcn5eWYeqayA7Bvb32WhFKRvbezFkfcNsL2Ut1DiBlsS5lU9HmyRcRZUWRWa8THT_lp8qsMv_ZFzUJ4dxuF2FVNOzpAAsBg66eJzSjA1cEEG3_wUU0bazx_PbmfDGZesCl0t4E2WlNnnvrHe9V8Dq2aIEO2ejL6B3RMavb1HnU5gzURVGbyIrz_IoCm5u6T_vgzLwlzZVfn4tTP-CFcLb8Ox9m0er39Rv8NDVB7utor_Dl87WoZeIL98eg4J90gEf-mjdFCdI6aA4HTaJgOWnvVjqMRGGh_PXfc3I-pX1BYSxeqNhDAbHtfW85STsDF2EY8X2xXznAe_QgJQXTMyhPj1Wh3nRYU7NDPECecY-dRyDWCrE8BzdDOY0CeEJMqAES3uqx04Zpj6RpxXzVnysisv8Aedsjrsitt2slNFUjf63c5V5syw6y33Y0BH8a3HknJr9lM3h6qhtzgSA8XAIES8Lc2kwrn8kTEJkX_Tu4cu_8hauh-j_ltG8m3VvZuaZG3jtO1D64if0zzLZPCt630hTYWuwdwF31TFSKjs0hVUO4TIayYS5kpI-u86I57PuvljI2_0JgyWIIzSPdfg_-8zvu8MJARlbUhi-thxCUbjTHDkpQAVlDTe-yoolv5sOdzHucW_CcjQRzlOBgX56DHrtBFARRjEmRvAIsC5kEP6bzl3pduYKS2w95KQHzXFAOzdQoM56C29vY-LNK2p6Q7nDpwAWWfKV7cjj0Y4vSKCyMEVVMOT3_fEB4yAWNjRnkRqT1KKh_4EiuF015Uyj4Kw6SjNV2psbi9aRv-7oAHgcE_7DCw2GNVgkcfiRwMooLrUF3yU8x6uW8x8zALN2ogpsuYwE3TirlCYuMRWRiDxKlfxSmb07oBvYLFzsQDR-BhW-M4A5KPrI1JMK6lGhl-Y_44MkIAyOqECpXcBlNzkBivkP3rqX89ukkjf5H2jLm-wzNK_LLMkvAlCmACCKVItNctnUXempc4bMWa95tWIUCCZCZ4fQM8SXZ7WSFnkUp0xGK66i71DHCzHEUqteOGcYNPyo6-mIs8SNSf5j9XRpTY_3vRjEl1qAcInCLcj18leiM_OSiZ_10npiApe2RxPvQQNZZLCIZqG8a3LA7vq3vW_psPL_5fNcjtn5Dibu855cfQsNrHZe2QIOGz5kgjIg6IzbyTKxIsQyprnheR5T0xC3bslijR6b5tky9TzFAoYwH6nW3bYgztPW_2DOFpZAie4HCtdIBYdO4FQKSmuBgr-E6LRSj2xyyrqa97tWRDl8xavRpbB2p9KOVc3pKKZL7hsxueJxMLLn_xJLrZIqzpnV-BioPtnhPQ5rFyCgGM0wCKaFWJp4vJDH8BtC_fKTMYrIWdDZqajKfli74i4c26smDM9Zq19rgqqN0J4EY_SkqdJ14o-3DfLK4DgV8rNMiEXPIKZn56_a0f1gQARJg9I-aq-hBr-IcqUguEsCGg2eBMNNmK3-eSW-Vj3bqrQwlvpX6qrTrJJcFO6CDL3M62vi_mLcQ0ewA26bRGV8i1BJpcOVb6bbkYS39OLx_exeQ1PBcNlao-AIlEzra3JG7K6-3-6O02bccHzTw-UvvYQDPporVhrKTYwz4g3ICxqy_8oseOhpmxYOQ_WEbxu39ztiEujLFJ618HD-p7QaaBqpcwUDDdoJqVB9QSb5CC8S21Ma2FMvOFu59sx7lODQw01UWouVLsaoJ66jHjzAc6oBVf-rLPlvVHsFVZ0WicArrMxYvRkQ8OQtctuIscy4xRcoIMER_BuvqquOuDja4EjjpE1rlAWcjRh4lBNbHe5LP2z0mHr_Pv6jAa4TenhpMC10v2XXNUNmeXkejnmIkzPDwS3dwtNBi0NtX7Mgd004CEWdS8okjN9yfxVIDIh7bGDOKF1CqGsYyyLAA6gePRsMYFoyzxZ3YBHJRRnAMJiycWZIXWNgu65Tdc7yAGRz1HHdF5_3FpbZlZgjuPWCuesTmVCqVMydLjGVziphwGAhOiuCHIqDHq0WpHDnkQRdcQZrCJPxR5bKMZ0CduNW_X1LGAMRhmGBass-9lWOzkAW7uQT-xYG2TGctKHpaT0Qf8i_b_iVO-WdUei6O0RpVyJXHwV77Xgo9bf8bxEMawZhW_3hBFm7i0CR9kygv9_C_YX9HtE5V-u84zgZQA6oyS0KXc6qtV4FNr64nwiEL9E5GqPko-frvUIRZS_OkOQ6ngW65PflW_VrR7XTUso2QrTh_NUYYQZmlQ7keubeTczpbff9rVg1VOsujtWqeEd0ahdr8pK6uvpjVL8zBybVjDJQAkHuTN4Q2UPYDrjgmKDO4g3YTpW0eRZ6-qqrDB9Ns-xZYQCfWEgGHaxeK2AhIXGwIRjYZracWXZfXQ5q0B0A185l0tFNPjnjUyfFJ2bFWjJG_YP9c16BjcKoRl7dTNaYu0-FDyPti_qd87yXxixmL9Dz9BTaNL4FKDEOxM4NI1jH7gUhxjAaKf1AckPU9btSxd9QCjlx4HBdNogB_6GvcuRYLXF9QyGKtRyFh4dd8ozMSxVCb4BdY4cpBdnhpx-4Xby0ZbMv7rkIXMkMAwRQbiOrXe8P9uft_hxPacMWiOHINjaxWUnUlfzuAKDAus08-q3PdHJL1iyGhGGox21-oENRjzeKp_XdFP0VXZOMUPgvTrlQZ9rL0PnFSWaJx1fJDdneUFAZQBeKK1pgTJxA3QLcvI9oKWVqJh7T5w76cXaNO5d7ghDAjAVMw-3nQYDZy831Cl4CLkePjWeeRB_xb7VLKWETQ411uiE6vpoOLlJEIEAevLo93HYrhW9UQHUnR3-dO2yiOLZqSMt04sJ58qLsnFZdPKXozJyrKAUf2vuRJA4J2VudnCC3nXVwXKM_q-h1wQ-_YAxSfc2z87CR9TbSResH37TuXacbycai0gxpNXg_PLmRQEWmApjXQIJYFs0FafTU40a936qcmRTmJeVw87KoqHqwmVek-Okmf7JbOTK68GurAjcYiuPgB9H6eDhBFmjdXlOssY_g3Ftt54RumJgKr1KdN647U_ZU9qYpCdBvNO_6emuZ-0TBtXph52xKvvYs8wt3ODK1izkHWvNCIhjhfnNhC2iKKTD42-QvREqh9a1YQOea2sZ_VWaG2jbbrr5dEpWzgidZAh-A1j2an8pzKFy3hC3neUjskJfyj_kAbHZD04_d5h46UfOd1MkMNuAZ44sxHNU-gDBNE3j8dl1fVlBAvXmF5Vfn_uVT_gAdMew5x_iXv7J25hOe4nK4rQAnKmtdCJKElo-p4OETCTdxiF5tjuR5hLfvupyNqaK0exAENt20GoRhn9iqkGyzviNQvx1np1g-8G2Xr-yeZgVjoVLjPoytAemHIQq7pvqZ1Lb5Ct5oWkPQvjvaTFB0o1ec4xI0ntPQRqIh0gYu7gSS8vIG-f7whMmRW4-CHR4HjYVkmw8UY_re8eQKg74KzcRNdywC6xI_z2hBsZcaktyHXOwOziig1tXA_Sxbg3xXL-IphX6NRSpJQc7-hl6_rLT3G9mmsbkE0oUxdxwbNoT-kzbUNxnvrdcfu3gL_kaPnKFigKh0qj_RuEGCPO39CQekau6GnADwaIj6BL_p2QRO8BnNjcOKrmxyLP4A_uQdQmW0XrwoTYPUYgNE3chE9HebpTFafUHWM1q-3J5egLiT9F8qSefy95TOfahh42okWY9XYd3uQYHzGFFmafDo9Y5-iGHgLou6Bfr-soSNj3AnUJ3t3E5Y_zN7lAF8QegxaeOS3LBC2Vzy_gP0mqf5OiZ6utaCJbBHaGwJDolvszcXqFyU1VP_1qcSLufRLNUUsjdNQ_vxh2MTo-ZETyRqDfi7NdnrvaCwqI-rP2UyyWe5GrTNHhm1XoXhCOOeHzruhYe9btHDKUWth1r0bLmOdnVA_BXdbnYNW_obUM8jexOAARvBuLSDNNKeTvVUvfoDZ6dMKE7rKVqEaiWOc6pObeUR98REiZccEBQOXoBUWhb0E4hOjxD75DNL2CxRga0y_JOOLjYHunJy9aabBtMlZJAdLyXCtCjpc-bNHSBZfe7ug7ygijMkJ2HYK7CMkHktd6hAZeD6mzFXhn5OeI6RPKtsQAMBdYGbQQJI3o5Itg909BARXz5qZP13Lf1_aHJdYBef87sUnsZtiCAw4F6S0CsB0bdCfyGzWtQTBMvKvy9CRGvGMknoB1o2B8FZ72SLwPDOg5Dd86bbVibVgODeZ3p_upvXCEdUbISSakfT2WRKCvYhcNFFtCT6FSYMl8O7ykBI4Gt0cfbfZ9o0f34RGXE_gAFkTmFhp1BpB-3ChgGLDgPtUDRc9tCHwgBQayn5u3e-25HfNL1cD-pF0rtJ1lff5X11AyVm9q4OT5bpUQSpe816PeF0pjIf5MHhmQgxEGTIFPHFaPZbXqvsOIaHUUm1O9KlzLvXt3EVwtQvrcdaWwmEJepJvQhx05be12JoOY5ZABlIpRJezDCEA4myj8n0WQwpgmozbqn8Zy_Ev4RQksz3InaLbyfs4WqHa8HiQwt9ymVEA5uQVNGBkuaQbWC0ieasiIL00sIOccR2u3ZiNgnNLWOFyZ1U6Q-aIMd3hoDdwL61P5kz3OQV-DoZbMOs5svxuLybMj-B34XCS-wj5lXQPQtLNSHyVVUd1yNRfcCk8_ELfhD_hbVRAB0B2mH07cCRoD_TCuXkZhyOYwJf361LMTXtxPFDufmRHIDKyY4y_FA1hpEVA_Tj_5oEgeNdfpNpoFcwQqMyo9qrUYMden7Hooyee3PSt6jv-VXRYMO8zOgqgOIPu9bqKYvopM4rNxWFjd44YYYlajRWTkyD66nzV1yJ1mwcYCdrJMWMxCkf9NIJxZ0xYkKmH7vXRG8obbLad64gkjsf4rjXBh16kdxGzh3FjcMzlxk4K_yAjuQLhxOoghh9f1qLGbiV2cbWD6wHT_GspWQDqeJfai0WW8B913Lk2IAWZXzwhCPFH8_rDtUbTvqNbX3VA89ziNEnFoCXe6VhJKyosN4yYG2iR-DNUZKmD48swRC1M5Y-PH6vJr-y2wGbcyZN63ZcKvRxGT672Zhzeaovk3Svy8VnmF5mRnqLxYryr-9kiib4pc2A9TlLzvybpkNNg_puo053CRlRXKlxZiubR2cqod9Aqf6A5NUnngN_y5NqTvtf9u7QnvNFaOV4847MYWiHpVPetcE5c2EuzSdHazCdL625XgCHibM9U8UQ7IiVG2MYr0TQeNMcs-f1ycbJF7cloToZnwy-qrqOoV0Yz44Jh4YV7S54atvUp29Ze8rz0JXofRDjDyx6Ixl5nsO1eBohkvz7e5-x108FiYyiKhbgYwnKD6hlpWqyIU4Y3ZSlKa5l_reP1AkS-lkSuHsy0J6YBSlgljbCxlmjy-W1xd3BR4By1Tsqy3FkaQ5bkPDBViHL4ZDRHLnOXsukumaMUgJAFUyfS0NZ2gbvb92fx4Jp3a9Zy-HT3GPeyM8XNZnmPe9wwOFoHTXTa3ESSrjo3Y9PTn10hxG60IY9_zF7_Qh6mwLeRqsC3yraO0zaiPTetFapv8LY3ER4mpTpySzIBfm7ocQljk3wtmVxX7A9dlez9hET6PA1OEipa9CU1KRLg3UWXjAitZ5nkXI0-H6jaqzmuDC9OzLWSJtJPgrejUu5t0389Yp3EGFrqiAaNkywUKawiqNiYk2EXJUerVw50tQ-mrlrfGJccWN5KrAf9AdXg4cJ8Xb48laneoEhvvfoISxkZ_XJN9DODQiYxBMVstPFrUzLqa9ASakCV1Us9nrhkODVFTktQIoUAkXOz3OOHEbP2kRbEabx347M4_M9Op9PdRKX1UiB6KmXnqr4xWQNEHPSIH0-vxPpFXFfNpo-5FvQ0PdXt6mDTOSSgFVL8NbKHRDVUCVK_f0CNonmKd48hjak263dWEtrUV4RKpYFz2DGCctmnc1IfkifFaC3zNfiK8fk4JVO9um5pmtW_MKJH1mDnMM5fVHVkOeRVis6LMAKN86IfpY7ndegBkkRiNgmbclQTxcLu49BaQ1cMIXT3SzyS37IgPRC_HSXduV8kW-8CjRBekl13Jj9c6hUyuTueK9SAIZ4iMw0_xyDydEv_iKcnqAUpPfoRZZUIIQ3fZSLwqqYbz4A__1ESbU2I13X0AHzYkvCdzFlUAnAJZDHTUUvM3mZhODCf-cL1A4CprcIdxF51TXndHFSYkPBYCuQR0soplV8ATnWudm-8nR2YTO5KBeAVR80FFNAbxZ_KSQJAg5-LQzCSTwxjFFotld2DBrByBCzuvgsb2yBWvIgnqer7D1J5ytdAIBi5yRO72nGfTAwduifUAfwbUhoBoXnixcOVUeX5eQDnreNK0noXHhwVy2GDA2Tgjxqp6LMcdrrXFl-pme7jFgroenEAhUfWu48_iXqlnU6HHL0x_v-f3rAIfKT0x4exqLNTyA6gLPr96cYBr-Gx1uTneqxjQZHVfklMw8dpZpDawVHFqnOYwypEGtcEXaOtKHjaXdOlSyreEb1IKjRuanan9C62LGuwEa57lRY06s2WNjvPGV2XOqeElBFO-UGjlFSMGeryTxq6BKv3XbToqDlp85VE1WvpAZOOd3ftXJ1guTLTitP2fDLIM93S7NVXBq9Pkoim_O4zelIq7_ShfCh7sntRGNwyHv3LjBDcPxgsPO9MoHP55093BYL6nDTwHZ2kbX8yWzv9mphFYEkTOcy-5N0r0nfQqy7wh94O66wJ-Z6moLyc0X9IgPojbxk8Qy01QgN91SFiEwLIwW4GwBr4qjT8hYGL-p3RWEW2AUspISo0Jdt_BQS_X5exobnWLxK-l1aGKrVuxgmCmT8uJfAQetRWvSQXFRZZg1JH_Y_-1AKigDiH9s8ygvavmElXygPUKMpojVACPkFg-2lILawhyy0bPOTpUFeuwFBZCTm7qxbJJc3RP2f-v8BNd-a0zeZ_hYp5LJi-AFe8W3uuofEkro55oWAcrTzOwuqDFzfzKTFqlzf2mi7ROs46T5rzpy5AYxXFwk3OWvlF7QUru2hqLxfjIig3DOPZphc2ACzQ1xoI9-ozhfV3n9y8DJkjfTVyQ_cq08wjG29SousV5yMUnpR8wKKf4ko_nYiJlaYXSBOwm7EaVGj8cu6h8GfFchm1WM3qI-XuYAVqfvyhtVm232XLPSN1id103vak5J0wcdWY10wdaSozzWbiFDT6lRAdGIJML-wKNBQeGMl99G1y7xVYWNwLw2Zo15vhDi_IrGl34pjIs8HhYuDvDphUFLGdblRpemEr6UumaRP5MvM06A0PjTFBKIqMZ1_etSBb3tfxDSEihWM0DBM3te6SKcANYLCbi2E2sU_gmlN3Ftq69fMBaRA2uZihOluDNRBKNcOJi6UIB98rHxR_4p3rpDYbeStCRSwsx_QQIIwja4kaZSgiLbu9SlCqN271mF5PzDO66CLpy-OPwcreVSu0gecTUeD3d8DisaZXbq3cyEtDM0ibCcRPo6yNfaM94FPuwsVzb8aE0hIk9rQ21ItZqGnrb754FrbFgmdis1ImXmAWS0e2txQu-FI9Bt2MGaMjE4Rg3C-muEY_QV8rVynuXGJohz7jXgrlz6pcGzlQGTjz2hvpSi5hHl_ickQ8e4uSnYozyIobpRF6HdXnHhbrqnwLVkyER8nnenZJqVJlzE-LI2fZFo2nw19NVobn8uU8Q99_AhGpI_BYIo3JJtEf3s0_accWcENTLrT4AMUhLZmRYSOQhTZP1t2_Eoy-z5El-E2w2Zj-jf8yu-6-VU3_Nqnch_Ubnm5FYNi-qnK5UhQwE8PNcj_vVS1v5y2xWNkXp3ELL1H9Em-DIzOXHlD9s5bhfecwRgN6ZzFUVhqaSo8bkCvPSCvSU2E8AilYAp2VQQFoTxdXJYL_-4ojsuOpbBT26538kbeC4h8Fa50z9XYaslPTF7O7cnL1LsC96w6M6TpRJRwt73rSoTcoRG6H4jZJi_bZ4X02vuj-Cf5xAi_BTIk6EsAEGrE0d8MOguf-gBqCBId1gv6tpmWw_OQ6Oe-Tw-CRLVix66qprIaZ1xX8mwpS-w3JCSzBy_Zw==",
+    "summary": []
+   },
+   {
+    "id": "msg_05e43d22b6a929eb006acfcdbf7f6887d081d638bb0a0d6d8e",
+    "type": "message",
+    "status": "completed",
+    "content": [
+     {
+      "type": "output_text",
+      "annotations": [],
+      "logprobs": [],
+      "text": "litellm/llms/anthropic/prompt_cache_pricing.py\nlitellm/vector_stores/vector_store_registry.py\nlitellm/llms/gigachat/file_handler.py\nlitellm/proxy/_experimental/mcp_server/toolset_db.py\nlitellm/litellm_core_utils/get_llm_provider_logic.py"
+     }
+    ],
+    "phase": "final_answer",
+    "role": "assistant"
+   }
+  ],
+  "parallel_tool_calls": true,
+  "presence_penalty": 0.0,
+  "previous_response_id": null,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "24h",
+  "reasoning": {
+   "context": "all_turns",
+   "effort": "medium",
+   "mode": "standard",
+   "summary": null
+  },
+  "safety_identifier": null,
+  "service_tier": "default",
+  "store": true,
+  "temperature": 1.0,
+  "text": {
+   "format": {
+    "type": "text"
+   },
+   "verbosity": "medium"
+  },
+  "tool_choice": "auto",
+  "tool_usage": {
+   "image_gen": {
+    "input_tokens": 0,
+    "input_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "output_tokens": 0,
+    "output_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "total_tokens": 0
+   },
+   "web_search": {
+    "num_requests": 0
+   }
+  },
+  "tools": [
+   {
+    "type": "function",
+    "description": "Reads a file from the local filesystem. You can access any file directly by using this tool. Assume this tool is able to read all files on the machine. If the user provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned. The file_path parameter must be an absolute path, not a relative path. By default, it reads up to 2000 lines starting from the beginning of the file. You can optionally specify a line offset and limit (especially handy for long files), but it is recommended to read the whole file by not providing these parameters. Any lines longer than 2000 characters will be truncated. Results are returned using cat -n format, with line numbers starting at 1. This tool can only read files, not directories. To read a directory, use an ls command via the Bash tool. You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files as a batch that are potentially useful. If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.",
+    "name": "Read",
+    "output_schema": null,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "file_path": {
+       "type": "string",
+       "description": "The absolute path to the file to read"
+      },
+      "offset": {
+       "type": "number",
+       "description": "The line number to start reading from. Only provide if the file is too large to read at once"
+      },
+      "limit": {
+       "type": "number",
+       "description": "The number of lines to read. Only provide if the file is too large to read at once."
+      }
+     },
+     "required": [
+      "file_path",
+      "offset",
+      "limit"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   },
+   {
+    "type": "function",
+    "description": "Performs exact string replacements in files. You must use your Read tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string. ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required. Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked. The edit will FAIL if old_string is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use replace_all to change every instance of old_string. Use replace_all for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.",
+    "name": "Edit",
+    "output_schema": null,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "file_path": {
+       "type": "string",
+       "description": "The absolute path to the file to modify"
+      },
+      "old_string": {
+       "type": "string",
+       "description": "The text to replace"
+      },
+      "new_string": {
+       "type": "string",
+       "description": "The text to replace it with (must be different from old_string)"
+      },
+      "replace_all": {
+       "type": "boolean",
+       "default": false,
+       "description": "Replace all occurences of old_string (default false)"
+      }
+     },
+     "required": [
+      "file_path",
+      "old_string",
+      "new_string",
+      "replace_all"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   },
+   {
+    "type": "function",
+    "description": "Writes a file to the local filesystem. This tool will overwrite the existing file if there is one at the provided path. If this is an existing file, you MUST use the Read tool first to read the file's contents. This tool will fail if you did not read the file first. ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required. NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User. Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.",
+    "name": "Write",
+    "output_schema": null,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "file_path": {
+       "type": "string",
+       "description": "The absolute path to the file to write (must be absolute, not relative)"
+      },
+      "content": {
+       "type": "string",
+       "description": "The content to write to the file"
+      }
+     },
+     "required": [
+      "file_path",
+      "content"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   },
+   {
+    "type": "function",
+    "description": "Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures. Before executing the command, please follow these steps: 1. Directory Verification: If the command will create new directories or files, first use the LS tool to verify the parent directory exists and is the correct location. 2. Command Execution: Always quote file paths that contain spaces with double quotes. After ensuring proper quoting, execute the command. Capture the output of the command. Usage notes: The command argument is required. You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 120000ms (2 minutes). It is very helpful if you write a clear, concise description of what this command does in 5-10 words. If the output exceeds 30000 characters, output will be truncated before being returned to you. VERY IMPORTANT: You MUST avoid using search commands like find and grep. Instead use Grep, Glob, or Task to search. You MUST avoid read tools like cat, head, tail, and ls, and use Read and LS to read files. If you still need to run grep, STOP. ALWAYS USE ripgrep at rg first, which all Claude Code users have pre-installed. When issuing multiple commands, use the ; or && operator to separate them. DO NOT use newlines to separate commands (newlines are ok in quoted strings). Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of cd. You may use cd if the User explicitly requests it.",
+    "name": "Bash",
+    "output_schema": null,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "command": {
+       "type": "string",
+       "description": "The command to execute"
+      },
+      "timeout": {
+       "type": "number",
+       "description": "Optional timeout in milliseconds (max 600000)"
+      },
+      "description": {
+       "type": "string",
+       "description": "Clear, concise description of what this command does in 5-10 words."
+      },
+      "run_in_background": {
+       "type": "boolean",
+       "description": "Set to true to run this command in the background. Use BashOutput to read the output later."
+      }
+     },
+     "required": [
+      "command",
+      "timeout",
+      "description",
+      "run_in_background"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   },
+   {
+    "type": "function",
+    "description": "A powerful search tool built on ripgrep. ALWAYS use Grep for search tasks. NEVER invoke grep or rg as a Bash command. The Grep tool has been optimized for correct permissions and access. Supports full regex syntax (e.g., \"log.*Error\", \"function\\s+\\w+\"). Filter files with glob parameter (e.g., \"*.js\", \"**/*.tsx\") or type parameter (e.g., \"js\", \"py\", \"rust\"). Output modes: \"content\" shows matching lines, \"files_with_matches\" shows only file paths (default), \"count\" shows match counts. Use Task tool for open-ended searches requiring multiple rounds. Pattern syntax: Uses ripgrep (not grep), so literal braces need escaping (use interface\\{\\} to find interface{} in Go code). Multiline matching: By default patterns match within single lines only. For cross-line patterns like struct \\{[\\s\\S]*?field, use multiline: true.",
+    "name": "Grep",
+    "output_schema": null,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "pattern": {
+       "type": "string",
+       "description": "The regular expression pattern to search for in file contents"
+      },
+      "path": {
+       "type": "string",
+       "description": "File or directory to search in (rg PATH). Defaults to current working directory."
+      },
+      "glob": {
+       "type": "string",
+       "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\") - maps to rg --glob"
+      },
+      "output_mode": {
+       "type": "string",
+       "enum": [
+        "content",
+        "files_with_matches",
+        "count"
+       ],
+       "description": "Output mode: \"content\" shows matching lines, \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\"."
+      },
+      "-B": {
+       "type": "number",
+       "description": "Number of lines to show before each match (rg -B). Requires output_mode: \"content\", ignored otherwise."
+      },
+      "-A": {
+       "type": "number",
+       "description": "Number of lines to show after each match (rg -A). Requires output_mode: \"content\", ignored otherwise."
+      },
+      "-C": {
+       "type": "number",
+       "description": "Number of lines to show before and after each match (rg -C). Requires output_mode: \"content\", ignored otherwise."
+      },
+      "-n": {
+       "type": "boolean",
+       "description": "Show line numbers in output (rg -n). Requires output_mode: \"content\", ignored otherwise. Defaults to true."
+      },
+      "-i": {
+       "type": "boolean",
+       "description": "Case insensitive search (rg -i)"
+      },
+      "type": {
+       "type": "string",
+       "description": "File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types."
+      },
+      "head_limit": {
+       "type": "number",
+       "description": "Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified."
+      },
+      "multiline": {
+       "type": "boolean",
+       "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."
+      }
+     },
+     "required": [
+      "pattern",
+      "path",
+      "glob",
+      "output_mode",
+      "-B",
+      "-A",
+      "-C",
+      "-n",
+      "-i",
+      "type",
+      "head_limit",
+      "multiline"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   },
+   {
+    "type": "function",
+    "description": "Fast file pattern matching tool that works with any codebase size. Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\". Returns matching file paths sorted by modification time. Use this tool when you need to find files by name patterns. When you are doing an open ended search that may require multiple rounds of globbing and grepping, use the Task tool instead. You have the capability to call multiple tools in a single response. It is always better to speculatively perform multiple searches as a batch that are potentially useful.",
+    "name": "Glob",
+    "output_schema": null,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "pattern": {
+       "type": "string",
+       "description": "The glob pattern to match files against"
+      },
+      "path": {
+       "type": "string",
+       "description": "The directory to search in. If not specified, the current working directory will be used. IMPORTANT: Omit this parameter if you do not provide a value - this is the default."
+      }
+     },
+     "required": [
+      "pattern",
+      "path"
+     ],
+     "additionalProperties": false
+    },
+    "strict": true
+   }
+  ],
+  "top_logprobs": 0,
+  "top_p": 0.98,
+  "truncation": "disabled",
+  "usage": {
+   "input_tokens": 65554,
+   "input_tokens_details": {
+    "cache_write_tokens": 61394,
+    "cached_tokens": 4157
+   },
+   "output_tokens": 592,
+   "output_tokens_details": {
+    "reasoning_tokens": 516
+   },
+   "total_tokens": 66146
+  },
+  "user": null,
+  "metadata": {}
+ },
+ "chunks": [],
+ "events": []
+}

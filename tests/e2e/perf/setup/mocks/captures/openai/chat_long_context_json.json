@@ -1,0 +1,52 @@
+{
+ "provider": "openai",
+ "route": "chat",
+ "shape": "long_context",
+ "marker": "perfreq-003450-c",
+ "captured_at": "2026-10-14T18:44:42Z",
+ "stream": false,
+ "model": "gpt-6-luna",
+ "request_bytes": 1438267,
+ "request_tokens_estimate": 359566,
+ "status": 200,
+ "ttfb_s": 6.1787,
+ "total_s": 6.1788,
+ "body": {
+  "id": "chatcmpl-EYyFpT9LCGxshUighROTu1yGdOIch",
+  "object": "chat.completion",
+  "created": 1792003477,
+  "model": "gpt-6-luna",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "role": "assistant",
+     "content": "litellm/llms/anthropic/prompt_cache_pricing.py\nlitellm/proxy/client/cli/commands/agents.py\nlitellm/proxy/management_helpers/team_metadata_validation.py\nlitellm/llms/gigachat/file_handler.py\nlitellm/proxy/management_endpoints/request_error_endpoints.py\nlitellm/llms/anthropic/completion/transformation.py\nlitellm/llms/langgraph/chat/transformation.py\nlitellm/llms/bedrock/chat/converse_handler.py\nlitellm/proxy/auth/password_policy.py\nlitellm/proxy/openai_files_endpoints/files_endpoints.py\nlitellm/llms/xai/oauth.py\nlitellm/proxy/guardrails/guardrail_hooks/custom_code/primitives.py",
+     "refusal": null,
+     "annotations": []
+    },
+    "finish_reason": "stop"
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 346364,
+   "completion_tokens": 170,
+   "total_tokens": 346534,
+   "prompt_tokens_details": {
+    "cached_tokens": 4238,
+    "cache_write_tokens": 342123,
+    "audio_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0,
+    "audio_tokens": 0,
+    "accepted_prediction_tokens": 0,
+    "rejected_prediction_tokens": 0
+   }
+  },
+  "service_tier": "default",
+  "system_fingerprint": null
+ },
+ "chunks": [],
+ "events": []
+}

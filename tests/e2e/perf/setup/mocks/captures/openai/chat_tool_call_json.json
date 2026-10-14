@@ -1,0 +1,52 @@
+{
+ "provider": "openai",
+ "route": "chat",
+ "shape": "tool_call",
+ "marker": "perfreq-003450-c",
+ "captured_at": "2026-10-14T18:44:31Z",
+ "stream": false,
+ "model": "gpt-6-luna",
+ "request_bytes": 271943,
+ "request_tokens_estimate": 67985,
+ "status": 200,
+ "ttfb_s": 2.5578,
+ "total_s": 2.5579,
+ "body": {
+  "id": "chatcmpl-EYyFiiSOYcHP897Q82Ljmn1wxEFZP",
+  "object": "chat.completion",
+  "created": 1792003470,
+  "model": "gpt-6-luna",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "role": "assistant",
+     "content": "litellm/llms/anthropic/prompt_cache_pricing.py\nlitellm/llms/gigachat/file_handler.py",
+     "refusal": null,
+     "annotations": []
+    },
+    "finish_reason": "stop"
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 65616,
+   "completion_tokens": 31,
+   "total_tokens": 65647,
+   "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "cache_write_tokens": 65613,
+    "audio_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0,
+    "audio_tokens": 0,
+    "accepted_prediction_tokens": 0,
+    "rejected_prediction_tokens": 0
+   }
+  },
+  "service_tier": "default",
+  "system_fingerprint": null
+ },
+ "chunks": [],
+ "events": []
+}
