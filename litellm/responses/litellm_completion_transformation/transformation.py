@@ -240,6 +240,9 @@ def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
 
 
+_NO_CACHE_MARKS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def _cache_marks(block: Mapping[str, object]) -> Mapping[str, object]:
     """The block's ``cache_control`` and ``prompt_cache_breakpoint``, both of which the chat transforms read off the
     same block (the Claude ones rename the breakpoint to ``cache_control``)."""
@@ -259,7 +262,7 @@ def _tool_output_cache_marks(tool_call_output: Mapping[str, object]) -> Mapping[
     part_marks: Final = tuple(
         _cache_marks(_STR_KEY_DICT_ADAPTER.validate_python(part)) for part in parts if isinstance(part, dict)
     )
-    last_part_marks: Final[Mapping[str, object]] = next((marks for marks in reversed(part_marks) if marks), {})
+    last_part_marks: Final = next((marks for marks in reversed(part_marks) if marks), _NO_CACHE_MARKS)
     return {**last_part_marks, **_cache_marks(tool_call_output)}
 
 
@@ -1936,7 +1939,7 @@ class LiteLLMCompletionResponsesConfig:
                         content_list.append(
                             {
                                 **LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item),
-                                **_part_cache_marks(item),
+                                **_part_cache_marks(_STR_KEY_DICT_ADAPTER.validate_python(item)),
                             }
                         )
                     elif item.get("type") == "encrypted_content":
@@ -1956,7 +1959,7 @@ class LiteLLMCompletionResponsesConfig:
                                     item.get("type") or "text"
                                 ),
                                 "text": text_value,
-                                **_part_cache_marks(item),
+                                **_part_cache_marks(_STR_KEY_DICT_ADAPTER.validate_python(item)),
                             }
                         )
             return content_list
