@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
@@ -218,11 +218,54 @@ _REASONED: Final[Event] = {
     "usage": {"input_tokens": 412, "output_tokens": 10, "output_tokens_details": {"thinking_tokens": 4}},
 }
 
+JSON_TOOL_NAME: Final = "json_tool_call"
+JSON_ANSWER_SCHEMA: Final[Event] = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+JSON_ANSWER_FORMAT: Final[Event] = {
+    "type": "json_schema",
+    "json_schema": {"name": "answer", "schema": JSON_ANSWER_SCHEMA, "strict": True},
+}
+DOCS_PARTIAL_TEXT: Final = "Hello.."
+_DECLARED_INPUT: Final[Event] = {"answer": DOCS_PARTIAL_TEXT}
+_ENVELOPED_INPUT: Final[Event] = {"parameters": _DECLARED_INPUT}
+DECLARED_PARTIAL_JSON: Final = '{"answer": "Hello..'
+ENVELOPED_PARTIAL_JSON: Final = '{"parameters": {"answer": "Hello..'
+_JSON_TOOL_USE_ID: Final = "toolu_01RefusalFixtureJsonTool"
+
+
+def _json_tool_refusal(tool_input: Event, partial_json: str) -> Fixture:
+    message: Final[Event] = {
+        **DOCS_REFUSAL,
+        "content": [{"type": "tool_use", "id": _JSON_TOOL_USE_ID, "name": JSON_TOOL_NAME, "input": tool_input}],
+    }
+    start, delta, stop = refusal_events(DOCS_REFUSAL)
+    tool_block: Final[tuple[Event, ...]] = (
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": _JSON_TOOL_USE_ID, "name": JSON_TOOL_NAME, "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": partial_json},
+        },
+        {"type": "content_block_stop", "index": 0},
+    )
+    return Fixture(200, json.dumps(message).encode(), (start, *tool_block, delta, stop))
+
+
 FIXTURES: Final[Mapping[str, Fixture]] = MappingProxyType(
     {
         "refusal": Fixture(200, json.dumps(DOCS_REFUSAL).encode(), refusal_events(DOCS_REFUSAL)),
         "partial": Fixture(200, json.dumps(_PARTIAL).encode(), refusal_events(_PARTIAL)),
         "reasoned": Fixture(200, json.dumps(_REASONED).encode(), refusal_events(_REASONED)),
+        "jsontool": _json_tool_refusal(_DECLARED_INPUT, DECLARED_PARTIAL_JSON),
+        "jsonheld": _json_tool_refusal(_ENVELOPED_INPUT, ENVELOPED_PARTIAL_JSON),
         "duplicate": Fixture(200, _duplicated_stop_details()),
         "null": _captured(None),
         "missing": _captured(None, keep=False),
@@ -247,6 +290,13 @@ _OPENAI_USAGE: Final[Event] = {
     "total_tokens": 12,
     "completion_tokens_details": {"reasoning_tokens": 4, "text_tokens": 3},
 }
+UNVALIDATED_USAGE_DETAILS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "text": {"reasoning_tokens": "abc"},
+        "fraction": {"reasoning_tokens": 1.5},
+        "object": {"reasoning_tokens": {"a": 1}},
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,14 +395,15 @@ def _entry_key(store: Redis, needle: str) -> str | None:
 def _with_message_fields(response: Event, fields: JsonValue) -> Event:
     choice: Final = JSON_OBJECT.validate_python(JSON_LIST.validate_python(response["choices"])[0])
     message: Final = JSON_OBJECT.validate_python(choice["message"])
-    return {
-        **response,
-        "id": f"{response['id']}{STALE_ID_SUFFIX}",
-        "choices": [{**choice, "message": {**message, "provider_specific_fields": fields}}],
-    }
+    return {**response, "choices": [{**choice, "message": {**message, "provider_specific_fields": fields}}]}
 
 
-def rewrite_cached_message_fields(needle: str, fields: JsonValue) -> str:
+def _with_usage_details(response: Event, details: JsonValue) -> Event:
+    usage: Final = JSON_OBJECT.validate_python(response["usage"])
+    return {**response, "usage": {**usage, "completion_tokens_details": details}}
+
+
+def _rewrite_cached_response(needle: str, rewrite: Callable[[Event], Event]) -> str:
     store: Final = Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
     key: Final = eventually(lambda: _entry_key(store, needle), lambda found: found is not None)
     assert key is not None, needle
@@ -362,9 +413,17 @@ def rewrite_cached_message_fields(needle: str, fields: JsonValue) -> str:
     response: Final = (
         JSON_OBJECT.validate_json(stored) if isinstance(stored, str) else JSON_OBJECT.validate_python(stored)
     )
-    rewritten: Final = _with_message_fields(response, fields)
+    rewritten: Final = {**rewrite(response), "id": f"{response['id']}{STALE_ID_SUFFIX}"}
     store.set(key, json.dumps({**entry, "response": json.dumps(rewritten) if encoded else rewritten}), ex=60)
     return str(rewritten["id"])
+
+
+def rewrite_cached_message_fields(needle: str, fields: JsonValue) -> str:
+    return _rewrite_cached_response(needle, lambda response: _with_message_fields(response, fields))
+
+
+def rewrite_cached_usage_details(needle: str, details: JsonValue) -> str:
+    return _rewrite_cached_response(needle, lambda response: _with_usage_details(response, details))
 
 
 def key_hash(key: str) -> str:

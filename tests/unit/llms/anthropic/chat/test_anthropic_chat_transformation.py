@@ -8780,6 +8780,42 @@ def test_end_turn_response_carries_no_stop_details():
     assert "stop_reason" not in provider_fields
 
 
+def _json_mode_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {
+        **_refusal_message_body(stop_reason, stop_details),
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": "Hello"}}
+        ],
+    }
+
+
+def _transform_json_mode_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=True,
+        prefix_prompt=None,
+    )
+
+
+def test_json_mode_refusal_keeps_stop_details_on_the_message():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    result: Final = _transform_json_mode_body(_json_mode_message_body("refusal", stop_details))
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert message.provider_specific_fields == {"stop_reason": "refusal", "stop_details": stop_details}
+
+
+def test_json_mode_tool_use_turn_adds_no_stop_fields_to_the_message():
+    result: Final = _transform_json_mode_body(_json_mode_message_body("tool_use", None))
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert not message.provider_specific_fields
+
+
 def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> None:
     result = AnthropicConfig().transform_parsed_response(
         completion_response=MagicMock(),

@@ -2751,7 +2751,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _message.provider_specific_fields = provider_specific_fields
 
         if json_mode_message is not None:
+            refusal_fields: Final = refusal_provider_specific_fields(
+                REFUSAL_STOP_FIELDS.validate_python(completion_response)
+            )
             completion_response["stop_reason"] = "stop"
+            if refusal_fields:
+                json_mode_message.provider_specific_fields = dict(refusal_fields)
             _message = json_mode_message
 
         model_response.choices[0].message = _message

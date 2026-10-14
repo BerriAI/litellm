@@ -8,17 +8,24 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote, urlsplit
 
 import anthropic
+import httpx
 import openai
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.anthropic_refusal import (
     CITED_FIELDS,
+    DECLARED_PARTIAL_JSON,
+    DOCS_PARTIAL_TEXT,
     DOCS_REFUSAL,
     DOCS_STOP_DETAILS,
+    ENVELOPED_PARTIAL_JSON,
     FIXTURES,
+    JSON_ANSWER_FORMAT,
+    JSON_TOOL_NAME,
     MALFORMED_STOP_DETAILS,
     REFUSAL_FIELDS,
+    UNVALIDATED_USAGE_DETAILS,
     Ledger,
     Location,
     frame_types,
@@ -30,6 +37,7 @@ from integration._support.anthropic_refusal import (
     relayed,
     respond,
     rewrite_cached_message_fields,
+    rewrite_cached_usage_details,
     sink_config,
 )
 from integration._support.anthropic_thinking import (
@@ -1171,3 +1179,171 @@ def test_stream_cache_hit_skips_cached_provider_fields_that_are_not_an_object(ri
             lambda found: len(found) >= 1,
         )
         assert tuple(_message_fields(event["response"]) for event in stale_logs) == ((),) * len(stale_logs), stale_logs
+
+
+JsonModeRoute: TypeAlias = Literal["anthropic_native", "anthropic_tool", "bedrock_invoke"]
+_UNMAPPED_MODEL: Final = "claude-scripted-9"
+_JSON_ANSWER: Final = json.dumps({"answer": DOCS_PARTIAL_TEXT})
+
+
+@dataclass(frozen=True, slots=True)
+class JsonModeCase:
+    route: JsonModeRoute
+    fixture: str
+    streamed_text: str
+    message_text: str
+    finish_reason: str
+    requested: Literal["json_tool", "native"]
+
+
+_JSON_MODE_CASES: Final[Mapping[str, JsonModeCase]] = {
+    "anthropic_native": JsonModeCase(
+        "anthropic_native", "partial", DOCS_PARTIAL_TEXT, DOCS_PARTIAL_TEXT, "content_filter", "native"
+    ),
+    "anthropic_tool_declared": JsonModeCase(
+        "anthropic_tool", "jsontool", DECLARED_PARTIAL_JSON, _JSON_ANSWER, "stop", "json_tool"
+    ),
+    "anthropic_tool_enveloped": JsonModeCase(
+        "anthropic_tool", "jsonheld", ENVELOPED_PARTIAL_JSON, _JSON_ANSWER, "stop", "json_tool"
+    ),
+    "bedrock_invoke_declared": JsonModeCase(
+        "bedrock_invoke", "jsontool", DECLARED_PARTIAL_JSON, _JSON_ANSWER, "stop", "json_tool"
+    ),
+    "bedrock_invoke_enveloped": JsonModeCase(
+        "bedrock_invoke", "jsonheld", ENVELOPED_PARTIAL_JSON, _JSON_ANSWER, "stop", "json_tool"
+    ),
+}
+
+
+def _json_mode_deployment(scenario: Scenario, route: JsonModeRoute, rig: Rig) -> tuple[str, Provider]:
+    match route:
+        case "anthropic_native":
+            return _deployment(scenario, "anthropic", rig), "anthropic"
+        case "anthropic_tool":
+            return (
+                scenario.model(model=f"anthropic/{_UNMAPPED_MODEL}", api_base=rig.wire.url, api_key=_ANTHROPIC_KEY),
+                "anthropic",
+            )
+        case "bedrock_invoke":
+            return _deployment(scenario, "bedrock_invoke", rig), "bedrock_invoke"
+
+
+def _requested_format(body: Mapping[str, JsonValue]) -> tuple[bool, bool]:
+    tools: Final = JSON_LIST.validate_python(body.get("tools") or [])
+    output_config: Final = JSON_OBJECT.validate_python(body.get("output_config") or {})
+    json_tool: Final = any(JSON_OBJECT.validate_python(tool).get("name") == JSON_TOOL_NAME for tool in tools)
+    return json_tool, "output_format" in body or "format" in output_config
+
+
+def _received(wire: Wire) -> tuple[tuple[str, tuple[bool, bool]], ...]:
+    return tuple(
+        (urlsplit(unquote(request.target)).path, _requested_format(JSON_OBJECT.validate_json(request.body)))
+        for request in wire.drain()
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "sse"])
+@pytest.mark.parametrize("case", tuple(_JSON_MODE_CASES))
+def test_json_mode_refusal_relays_the_docs_stop_details_through_the_response_format_path(
+    rig: Rig, case: str, stream: bool
+) -> None:
+    expected: Final = _JSON_MODE_CASES[case]
+    with rig.gateway.scenario() as scenario:
+        model, provider = _json_mode_deployment(scenario, expected.route, rig)
+        key: Final = scenario.key()
+        request: Final = {
+            **_chat_request(model, refusal_prompt(expected.fixture, _marker()), stream=stream, cached=False),
+            "response_format": JSON_ANSWER_FORMAT,
+        }
+        content: Final = _post(rig, "/v1/chat/completions", request, key)
+        requested: Final = (expected.requested == "json_tool", expected.requested == "native")
+        assert _received(rig.wire) == ((_STREAM_TARGETS[provider][int(stream)], requested),)
+        if stream:
+            chunks: Final = chunks_of(content.decode())
+            streamed: Final = (_streamed_text(chunks), _finish_reasons(chunks), _relayed_in(chunks))
+            assert streamed == (
+                expected.streamed_text,
+                (expected.finish_reason,),
+                ((_DELTA_FIELDS, REFUSAL_FIELDS),),
+            ), chunks
+        else:
+            body: Final = JSON_OBJECT.validate_json(content)
+            answered: Final = (_message_text(body), _choice(body)["finish_reason"], relayed(body))
+            assert answered == (
+                expected.message_text,
+                expected.finish_reason,
+                ((_CHAT_FIELDS, REFUSAL_FIELDS),),
+            ), body
+        logged: Final = _logged_response(rig, key)
+        assert relayed(logged) == ((_CHAT_FIELDS, REFUSAL_FIELDS),), logged
+
+
+def _serialized_choice(body: Mapping[str, JsonValue]) -> Event:
+    choice: Final = _choice(body)
+    return {**choice, "message": JSON_OBJECT.validate_python(choice["message"])}
+
+
+_ANTHROPIC_MESSAGE_FIELDS: Final[Event] = {"citations": None, "thinking_blocks": None}
+
+
+@pytest.mark.parametrize(("fixture", "content"), [("refusal", None), ("partial", DOCS_PARTIAL_TEXT)])
+def test_chat_refusal_body_serializes_the_stop_details_beside_the_existing_message_fields(
+    rig: Rig, fixture: str, content: str | None
+) -> None:
+    with rig.gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "anthropic", rig)
+        key: Final = scenario.key()
+        body: Final = _chat(rig, key, model, refusal_prompt(fixture, _marker()))
+        expected: Final[Event] = {
+            "finish_reason": "content_filter",
+            "index": 0,
+            "message": {
+                "content": content,
+                "role": "assistant",
+                "provider_specific_fields": {**_ANTHROPIC_MESSAGE_FIELDS, **REFUSAL_FIELDS},
+            },
+        }
+        assert _serialized_choice(body) == expected, body
+        assert _paths(rig.wire) == ("/v1/messages",)
+        logged: Final = _logged_response(rig, key)
+        assert relayed(logged) == ((_CHAT_FIELDS, REFUSAL_FIELDS),), logged
+
+
+def _usage_of(chunks: Sequence[Mapping[str, JsonValue]]) -> tuple[tuple[JsonValue, JsonValue], ...]:
+    usages: Final = tuple(JSON_OBJECT.validate_python(chunk["usage"]) for chunk in chunks if chunk.get("usage"))
+    return tuple((usage["completion_tokens"], usage.get("completion_tokens_details")) for usage in usages)
+
+
+def _served_ids(response: httpx.Response) -> frozenset[JsonValue]:
+    return frozenset(chunk["id"] for chunk in chunks_of(response.text)) if response.status_code == 200 else frozenset()
+
+
+@pytest.mark.parametrize("variant", tuple(UNVALIDATED_USAGE_DETAILS))
+def test_stream_cache_hit_skips_cached_usage_details_that_fail_validation(rig: Rig, variant: str) -> None:
+    with rig.gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "openai_compatible", rig)
+        key: Final = scenario.key()
+        marker: Final = _marker()
+        request: Final = {
+            **_chat_request(model, refusal_prompt("plainusage", marker), stream=True, cached=True),
+            "stream_options": {"include_usage": True},
+        }
+        filled: Final = chunks_of(_post(rig, "/v1/chat/completions", {**request, "cache": {"ttl": 2}}, key).decode())
+        assert (_streamed_text(filled), _chat_usage_counts(filled)) == ("ready now", ((7, 4),)), filled
+        _logged(rig, key)
+        stale_id: Final = rewrite_cached_usage_details(openai_id(marker), UNVALIDATED_USAGE_DETAILS[variant])
+        replayed: Final = eventually(
+            lambda: rig.gateway.request("POST", "/v1/chat/completions", request, key=key),
+            lambda response: response.status_code != 200 or _served_ids(response) == {stale_id},
+            seconds=30,
+        )
+        assert replayed.status_code == 200, replayed.text
+        chunks: Final = chunks_of(replayed.text)
+        streamed: Final = (_streamed_text(chunks), _finish_reasons(chunks), _usage_of(chunks))
+        assert streamed == ("ready now", ("stop",), ((7, {"reasoning_tokens": 0, "text_tokens": 7}),)), chunks
+        assert _paths(rig.wire) == ("/v1/chat/completions",)
+        stale_logs: Final = eventually(
+            lambda: tuple(event for event in rig.sink.for_key(key) if _response_id(event) == stale_id),
+            lambda found: len(found) >= 1,
+        )
+        assert tuple(event["status"] for event in stale_logs) == ("success",) * len(stale_logs), stale_logs
