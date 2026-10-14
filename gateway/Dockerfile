@@ -118,7 +118,7 @@ RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     find /app/.venv -type d -path "*/tornado/test" -delete && \
     chmod -R a+rX /opt/prisma && \
     python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths" && \
-    python -c "import litellm; from litellm.rust_bridge.loader import native_bridge_available; assert litellm.__file__ == '/app/litellm/__init__.py', litellm.__file__; assert native_bridge_available()"
+    python -c "import litellm, litellm.rust_bridge._native; assert litellm.__file__ == '/app/litellm/__init__.py', litellm.__file__"
 
 USER nonroot
 

@@ -2,32 +2,33 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Final, Protocol
 
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
+from litellm.rust_bridge import _native
 from litellm.rust_bridge.host.timeouts import timeout_to_seconds
-from litellm.rust_bridge.loader import get_native_bridge
 
 
 class RustResponsesWebSocket(Protocol):
-    async def send_text(self, text: str) -> None: ...
+    def send_text(self, text: str) -> Awaitable[None]: ...
 
-    async def recv_text(self) -> str | None: ...
+    def recv_text(self) -> Awaitable[str | None]: ...
 
-    async def close(self) -> None: ...
+    def close(self) -> Awaitable[None]: ...
 
 
 class RustResponsesWebSocketConnection(Protocol):
     @classmethod
-    async def connect(
+    def connect(
         cls,
         url: str,
         headers: dict[str, str],
         timeout_seconds: float | None,
-    ) -> RustResponsesWebSocket: ...
+    ) -> Awaitable[RustResponsesWebSocket]: ...
 
 
 class _Unset:
@@ -53,16 +54,10 @@ def set_rust_responses_websocket(
         _STATE.connection = connection
 
 
-def load_rust_responses_websocket() -> RustResponsesWebSocketConnection | None:
+def load_rust_responses_websocket() -> RustResponsesWebSocketConnection:
     if _STATE.connection is not None:
         return _STATE.connection
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    connection_type: Final[RustResponsesWebSocketConnection | None] = getattr(
-        native_bridge, "ResponsesWebSocketConnection", None
-    )
-    return connection_type
+    return _native.ResponsesWebSocketConnection
 
 
 class _ConnectionAdapter:
@@ -89,8 +84,6 @@ async def connect(
     timeout: float | httpx.Timeout | None,
 ) -> _ConnectionAdapter | None:
     connection_type: Final = load_rust_responses_websocket()
-    if connection_type is None:
-        return None
     try:
         connection: Final = await connection_type.connect(
             url=url,
