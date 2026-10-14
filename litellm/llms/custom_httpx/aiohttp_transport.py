@@ -56,7 +56,7 @@ AIOHTTP_EXC_MAP: Final[dict[type[BaseException], type[Exception]]] = {
     aiohttp.ClientOSError: httpx.ConnectError,
     aiohttp.ClientPayloadError: httpx.ReadError,
     # Connection disconnection exceptions
-    aiohttp.ServerDisconnectedError: httpx.ReadError,
+    aiohttp.ServerDisconnectedError: httpx.RemoteProtocolError,
     # Response related exceptions
     aiohttp.ClientConnectionError: httpx.NetworkError,
     aiohttp.ClientPayloadError: httpx.ReadError,

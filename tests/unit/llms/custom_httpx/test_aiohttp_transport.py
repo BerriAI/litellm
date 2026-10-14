@@ -1,5 +1,6 @@
 import aiohttp as aiohttp_aiohttp_handler, asyncio, importlib, litellm
 import concurrent.futures
+import itertools
 import socket
 import sys
 from typing import Final
@@ -1273,3 +1274,46 @@ async def test_refused_connection_maps_to_httpx_connect_error(
     assert isinstance(cause, aiohttp_aiohttp_handler.ClientConnectorError)
     assert cause.ssl is expected_ssl
     assert (cause.host, cause.port) == ("127.0.0.1", port)
+
+
+async def _read_one_request(reader: asyncio.StreamReader) -> None:
+    head: Final = await reader.readuntil(b"\r\n\r\n")
+    header_lines: Final = head.lower().split(b"\r\n")
+    body_length: Final = next(
+        (int(line.split(b":", 1)[1]) for line in header_lines if line.startswith(b"content-length:")), 0
+    )
+    await reader.readexactly(body_length)
+
+
+@pytest.mark.asyncio
+async def test_server_disconnect_before_response_is_retried_on_a_fresh_connection() -> None:
+    """A load balancer that drops an idle keepalive connection answers the next
+    request with a clean close and no response. The request must be resent on a
+    new connection instead of failing the caller."""
+    attempts: Final = itertools.count(1)
+    body: Final = b'{"ok": true}'
+
+    async def cut_first_then_answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await _read_one_request(reader)
+        if next(attempts) > 1:
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
+                + b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+            )
+            await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server: Final = await asyncio.start_server(cut_first_then_answer, "127.0.0.1", 0)
+    port: Final = server.sockets[0].getsockname()[1]
+    handler: Final = AsyncHTTPHandler(timeout=5.0, transport=AsyncHTTPHandler.create_aiohttp_transport())
+    try:
+        response: Final = await handler.post(f"http://127.0.0.1:{port}/", json={"hello": "world"})
+    finally:
+        await handler.close()
+        server.close()
+        await server.wait_closed()
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert next(attempts) == 3
