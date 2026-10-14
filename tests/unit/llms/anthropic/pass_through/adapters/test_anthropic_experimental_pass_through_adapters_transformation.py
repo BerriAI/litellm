@@ -4012,6 +4012,28 @@ def test_translate_anthropic_tool_choice_none():
     assert result == "none"
 
 
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"name": "get_weather"},
+        {"type": "web_search"},
+        "auto",
+    ],
+)
+def test_translate_anthropic_tool_choice_invalid_is_a_400(tool_choice):
+    """
+    Regression test for issue #46179.
+
+    A tool_choice the Messages API itself rejects has to come back as a 400 naming the field it
+    came in on. Before, a missing type raised a bare KeyError and an unknown one a bare ValueError,
+    neither carrying a status, so the Router retried them and a gateway in front reported a 500.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    with pytest.raises(litellm.BadRequestError, match="tool_choice"):
+        adapter.translate_anthropic_tool_choice_to_openai(tool_choice)
+
+
 # ---------------------------------------------------------------------------
 # PolyfillResult integration tests
 # ---------------------------------------------------------------------------

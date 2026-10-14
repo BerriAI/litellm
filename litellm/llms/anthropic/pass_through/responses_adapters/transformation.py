@@ -27,6 +27,7 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     prompt_cache_key_from_user_id,
+    validated_anthropic_tool_choice,
 )
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
@@ -497,14 +498,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         tool_choice: AnthropicMessagesToolChoice,
     ) -> str | dict[str, object]:
         """Convert Anthropic tool_choice to Responses API tool_choice."""
-        tc_type: Final = tool_choice.get("type")
-        if tc_type == "any":
-            return "required"
-        elif tc_type == "tool":
-            return {"type": "function", "name": tool_choice.get("name", "")}
-        elif tc_type == "none":
-            return "none"
-        return "auto"
+        validated: Final = validated_anthropic_tool_choice(tool_choice)
+        match validated["type"]:
+            case "any":
+                return "required"
+            case "tool":
+                return {"type": "function", "name": validated.get("name", "")}
+            case "none":
+                return "none"
+            case "auto":
+                return "auto"
 
     @staticmethod
     def translate_context_management_to_responses_api(
