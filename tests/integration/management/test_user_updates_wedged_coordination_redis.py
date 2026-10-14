@@ -634,7 +634,6 @@ def test_user_models_only_update_is_enforced_on_the_gateway(gateway: Gateway) ->
 
 
 def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gateway: Gateway, peer: Gateway) -> None:
-    pytest.skip("BUG: models-only /user/update leaves warmed peer serving the revoked model with 200")
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
