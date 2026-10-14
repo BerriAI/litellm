@@ -4,7 +4,26 @@ Utility helpers for reading and parsing environment variables.
 
 import logging
 import os
-from typing import Final
+from collections.abc import Callable
+from typing import Final, TypeVar
+
+_NumberT: Final = TypeVar("_NumberT", int, float)
+
+
+def _get_env_number(env_var: str, default: _NumberT, parse: Callable[[str], _NumberT]) -> _NumberT:
+    raw: Final = os.getenv(env_var)
+    if raw is None:
+        return default
+    stripped: Final = raw.strip()
+    if not stripped:
+        return default
+    try:
+        return parse(stripped)
+    except ValueError:
+        logging.getLogger("LiteLLM").warning(
+            "%s=%r is not a valid %s. Falling back to %s.", env_var, raw, type(default).__name__, default
+        )
+        return default
 
 
 def get_env_int(env_var: str, default: int) -> int:
@@ -13,14 +32,15 @@ def get_env_int(env_var: str, default: int) -> int:
     Handles empty strings, whitespace, and non-numeric values gracefully
     so that misconfiguration doesn't crash the process at import time.
     """
-    raw = os.getenv(env_var)
-    if raw is None:
-        return default
-    raw = raw.strip()
-    try:
-        return int(raw)
-    except (ValueError, TypeError):
-        return default
+    return _get_env_number(env_var, default, int)
+
+
+def get_env_float(env_var: str, default: float) -> float:
+    """Parse an environment variable as a float, falling back to default on invalid values.
+
+    Same contract as `get_env_int`: a blank or unparsable value means "unset".
+    """
+    return _get_env_number(env_var, default, float)
 
 
 def get_env_int_in_range(env_var: str, default: int, minimum: int, maximum: int) -> int:

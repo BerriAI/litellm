@@ -17,6 +17,17 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from unittest.mock import patch
 
 
+_ENV_HELPERS = frozenset({"get_env_int", "get_env_float", "get_env_int_in_range", "get_env_int_or_none"})
+
+
+def _single_name_target(node: ast.stmt) -> str | None:
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        return node.target.id
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+        return node.targets[0].id
+    return None
+
+
 def _build_constant_env_var_map() -> dict[str, str]:
     """
     Build a mapping of CONSTANT_NAME -> ENV_VAR_NAME by parsing constants.py.
@@ -29,13 +40,10 @@ def _build_constant_env_var_map() -> dict[str, str]:
     parsed = ast.parse(constants_source)
 
     for node in parsed.body:
-        if not isinstance(node, ast.Assign):
+        constant_name = _single_name_target(node)
+        if constant_name is None or not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
             continue
 
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
-            continue
-
-        constant_name = node.targets[0].id
         env_var_name = None
 
         for child in ast.walk(node.value):
@@ -55,10 +63,10 @@ def _build_constant_env_var_map() -> dict[str, str]:
                 env_var_name = child.args[0].value
                 break
 
-            # get_env_int("ENV_NAME", default)
+            # get_env_int("ENV_NAME", default) and its siblings
             if (
                 isinstance(child.func, ast.Name)
-                and child.func.id == "get_env_int"
+                and child.func.id in _ENV_HELPERS
                 and len(child.args) >= 1
                 and isinstance(child.args[0], ast.Constant)
                 and isinstance(child.args[0].value, str)
@@ -103,6 +111,38 @@ def test_cli_jwt_expiration_hours_from_environment(
         monkeypatch.delenv("CLI_JWT_EXPIRATION_HOURS", raising=False)
         monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
         importlib.reload(litellm.constants)
+
+
+def _numeric_constants_read_from_env() -> dict[str, str]:
+    return {
+        name: env_var
+        for name, env_var in _build_constant_env_var_map().items()
+        if type(getattr(constants, name, None)) in (int, float)
+    }
+
+
+def test_constants_import_treats_blank_numeric_env_values_as_unset() -> None:
+    """
+    Regression: a numeric knob exported as a blank string (a Helm `value: ""` or an emptied .env
+    line) raised ValueError while importing litellm.constants, so the proxy crash-looped at boot.
+    Blank now means unset, so every numeric constant keeps the value it has with the variable absent.
+    """
+    constant_env_vars = _numeric_constants_read_from_env()
+    assert "ROUTER_MAX_FALLBACKS" in constant_env_vars
+    env_vars = set(constant_env_vars.values())
+    try:
+        with mock.patch.dict(os.environ):
+            for env_var in env_vars:
+                os.environ.pop(env_var, None)
+            importlib.reload(litellm.constants)
+            defaults = {name: getattr(litellm.constants, name) for name in constant_env_vars}
+        with mock.patch.dict(os.environ, {env_var: "" for env_var in env_vars}):
+            importlib.reload(litellm.constants)
+            with_blank_env = {name: getattr(litellm.constants, name) for name in constant_env_vars}
+    finally:
+        importlib.reload(litellm.constants)
+
+    assert with_blank_env == defaults
 
 
 @pytest.fixture()
