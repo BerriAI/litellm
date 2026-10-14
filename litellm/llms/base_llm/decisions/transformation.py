@@ -483,12 +483,32 @@ class BaseDecisionsConfig(ABC):
     def request_model(self, model: str) -> str:
         return model
 
-    def validate_environment(self, headers: Mapping[str, str], model: str, api_key: str | None) -> dict[str, str]:
+    def validate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, str]:
         return {
             **{name: value for name, value in headers.items() if name.lower() not in _RESERVED_HEADERS},
             **({"Authorization": f"Bearer {api_key}"} if api_key is not None else {}),
             "Content-Type": "application/json",
         }
+
+    async def avalidate_environment(
+        self,
+        headers: Mapping[str, str],
+        model: str,
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, str]:
+        return self.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"

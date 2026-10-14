@@ -21,6 +21,13 @@ import litellm
 
 _API_KEY: Final = "synthetic-decisions-key"
 _ENV_KEY: Final = "synthetic-decisions-env-key"
+_AZURE_AI_ENTRA_SCENARIO: Final = "providers"
+_AZURE_AI_ENTRA_TOKEN: Final = "synthetic-decisions-entra-token"
+_AZURE_AI_MISSING_CREDENTIALS_MESSAGE: Final = (
+    "Missing Azure AI credentials - set an API key (`api_key` or AZURE_AI_API_KEY), or Entra ID / OAuth "
+    "credentials (`tenant_id` + `client_id` + `client_secret`, `azure_ad_token`, an OIDC token, or a managed "
+    "identity with `litellm.enable_azure_ad_token_refresh = True`)"
+)
 _PASS_THROUGH_MODEL: Final = "gpt-6-luna"
 _PASS_THROUGH_AUTHORIZATION: Final = "Bearer customer-held-upstream-key"
 _PASS_THROUGH_NEIGHBOUR: Final = "decisions-beside-a-pass-through"
@@ -233,6 +240,56 @@ def _assert_connection_error(response: httpx.Response) -> None:
     assert 500 <= response.status_code < 600, response.text
     assert _CONNECTION_ERROR in response.text, response.text
     assert _GENERIC_API_ERROR not in response.text, response.text
+
+
+def test_azure_ai_entra_auth_reaches_the_scripted_upstream_for_both_decisions_routes(
+    gateway: Gateway, scenario: Scenario
+) -> None:
+    provider: Final = _PROVIDERS[9]
+    handle: Final = register_scenario(
+        _AZURE_AI_ENTRA_SCENARIO,
+        JsonResponse(content_type="application/json", body=_answer_body(provider)),
+    )
+    scenario.cleanups.callback(delete_scenario, handle)
+    model: Final = "azure_ai/decision-1-entra"
+    body: Final = {"model": model, "state": _STATE, "questions": _QUESTIONS}
+    decisions_body: Final = {
+        "model": model,
+        "input": "The export job hangs at 99%",
+        "questions": [{"type": "predicate", "name": "defect", "instructions": "Is this a defect?"}],
+    }
+
+    no_credentials_body: Final = {**body, "model": "azure_ai/decision-1-no-credentials"}
+    systemone_auth_error: Final = gateway.request("POST", "/v1/systemone", no_credentials_body)
+    assert systemone_auth_error.status_code == 401, systemone_auth_error.text
+    assert _AZURE_AI_MISSING_CREDENTIALS_MESSAGE in string_value(
+        object_value(object_value(systemone_auth_error.json())["error"])["message"]
+    )
+    no_credentials_decisions_body: Final = {
+        **decisions_body,
+        "model": "azure_ai/decision-1-no-credentials",
+    }
+    decisions_auth_error: Final = gateway.request("POST", "/v1/decisions", no_credentials_decisions_body)
+    assert decisions_auth_error.status_code == 401, decisions_auth_error.text
+    assert _AZURE_AI_MISSING_CREDENTIALS_MESSAGE in string_value(
+        object_value(object_value(decisions_auth_error.json())["error"])["message"]
+    )
+    assert not _upstream_calls(gateway, handle)
+
+    systemone_response: Final = gateway.request("POST", "/v1/systemone", body)
+    assert systemone_response.status_code == 200, systemone_response.text
+    decisions_response: Final = gateway.request("POST", "/v1/decisions", decisions_body)
+    assert decisions_response.status_code == 200, decisions_response.text
+
+    calls: Final = _upstream_calls(gateway, handle)
+    assert tuple(string_value(call["authorization"]) for call in calls) == (
+        f"Bearer {_AZURE_AI_ENTRA_TOKEN}",
+        f"Bearer {_AZURE_AI_ENTRA_TOKEN}",
+    )
+    assert tuple(string_value(call["path"]) for call in calls) == (
+        "/providers/microsoft/v1/systemone",
+        "/providers/microsoft/v1/systemone",
+    )
 
 
 def _free_closed_port() -> int:

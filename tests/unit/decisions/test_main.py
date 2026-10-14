@@ -22,6 +22,7 @@ from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.decisions import (
@@ -2676,6 +2677,132 @@ async def test_azure_ai_decision_requires_api_base_before_http(
         )
 
     assert len(respx_mock.calls) == 0
+
+
+def _clear_azure_ai_auth_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)
+
+
+def test_azure_ai_systemone_uses_entra_token_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.systemone(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decisions_use_entra_token_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    await litellm.adecisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+def test_azure_ai_decisions_prefer_api_key_when_both_are_set(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        api_key="foundry-key",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer foundry-key"
+
+
+def test_azure_ai_decisions_without_credentials_raise_authentication_error(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    with pytest.raises(ValueError, match="Missing Azure AI credentials") as helper_error:
+        get_azure_ai_auth_headers(None, {})
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as caught:
+        litellm.decisions(
+            model="azure_ai/decision-1",
+            input="review",
+            questions=_PREDICATE_QUESTIONS,
+            api_base="https://res.services.ai.azure.com",
+        )
+
+    assert caught.value.status_code == 401
+    assert str(helper_error.value) in str(caught.value)
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_systemone_without_credentials_raises_authentication_error(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    with pytest.raises(ValueError, match="Missing Azure AI credentials") as helper_error:
+        get_azure_ai_auth_headers(None, {})
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as caught:
+        await litellm.asystemone(
+            model="azure_ai/decision-1",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_base="https://res.services.ai.azure.com",
+        )
+
+    assert caught.value.status_code == 401
+    assert str(helper_error.value) in str(caught.value)
+    assert not route.called
 
 
 _CLEF_OMNI_UPSTREAM: Final = "https://example.com/ai/run/@cf/cloudflare/clef-omni"
