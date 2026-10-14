@@ -3098,6 +3098,90 @@ def test_streamed_json_mode_envelope_whose_label_is_a_property_name_is_still_unw
     assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
 
 
+_STREAMED_OPTIONAL_RISK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"tier": {"type": "integer"}, "summary": {"type": "string"}},
+}
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        pytest.param(_STREAMED_OPTIONAL_RISK_SCHEMA, id="no_required_keys"),
+        pytest.param(
+            {**_STREAMED_OPTIONAL_RISK_SCHEMA, "additionalProperties": True}, id="no_required_keys_and_open_to_others"
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "leading_label",
+    [
+        pytest.param({}, id="field_name_label_first"),
+        pytest.param({"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME}, id="tool_name_label_first"),
+    ],
+)
+def test_streamed_json_mode_split_answer_arrives_as_one_object_when_the_schema_requires_no_key(
+    schema: dict[str, object], leading_label: dict[str, str]
+):
+    blocks = tuple(
+        json.dumps({**leading_label, "$PARAMETER_NAME": name, "$PARAMETER_VALUE": value})
+        for name, value in _STREAMED_RISK_OBJECT.items()
+    )
+
+    contents = _streamed_json_tool_blocks(blocks, schema)
+
+    assert json.loads(contents[-1]) == _STREAMED_RISK_OBJECT
+    assert contents[:-1] == ("",) * (len(contents) - 1)
+
+
+def _json_mode_stream_chunks(events: tuple[dict[str, object], ...]) -> tuple[ModelResponseStream, ...]:
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        json_mode=True,
+        response_format_schema=response_format_schema(_STREAMED_RISK_SCHEMA),
+    )
+    return tuple(iterator.chunk_parser(event) for event in events)
+
+
+def test_streamed_json_mode_answer_beside_a_client_tool_call_keeps_that_call_usable():
+    answer = json.dumps(_STREAMED_RISK_OBJECT)
+    message_start, *_, message_delta = _json_tool_events(())
+    weather_call = (
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_weather", "name": "get_weather", "input": {}},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+        },
+        {"type": "content_block_stop", "index": 1},
+    )
+
+    chunks = _json_mode_stream_chunks((message_start, *_json_tool_block_events(0, answer), *weather_call, message_delta))
+
+    tool_calls = tuple(chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks))
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == answer
+    assert {call.index for call in tool_calls} == {0}
+    assert tool_calls[0].function.name == "get_weather"
+    assert "".join(call.function.arguments or "" for call in tool_calls) == '{"city": "Paris"}'
+    assert chunks[-1].choices[0].finish_reason == "tool_calls"
+
+
+def test_streamed_json_mode_answer_cut_at_max_tokens_ends_with_length():
+    cut_answer = '{"tier": 3, "summ'
+    *events, message_delta = _json_tool_events((cut_answer,))
+    cut_message_delta = {**message_delta, "delta": {"stop_reason": "max_tokens", "stop_sequence": None}}
+
+    chunks = _json_mode_stream_chunks((*events, cut_message_delta))
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == cut_answer
+    assert chunks[-1].choices[0].finish_reason == "length"
+
+
 @respx.mock
 def test_anthropic_streaming_function_call_arguments_are_assembled(
     monkeypatch: pytest.MonkeyPatch,

@@ -97,14 +97,24 @@ def _key_after_a_string_verdict(string_value_start: str, schema: ResponseFormatS
     return "pass_through" if next_key.group(1) in schema.property_names else "hold"
 
 
-def _first_value_verdict(after_first_key: str, schema: ResponseFormatSchema) -> _EnvelopeVerdict:
+def _string_value_verdict(string_value_start: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+    if schema.required_names:
+        return _key_after_a_string_verdict(string_value_start, schema)
+    text, closing_quote, _ = string_value_start[1:].partition('"')
+    labels: Final = schema.property_names | {tool_name}
+    if closing_quote:
+        return "hold" if text in labels else "pass_through"
+    return "undecided" if any(label.startswith(text) for label in labels) else "pass_through"
+
+
+def _first_value_verdict(after_first_key: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
     value_start: Final = after_first_key.lstrip()
     if not value_start:
         return "undecided"
-    if value_start.startswith("{"):
+    if value_start.startswith('"'):
+        return _string_value_verdict(value_start, schema, tool_name)
+    if value_start.startswith("{") and not schema.accepts_a_lone_undeclared_key:
         return "hold"
-    if value_start.startswith('"') and schema.required_names:
-        return _key_after_a_string_verdict(value_start, schema)
     return "pass_through"
 
 
@@ -120,9 +130,9 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
             return "undecided"
     if first_key.group(1) == "values" and "values" not in schema.property_names:
         return "hold"
-    if first_key.group(1) in schema.property_names or not schema.property_names or schema.accepts_a_lone_undeclared_key:
+    if first_key.group(1) in schema.property_names or not schema.property_names:
         return "pass_through"
-    return _first_value_verdict(buffered_json[first_key.end() :], schema)
+    return _first_value_verdict(buffered_json[first_key.end() :], schema, tool_name)
 
 
 def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
@@ -1168,6 +1178,8 @@ class ModelResponseIterator:
             # (per Anthropic's fine-grained streaming pattern)
             tool_name: Final = tool_use.get("function", {}).get("name", "")
             self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
+            if self.is_response_format_tool:
+                self.tool_index -= 1
 
         if self.is_response_format_tool and self.response_format_schema is not None:
             self.converted_response_format_tool = True
@@ -1230,13 +1242,13 @@ class ModelResponseIterator:
             Tuple of (finish_reason, usage, container)
         """
         message_delta: Final = MessageBlockDelta(**chunk)
-        # Override finish_reason to "stop" if we converted response_format tools
-        # (matches OpenAI behavior and non-streaming Anthropic implementation)
-        finish_reason: Final = (
-            "stop"
-            if self.converted_response_format_tool
-            else map_finish_reason(finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop")
+        provider_finish_reason: Final = map_finish_reason(
+            finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop"
         )
+        called_only_the_response_format_tool: Final = (
+            provider_finish_reason == "tool_calls" and self.converted_response_format_tool and self.tool_index < 0
+        )
+        finish_reason: Final = "stop" if called_only_the_response_format_tool else provider_finish_reason
         usage: Final = (
             self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
         )
