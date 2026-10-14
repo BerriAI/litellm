@@ -135,6 +135,24 @@ async def test_the_async_replay_ignores_cached_provider_fields_that_are_not_an_o
     assert all(c.choices[0].delta.provider_specific_fields is None for c in chunks)
 
 
+@pytest.mark.parametrize(
+    "details",
+    [{"reasoning_tokens": "abc"}, {"reasoning_tokens": 1.5}, {"reasoning_tokens": {"a": 1}}],
+    ids=["text", "fraction", "object"],
+)
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_skips_cached_completion_tokens_details_that_do_not_validate(replay, details):
+    cached = _async_payload()
+    cached["usage"]["completion_tokens_details"] = details
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+    rebuilt = litellm.stream_chunk_builder(chunks=chunks)
+
+    assert rebuilt.choices[0].message.content == "Hello world! How are you?"
+    assert rebuilt.usage.completion_tokens == 7
+
+
 @pytest.mark.asyncio
 async def test_async_finish_reason_only_on_last_chunk():
     chunks = await _collect_async(_async_payload())

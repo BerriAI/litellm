@@ -6,7 +6,7 @@ import traceback
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, cast
 
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -420,7 +420,12 @@ def _cached_provider_specific_fields(message: _CachedMessageProviderFields) -> M
 
 def _cached_completion_tokens_details(usage: _CachedUsageDetails) -> CompletionTokensDetailsWrapper | None:
     details: Final = usage.get("completion_tokens_details")
-    return _COMPLETION_TOKENS_DETAILS.validate_python(details) if isinstance(details, dict) else None
+    if not isinstance(details, dict):
+        return None
+    try:
+        return _COMPLETION_TOKENS_DETAILS.validate_python(details)
+    except ValidationError:
+        return None
 
 
 def handle_invalid_parallel_tool_calls(
