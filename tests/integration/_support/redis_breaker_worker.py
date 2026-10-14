@@ -11,9 +11,11 @@ import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
+
+Scenario: TypeAlias = Literal["callbacks_before_cache", "callbacks_after_cache", "no_callbacks"]
 
 STATE_GAUGE: Final = "litellm_redis_circuit_breaker_state"
 WORKER_TIMEOUT_SECONDS: Final = 120
@@ -29,9 +31,11 @@ class WorkerReport:
 _REPORT: Final = TypeAdapter(WorkerReport)
 
 
-def run_breaker_worker(api_base: str, prom_dir: Path, environment: Mapping[str, str] = os.environ) -> WorkerReport:
+def run_breaker_worker(
+    scenario: Scenario, api_base: str, prom_dir: Path, environment: Mapping[str, str] = os.environ
+) -> WorkerReport:
     completed: Final = subprocess.run(
-        (sys.executable, "-I", __file__, api_base, environment["REDIS_HOST"], environment["REDIS_PORT"]),
+        (sys.executable, "-I", __file__, scenario, api_base, environment["REDIS_HOST"], environment["REDIS_PORT"]),
         env={**environment, "PROMETHEUS_MULTIPROC_DIR": str(prom_dir)},
         capture_output=True,
         text=True,
@@ -56,11 +60,15 @@ def _series(families: Iterator[object]) -> Iterator[tuple[tuple[tuple[str, str],
             yield tuple(sorted(sample.labels.items())), float(sample.value)
 
 
-def main(api_base: str, redis_host: str, redis_port: str) -> None:
+def main(scenario: str, api_base: str, redis_host: str, redis_port: str) -> None:
     import litellm
     from litellm.caching.caching import Cache
 
+    if scenario == "callbacks_before_cache":
+        litellm.service_callback = ["prometheus_system"]  # test-quality-ok: this worker process exits right after the report
     litellm.cache = Cache(type="redis", host=redis_host, port=redis_port)  # test-quality-ok: throwaway worker process
+    if scenario == "callbacks_after_cache":
+        litellm.service_callback = ["prometheus_system"]  # test-quality-ok: throwaway worker process
     response: Final = litellm.completion(
         model="openai/gpt-5.6",
         api_base=api_base,
@@ -76,4 +84,4 @@ def main(api_base: str, redis_host: str, redis_port: str) -> None:
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:4])
+    main(*sys.argv[1:5])
