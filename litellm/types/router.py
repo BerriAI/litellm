@@ -56,6 +56,17 @@ from .utils import (
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
 
 
+class FallbackSkipReason(str, enum.Enum):
+    NOT_AUTHORIZED = "not_authorized"
+    OVER_BUDGET = "over_budget"
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedFallbackTarget:
+    target: str
+    reason: FallbackSkipReason
+
+
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
     api_base: str
 
@@ -188,6 +199,7 @@ class UpdateRouterConfig(LiteLLMBaseModel):
     weights: RouterWeights | None = None
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
+    fallback_on_unsupported_params: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -926,6 +938,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    description: str | None = None
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():

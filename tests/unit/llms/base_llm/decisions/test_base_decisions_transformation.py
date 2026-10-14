@@ -94,11 +94,10 @@ def test_openai_messages_become_systemone_state_text() -> None:
 
     body: Final = ir_to_systemone_request("jev-latest", ir)
 
-    assert isinstance(body, Mapping)
     assert body["state"] == "The package arrived broken.\n\nI want a refund.\n\nOrder 1234."
 
 
-def test_image_input_is_unsupported_by_systemone_providers() -> None:
+def test_openai_input_images_reach_a_systemone_provider_as_its_images_in_message_order() -> None:
     ir: Final = _openai_ir(
         {
             "input": [
@@ -106,15 +105,27 @@ def test_image_input_is_unsupported_by_systemone_providers() -> None:
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": "Is the screen cracked?"},
-                        {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+                        {"type": "input_image", "image_url": "data:image/png;base64,AA==", "detail": "high"},
                     ],
-                }
+                },
+                {"role": "user", "content": [{"type": "input_image", "image_url": "data:image/webp;base64,BB=="}]},
+                {"role": "user", "content": "Order 1234."},
             ],
             "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
         }
     )
 
-    assert isinstance(ir_to_systemone_request("jev-latest", ir), UnsupportedDecisionsRequest)
+    body: Final = ir_to_systemone_request("clef", ir)
+
+    assert body["state"] == "Is the screen cracked?\n\nOrder 1234."
+    assert body["images"] == ["data:image/png;base64,AA==", "data:image/webp;base64,BB=="]
+
+
+def test_systemone_images_reach_a_systemone_provider_in_the_callers_form() -> None:
+    images: Final = ["data:image/png;base64,AA==", {"content_type": "image/jpeg", "base64": "BB=="}]
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "images": images}))
+
+    assert ir_to_systemone_request("clef", ir) == {"model": "clef", **_SYSTEMONE_REQUEST, "images": images}
 
 
 def test_the_largest_openai_request_accepted_translates_to_a_valid_systemone_request() -> None:
@@ -178,3 +189,23 @@ def test_missing_or_mismatched_systemone_answers_are_refusals_left_out_of_the_re
 
     assert parsed.answers[1:] == (DecisionsIRRefusal(), DecisionsIRRefusal(), DecisionsIRRefusal())
     assert tuple(ir_to_systemone_response(parsed, ir).answers) == ("damaged",)
+
+
+def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
+    audio: Final = ["data:audio/wav;base64,YQ=="]
+    videos: Final = ["data:video/mp4;base64,YQ=="]
+    audio_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "audio": audio}))
+    video_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "videos": videos}))
+
+    assert ir_to_systemone_request("clef-omni", audio_only, supports_audio=True) == {
+        "model": "clef-omni",
+        **_SYSTEMONE_REQUEST,
+        "audio": audio,
+    }
+    assert ir_to_systemone_request("clef-omni", video_only, supports_video=True) == {
+        "model": "clef-omni",
+        **_SYSTEMONE_REQUEST,
+        "videos": videos,
+    }
+    assert isinstance(ir_to_systemone_request("clef-omni", audio_only, supports_video=True), UnsupportedDecisionsRequest)
+    assert isinstance(ir_to_systemone_request("clef-omni", video_only, supports_audio=True), UnsupportedDecisionsRequest)

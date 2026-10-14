@@ -22,6 +22,7 @@ function PublicModelHubTableContent() {
       premiumUser={false}
       userRole={null}
       canOpenPlayground={false}
+      canAddModels={false}
     />
   );
 }

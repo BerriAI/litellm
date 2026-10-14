@@ -620,6 +620,7 @@ def test_sync_prompt_swap_cross_provider_with_credentials_raises():
     with pytest.raises(litellm.BadRequestError, match="Refusing to send"):
         _apply_prompt_management_to_responses_call(
             input="hi",
+            tools=None,
             model="anthropic/claude-haiku-4-5",
             custom_llm_provider="anthropic",
             litellm_logging_obj=logging_obj,

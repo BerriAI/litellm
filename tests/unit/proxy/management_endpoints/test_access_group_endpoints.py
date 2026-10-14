@@ -1602,3 +1602,65 @@ def test_update_access_group_response_carries_resolved_names(client_and_mocks):
     assert body["access_mcp_servers"] == [{"id": "mcp-new", "name": "Linear"}]
     assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}]
     assert body["access_mcp_server_ids"] == ["mcp-new"]
+
+
+def test_create_access_group_persists_mcp_tool_permissions_as_json(client_and_mocks):
+    """Tool allowlists are stored on the group as JSON, an explicit [] survives as a deny-all entry."""
+    client, _, mock_table, *_ = client_and_mocks
+    tool_permissions = {"mcp-1": ["read_file"], "mcp-2": []}
+
+    resp = client.post(
+        "/v1/access_group",
+        json={
+            "access_group_name": "tools",
+            "access_mcp_server_ids": ["mcp-1", "mcp-2"],
+            "mcp_tool_permissions": tool_permissions,
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    written = mock_table.create.await_args.kwargs["data"]
+    assert written["mcp_tool_permissions"].data == tool_permissions
+
+
+def test_create_access_group_without_tool_permissions_writes_null(client_and_mocks):
+    client, _, mock_table, *_ = client_and_mocks
+
+    resp = client.post("/v1/access_group", json={"access_group_name": "servers-only", "access_mcp_server_ids": ["m"]})
+
+    assert resp.status_code == 201, resp.text
+    assert mock_table.create.await_args.kwargs["data"]["mcp_tool_permissions"].data is None
+
+
+@pytest.mark.parametrize("tool_permissions", [{"mcp-1": ["a", "b"]}, {"mcp-1": []}, None])
+def test_update_access_group_writes_mcp_tool_permissions(client_and_mocks, tool_permissions):
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(return_value=_make_access_group_record(access_group_id="ag-update"))
+
+    resp = client.put("/v1/access_group/ag-update", json={"mcp_tool_permissions": tool_permissions})
+
+    assert resp.status_code == 200, resp.text
+    written = mock_table.update.await_args.kwargs["data"]["mcp_tool_permissions"]
+    assert written.data == tool_permissions
+
+
+def test_update_access_group_leaves_tool_permissions_alone_when_not_sent(client_and_mocks):
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(return_value=_make_access_group_record(access_group_id="ag-update"))
+
+    resp = client.put("/v1/access_group/ag-update", json={"description": "x"})
+
+    assert resp.status_code == 200, resp.text
+    assert "mcp_tool_permissions" not in mock_table.update.await_args.kwargs["data"]
+
+
+def test_get_access_group_returns_mcp_tool_permissions(client_and_mocks):
+    client, _, mock_table, *_ = client_and_mocks
+    record = _make_access_group_record(access_group_id="ag-tools", access_mcp_server_ids=["mcp-1"])
+    record.dict = lambda: {**record.model_dump(), "mcp_tool_permissions": {"mcp-1": []}}
+    mock_table.find_unique = AsyncMock(return_value=record)
+
+    resp = client.get("/v1/access_group/ag-tools")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["mcp_tool_permissions"] == {"mcp-1": []}

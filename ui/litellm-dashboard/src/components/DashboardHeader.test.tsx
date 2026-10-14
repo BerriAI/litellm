@@ -35,7 +35,7 @@ vi.mock("@/components/liteadmin/LiteAdmin", () => ({ default: () => <button>Lite
 const renderDashboardHeader = () =>
   render(
     <CommandPaletteProvider>
-      <DashboardHeader />
+      <DashboardHeader accessToken={null} />
     </CommandPaletteProvider>,
   );
 
@@ -59,11 +59,11 @@ describe("DashboardHeader breadcrumb", () => {
     expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
   });
 
-  it("titles the dashboard root as Virtual Keys", () => {
+  it("titles the dashboard root as Home", () => {
     state.pathname = "/ui/";
     renderDashboardHeader();
 
-    expect(screen.getByText("Virtual Keys")).toBeInTheDocument();
+    expect(screen.getByText("Home")).toBeInTheDocument();
   });
 
   it("roots the breadcrumb in the AI Gateway selector (with a Chat option) and drops the static section crumb when the selector is available", async () => {
@@ -133,7 +133,7 @@ describe("DashboardHeader breadcrumb", () => {
     state.isDesktop = true;
     rerender(
       <CommandPaletteProvider>
-        <DashboardHeader />
+        <DashboardHeader accessToken={null} />
       </CommandPaletteProvider>,
     );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
@@ -141,7 +141,7 @@ describe("DashboardHeader breadcrumb", () => {
     state.isDesktop = false;
     rerender(
       <CommandPaletteProvider>
-        <DashboardHeader />
+        <DashboardHeader accessToken={null} />
       </CommandPaletteProvider>,
     );
     expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();

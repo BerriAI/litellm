@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import Final, Literal, cast
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
@@ -24,6 +25,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.compresr import (
     CompresrGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
+    DecisionModelCheck,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
@@ -69,6 +73,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.typesafe import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.wingback import (
+    WingbackGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
     XecGuardConfigModel,
@@ -149,6 +156,9 @@ class SupportedGuardrailIntegrations(Enum):
     AGENT_365 = "agent_365"
     LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
+    AIRIA = "airia"
+    WINGBACK = "wingback"
+    DECISION_MODEL = "decision_model"
 
 
 class Role(Enum):
@@ -992,6 +1002,16 @@ def runtime_stream_scope(
 LoggingOnlyScope = Literal["input", "output"]
 
 
+def _is_blank(value: object) -> bool:
+    return isinstance(value, str) and not value.strip()
+
+
+def _default_if_blank(field: FieldInfo | None, value: object) -> object:
+    if field is None or field.is_required() or not _is_blank(value):
+        return value
+    return field.get_default(call_default_factory=True)
+
+
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
@@ -1133,9 +1153,11 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     skip_unscannable_attachments: bool | None = Field(
         default=False,
         description=(
-            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
-            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
-            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+            "Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the "
+            "guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are "
+            "references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still "
+            "governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, "
+            "and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them."
         ),
     )
     sanitize_error_detail: bool | None = Field(
@@ -1156,8 +1178,21 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
             "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
-            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. "
+            "Also implemented by guardrail='decision_model'."
         ),
+    )
+
+    max_input_chars: int | None = Field(
+        default=None,
+        gt=0,
+        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+    )
+
+    max_concurrent_decision_calls: int | None = Field(
+        default=None,
+        gt=0,
+        description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
     )
 
     extra_headers: list[str] | None = Field(
@@ -1265,6 +1300,14 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    @model_validator(mode="before")  # pyright: ignore[reportUntypedFunctionDecorator]  # pydantic decorators are untyped
+    @classmethod
+    def blank_values_mean_field_default(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        fields: Final = cast(Mapping[str, object], data)  # cast-ok: pydantic hands a before-validator the raw mapping
+        return {key: _default_if_blank(cls.model_fields.get(key), value) for key, value in fields.items()}
+
     @field_validator(
         "mode",
         "default_action",
@@ -1328,8 +1371,20 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
     Agent365GuardrailConfigModel,
+    WingbackGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
+    decision_model: str | None = Field(
+        default=None,
+        description="For guardrail='decision_model': the Decisions-API model that scores each check",
+    )
+    checks: BedrockChecksConfigModel | tuple[DecisionModelCheck, ...] | None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # widened to also accept decision-model checks
+        default=None,
+        description=(
+            "Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate "
+            "checks a decision_model guardrail scores for guardrail='decision_model'"
+        ),
+    )
     mode: str | list[str] | Mode = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
@@ -1355,14 +1410,22 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
         return self
 
-    def __init__(self, **kwargs) -> None:
+    @model_validator(mode="after")
+    def validate_checks_list_for_guardrail(self) -> "LitellmParams":
+        if isinstance(self.checks, tuple) and self.guardrail != SupportedGuardrailIntegrations.DECISION_MODEL.value:
+            raise ValueError(
+                f"checks as a list is only supported by guardrail='decision_model', got guardrail={self.guardrail!r}"
+            )
+        return self
+
+    def __init__(self, **kwargs: object) -> None:
         default_on: Final = kwargs.pop("default_on", None)
-        if default_on is not None:
+        if default_on is not None and not _is_blank(default_on):
             kwargs["default_on"] = default_on
         else:
             kwargs["default_on"] = False
 
-        super().__init__(**kwargs)
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType]  # pydantic validates each field's type at runtime
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -1425,6 +1488,7 @@ class GuardrailUIAddGuardrailSettings(LiteLLMBaseModel):
     providers_without_directional_logging_only_scope: tuple[str, ...]
     pii_entity_categories: list[PiiEntityCategoryMap]
     content_filter_settings: dict[str, object] | None = None
+    decision_model_providers: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class PresidioPerRequestConfig(LiteLLMBaseModel):

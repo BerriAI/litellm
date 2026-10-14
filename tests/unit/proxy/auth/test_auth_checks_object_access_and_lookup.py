@@ -8857,6 +8857,30 @@ async def test_get_access_object_db_fetch_returns_validated_access_group():
 
 
 @pytest.mark.asyncio
+async def test_get_access_object_distinguishes_absent_group_from_unreadable_row():
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import AccessGroupNotFoundError, get_access_object
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    absent_client = MagicMock()
+    absent_client.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=None)
+    with pytest.raises(AccessGroupNotFoundError) as absent_info:
+        await get_access_object("typo-group", absent_client, mock_cache)
+    assert absent_info.value.status_code == 404
+    assert "Access group doesn't exist in db" in str(absent_info.value.detail)
+
+    unreadable_client = MagicMock()
+    unreadable_client.db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=ConnectionError("db unreachable"))
+    with pytest.raises(HTTPException) as unreadable_info:
+        await get_access_object("real-group", unreadable_client, mock_cache)
+    assert unreadable_info.value.status_code == 404
+    assert not isinstance(unreadable_info.value, AccessGroupNotFoundError)
+
+
+@pytest.mark.asyncio
 async def test_get_team_object_by_alias_db_fetch_returns_cached_obj():
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.auth_checks import get_team_object_by_alias
@@ -10969,6 +10993,61 @@ def test_can_object_call_model_allows_listed_model_for_key():
     )
 
     assert result is True
+
+
+def _router_serving(model_names: list[str]) -> "Router":
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": f"openai/{name}", "api_key": "sk-test"}}
+            for name in model_names
+        ]
+    )
+
+
+def test_can_project_access_model_expands_all_team_models_sentinel():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="p-1", team_id="t-1", models=["all-team-models"])
+    result: Final = can_project_access_model(
+        model="gpt-5.6-sol",
+        project_object=project,
+        llm_router=_router_serving(["gpt-5.6-sol"]),
+    )
+
+    assert result is True
+
+
+def test_can_project_access_model_denies_model_outside_router_names():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="p-1", team_id="t-1", models=["all-team-models"])
+    with pytest.raises(ProxyException) as exc_info:
+        can_project_access_model(
+            model="gpt-5.6-sol-eu",
+            project_object=project,
+            llm_router=_router_serving(["gpt-5.6-sol"]),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.project_model_access_denied
+
+
+def test_can_project_access_model_keeps_sentinel_denied_without_team_id():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="p-1", team_id=None, models=["all-team-models"])
+    with pytest.raises(ProxyException) as exc_info:
+        can_project_access_model(
+            model="gpt-5.6-sol",
+            project_object=project,
+            llm_router=_router_serving(["gpt-5.6-sol"]),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.project_model_access_denied
 
 
 @pytest.mark.asyncio
