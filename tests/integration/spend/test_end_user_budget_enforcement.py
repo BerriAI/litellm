@@ -451,10 +451,57 @@ class _CustomerInfo(BaseModel):
     litellm_budget_table: _Budget | None
 
 
+def _new_customer(gateway: Gateway, user_id: str, *, path: str = "/customer/new", **fields: JsonValue) -> None:
+    response: Final = gateway.request("POST", path, {"user_id": user_id, **fields})
+    assert response.status_code == 200, response.text
+
+
 def _customer_info(gateway: Gateway, user_id: str) -> _CustomerInfo:
     response: Final = gateway.request("GET", "/customer/info", params={"end_user_id": user_id})
     assert response.status_code == 200, response.text
     return _CustomerInfo.model_validate_json(response.content)
+
+
+def _chat(gateway: Gateway, model: str, key: str, end_user: str, *, stream: bool = False) -> httpx.Response:
+    body: Final[dict[str, JsonValue]] = {
+        "model": model,
+        "messages": [{"role": "user", "content": f"end user budget {uuid.uuid4().hex}"}],
+        "user": end_user,
+    }
+    if stream:
+        body["stream"] = True
+    return gateway.request("POST", "/v1/chat/completions", body, key=key)
+
+
+def _observed_requests(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
+    response: Final = upstream.get("/__observations")
+    response.raise_for_status()
+    requests: Final = response.json()["requests"]
+    assert isinstance(requests, list)
+    return requests
+
+
+def _expected_observation(body: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "path": "/v1/chat/completions",
+        "authorization": "Bearer integration-provider-key",
+        "body": body,
+        "method": "POST",
+        "api_key": "",
+    }
+
+
+def _sent_body(response: httpx.Response, end_user: str) -> dict[str, JsonValue]:
+    sent: Final = object_value(json.loads(response.request.content))
+    expected: Final[dict[str, JsonValue]] = {"messages": sent["messages"], "model": "gpt-4o-mini", "user": end_user}
+    if sent.get("stream") is True:
+        expected["stream"] = True
+        expected["stream_options"] = {"include_usage": True}
+    return expected
+
+
+def _end_user_row(user_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT spend, blocked FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_id,))
 
 
 def _daily_rows(user_id: str) -> list[dict[str, JsonValue]]:
@@ -486,13 +533,10 @@ def test_customer_budget_refuses_calls_and_writes_daily_spend(gateway: Gateway) 
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        variant: Final = SPELLINGS["user"]
-        deployment: Final = _deployment(scenario, variant)
-        key: Final = scenario.key(models=[deployment.model])
+        _observed_requests(upstream)
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
-        created: Final = gateway.post("/customer/new", {"user_id": end_user, "max_budget": 0.05})
-        assert created["user_id"] == end_user
-        scenario.cleanups.callback(_delete_customer, gateway, end_user)
+        _new_customer(gateway, end_user, max_budget=0.05)
+        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
         info: Final = _customer_info(gateway, end_user)
         assert info.blocked is False
         assert info.litellm_budget_table is not None and info.litellm_budget_table.max_budget == 0.05, info
@@ -503,29 +547,29 @@ def test_customer_budget_refuses_calls_and_writes_daily_spend(gateway: Gateway) 
         )
         assert len(joined) == 1 and float(str(joined[0]["max_budget"])) == 0.05, joined
 
-        _observed(upstream)
-        served_content: Final = f"end user budget {uuid.uuid4().hex}"
-        served: Final = _send(gateway, variant, deployment, key, end_user, served_content)
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(models=[model])
+        served: Final = _chat(gateway, model, key, end_user)
         assert served.status_code == 200, served.text
-        assert _observed(upstream) == [_upstream_request(variant, deployment.upstream_prefix, end_user, served_content)]
+        assert _observed_requests(upstream) == [_expected_observation(_sent_body(served, end_user))]
 
         charged: Final = eventually(
-            lambda: _end_user_spend(end_user),
+            lambda: _end_user_row(end_user),
             lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) >= 0.05,
             seconds=70,
         )
         assert float(str(charged[0]["spend"])) == pytest.approx(20 * 0.001 + 20 * 0.002)
         daily: Final = eventually(lambda: _daily_rows(end_user), lambda rows: len(rows) == 1, seconds=70)
         assert daily[0]["model"] == "openai/gpt-4o-mini"
-        assert daily[0]["model_group"] == deployment.model
+        assert daily[0]["model_group"] == model
         assert float(str(daily[0]["spend"])) == pytest.approx(0.06)
         assert int(str(daily[0]["api_requests"])) == 1
         assert int(str(daily[0]["successful_requests"])) == 1
 
-        denied: Final = _send(gateway, variant, deployment, key, end_user, f"end user budget {uuid.uuid4().hex}")
+        denied: Final = _chat(gateway, model, key, end_user)
         assert denied.status_code == 422, denied.text
         _assert_budget_refusal(denied, end_user, 0.05)
-        assert _observed(upstream) == []
+        assert _observed_requests(upstream) == []
 
 
 def test_customer_budget_update_takes_effect_without_restart(gateway: Gateway) -> None:
@@ -533,19 +577,15 @@ def test_customer_budget_update_takes_effect_without_restart(gateway: Gateway) -
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        variant: Final = SPELLINGS["user"]
-        deployment: Final = _deployment(scenario, variant)
-        key: Final = scenario.key(models=[deployment.model])
+        _observed_requests(upstream)
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
-        created: Final = gateway.post("/end_user/new", {"user_id": end_user, "max_budget": 1.0})
-        assert created["user_id"] == end_user
-        scenario.cleanups.callback(_delete_customer, gateway, end_user)
-
-        _observed(upstream)
-        served_content: Final = f"end user budget {uuid.uuid4().hex}"
-        served: Final = _send(gateway, variant, deployment, key, end_user, served_content)
+        _new_customer(gateway, end_user, path="/end_user/new", max_budget=1.0)
+        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(models=[model])
+        served: Final = _chat(gateway, model, key, end_user)
         assert served.status_code == 200, served.text
-        assert _observed(upstream) == [_upstream_request(variant, deployment.upstream_prefix, end_user, served_content)]
+        assert _observed_requests(upstream) == [_expected_observation(_sent_body(served, end_user))]
 
         updated: Final = gateway.request("POST", "/customer/update", {"user_id": end_user, "max_budget": 0.01})
         assert updated.status_code == 200, updated.text
@@ -558,14 +598,14 @@ def test_customer_budget_update_takes_effect_without_restart(gateway: Gateway) -
         )
         assert len(budget_row) == 1 and float(str(budget_row[0]["max_budget"])) == 0.01, budget_row
         eventually(
-            lambda: _end_user_spend(end_user),
+            lambda: _end_user_row(end_user),
             lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) >= 0.05,
             seconds=70,
         )
-        denied: Final = _send(gateway, variant, deployment, key, end_user, f"end user budget {uuid.uuid4().hex}")
+        denied: Final = _chat(gateway, model, key, end_user)
         assert denied.status_code == 422, denied.text
         _assert_budget_refusal(denied, end_user, 0.01)
-        assert _observed(upstream) == []
+        assert _observed_requests(upstream) == []
 
 
 def test_streamed_call_is_refused_as_json_once_over_budget(gateway: Gateway) -> None:
@@ -573,30 +613,26 @@ def test_streamed_call_is_refused_as_json_once_over_budget(gateway: Gateway) -> 
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        variant: Final = SPELLINGS["user_stream"]
-        deployment: Final = _deployment(scenario, variant)
-        key: Final = scenario.key(models=[deployment.model])
+        _observed_requests(upstream)
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
-        created: Final = gateway.post("/customer/new", {"user_id": end_user, "max_budget": 0.05})
-        assert created["user_id"] == end_user
-        scenario.cleanups.callback(_delete_customer, gateway, end_user)
-
-        _observed(upstream)
-        served_content: Final = f"end user budget {uuid.uuid4().hex}"
-        served: Final = _send(gateway, variant, deployment, key, end_user, served_content)
+        _new_customer(gateway, end_user, max_budget=0.05)
+        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(models=[model])
+        served: Final = _chat(gateway, model, key, end_user, stream=True)
         assert served.status_code == 200, served.text
         assert served.headers["content-type"].startswith("text/event-stream")
         assert 'data: {"id":"chatcmpl-' in served.text and "data: [DONE]" in served.text, served.text
-        assert _observed(upstream) == [_upstream_request(variant, deployment.upstream_prefix, end_user, served_content)]
+        assert _observed_requests(upstream) == [_expected_observation(_sent_body(served, end_user))]
         eventually(
-            lambda: _end_user_spend(end_user),
+            lambda: _end_user_row(end_user),
             lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) >= 0.05,
             seconds=70,
         )
 
-        denied: Final = _send(gateway, variant, deployment, key, end_user, f"end user budget {uuid.uuid4().hex}")
+        denied: Final = _chat(gateway, model, key, end_user, stream=True)
         assert denied.status_code == 422, denied.text
         assert denied.headers["content-type"].startswith("application/json")
         assert "data:" not in denied.text, denied.text
         _assert_budget_refusal(denied, end_user, 0.05)
-        assert _observed(upstream) == []
+        assert _observed_requests(upstream) == []
