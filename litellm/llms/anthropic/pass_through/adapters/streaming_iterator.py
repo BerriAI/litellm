@@ -15,12 +15,15 @@ from typing import (
     get_args,
 )
 
+from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
+from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
+from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -37,11 +40,13 @@ from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponseStream
 
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
+_SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
 class _UsageDeltaWithIterations(UsageDelta, total=False):
@@ -214,35 +219,23 @@ class _CombinedChunkSplitter:
         pieces: Final = tuple(copy.deepcopy(chunk) for _ in present_groups)
         for index, (piece, group) in enumerate(zip(pieces, present_groups)):
             copied_delta = piece.choices[0].delta
-            fields = {field: value for field in group if (value := getattr(copied_delta, field, None))}
-            fields = _CombinedChunkSplitter._normalize_reasoning_fields(fields)
+            reasoning_content = (
+                getattr(copied_delta, "reasoning_content", None) if "reasoning_content" in group else None
+            )
+            thinking_blocks = getattr(copied_delta, "thinking_blocks", None) if "thinking_blocks" in group else None
+            unsigned_text = _CombinedChunkSplitter._unsigned_thinking_text(thinking_blocks) if thinking_blocks else None
+            if unsigned_text:
+                reasoning_content = unsigned_text
+                thinking_blocks = None
             role = getattr(copied_delta, "role", None) if index == 0 else None
-            piece.choices[0].delta = Delta(role=role, **fields)
+            piece.choices[0].delta = Delta(
+                role=role,
+                reasoning_content=reasoning_content if reasoning_content else None,
+                thinking_blocks=thinking_blocks if thinking_blocks else None,
+                content=(copied_delta.content if "content" in group and copied_delta.content else None),
+                tool_calls=(copied_delta.tool_calls if "tool_calls" in group and copied_delta.tool_calls else None),
+            )
         return pieces
-
-    @staticmethod
-    def _normalize_reasoning_fields(fields: "dict[str, Any]") -> "dict[str, Any]":
-        """Collapse signature-less ``thinking_blocks`` into ``reasoning_content``.
-
-        The block opener seeds a ``thinking_blocks`` start body with the full
-        thinking text while the delta re-emits it, so SSE accumulators would
-        collect it twice; the ``reasoning_content`` branch opens an empty body.
-        Signature-carrying blocks are kept intact so ``signature_delta``
-        suppression of the full-text snapshot still applies.
-        """
-        thinking_blocks: Final = fields.get("thinking_blocks")
-        if not thinking_blocks:
-            return fields
-        if any(block.get("signature") for block in thinking_blocks if isinstance(block, dict)):
-            return fields
-        thinking_text: Final = "".join(
-            block.get("thinking") or ""
-            for block in thinking_blocks
-            if isinstance(block, dict) and block.get("type") == "thinking"
-        )
-        if not thinking_text:
-            return fields
-        return {"reasoning_content": thinking_text}
 
     @staticmethod
     def _split(chunk: "ModelResponseStream") -> "list[ModelResponseStream]":
@@ -269,6 +262,27 @@ class _CombinedChunkSplitter:
 
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
+
+    @staticmethod
+    def _unsigned_thinking_text(
+        blocks: Sequence[Mapping[str, Any]],
+    ) -> str | None:
+        """Return the combined thinking text when no block carries a signature.
+
+        The block opener seeds a ``thinking_blocks`` start body with the full
+        thinking text while the delta re-emits it, so SSE accumulators would
+        collect it twice; the ``reasoning_content`` branch opens an empty body.
+        Signature-carrying blocks are kept intact so ``signature_delta``
+        suppression of the full-text snapshot still applies.
+        """
+        if any(block.get("signature") for block in blocks if isinstance(block, dict)):
+            return None
+        thinking_text: Final = "".join(
+            block.get("thinking") or ""
+            for block in blocks
+            if isinstance(block, dict) and block.get("type") == "thinking"
+        )
+        return thinking_text or None
 
     def __next__(self) -> "ModelResponseStream":
         if self._buffer:
@@ -333,6 +347,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         compaction_block: CompactionBlock | None = None,
         iterations_usage: list[UsageIteration] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
+        safeguards_evaluator: "SafeguardsEvaluator | None" = None,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -343,6 +358,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self.litellm_logging_obj = litellm_logging_obj
+        self.safeguards_evaluator: Final = safeguards_evaluator
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
         # Polyfill applied_edits on final message_delta.
@@ -1039,14 +1055,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Async version of anthropic_sse_wrapper.
         Convert AnthropicStreamWrapper dict chunks to Server-Sent Events format.
         """
+        safeguard_results: Final = (
+            StreamedSafeguardResults(self.safeguards_evaluator) if self.safeguards_evaluator is not None else None
+        )
         try:
             async for chunk in self:
-                if isinstance(chunk, dict):
-                    event_type: str = str(chunk.get("type", "message"))
-                    payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                    yield payload.encode()
-                else:
+                if not isinstance(chunk, dict):
                     yield chunk
+                elif safeguard_results is None:
+                    yield anthropic_sse_frame(chunk)
+                else:
+                    yield anthropic_sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
             verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
             logging_obj: Final = self.litellm_logging_obj
