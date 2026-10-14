@@ -373,7 +373,7 @@ def test_batch_upload_to_two_target_models_through_a_route_alias_reaches_each_de
 
 def test_batch_upload_with_repeated_plain_target_model_names_reaches_each_deployment(gateway: Gateway) -> None:
     pytest.skip("BUG: repeated plain target_model_names keeps only the last value")
-    _assert_upload_reaches_both_target_models(gateway, "repeated_plain")
+    _assert_upload_reaches_both_target_models(gateway, "repeated_plain", _sdk_base_url(gateway))
 
 
 def test_batch_upload_to_two_target_models_keeps_the_jsonl_content_type(gateway: Gateway) -> None:
