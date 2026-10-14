@@ -1,6 +1,7 @@
 import ast, asyncio, os
 import inspect
 import json
+from typing import Final
 from unittest import mock
 
 import httpx
@@ -15,6 +16,26 @@ import litellm
 from litellm import constants, get_llm_provider, MorphChatConfig
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from unittest.mock import patch
+
+
+def test_azure_computer_use_default_costs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Match Azure pricing, verified 2026-10-04: https://azure.microsoft.com/en-us/pricing/details/openai/"""
+    budget_notice_state: Final[bool] = constants.budget_reservation_disabled_info_emitted
+    try:
+        with monkeypatch.context() as clean_environment:
+            clean_environment.delenv("AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", raising=False)
+            clean_environment.delenv("AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS", raising=False)
+            default_constants: Final = importlib.reload(constants)
+            assert default_constants.AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS == 0.003
+            assert default_constants.AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS == 0.012
+    finally:
+        importlib.reload(constants)
+        constants.budget_reservation_disabled_info_emitted = budget_notice_state
+
+
+def test_clarifai_models_are_distinct() -> None:
+    assert "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Thinking-2507" in constants.clarifai_models
+    assert "clarifai/openai.chat-completion.gpt-5-nano" in constants.clarifai_models
 
 
 def _build_constant_env_var_map() -> dict[str, str]:
