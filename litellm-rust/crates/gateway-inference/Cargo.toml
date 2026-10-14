@@ -40,11 +40,11 @@ litellm-secrets.workspace = true
 litellm-llms-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-switchyard-libsy = { version = "0.3.0", optional = true }
-switchyard-llm-client = { version = "0.3.0", optional = true }
-switchyard-protocol = { version = "0.3.0", optional = true }
-switchyard-runner = { version = "0.3.0", optional = true }
-switchyard-translation = { version = "0.3.0", optional = true }
+switchyard-libsy = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "4bdf5719ce1c43902df92ef64407b858d1f99394", optional = true }
+switchyard-llm-client = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "4bdf5719ce1c43902df92ef64407b858d1f99394", optional = true }
+switchyard-protocol = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "4bdf5719ce1c43902df92ef64407b858d1f99394", optional = true }
+switchyard-runner = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "4bdf5719ce1c43902df92ef64407b858d1f99394", optional = true }
+switchyard-translation = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "4bdf5719ce1c43902df92ef64407b858d1f99394", optional = true }
 thiserror.workspace = true
 
 [dev-dependencies]
