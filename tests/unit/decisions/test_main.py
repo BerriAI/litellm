@@ -561,9 +561,19 @@ async def test_oss_classifier_env_key_goes_only_to_its_env_api_base(
         state="review",
         questions=questions,
         api_base="https://deployment-chosen.example",
+        api_key="",
+    )
+    await litellm.asystemone(
+        model=f"{provider}/{model}",
+        state="review",
+        questions=questions,
+        api_base="https://operator-configured.example/",
     )
 
-    assert env_upstream.calls[0].request.headers["authorization"] == "Bearer operator-env-key"
+    assert [call.request.headers["authorization"] for call in env_upstream.calls] == [
+        "Bearer operator-env-key",
+        "Bearer operator-env-key",
+    ]
     assert "authorization" not in other_upstream.calls[0].request.headers
 
 
@@ -2031,7 +2041,9 @@ async def test_clips_are_dropped_from_the_wire_for_a_model_without_media_support
     call: Final = getattr(litellm, f"a{api}")
 
     await call(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs)
-    await call(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs, **clips)
+    await call(
+        model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs, **clips
+    )
 
     assert len(route.calls) == 2
     text_only_body: Final = json.loads(route.calls[0].request.content)
@@ -2157,7 +2169,12 @@ async def test_media_support_is_read_per_kind_from_the_cost_map(
         (
             "typesafe/jev-chatty",
             "https://example.com/v1/systemone",
-            {"litellm_provider": "typesafe", "mode": "chat", "supports_audio_input": True, "supports_video_input": True},
+            {
+                "litellm_provider": "typesafe",
+                "mode": "chat",
+                "supports_audio_input": True,
+                "supports_video_input": True,
+            },
         ),
         ("openai/gpt-audio", "https://example.com/v1/decisions", None),
     ),
@@ -2179,7 +2196,9 @@ async def test_a_chat_models_media_flags_do_not_count_for_decisions(
     audio: Final = ["data:audio/wav;base64,YQ=="]
     videos: Final = ["data:video/mp4;base64,YQ=="]
 
-    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("does not support parameters: ['audio', 'videos']")):
+    with pytest.raises(
+        litellm.UnsupportedParamsError, match=re.escape("does not support parameters: ['audio', 'videos']")
+    ):
         await litellm.asystemone(
             model=model,
             state="test",

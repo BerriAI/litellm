@@ -471,7 +471,7 @@ def test_strands_decider_provider_fields():
     ("provider", "display_name", "litellm_provider", "model_placeholder"),
     (
         ("Laya", "Laya", LlmProviders.LAYA.value, "laya/english"),
-        ("Bespoke", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble-latest"),
+        ("Bespoke", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble"),
     ),
 )
 def test_oss_decisions_provider_fields(

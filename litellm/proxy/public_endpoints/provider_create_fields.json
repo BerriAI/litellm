@@ -792,7 +792,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "bespoke/nimble-latest"
+    "default_model_placeholder": "bespoke/nimble"
   },
   {
     "provider": "BYTEZ",

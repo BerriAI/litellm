@@ -375,7 +375,7 @@ describe("provider_info_helpers", () => {
 
     it.each([
       [Providers.Laya, "laya/english"],
-      [Providers.Bespoke, "bespoke/nimble-latest"],
+      [Providers.Bespoke, "bespoke/nimble"],
     ])("should return the %s decisions model placeholder", (provider, placeholder) => {
       expect(getPlaceholder(provider)).toBe(placeholder);
     });

@@ -479,7 +479,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
   [Providers.Sail]: "sail/openai/gpt-oss-120b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
-  [Providers.Bespoke]: "bespoke/nimble-latest",
+  [Providers.Bespoke]: "bespoke/nimble",
   [Providers.Laya]: "laya/english",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.StrandsDecider]: "strands_decider/strands-decider-2B-hobson-v19",

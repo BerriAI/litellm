@@ -13,6 +13,10 @@ pytestmark: Final = pytest.mark.parametrize("provider", ["laya", "bespoke"])
         (None, None, "http://decision.test/root", "oss-env-key"),
         ("http://custom.test/", None, "http://custom.test", None),
         ("http://custom.test/", "explicit-key", "http://custom.test", "explicit-key"),
+        ("http://custom.test/", "", "http://custom.test", None),
+        ("http://decision.test/root", None, "http://decision.test/root", "oss-env-key"),
+        ("http://decision.test/root/", "", "http://decision.test/root", "oss-env-key"),
+        ("http://decision.test/root", "explicit-key", "http://decision.test/root", "explicit-key"),
     ],
 )
 def test_oss_credentials_stay_with_their_configured_destination(
@@ -51,7 +55,9 @@ def test_oss_missing_server_does_not_fall_back_to_typesafe(
         oss_connection(provider)
 
 
-def test_oss_request_accepts_the_name_ollama_serves_nimble_under_only_for_bespoke(provider: OssDecisionProvider) -> None:
+def test_oss_request_accepts_the_name_ollama_serves_nimble_under_only_for_bespoke(
+    provider: OssDecisionProvider,
+) -> None:
     body: Final = {"model": "nimble"}
     if provider == "bespoke":
         assert validate_oss_request(provider, body) == "nimble"
