@@ -1255,6 +1255,17 @@ async def test_new_project_does_not_expose_database_errors(monkeypatch):
     assert internal_detail not in exc_info.value.message
 
 
+@pytest.mark.asyncio
+async def test_new_project_keeps_license_error(monkeypatch):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", False)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team"))
+
+    assert exc_info.value.code == "403"
+    assert "enterprise feature" in exc_info.value.message
+
+
 def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     existing_row = mock.MagicMock(
         team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata
