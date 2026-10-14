@@ -116,6 +116,19 @@ else:
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
 
+# OpenAI / Agents SDK tiers Gemini does not expose. Match Together AI and the
+# /v1/messages degradation chain floor so chat completions do not 400 on them.
+GEMINI_REASONING_EFFORT_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "xhigh": "high",
+        "max": "high",
+    }
+)
+
+
+def _normalize_gemini_reasoning_effort(reasoning_effort: str) -> str:
+    return GEMINI_REASONING_EFFORT_ALIASES.get(reasoning_effort, reasoning_effort)
+
 # Gemini prebuilt voices per https://ai.google.dev/gemini-api/docs/speech-generation (2026-10-01), by nearest character;
 # nova is left out since Gemini 3.x TTS models accept it as given (live check 2026-10-08)
 OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
@@ -891,6 +904,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         reasoning_effort: str,
         model: str | None = None,
     ) -> GeminiThinkingConfig:
+        reasoning_effort = _normalize_gemini_reasoning_effort(reasoning_effort)
         if reasoning_effort == "minimal":
             # Use model-specific minimum thinking budget or fallback
             # Check for exact matches first, then partial matches
@@ -957,6 +971,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
+        reasoning_effort = _normalize_gemini_reasoning_effort(reasoning_effort)
         supports_minimal: Final = bool(model) and VertexGeminiConfig._supports_minimal_thinking_level(model)
         if reasoning_effort == "minimal":
             if supports_minimal:
@@ -1264,14 +1279,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_name="reasoning_effort",
                         param_description="thinking_budget",
                     )
-                    if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                        optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                            effort_value, model
-                        )
-                    else:
-                        optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                            effort_value, model
-                        )
+                    try:
+                        if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                            optional_params["thinkingConfig"] = (
+                                VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                                    effort_value, model
+                                )
+                            )
+                        else:
+                            optional_params["thinkingConfig"] = (
+                                VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                                    effort_value, model
+                                )
+                            )
+                    except UnsupportedParamsError:
+                        # Error text advertises drop_params; honor it (and litellm.drop_params).
+                        if drop_params or litellm.drop_params:
+                            continue
+                        raise
             elif param == "thinking":
                 # Validate no conflict with thinking_level
                 VertexGeminiConfig._validate_thinking_config_conflicts(
