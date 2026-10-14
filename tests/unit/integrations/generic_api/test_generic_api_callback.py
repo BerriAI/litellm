@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Final, TypedDict
+from typing import Awaitable, Final, TypedDict, TypeVar
 from unittest.mock import AsyncMock
 
 import httpx
@@ -22,6 +22,17 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+_T = TypeVar("_T")
+
+
+async def _await_with_spawned_tasks(call: Awaitable[_T]) -> _T:
+    before: Final = asyncio.all_tasks()
+    result: Final = await call
+    spawned: Final = asyncio.all_tasks() - before - {asyncio.current_task()}
+    await asyncio.wait_for(asyncio.gather(*spawned), timeout=5)
+    return result
 
 
 @pytest.fixture(autouse=True)
@@ -51,20 +62,22 @@ async def test_generic_api_callback():
     os.environ["GENERIC_LOGGER_ENDPOINT"] = test_endpoint
 
     # Initialize the GenericAPILogger and set the mock
-    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=1)
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
     # Make the completion call
-    response = await litellm.acompletion(
-        model="gpt-5.5",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-        mock_response="hi",
-        user="test_user",
+    response = await _await_with_spawned_tasks(
+        litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="hi",
+            user="test_user",
+        )
     )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -130,21 +143,23 @@ async def test_generic_api_callback_multiple_logs():
     os.environ["GENERIC_LOGGER_ENDPOINT"] = test_endpoint
 
     # Initialize the GenericAPILogger and set the mock
-    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=5)
+    generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
     # Make the completion call
     for _ in range(10):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": "Hello, world!"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": "Hello, world!"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(6)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -208,7 +223,7 @@ async def test_generic_api_callback_ndjson_format():
     generic_logger = GenericAPILogger(
         endpoint=test_endpoint,
         headers=test_headers,
-        flush_interval=1,
+        flush_interval=3600,
         log_format="ndjson",  # Set NDJSON format
     )
     generic_logger.async_httpx_client.post = mock_post
@@ -216,15 +231,17 @@ async def test_generic_api_callback_ndjson_format():
 
     # Make multiple completion calls to generate multiple logs
     for i in range(3):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()
@@ -277,7 +294,7 @@ async def test_generic_api_callback_single_format():
     generic_logger = GenericAPILogger(
         endpoint=test_endpoint,
         headers=test_headers,
-        flush_interval=1,  # Quick flush to trigger batch send
+        flush_interval=3600,
         log_format="single",  # Set single format
     )
     generic_logger.async_httpx_client.post = mock_post
@@ -285,15 +302,17 @@ async def test_generic_api_callback_single_format():
 
     # Make 3 completion calls
     for i in range(3):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called 3 times (once per log in batch)
     assert mock_post.call_count == 3, f"Expected 3 calls, got {mock_post.call_count}"
@@ -336,7 +355,7 @@ async def test_generic_api_callback_json_array_format_explicit():
     generic_logger = GenericAPILogger(
         endpoint=test_endpoint,
         headers=test_headers,
-        flush_interval=1,
+        flush_interval=3600,
         log_format="json_array",  # Explicitly set json_array
     )
     generic_logger.async_httpx_client.post = mock_post
@@ -344,15 +363,17 @@ async def test_generic_api_callback_json_array_format_explicit():
 
     # Make multiple completion calls
     for i in range(5):
-        response = await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Hello, world! {i}"}],
-            mock_response="hi",
-            user="test_user",
+        response = await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Hello, world! {i}"}],
+                mock_response="hi",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called once (batched)
     mock_post.assert_called_once()
@@ -386,7 +407,7 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     os.environ["SUMOLOGIC_WEBHOOK_URL"] = "https://collectors.sumologic.com/receiver/v1/http/test123"
 
     # Initialize using callback_name (loads from JSON config)
-    generic_logger = GenericAPILogger(callback_name="sumologic", flush_interval=1)
+    generic_logger = GenericAPILogger(callback_name="sumologic", flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
 
@@ -395,15 +416,17 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
 
     # Make completion calls
     for i in range(2):
-        await litellm.acompletion(
-            model="gpt-5.5",
-            messages=[{"role": "user", "content": f"Test {i}"}],
-            mock_response="response",
-            user="test_user",
+        await _await_with_spawned_tasks(
+            litellm.acompletion(
+                model="gpt-5.5",
+                messages=[{"role": "user", "content": f"Test {i}"}],
+                mock_response="response",
+                user="test_user",
+            )
         )
 
-    # Wait for async flush
-    await asyncio.sleep(3)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+    await generic_logger.flush_queue()
 
     # Assert httpx post was called
     mock_post.assert_called_once()

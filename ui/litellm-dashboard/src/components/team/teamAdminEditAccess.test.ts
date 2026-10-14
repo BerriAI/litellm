@@ -13,8 +13,14 @@ describe("teamAdminFieldLabel", () => {
     ["tpm_limit", "Tokens per minute Limit (TPM)"],
     ["rpm_limit", "Requests per minute Limit (RPM)"],
     ["max_budget", "Max Budget (USD)"],
+    ["soft_budget", "Soft Budget (USD)"],
     ["raise_max_budget", "Raise the team's max budget"],
     ["projects", "Create and update projects"],
+    ["team_member_budget", "Member Default Budget (USD)"],
+    ["team_member_budget_duration", "Member Default Budget Duration"],
+    ["team_member_tpm_limit", "Member Default TPM Limit"],
+    ["team_member_rpm_limit", "Member Default RPM Limit"],
+    ["create_member_keys", "Create keys for team members"],
   ])("names %s the way the team settings form does", (field, label) => {
     expect(teamAdminFieldLabel(field)).toBe(label);
   });
@@ -72,6 +78,86 @@ describe("teamAdminSettingsChanges", () => {
     const values = { tpm_limit: "5000", rpm_limit: "50", max_budget: "5" };
 
     expect(teamAdminSettingsChanges(values, allStored, new Set(["rpm_limit"]))).toStrictEqual({ rpm_limit: 50 });
+  });
+});
+
+describe("teamAdminSettingsChanges for team member defaults", () => {
+  const stored = {
+    team_member_budget: 10,
+    team_member_budget_duration: "30d",
+    team_member_tpm_limit: 100,
+    team_member_rpm_limit: 5,
+  };
+  const enabled = new Set([
+    "team_member_budget",
+    "team_member_budget_duration",
+    "team_member_tpm_limit",
+    "team_member_rpm_limit",
+  ]);
+
+  const durationEnabled = new Set(["team_member_budget_duration"]);
+
+  it("sends every changed member default and skips the unchanged ones", () => {
+    const values = {
+      team_member_budget: "25",
+      team_member_budget_duration: "7d",
+      team_member_tpm_limit: "100",
+      team_member_rpm_limit: "9",
+    };
+
+    expect(teamAdminSettingsChanges(values, stored, enabled)).toStrictEqual({
+      team_member_budget: 25,
+      team_member_budget_duration: "7d",
+      team_member_rpm_limit: 9,
+    });
+  });
+
+  it("sends a never-resetting duration as null", () => {
+    expect(teamAdminSettingsChanges({ team_member_budget_duration: null }, stored, durationEnabled)).toStrictEqual({
+      team_member_budget_duration: null,
+    });
+  });
+
+  it("sends a never-resetting duration for a team without member defaults yet", () => {
+    expect(teamAdminSettingsChanges({ team_member_budget_duration: null }, {}, durationEnabled)).toStrictEqual({
+      team_member_budget_duration: null,
+    });
+  });
+
+  it.each([
+    ["the stored duration", "30d", stored],
+    ["an untouched duration on a team with a stored duration", undefined, stored],
+    ["an untouched duration on a team without member defaults", undefined, {}],
+    ["a stored never-resetting duration picked again", null, { team_member_budget_duration: null }],
+  ])("sends no duration for %s", (_label, team_member_budget_duration, initialValues) => {
+    expect(teamAdminSettingsChanges({ team_member_budget_duration }, initialValues, durationEnabled)).toStrictEqual({});
+  });
+
+  it("leaves out member defaults the proxy did not enable", () => {
+    const values = { team_member_budget: "25", team_member_budget_duration: "7d" };
+
+    expect(teamAdminSettingsChanges(values, stored, new Set(["max_budget"]))).toStrictEqual({});
+  });
+});
+
+describe("teamAdminSettingsChanges for the soft budget", () => {
+  const stored = { soft_budget: 50 };
+  const enabled = new Set(["soft_budget"]);
+
+  it("sends a changed soft budget as a number", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "40" }, stored, enabled)).toStrictEqual({ soft_budget: 40 });
+  });
+
+  it("sends a cleared soft budget as no soft budget", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "" }, stored, enabled)).toStrictEqual({ soft_budget: null });
+  });
+
+  it("leaves out an unchanged soft budget", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "50" }, stored, enabled)).toStrictEqual({});
+  });
+
+  it("leaves out a changed soft budget when the proxy did not enable it", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "40" }, stored, new Set(["max_budget"]))).toStrictEqual({});
   });
 });
 

@@ -5347,12 +5347,12 @@ def test_parallel_tool_calls_flag_decoupled_from_ttl_pricing(monkeypatch):
     The disable_parallel_tool_use gate must read supports_parallel_tool_use_config,
     not the 1h-TTL pricing field: a model carrying only the former still gets the flag.
     """
-    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+    from litellm.llms.bedrock.common_utils import supports_bedrock_prompt_cache_ttl
 
     config = AmazonConverseConfig()
     model = "anthropic.claude-parallel-tool-use-only"
     monkeypatch.setitem(litellm.model_cost, model, {"supports_parallel_tool_use_config": True})
-    assert is_claude_4_5_on_bedrock(model) is False
+    assert supports_bedrock_prompt_cache_ttl(model) is False
     messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
 
     optional_params = config.map_openai_params(
@@ -5924,7 +5924,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model(monk
     cache_control behavior, instead of always emitting a bare
     {"type": "default"} cachePoint with no ttl.
 
-    Forces the bundled local cost map so `is_claude_4_5_on_bedrock` (which
+    Forces the bundled local cost map so `supports_bedrock_prompt_cache_ttl` (which
     reads `cache_creation_input_token_cost_above_1hr` from litellm.model_cost)
     sees this branch's pricing data rather than the network-fetched `main`
     copy, which lacks it until merge.

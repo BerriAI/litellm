@@ -148,6 +148,11 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
     )
 
 
+def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
+    recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
+    return recorded if isinstance(recorded, int) and recorded > 0 else 0
+
+
 def _served_model_name(model_version: object) -> str | None:
     if not isinstance(model_version, str) or not model_version:
         return None
@@ -1299,11 +1304,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "AUDIO" not in optional_params["responseModalities"]:
                 optional_params["responseModalities"].append("AUDIO")
 
-        # Set default temperature to 1.0 for Gemini 3 models if not specified
-        if VertexGeminiConfig._is_gemini_3_or_newer(model):
-            if "temperature" not in optional_params:
-                optional_params["temperature"] = 1.0
-
         self._drop_search_tools_mixed_with_functions(optional_params)
 
         return optional_params
@@ -1820,6 +1820,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _calculate_usage(
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
+        cache_creation_tokens: int = 0,
     ) -> Usage:
         if completion_response is not None and "usageMetadata" not in completion_response:
             raise ValueError(f"usageMetadata not found in completion_response. Got={completion_response}")
@@ -1963,19 +1964,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         tool_use_prompt_tokens: Final = usage_metadata.get("toolUsePromptTokenCount") or None
 
-        prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=cached_tokens,
-            audio_tokens=prompt_audio_tokens,
-            text_tokens=prompt_text_tokens,
-            image_tokens=prompt_image_tokens,
-            video_tokens=prompt_video_tokens,
-            tool_use_tokens=tool_use_prompt_tokens,
-        )
-
         billable_tool_use_prompt_tokens: Final = (
             0
             if VertexGeminiConfig._response_has_search_grounding(completion_response)
             else (tool_use_prompt_tokens or 0)
+        )
+        billable_text_tokens: Final = (
+            prompt_text_tokens if prompt_text_tokens is None else prompt_text_tokens + billable_tool_use_prompt_tokens
+        )
+
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens,
+            audio_tokens=prompt_audio_tokens,
+            text_tokens=billable_text_tokens,
+            image_tokens=prompt_image_tokens,
+            video_tokens=prompt_video_tokens,
+            tool_use_tokens=tool_use_prompt_tokens,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
@@ -1983,11 +1987,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
         usage: Final = Usage(
-            prompt_tokens=usage_metadata.get("promptTokenCount", 0) + billable_tool_use_prompt_tokens,
+            prompt_tokens=usage_metadata.get("promptTokenCount", 0)
+            + billable_tool_use_prompt_tokens
+            + cache_creation_tokens,
             completion_tokens=completion_tokens,
-            total_tokens=usage_metadata.get("totalTokenCount", 0),
+            total_tokens=usage_metadata.get("totalTokenCount", 0) + cache_creation_tokens,
             prompt_tokens_details=prompt_tokens_details,
             cache_read_input_tokens=cached_tokens,
+            cache_creation_input_tokens=cache_creation_tokens or None,
             reasoning_tokens=reasoning_tokens,
             completion_tokens_details=response_tokens_details,
         )
@@ -1998,8 +2005,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def calculate_usage(
         cls,
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
+        cache_creation_tokens: int = 0,
     ) -> Usage:
-        return cls._calculate_usage(completion_response)
+        return cls._calculate_usage(completion_response, cache_creation_tokens)
 
     @staticmethod
     def _check_finish_reason(
@@ -2610,7 +2618,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     _,  # cumulative_tool_call_index not needed in non-streaming
                 ) = VertexGeminiConfig._process_candidates(_candidates, model_response, logging_obj.optional_params)
 
-            usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
+            usage: Final = VertexGeminiConfig._calculate_usage(
+                completion_response=completion_response,
+                cache_creation_tokens=_cache_creation_tokens(logging_obj),
+            )
 
             VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
@@ -2737,6 +2748,7 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
+    timeout: float | httpx.Timeout | None = None,
 ):
     if gemini_client is not None:
         client = gemini_client
@@ -2746,7 +2758,9 @@ async def make_call(
         )
 
     try:
-        response: Final = await client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+        response: Final = await client.post(
+            api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj, timeout=timeout
+        )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         exception_string: Final = str(await e.response.aread())
@@ -2789,13 +2803,16 @@ def make_sync_call(
     model: str,
     messages: list,
     logging_obj,
+    timeout: float | httpx.Timeout | None = None,
 ):
     if gemini_client is not None:
         client = gemini_client
     if client is None:
         client = HTTPHandler()  # Create a new client if none provided
 
-    response: Final = client.post(api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj)
+    response: Final = client.post(
+        api_base, headers=headers, data=data, stream=True, logging_obj=logging_obj, timeout=timeout
+    )
 
     if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
@@ -2913,6 +2930,7 @@ class VertexLLM(VertexBase):
                 model=model,
                 messages=messages,
                 logging_obj=logging_obj,
+                timeout=timeout,
             ),
             model=model,
             custom_llm_provider="vertex_ai_beta",
@@ -3189,6 +3207,7 @@ class VertexLLM(VertexBase):
                     messages=messages,
                     logging_obj=logging_obj,
                     headers=headers,
+                    timeout=timeout,
                 ),
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
@@ -3384,6 +3403,7 @@ class ModelResponseIterator:
 
         usage: Final = VertexGeminiConfig.calculate_usage(
             completion_response=processed_chunk,
+            cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
         )
 
         VertexGeminiConfig.set_grounding_usage_counters(usage, grounding_metadata)

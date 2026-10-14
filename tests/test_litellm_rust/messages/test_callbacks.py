@@ -5,7 +5,6 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
@@ -19,6 +18,7 @@ from tests.test_litellm_rust.support.requests import (
     MESSAGES_RESPONSE,
     request_body,
 )
+from tests.test_litellm_rust.support.served import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -48,11 +48,6 @@ def arguments(server: RecordingServer, **kwargs: object) -> dict[str, object]:
     }
 
 
-def assert_served_natively(server: RecordingServer) -> None:
-    assert len(server.requests) == 1
-    assert not server.requests[0].headers.get("user-agent", "").startswith("python-httpx")
-
-
 @pytest.mark.asyncio
 async def test_native_messages_callbacks_see_the_provider_request_and_the_public_response(
     messages_server: RecordingServer,
@@ -63,7 +58,7 @@ async def test_native_messages_callbacks_see_the_provider_request_and_the_public
         **arguments(messages_server, callbacks=[recorder], litellm_call_id="messages-success")
     )
 
-    assert_served_natively(messages_server)
+    assert_served_natively(messages_server, response)
     assert response["content"] == MESSAGES_RESPONSE["content"]
     sent: Final = messages_server.requests[0]
     assert sent.path == "/v1/messages"
@@ -107,7 +102,7 @@ async def test_native_messages_provider_error_reaches_caller_and_failure_callbac
     with pytest.raises(litellm.BadRequestError) as raised:
         await litellm.anthropic.messages.acreate(**arguments(messages_server, callbacks=[Observe()]))
 
-    assert_served_natively(messages_server)
+    assert len(messages_server.requests) == 1
     assert [phase for phase, _ in observed] == ["sync", "async"]
     assert all(error is raised.value for _, error in observed)
 
@@ -127,14 +122,13 @@ async def test_native_messages_stream_relays_provider_events_and_logs_success_on
         **arguments(messages_server, stream=True, callbacks=[recorder])
     )
     assert isinstance(stream, AsyncIterator)
-    assert get_hidden_params_dict(stream)["additional_headers"]["x-litellm-rust"] == "true"
     first: Final = await anext(stream)
     await drain_logging()
     assert "async_log_success_event" not in recorder.names
     rest: Final = [chunk async for chunk in stream]
 
     assert first + b"".join(rest) == sse_payload()
-    assert_served_natively(messages_server)
+    assert_served_natively(messages_server, stream)
     assert messages_server.requests[0].body["stream"] is True
     success: Final = await recorder.wait_for_async("async_log_success_event")
     assert len(success) == 1
@@ -171,10 +165,9 @@ def test_native_sync_messages_stream_relays_provider_events_and_logs_success_onc
 
     stream: Final = litellm.anthropic.messages.create(**arguments(messages_server, stream=True, callbacks=[recorder]))
     assert isinstance(stream, Iterator)
-    assert get_hidden_params_dict(stream)["additional_headers"]["x-litellm-rust"] == "true"
 
     assert b"".join(stream) == sse_payload()
-    assert_served_natively(messages_server)
+    assert_served_natively(messages_server, stream)
     assert len(recorder.wait_for("async_log_success_event")) == 1
 
 
@@ -183,7 +176,7 @@ def test_native_sync_messages_returns_the_provider_message(messages_server: Reco
 
     response: Final = litellm.anthropic.messages.create(**arguments(messages_server, callbacks=[recorder]))
 
-    assert_served_natively(messages_server)
+    assert_served_natively(messages_server, response)
     assert response["content"] == MESSAGES_RESPONSE["content"]
     assert len(recorder.wait_for("log_success_event")) == 1
 
@@ -216,7 +209,7 @@ async def test_native_messages_failing_pre_call_logger_does_not_fail_the_call(me
 
     response: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server, callbacks=[Broken()]))
 
-    assert_served_natively(messages_server)
+    assert_served_natively(messages_server, response)
     assert response["content"] == MESSAGES_RESPONSE["content"]
 
 
@@ -259,9 +252,9 @@ async def test_native_messages_does_not_restore_keywords_deleted_by_a_pre_call_h
         stream=False,
     )
     with rebound(litellm, "callbacks", [DropKeywords()]):
-        await litellm.anthropic.messages.acreate(**call_arguments)
+        response: Final = await litellm.anthropic.messages.acreate(**call_arguments)
 
-    assert_served_natively(messages_server)
+    assert_served_natively(messages_server, response)
     sent: Final = messages_server.requests[0]
     assert sent.body == {
         "model": MESSAGES_MODEL.removeprefix("anthropic/"),

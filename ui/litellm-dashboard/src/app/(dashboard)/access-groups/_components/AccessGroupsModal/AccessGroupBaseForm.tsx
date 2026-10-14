@@ -6,6 +6,8 @@ import { z } from "zod";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -19,6 +21,7 @@ export const accessGroupFormSchema = z.object({
   description: z.string(),
   modelIds: z.array(z.string()),
   mcpServerIds: z.array(z.string()),
+  mcpToolPermissions: z.record(z.string(), z.array(z.string())),
   agentIds: z.array(z.string()),
 });
 
@@ -34,6 +37,37 @@ interface AccessGroupBaseFormProps {
   isNameDisabled?: boolean;
   activeTab: string;
   onTabChange: (tab: string) => void;
+  initialServerIds?: readonly string[];
+}
+
+export function AccessGroupMCPToolPermissions({
+  selectedServers,
+  toolPermissions,
+  onChange,
+  preserveUnrestrictedServers,
+}: {
+  selectedServers: string[];
+  toolPermissions: Record<string, string[]>;
+  onChange: (next: Record<string, string[]>) => void;
+  preserveUnrestrictedServers?: readonly string[];
+}) {
+  const { accessToken } = useAuthorized();
+
+  if (selectedServers.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="pt-4">
+      <MCPToolPermissions
+        accessToken={accessToken ?? ""}
+        selectedServers={selectedServers}
+        toolPermissions={toolPermissions}
+        onChange={onChange}
+        preserveUnrestrictedServers={preserveUnrestrictedServers}
+      />
+    </div>
+  );
 }
 
 export function AccessGroupBaseForm({
@@ -41,6 +75,7 @@ export function AccessGroupBaseForm({
   isNameDisabled = false,
   activeTab,
   onTabChange,
+  initialServerIds,
 }: AccessGroupBaseFormProps) {
   const { data: agentsData } = useAgents();
   const { data: mcpServersData } = useMCPServers();
@@ -108,6 +143,12 @@ export function AccessGroupBaseForm({
             />
           )}
         </FormField>
+        <AccessGroupMCPToolPermissions
+          selectedServers={form.watch("mcpServerIds")}
+          toolPermissions={form.watch("mcpToolPermissions")}
+          onChange={(next) => form.setValue("mcpToolPermissions", next, { shouldDirty: true })}
+          preserveUnrestrictedServers={initialServerIds}
+        />
       </TabsContent>
 
       <TabsContent value={AGENTS_TAB} className="pt-4">

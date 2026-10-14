@@ -267,3 +267,32 @@ def test_pure_non_auth_response_still_classifies_upstream_error():
     fault = classify_list_exception(exc)
     assert fault.tag == "upstream_error"
     assert fault.status_code == 502
+
+
+@pytest.mark.parametrize("status, challenge, expected", [
+    (403, 'Bearer error="insufficient_scope", scope="tools.write"', "tools.write"),
+    (403, 'bEaReR error=insufficient_scope, scope="tools.read tools.write"', "tools.read tools.write"),
+    (403, 'Bearer error="insufficient_scope"', ""),
+        (403, 'Bearer error="insufficient_scope", scope=', None),
+    (403, 'Bearer error="insufficient_scope", scope', None),
+    (401, 'Bearer error="insufficient_scope", scope="tools.write"', None),
+    (403, 'Bearer error="invalid_token", scope="tools.write"', None),
+    (403, '', None),
+    (403, 'Basic error="insufficient_scope", scope="tools.write"', None),
+    (403, 'Bearer error_description="error=insufficient_scope", scope="tools.write"', None),
+    (403, 'Bearer error="insufficient_scope", error="invalid_token"', None),
+    (403, 'Bearer error="insufficient_scope", scope="tools.write\r\ninjected"', None),
+    (403, 'Bearer error="insufficient_scope", scope="tools.write", Basic realm="other"', None),
+])
+@pytest.mark.parametrize("client", ["httpx", "httpx2"])
+def test_managed_scope_step_up_only_accepts_unambiguous_bearer_challenges(status, challenge, expected, client):
+    import httpx2
+
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import upstream_insufficient_scope
+
+    transport = httpx if client == "httpx" else httpx2
+    response = transport.Response(status, headers={"www-authenticate": challenge}, request=transport.Request("POST", "https://peer.test/mcp"))
+    cause = transport.HTTPStatusError("upstream rejected", request=response.request, response=response)
+    wrapped = RuntimeError("transport failure")
+    wrapped.__cause__ = cause
+    assert upstream_insufficient_scope(wrapped) == expected

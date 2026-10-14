@@ -3,6 +3,7 @@ import { makeOpenAIEmbeddingsRequest } from "./embeddings_api";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
+  getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
   getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
 }));
 
@@ -45,7 +46,7 @@ describe("embeddings_api", () => {
     );
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch).toHaveBeenCalledWith("https://example.com/embeddings", {
+    expect(mockFetch).toHaveBeenCalledWith("https://gateway.example.com/embeddings", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

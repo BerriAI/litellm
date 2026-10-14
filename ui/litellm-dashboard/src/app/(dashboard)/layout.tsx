@@ -15,7 +15,6 @@ import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLogin
 import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { UserBanner } from "@/components/UserBanner";
 import { LiteAdminFrame } from "@/components/liteadmin/LiteAdmin";
-import { UpgradeBanner } from "@/components/UpgradeBanner";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
@@ -25,6 +24,8 @@ import { Button } from "@/components/ui/button";
 import { Menu } from "lucide-react";
 import { useMediaQuery } from "usehooks-ts";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
+import { recordUiEvent } from "@/lib/telemetry/uiEvents";
+import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -112,6 +113,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const { mode } = usePluginMode();
   const pathname = usePathname();
   const routeSegment = routeSegmentForPathname(pathname);
+  useEffect(() => {
+    void recordUiEvent({ page: routeSegment || "home", action: "view" });
+  }, [routeSegment]);
   const searchParams = useSearchParams();
   const navigationKey = `${pathname}?${searchParams.toString()}`;
   const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
@@ -142,7 +146,6 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <EnvCredentialLoginWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
-        <UpgradeBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <AgentControlPlaneView />
         </main>
@@ -179,6 +182,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <CommandPaletteProvider>
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
             <DashboardHeader
+              accessToken={accessToken}
               navigationTrigger={
                 <SheetTrigger
                   handle={mobileNavigationHandle}
@@ -195,8 +199,10 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
             <EnvCredentialLoginWarningBanner accessToken={accessToken} />
             <LicenseExpiryBanner accessToken={accessToken} />
             <UserBanner accessToken={accessToken} />
-            <UpgradeBanner accessToken={accessToken} />
-            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
+            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+              <TelemetryEnvBanner />
+              {children}
+            </main>
           </div>
         </CommandPaletteProvider>
       </LiteAdminFrame>
