@@ -58,7 +58,7 @@ from litellm.proxy.utils import is_valid_api_key
 from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY, STREAM_OPTIONS_STASH_KEYS
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
@@ -3712,6 +3712,10 @@ _SPEECH_ARGS: Final = MappingProxyType(
 )
 
 
+async def _aspeech(stream: bool) -> HttpxBinaryResponseContent:
+    return await litellm.aspeech(**_SPEECH_ARGS, stream=stream)
+
+
 def _mock_elevenlabs_audio(respx_mock: respx.MockRouter, audio: httpx.AsyncByteStream | httpx.SyncByteStream) -> None:
     respx_mock.post(url__regex=rf"{_SPEECH_API_BASE}/v1/text-to-speech/.*").mock(
         return_value=httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=audio)
@@ -3745,7 +3749,7 @@ async def test_aspeech_logs_streamed_audio_like_buffered_audio(
     )
 
     async def logged_speech(stream: bool) -> dict[str, object]:
-        response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=stream)
+        response: Final = await _aspeech(stream=stream)
         assert await response.aread() == b"audio"
         return await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
 
@@ -3763,7 +3767,7 @@ async def test_aspeech_stream_is_logged_when_the_audio_ends(
 ) -> None:
     _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"rest", pause_seconds=0.3))
 
-    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True)
+    response: Final = await _aspeech(stream=True)
     assert await response.aread() == b"firstrest"
     logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
 
@@ -3772,20 +3776,42 @@ async def test_aspeech_stream_is_logged_when_the_audio_ends(
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-async def test_aspeech_stream_logs_a_failure_when_the_upstream_breaks_mid_clip(
-    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
+@pytest.mark.parametrize(
+    ("upstream_error", "raised"),
+    [
+        (httpx.ReadError("upstream reset"), litellm.APIConnectionError),
+        (httpx.ReadTimeout("upstream stalled"), litellm.Timeout),
+    ],
+)
+async def test_aspeech_stream_broken_mid_clip_is_billed_as_a_failure(
+    respx_mock: respx.MockRouter,
+    speech_logger: _SpeechLogger,
+    upstream_error: httpx.TransportError,
+    raised: type[Exception],
 ) -> None:
-    _mock_elevenlabs_audio(
-        respx_mock, _PausedAsyncAudio(b"first", httpx.ReadError("upstream reset"), pause_seconds=0)
+    respx_mock.post(url__regex=rf"{_SPEECH_API_BASE}/v1/text-to-speech/.*").mock(
+        side_effect=[
+            httpx.Response(
+                status_code=200,
+                headers={"content-type": "audio/mpeg"},
+                stream=_PausedAsyncAudio(b"first", rest, pause_seconds=0),
+            )
+            for rest in (b"rest", upstream_error)
+        ]
     )
 
-    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True)
-    with pytest.raises(httpx.ReadError):
-        await response.aread()
-    await response.aclose()
+    finished: Final = await _aspeech(stream=True)
+    await finished.aread()
+    logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+    broken: Final = await _aspeech(stream=True)
+    with pytest.raises(raised):
+        await broken.aread()
+    await broken.aclose()
     failed: Final = await asyncio.wait_for(speech_logger.failed_payloads.get(), timeout=5)
 
     assert failed["status"] == "failure"
+    assert isinstance(logged["response_cost"], float) and logged["response_cost"] > 0
+    assert failed["response_cost"] == logged["response_cost"]
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=0.5)
 
@@ -3796,7 +3822,7 @@ async def test_aspeech_stream_closed_mid_clip_is_logged_with_the_audio_sent(
 ) -> None:
     _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"never sent", pause_seconds=60))
 
-    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True)
+    response: Final = await _aspeech(stream=True)
     audio: Final = await response.aiter_bytes()
     assert await anext(audio) == b"first"
     await response.aclose()

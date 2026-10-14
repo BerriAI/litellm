@@ -295,7 +295,7 @@ async def test_audio_speech_chunk_generator_forwards_an_unread_upstream_stream()
         httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
     )
 
-    chunks = proxy_server._audio_speech_chunk_generator(response)
+    chunks = proxy_server._audio_speech_chunk_generator(response, on_upstream_error=AsyncMock())
 
     assert await anext(chunks) == first
     assert produced == [first]
@@ -341,17 +341,15 @@ async def _serve_until_disconnect(response: StreamingResponse) -> None:
         await response({"type": "http", "asgi": {"spec_version": "2.4"}}, _receive, _send)
 
 
-@pytest.fixture
-def patched_streaming_speech(monkeypatch):
-    """Route /v1/audio/speech to an upstream whose audio body is left unread."""
-    stream = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE], [])
+def _route_speech_to(monkeypatch: pytest.MonkeyPatch, response: HttpxBinaryResponseContent) -> AsyncMock:
+    failure_hook: Final = AsyncMock()
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
     monkeypatch.setattr(
         proxy_server,
         "proxy_logging_obj",
         MagicMock(
             pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
-            post_call_failure_hook=AsyncMock(),
+            post_call_failure_hook=failure_hook,
             post_call_response_headers_hook=AsyncMock(return_value={}),
             update_request_status=AsyncMock(),
         ),
@@ -363,12 +361,20 @@ def patched_streaming_speech(monkeypatch):
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
 
     async def _llm_call():
-        return _audio_response(stream)
+        return response
 
     async def _fake_route_request(*args, **kwargs):
         return _llm_call()
 
     monkeypatch.setattr(proxy_server, "route_request", _fake_route_request)
+    return failure_hook
+
+
+@pytest.fixture
+def patched_streaming_speech(monkeypatch):
+    """Route /v1/audio/speech to an upstream whose audio body is left unread."""
+    stream = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE], [])
+    _route_speech_to(monkeypatch, _audio_response(stream))
     yield stream
 
 
@@ -382,7 +388,7 @@ async def test_audio_speech_releases_its_upstream_when_the_client_walks_away():
 
     await _serve_until_disconnect(
         StreamingResponse(
-            proxy_server._audio_speech_chunk_generator(response),
+            proxy_server._audio_speech_chunk_generator(response, on_upstream_error=AsyncMock()),
             media_type="audio/mpeg",
             background=BackgroundTask(proxy_server._close_audio_speech_response, response),
         )
@@ -423,3 +429,33 @@ async def test_audio_speech_route_releases_an_upstream_whose_body_is_never_read(
     await captured[0].background()
 
     assert stream.closed is True
+
+
+class _BreaksMidClipAudioStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"a" * AUDIO_SPEECH_CHUNK_SIZE
+        raise httpx.ReadError("upstream reset")
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_bills_a_clip_whose_upstream_breaks_mid_stream(monkeypatch: pytest.MonkeyPatch):
+    response: Final = HttpxBinaryResponseContent(
+        httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=_BreaksMidClipAudioStream())
+    )
+    response.hidden_params = {"response_cost": 0.25}
+    failure_hook: Final = _route_speech_to(monkeypatch, response)
+
+    request: Final = _speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True})
+    streaming: Final = await proxy_server.audio_speech(
+        request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
+    )
+    assert isinstance(streaming, StreamingResponse)
+    body: Final = aiter(streaming.body_iterator)
+    assert await anext(body) == b"a" * AUDIO_SPEECH_CHUNK_SIZE
+    with pytest.raises(httpx.ReadError):
+        await anext(body)
+
+    failure_hook.assert_awaited_once()
+    assert failure_hook.await_args is not None
+    assert isinstance(failure_hook.await_args.kwargs["original_exception"], httpx.ReadError)
+    assert failure_hook.await_args.kwargs["request_data"]["response_cost"] == 0.25

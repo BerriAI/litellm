@@ -1372,10 +1372,31 @@ def _dispatch_success_logging(
     )
 
 
-def _unread_speech_upstream(result: object, call_type: str) -> httpx.Response | None:
-    if call_type not in _SPEECH_CALL_TYPES or not isinstance(result, HttpxBinaryResponseContent):
+def _unread_speech_upstream(result: object, call_type: str, stream_requested: bool) -> httpx.Response | None:
+    if (
+        not stream_requested
+        or call_type not in _SPEECH_CALL_TYPES
+        or not isinstance(result, HttpxBinaryResponseContent)
+    ):
         return None
     return result.unread_response()
+
+
+def _bill_failed_speech_stream(logging_obj: LiteLLMLoggingObject, result: object) -> None:
+    logging_obj.record_partial_usage_for_failure(Usage(), logging_obj.response_cost_calculator(result=result) or 0.0)
+
+
+def _speech_stream_error_mapper(
+    model: str | None, logging_obj: LiteLLMLoggingObject
+) -> Callable[[httpx.TransportError], Exception]:
+    llm_provider: Final = str(logging_obj.model_call_details.get("custom_llm_provider") or "")
+
+    def map_error(error: httpx.TransportError) -> Exception:
+        if isinstance(error, httpx.TimeoutException):
+            return litellm.Timeout(message=str(error), model=model or "", llm_provider=llm_provider)
+        return litellm.APIConnectionError(message=str(error), llm_provider=llm_provider, model=model or "")
+
+    return map_error
 
 
 def _async_speech_end_logger(
@@ -1400,6 +1421,7 @@ def _async_speech_end_logger(
         if is_litellm_internal_call:
             return
         traceback_exception: Final = "".join(traceback.format_exception(error))
+        _bill_failed_speech_stream(logging_obj, result)
         unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
         logging_obj.failure_handler(error, traceback_exception, start_time, end_time)
         await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
@@ -1419,6 +1441,7 @@ def _sync_speech_end_logger(
     def log_speech_end(error: Exception | None) -> None:
         end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # matches the naive start_time the wrapper took
         if error is not None:
+            _bill_failed_speech_stream(logging_obj, result)
             logging_obj.failure_handler(error, "".join(traceback.format_exception(error)), start_time, end_time)
             return
         if is_litellm_internal_call:
@@ -1965,10 +1988,13 @@ def client(original_function):
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
             executor: Final[BoundedLoggingThreadPoolExecutor] = getattr(sys.modules[__name__], "executor")
-            unread_speech: Final = _unread_speech_upstream(result, call_type)
+            unread_speech: Final = _unread_speech_upstream(
+                result, call_type, "stream" in kwargs and kwargs["stream"] is True
+            )
             if unread_speech is not None and isinstance(unread_speech.stream, httpx.SyncByteStream):
                 unread_speech.stream = OnEndSyncByteStream(
                     unread_speech.stream,
+                    _speech_stream_error_mapper(model, logging_obj),
                     _sync_speech_end_logger(
                         logging_obj=logging_obj,
                         result=result,
@@ -2286,10 +2312,13 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
-            unread_speech: Final = _unread_speech_upstream(result, call_type)
+            unread_speech: Final = _unread_speech_upstream(
+                result, call_type, "stream" in kwargs and kwargs["stream"] is True
+            )
             if unread_speech is not None and isinstance(unread_speech.stream, httpx.AsyncByteStream):
                 unread_speech.stream = OnEndAsyncByteStream(
                     unread_speech.stream,
+                    _speech_stream_error_mapper(model, logging_obj),
                     _async_speech_end_logger(
                         logging_obj=logging_obj,
                         result=result,
