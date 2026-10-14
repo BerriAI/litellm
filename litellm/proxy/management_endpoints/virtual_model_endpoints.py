@@ -252,8 +252,12 @@ async def _authorize_member_deployments(
         )
 
     from litellm.proxy import proxy_server
-    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, can_user_call_model
-    from litellm.proxy.auth.auth_checks import get_user_object as auth_get_user_object, key_model_aliases_for_auth_check
+    from litellm.proxy.auth.auth_checks import (
+        can_key_call_resolved_model,
+        can_user_call_model,
+        key_model_aliases_for_auth_check,
+    )
+    from litellm.proxy.auth.auth_checks import get_user_object as auth_get_user_object
 
     user_object_for_teamless: Final[LiteLLM_UserTable | None] = (
         await auth_get_user_object(
