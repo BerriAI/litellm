@@ -186,6 +186,47 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+@pytest.mark.parametrize(
+    ("input_cost_per_token", "output_cost_per_token", "expected_cost"),
+    ((0.0, 0.0, 0.0), (0.001, 0.002, 10 * 0.001 + 253 * 0.002)),
+)
+def test_response_cost_calculator_custom_pricing_ignores_upstream_response_cost_header(
+    monkeypatch: pytest.MonkeyPatch,
+    input_cost_per_token: float,
+    output_cost_per_token: float,
+    expected_cost: float,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-custom-priced-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": input_cost_per_token,
+                "output_cost_per_token": output_cost_per_token,
+            }
+        }
+    )
+    response: Final = ModelResponse(
+        model="cc-custom-priced-chat",
+        choices=[Choices(message=Message(content="ok"))],
+        usage=Usage(prompt_tokens=10, completion_tokens=253, total_tokens=263),
+    )
+    response._hidden_params = {"additional_headers": {"llm_provider-x-litellm-response-cost": 0.000413}}
+
+    cost: Final = response_cost_calculator(
+        response_object=response,
+        model="cc-custom-priced-chat",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+        custom_pricing=True,
+    )
+
+    assert cost == pytest.approx(expected_cost)
+
+
 def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
     class MockResponse(BaseModel):
         pass
@@ -1059,9 +1100,9 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     router: Final = Router(
         model_list=[
             {
-                "model_name": "semantic-ranker-default-004",
+                "model_name": "semantic-ranker-custom-test",
                 "litellm_params": {
-                    "model": "vertex_ai/semantic-ranker-default-004",
+                    "model": "vertex_ai/semantic-ranker-custom-test",
                     "vertex_project": "test-project",
                     "vertex_location": "us-east5",
                 },
@@ -1070,7 +1111,7 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
         ]
     )
     router_model_id: Final = router.model_list[0]["model_info"]["id"]
-    assert litellm.model_cost["vertex_ai/semantic-ranker-default-004"].get("input_cost_per_query") is None
+    assert litellm.model_cost.get("vertex_ai/semantic-ranker-custom-test", {}).get("input_cost_per_query") is None
 
     response: Final = RerankResponse(
         id="vertex_ai_rerank_test",
@@ -1080,7 +1121,7 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
 
     cost: Final = completion_cost(
         completion_response=response,
-        model="vertex_ai/semantic-ranker-default-004",
+        model="vertex_ai/semantic-ranker-custom-test",
         custom_llm_provider="vertex_ai",
         call_type="arerank",
         custom_pricing=True,
@@ -1088,6 +1129,39 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     )
 
     assert cost == pytest.approx(3 * 0.001)
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "vertex_ai/semantic-ranker-default",
+        "vertex_ai/semantic-ranker-default@latest",
+        "vertex_ai/semantic-ranker-default-004",
+        "vertex_ai/semantic-ranker-default-003",
+        "vertex_ai/semantic-ranker-default-002",
+        "vertex_ai/semantic-ranker-fast",
+        "vertex_ai/semantic-ranker-fast@latest",
+        "vertex_ai/semantic-ranker-fast-004",
+    ),
+)
+def test_vertex_semantic_ranker_rerank_completion_cost_is_nonzero(
+    model: str, _local_model_cost_map: None
+) -> None:
+    response: Final = RerankResponse(
+        id="vertex_ai_rerank_pricing_test",
+        results=[],
+        meta={"billed_units": {"search_units": 3}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="vertex_ai",
+        call_type="rerank",
+    )
+
+    assert cost > 0
+    assert cost == pytest.approx(3 * litellm.model_cost[model]["input_cost_per_query"])
 
 
 def test_azure_realtime_cost_calculator(_local_model_cost_map):
@@ -1694,6 +1768,132 @@ def test_cost_discount_vertex_ai(monkeypatch):
     print(f"  - Original cost: ${cost_without_discount:.6f}")
     print(f"  - Discounted cost (5% off): ${cost_with_discount:.6f}")
     print(f"  - Savings: ${cost_without_discount - cost_with_discount:.6f}")
+
+
+def test_cost_discount_model_pattern_beats_bare_provider(monkeypatch):
+    """
+    Test that a <provider>/<model-pattern> discount key applies only to matching models
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    claude_response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="claude-sonnet-4-5",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    gemini_response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gemini-3-pro-preview",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    claude_undiscounted = completion_cost(
+        completion_response=claude_response,
+        model="vertex_ai/claude-sonnet-4-5",
+        custom_llm_provider="vertex_ai",
+    )
+    gemini_undiscounted = completion_cost(
+        completion_response=gemini_response,
+        model="vertex_ai/gemini-3-pro-preview",
+        custom_llm_provider="vertex_ai",
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {"vertex_ai/claude-*": 0.2, "vertex_ai": 0.05})
+    claude_discounted = completion_cost(
+        completion_response=claude_response,
+        model="vertex_ai/claude-sonnet-4-5",
+        custom_llm_provider="vertex_ai",
+    )
+    gemini_discounted = completion_cost(
+        completion_response=gemini_response,
+        model="vertex_ai/gemini-3-pro-preview",
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert claude_discounted == pytest.approx(claude_undiscounted * 0.8, rel=1e-9)
+    assert gemini_discounted == pytest.approx(gemini_undiscounted * 0.95, rel=1e-9)
+
+
+def test_cost_discount_model_pattern_matches_custom_priced_deployment(monkeypatch):
+    """
+    A custom-priced deployment prices against its router model id, but the discount still matches the request model
+    """
+    from litellm import Router, completion_cost
+    from litellm.types.utils import Choices, Message, Usage
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "qwen-3.7-plus",
+                "litellm_params": {"model": "dashscope/qwen3.7-plus", "api_key": "sk-fake"},
+                "model_info": {"input_cost_per_token": 4e-07, "output_cost_per_token": 1.6e-06},
+            }
+        ]
+    )
+    router_model_id: Final = router.model_list[0]["model_info"]["id"]
+    response: Final = ModelResponse(
+        model="dashscope/qwen3.7-plus",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"))],
+        usage=Usage(prompt_tokens=12, completion_tokens=377, total_tokens=389),
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {"dashscope/qwen*": 0.2})
+    discounted: Final = completion_cost(
+        completion_response=response,
+        model="dashscope/qwen3.7-plus",
+        custom_llm_provider="dashscope",
+        custom_pricing=True,
+        router_model_id=router_model_id,
+    )
+
+    assert discounted == pytest.approx((12 * 4e-07 + 377 * 1.6e-06) * 0.8, rel=1e-9)
+
+
+def test_cost_discount_together_ai_pattern_matches_unrewritten_model(monkeypatch):
+    """
+    Test that a <provider>/<model-pattern> discount matches the request model, not the
+    pricing category the Together AI cost lookup rewrites it to
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="together_ai/my-org/Custom-70B-Instruct",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    undiscounted = completion_cost(
+        completion_response=response,
+        model="together_ai/my-org/Custom-70B-Instruct",
+        custom_llm_provider="together_ai",
+    )
+    assert undiscounted > 0
+
+    monkeypatch.setattr(
+        litellm,
+        "cost_discount_config",
+        {"together_ai": 0.05, "together_ai/my-org/Custom-*": 0.20},
+    )
+    discounted = completion_cost(
+        completion_response=response,
+        model="together_ai/my-org/Custom-70B-Instruct",
+        custom_llm_provider="together_ai",
+    )
+
+    assert discounted == pytest.approx(undiscounted * 0.8, rel=1e-9)
 
 
 def test_cost_discount_not_applied_to_other_providers(monkeypatch):
@@ -3955,6 +4155,41 @@ def test_completion_cost_region_name_prices_mantle_on_the_regional_row(_local_mo
     assert litellm.completion_cost(
         completion_response=response, model="xai.grok-4.3", custom_llm_provider="bedrock_mantle"
     ) == pytest.approx(expected_flat)
+
+
+def test_completion_cost_discount_matches_region_stripped_model(monkeypatch, _local_model_cost_map):
+    """A discount pattern written against the bare model name must still match when the
+    cost-selected name carries a <provider>/<region>/ prefix from a priced regional row."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="xai.grok-4.3",
+        usage={"prompt_tokens": 38, "completion_tokens": 20, "total_tokens": 58},
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    undiscounted = litellm.completion_cost(
+        completion_response=response,
+        model="xai.grok-4.3",
+        custom_llm_provider="bedrock_mantle",
+        region_name="us-gov-west-1",
+    )
+    assert undiscounted > 0
+
+    monkeypatch.setattr(
+        litellm,
+        "cost_discount_config",
+        {"bedrock_mantle": 0.05, "bedrock_mantle/xai.grok-*": 0.20},
+    )
+    discounted = litellm.completion_cost(
+        completion_response=response,
+        model="xai.grok-4.3",
+        custom_llm_provider="bedrock_mantle",
+        region_name="us-gov-west-1",
+    )
+
+    assert discounted == pytest.approx(undiscounted * 0.8, rel=1e-9)
 
 
 def test_cost_per_token_region_name_applies_to_provider_prefixed_model(_local_model_cost_map):
@@ -8455,3 +8690,264 @@ def test_batch_cost_calculator():
 
     cost = completion_cost(**args)
     assert cost > 0
+
+
+def _live_session_results(*events: dict[str, object]) -> OpenAIRealtimeStreamList:
+    return cast(OpenAIRealtimeStreamList, list(events))
+
+
+def _live_logging_object(
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+) -> Logging:
+    return cast(
+        Logging,
+        SimpleNamespace(model_call_details={"start_time": start_time, "end_time": end_time}),
+    )
+
+
+def test_realtime_keeps_first_reported_session_model_for_pricing(_local_model_cost_map: None) -> None:
+    first_model: Final = "gpt-realtime-2"
+    later_model: Final = "gpt-realtime-mini"
+    combined_usage: Final = Usage(prompt_tokens=120, completion_tokens=60, total_tokens=180)
+    first_model_cost: Final = handle_realtime_stream_cost_calculation(
+        results=_live_session_results({"type": "session.created", "session": {"model": first_model}}),
+        combined_usage_object=combined_usage,
+        custom_llm_provider="openai",
+        litellm_model_name="unmapped-realtime-alias",
+    )
+    first_model_with_later_update_cost: Final = handle_realtime_stream_cost_calculation(
+        results=_live_session_results(
+            {"type": "session.created", "session": {"model": first_model}},
+            {"type": "session.started", "session": {"model": later_model}},
+        ),
+        combined_usage_object=combined_usage,
+        custom_llm_provider="openai",
+        litellm_model_name="unmapped-realtime-alias",
+    )
+    later_model_cost: Final = handle_realtime_stream_cost_calculation(
+        results=_live_session_results({"type": "session.started", "session": {"model": later_model}}),
+        combined_usage_object=combined_usage,
+        custom_llm_provider="openai",
+        litellm_model_name="unmapped-realtime-alias",
+    )
+
+    assert first_model_with_later_update_cost == pytest.approx(first_model_cost)
+    assert first_model_cost != pytest.approx(later_model_cost)
+
+
+def test_live_session_charges_latest_closed_voice_usage(_local_model_cost_map: None) -> None:
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "gpt-live-1"}},
+        {"type": "session.usage.updated", "usage": {"seconds": 12}},
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+        {"type": "session.closed", "usage": {"seconds": 16}},
+    )
+    rate: Final = cast(float, litellm.model_cost["gpt-live-1"]["input_cost_per_second"])
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-live-1",
+    )
+
+    assert rate > 0
+    assert cost == pytest.approx(16 * rate)
+
+
+def test_live_session_uses_last_reported_duration_when_wall_clock_is_short(_local_model_cost_map: None) -> None:
+    start_time: Final = datetime.datetime(2025, 1, 1)
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "gpt-live-1"}},
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+    )
+    rate: Final = cast(float, litellm.model_cost["gpt-live-1"]["input_cost_per_second"])
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-live-1",
+        litellm_logging_obj=_live_logging_object(start_time, start_time + datetime.timedelta(seconds=5)),
+    )
+
+    assert cost == pytest.approx(15 * rate)
+
+
+def test_live_session_uses_latest_cumulative_usage_snapshot_not_sum(_local_model_cost_map: None) -> None:
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "gpt-live-1"}},
+        {"type": "session.usage.updated", "usage": {"seconds": 12}},
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+    )
+    rate: Final = cast(float, litellm.model_cost["gpt-live-1"]["input_cost_per_second"])
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-live-1",
+    )
+
+    assert cost == pytest.approx(15 * rate)
+
+
+def test_live_session_ignores_non_finite_usage_snapshot_after_finite_one(_local_model_cost_map: None) -> None:
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "gpt-live-1"}},
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+        {"type": "session.usage.updated", "usage": {"seconds": float("nan")}},
+    )
+    rate: Final = cast(float, litellm.model_cost["gpt-live-1"]["input_cost_per_second"])
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-live-1",
+    )
+
+    assert cost == pytest.approx(15 * rate)
+
+
+def test_live_session_ignores_non_finite_closed_usage_snapshot(_local_model_cost_map: None) -> None:
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "gpt-live-1"}},
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+        {"type": "session.closed", "usage": {"seconds": float("inf")}},
+    )
+    rate: Final = cast(float, litellm.model_cost["gpt-live-1"]["input_cost_per_second"])
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-live-1",
+    )
+
+    assert cost == pytest.approx(15 * rate)
+
+
+def test_live_session_skips_non_finite_rate_for_next_candidate(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-non-finite-rate",
+        {"input_cost_per_second": float("nan"), "litellm_provider": "openai", "mode": "realtime"},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "live-fallback-rate",
+        {"input_cost_per_second": 0.25, "litellm_provider": "openai", "mode": "realtime"},
+    )
+    litellm.get_model_info.cache_clear()
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "live-non-finite-rate"}},
+        {"type": "session.usage.updated", "usage": {"seconds": 4}},
+    )
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="live-fallback-rate",
+    )
+
+    assert cost == pytest.approx(4 * 0.25)
+
+
+def test_live_session_uses_wall_clock_duration_when_greater_than_reported(_local_model_cost_map: None) -> None:
+    start_time: Final = datetime.datetime(2025, 1, 1)
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "gpt-live-1"}},
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+    )
+    rate: Final = cast(float, litellm.model_cost["gpt-live-1"]["input_cost_per_second"])
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-live-1",
+        litellm_logging_obj=_live_logging_object(start_time, start_time + datetime.timedelta(seconds=20)),
+    )
+
+    assert cost == pytest.approx(20 * rate)
+
+
+def test_live_session_deduplicates_delegated_responses_and_charges_voice(_local_model_cost_map: None) -> None:
+    delegated_response: Final[dict[str, object]] = {
+        "type": "response.event",
+        "delegation_id": "delegation-1",
+        "event": {
+            "type": "response.completed",
+            "response": {
+                "id": "resp-1",
+                "model": "gpt-4o-mini",
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            },
+        },
+    }
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "gpt-live-1"}},
+        {"type": "session.closed", "usage": {"seconds": 12}},
+        delegated_response,
+        delegated_response,
+    )
+    live_rate: Final = cast(float, litellm.model_cost["gpt-live-1"]["input_cost_per_second"])
+    backend_model: Final = litellm.model_cost["gpt-4o-mini"]
+    expected_backend_cost: Final = (
+        10 * cast(float, backend_model["input_cost_per_token"])
+        + 5 * cast(float, backend_model["output_cost_per_token"])
+    )
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-live-1",
+    )
+
+    assert cost == pytest.approx(12 * live_rate + expected_backend_cost)
+
+
+def test_live_session_zero_closed_seconds_do_not_use_usage_fallback(_local_model_cost_map: None) -> None:
+    start_time: Final = datetime.datetime(2025, 1, 1)
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "gpt-live-1"}},
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+        {"type": "session.closed", "usage": {"seconds": 0}},
+    )
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-live-1",
+        litellm_logging_obj=_live_logging_object(start_time, start_time + datetime.timedelta(seconds=20)),
+    )
+
+    assert cost == 0.0
+
+
+def test_live_session_uses_latest_snapshot_when_closed_usage_is_missing(_local_model_cost_map: None) -> None:
+    start_time: Final = datetime.datetime(2025, 1, 1)
+    results: Final = _live_session_results(
+        {"type": "session.started", "session": {"model": "gpt-live-1"}},
+        {"type": "session.usage.updated", "usage": {"seconds": 15}},
+        {"type": "session.closed", "reason": "server_end"},
+    )
+    rate: Final = cast(float, litellm.model_cost["gpt-live-1"]["input_cost_per_second"])
+
+    cost: Final = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=Usage(),
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-live-1",
+        litellm_logging_obj=_live_logging_object(start_time, start_time + datetime.timedelta(seconds=20)),
+    )
+
+    assert cost == pytest.approx(15 * rate)

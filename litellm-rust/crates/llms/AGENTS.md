@@ -24,13 +24,20 @@
 
 - Every file is `# rules` then `# references`, both concise bullets. Split a long `# rules` into `##` topic sections
 - A folder gets an AGENTS.md only when it adds something: a deviation, an explicit reuse of another provider, or upstream docs no other file lists. A folder without one follows its nearest parent
-- Every `src/<provider>/<format>/` folder gets one, since it talks to its own upstream endpoint. `.greptile/files.json` lists them all
+- Every `src/<provider>/<format>/` folder gets one, since it talks to its own upstream endpoint
 - A rule lives in the highest file where it holds. Never restate a parent's rule
 - Each upstream URL appears in exactly one AGENTS.md, the one owning that contract. Others point to that file by path
   - Format specs: `litellm-llms-types/src/formats/<format>/`
   - Provider wire-type docs: `litellm-llms-types/src/providers/<provider>/`
   - Provider-wide docs (auth, errors, regions): `src/<provider>/`
   - One host's endpoint docs: `src/<provider>/<format>/`
+
+## Streaming
+
+- Each format's `src/base_llm/<format>/streaming.rs` exposes the same three names: `event_stream` (bytes to typed events), `decode` (a whole stream to typed events) and `encode` (one typed event to the SSE frame LiteLLM's proxy sends clients). Callers use the module path, never a vendor prefix
+- SSE framing, `[DONE]` and the generic helpers live in `src/base_llm/sse.rs`. Messages frames are `event:` plus `data:`; Chat Completions and Responses frames are bare `data:`, as Python's proxy writes them
+- Decoding is strict: a malformed event, or `[DONE]` on a Messages stream, is `InvalidResponse` and ends the stream. Python never fails a stream this way; the divergence is deliberate and `src/base_llm/sse.rs` lists what Python does per format. A stream cut inside an event drops that event, as the SSE spec requires
+- What ends or fails a stream belongs on the format's event type (`is_terminal`, `is_failure`). The cache's success check in `inference/src/caching.rs` still matches type strings; move it onto the typed events rather than adding new string matches
 
 ## Python pairs
 
