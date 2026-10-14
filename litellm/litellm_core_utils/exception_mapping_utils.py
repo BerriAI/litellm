@@ -57,6 +57,7 @@ _STRUCTURED_ERROR_SIGNAL_KEYS: Final = (
     "error_type",
     "__type",
 )
+_ERROR_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _normalise_structured_marker(value: object) -> str:
@@ -75,21 +76,40 @@ def _parse_structured_error_payload(error_text: str) -> Mapping[str, object] | N
 
     for candidate in candidates:
         try:
-            payload: Final = json.loads(candidate)
-        except (TypeError, ValueError):
+            return _ERROR_PAYLOAD_ADAPTER.validate_json(candidate)
+        except ValidationError:
             continue
-        if isinstance(payload, dict):
-            return payload
     return None
 
 
-def _response_json_payload(response: httpx.Response | None) -> object | None:
+def _response_json_payload(response: httpx.Response | None) -> Mapping[str, object] | None:
     if response is None:
         return None
     try:
-        return response.json()
-    except (TypeError, ValueError):
+        return _ERROR_PAYLOAD_ADAPTER.validate_json(response.content)
+    except (ValidationError, httpx.ResponseNotRead):
         return None
+
+
+def _error_payload_mapping(payload: object) -> Mapping[str, object] | None:
+    try:
+        return _ERROR_PAYLOAD_ADAPTER.validate_python(payload)
+    except ValidationError:
+        return None
+
+
+def _error_object_has_validation_marker(error_object: Mapping[str, object]) -> bool:
+    return any(
+        _normalise_structured_marker(error_object.get(key)) in _VALIDATION_STRUCTURED_MARKERS
+        for key in _STRUCTURED_ERROR_SIGNAL_KEYS
+    )
+
+
+def _payload_has_validation_marker(payload: Mapping[str, object]) -> bool:
+    nested_error: Final = _error_payload_mapping(payload.get("error"))
+    return _error_object_has_validation_marker(payload) or (
+        nested_error is not None and _error_object_has_validation_marker(nested_error)
+    )
 
 
 def _structured_validation_signal(
@@ -102,29 +122,14 @@ def _structured_validation_signal(
     payloads: Final = tuple(
         payload
         for payload in (
-            error_body,
+            _error_payload_mapping(error_body),
             _response_json_payload(response),
             _parse_structured_error_payload(error_str),
         )
-        if isinstance(payload, dict)
+        if payload is not None
     )
 
-    for payload in payloads:
-        nested_error: Final = payload.get("error")
-        error_objects: Final = (payload, nested_error) if isinstance(nested_error, dict) else (payload,)
-
-        for error_object in error_objects:
-            for key in _STRUCTURED_ERROR_SIGNAL_KEYS:
-                value: Final = error_object.get(key)
-                if value is None:
-                    continue
-                marker: Final = _normalise_structured_marker(value)
-                if not marker:
-                    continue
-                if marker in _VALIDATION_STRUCTURED_MARKERS:
-                    return True
-
-    return False
+    return any(_payload_has_validation_marker(payload) for payload in payloads)
 
 
 class ExceptionCheckers:
@@ -685,8 +690,8 @@ def _map_anthropic_exception(
     extra_information: str,
 ) -> None:
     error_payload: Final = _parse_structured_error_payload(error_str)
-    structured_error: Final = error_payload.get("error") if error_payload is not None else None
-    structured_message: Final = structured_error.get("message") if isinstance(structured_error, Mapping) else None
+    structured_error: Final = _error_payload_mapping(error_payload.get("error")) if error_payload is not None else None
+    structured_message: Final = structured_error.get("message") if structured_error is not None else None
     if (
         "prompt is too long" in error_str
         or "prompt: length" in error_str
@@ -703,14 +708,17 @@ def _map_anthropic_exception(
             model=model,
             llm_provider="anthropic",
         )
-    elif (
-        isinstance(structured_message, str)
-        and structured_message.startswith("You have reached your specified API usage limits.")
-    ) or ExceptionCheckers.is_error_str_rate_limit(
-        error_str,
-        status_code=getattr(original_exception, "status_code", None),
-        response=getattr(original_exception, "response", None),
-        error_body=getattr(original_exception, "body", None),
+    elif getattr(original_exception, "status_code", None) != 429 and (
+        (
+            isinstance(structured_message, str)
+            and structured_message.startswith("You have reached your specified API usage limits.")
+        )
+        or ExceptionCheckers.is_error_str_rate_limit(
+            error_str,
+            status_code=getattr(original_exception, "status_code", None),
+            response=getattr(original_exception, "response", None),
+            error_body=getattr(original_exception, "body", None),
+        )
     ):
         raise RateLimitError(
             message=f"AnthropicException - {error_str}",
@@ -1087,7 +1095,7 @@ def _map_bedrock_exception(
             llm_provider="bedrock",
             response=getattr(original_exception, "response", None),
         )
-    elif ExceptionCheckers.is_error_str_rate_limit(
+    elif getattr(original_exception, "status_code", None) != 429 and ExceptionCheckers.is_error_str_rate_limit(
         error_str,
         status_code=getattr(original_exception, "status_code", None),
         response=getattr(original_exception, "response", None),
@@ -1425,21 +1433,25 @@ def _map_vertex_exception(
                 ),
             ),
         )
-    elif not _structured_validation_signal(
-        error_str=error_str,
-        response=getattr(original_exception, "response", None),
-        error_body=getattr(original_exception, "body", None),
-    ) and (
-        "429 Quota exceeded" in error_str
-        or "Quota exceeded for" in error_str
-        or "Resource exhausted" in error_str
-        or "IndexError: list index out of range" in error_str
-        or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
-        or ExceptionCheckers.is_error_str_rate_limit(
-            error_str,
-            status_code=getattr(original_exception, "status_code", None),
+    elif (
+        getattr(original_exception, "status_code", None) != 429
+        and not _structured_validation_signal(
+            error_str=error_str,
             response=getattr(original_exception, "response", None),
             error_body=getattr(original_exception, "body", None),
+        )
+        and (
+            "429 Quota exceeded" in error_str
+            or "Quota exceeded for" in error_str
+            or "Resource exhausted" in error_str
+            or "IndexError: list index out of range" in error_str
+            or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
+            or ExceptionCheckers.is_error_str_rate_limit(
+                error_str,
+                status_code=getattr(original_exception, "status_code", None),
+                response=getattr(original_exception, "response", None),
+                error_body=getattr(original_exception, "body", None),
+            )
         )
     ):
         raise RateLimitError(
@@ -1962,7 +1974,7 @@ def _map_together_ai_exception(
             model=model,
             llm_provider="together_ai",
         )
-    elif ExceptionCheckers.is_error_str_rate_limit(
+    elif getattr(original_exception, "status_code", None) != 429 and ExceptionCheckers.is_error_str_rate_limit(
         error_str,
         status_code=getattr(original_exception, "status_code", None),
         response=getattr(original_exception, "response", None),
@@ -2240,7 +2252,7 @@ def _map_azure_exception(
             response=getattr(original_exception, "response", None),
             body=getattr(original_exception, "body", None),
         )
-    elif ExceptionCheckers.is_error_str_rate_limit(
+    elif getattr(original_exception, "status_code", None) != 429 and ExceptionCheckers.is_error_str_rate_limit(
         error_str,
         status_code=getattr(original_exception, "status_code", None),
         response=getattr(original_exception, "response", None),

@@ -224,6 +224,17 @@ class TestExceptionCheckers:
             is True
         )
 
+    def test_rate_limit_classifier_leaves_unread_stream_available(self):
+        response: Final = httpx.Response(
+            status_code=400,
+            stream=httpx.ByteStream(b'{"error":{"type":"invalid_request_error"}}'),
+        )
+        assert (
+            ExceptionCheckers.is_error_str_rate_limit("too many requests", status_code=400, response=response) is True
+        )
+        assert response.is_stream_consumed is False
+        assert response.read() == b'{"error":{"type":"invalid_request_error"}}'
+
     def test_rate_limit_provider_specific_phrases(self):
         """Test that common vendor rate-limit and quota exhaustion phrases are properly recognized."""
         vendor_phrases: Final = (
