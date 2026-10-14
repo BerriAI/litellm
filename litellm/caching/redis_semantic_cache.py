@@ -367,15 +367,12 @@ class RedisSemanticCache(BaseCache):
                 ),
             )
         else:
-            embedding_response = cast(
-                EmbeddingResponse,
-                litellm.embedding(
-                    model=self.embedding_model,
-                    input=embedding_input,
-                    cache={"no-store": True, "no-cache": True},
-                    timeout=self.embedding_timeout,
-                    num_retries=0,
-                ),
+            embedding_response = litellm.embedding(
+                model=self.embedding_model,
+                input=embedding_input,
+                cache={"no-store": True, "no-cache": True},
+                timeout=self.embedding_timeout,
+                num_retries=0,
             )
         return embedding_response["data"][0]["embedding"]
 

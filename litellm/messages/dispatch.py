@@ -7,7 +7,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, typed_as
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -106,6 +106,7 @@ _ADISPATCH: Final = PublicDispatch(
 )
 
 
+@typed_as(main.anthropic_messages_handler)  # noqa: TID251  # dispatch boundary owns this Python fallback
 def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
@@ -120,6 +121,7 @@ def anthropic_messages_handler(
     )
 
 
+@typed_as(main.anthropic_messages)  # noqa: TID251  # dispatch boundary owns this Python fallback
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
     python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(

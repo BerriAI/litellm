@@ -7,7 +7,7 @@ tool through a ``tool_use`` content block, and results are fed back as
 ``tool_result`` blocks in a user message.
 """
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, Final, NamedTuple
 
@@ -75,6 +75,8 @@ async def anthropic_messages_with_mcp(
     caller's own credentials and access control, rather than being handed to the
     upstream provider as a url it cannot reach.
     """
+    from functools import partial
+
     import litellm
     from litellm.experimental_mcp_client.tools import (
         transform_mcp_tool_to_anthropic_tool,
@@ -82,14 +84,16 @@ async def anthropic_messages_with_mcp(
     from litellm.llms.anthropic.pass_through.adapters.handler import request_safeguards_evaluator
     from litellm.llms.anthropic.pass_through.messages.handler import proxy_classifies_tool_uses
     from litellm.llms.anthropic.pass_through.safeguards import with_safeguard_results
+    from litellm.messages.dispatch import MessagesResult
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
 
     mcp_references, other_tools = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
+    anthropic_messages_fn: Final[partial[Coroutine[object, object, MessagesResult]]] = partial(litellm.anthropic_messages)
 
     if not mcp_references:
-        return await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
+        return await _AnthropicMessagesCall(fn=anthropic_messages_fn).fn(
             max_tokens=max_tokens,
             messages=list(messages),
             model=model,
@@ -131,7 +135,7 @@ async def anthropic_messages_with_mcp(
     }
 
     if not should_auto_execute:
-        return await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
+        return await _AnthropicMessagesCall(fn=anthropic_messages_fn).fn(
             messages=list(messages), stream=stream, **base_call_args
         )
 
@@ -145,7 +149,7 @@ async def anthropic_messages_with_mcp(
         else base_call_args
     )
     working_messages: Sequence[Mapping[str, object]] = tuple(messages)
-    response: AnthropicMessagesResponse = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
+    response: AnthropicMessagesResponse = await _AnthropicMessagesCall(fn=anthropic_messages_fn).fn(
         messages=list(working_messages), stream=False, **loop_call_args
     )
 
@@ -182,7 +186,7 @@ async def anthropic_messages_with_mcp(
             {"role": "assistant", "content": list(_get_response_content(response))},
             _build_tool_result_message(tool_results),
         )
-        response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
+        response = await _AnthropicMessagesCall(fn=anthropic_messages_fn).fn(
             messages=list(working_messages), stream=False, **loop_call_args
         )
     else:

@@ -15,7 +15,7 @@ How it works:
 """
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -414,9 +414,12 @@ async def _call_messages_handler(
     Using the public function (decorated with @client) ensures logging, retries,
     and provider resolution all work correctly, identical to a direct user call.
     """
-    from litellm.messages import anthropic_messages
+    from functools import partial
 
-    return await anthropic_messages(
+    from litellm.messages.dispatch import MessagesResult
+
+    call: Final[partial[Coroutine[object, object, MessagesResult]]] = partial(litellm.messages.anthropic_messages)
+    return await call(
         model=model,
         messages=messages,
         tools=tools,

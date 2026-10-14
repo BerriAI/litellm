@@ -9,7 +9,7 @@ server-side using litellm router's search tools.
 import asyncio
 import math
 import uuid
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
@@ -912,7 +912,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
         kwargs: dict,
-    ) -> "AnthropicMessagesResponse | AsyncIterator[object]":
+    ) -> "AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]":
         """
         Execute agentic loop with WebSearch execution for Anthropic Messages API.
 
@@ -1346,7 +1346,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
         kwargs: Mapping[str, object],
-    ) -> "AnthropicMessagesResponse | AsyncIterator[object]":
+    ) -> "AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]":
         """Legacy path: execute search + build patch + run follow-up call."""
         request_patch, search_outcomes = await self._build_anthropic_request_patch(
             model=model,
@@ -1371,7 +1371,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             max_tokens = cast(int, kwargs.get("max_tokens", 1024))
 
         patch_kwargs: Final = dict[str, object](request_patch.kwargs)
-        response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
+        response: AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object] = await anthropic_messages.acreate(
             max_tokens=max_tokens,
             messages=request_patch.messages,
             model=request_patch.model or model,

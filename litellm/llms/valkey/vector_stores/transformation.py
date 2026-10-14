@@ -135,8 +135,12 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         super().__init__()
         self.sync_client = sync_client
         self.async_client = async_client
-        self.embedding_fn = embedding_fn if embedding_fn is not None else litellm.embedding
-        self.aembedding_fn = aembedding_fn if aembedding_fn is not None else litellm.aembedding
+        self.embedding_fn: Callable[..., EmbeddingResponse] = (
+            embedding_fn if embedding_fn is not None else litellm.embedding
+        )
+        self.aembedding_fn: Callable[..., Awaitable[EmbeddingResponse]] = (
+            aembedding_fn if aembedding_fn is not None else litellm.aembedding
+        )
 
     @staticmethod
     def _query_text(query: str | Sequence[str]) -> str:

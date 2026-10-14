@@ -3,7 +3,8 @@ Helper functions for health check calls.
 """
 
 import base64
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from functools import partial
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.llms.base_llm.ocr.transformation import DocumentType
@@ -238,8 +239,10 @@ class HealthCheckHelpers:
             get_audio_file_for_health_check,
         )
         from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
+        from litellm.messages.dispatch import MessagesResult
         from litellm.realtime_api.main import realtime_health_check
 
+        messages_call: Final[partial[Coroutine[object, object, MessagesResult]]] = partial(litellm.anthropic_messages)
         return {
             "chat": lambda: litellm.acompletion(
                 **model_params,
@@ -300,7 +303,7 @@ class HealthCheckHelpers:
                 **_filter_model_params(model_params=model_params),
                 input=prompt or "test",
             ),
-            "anthropic_messages": lambda: litellm.anthropic_messages(
+            "anthropic_messages": lambda: messages_call(
                 **{
                     "max_tokens": ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS,
                     "messages": [{"role": "user", "content": prompt or "test"}],

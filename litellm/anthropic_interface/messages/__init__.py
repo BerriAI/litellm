@@ -11,7 +11,8 @@ This is an __init__.py file to allow the following interface
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any
+from functools import partial
+from typing import Any, Final
 
 from litellm.messages import (
     anthropic_messages as _async_anthropic_messages,
@@ -19,6 +20,7 @@ from litellm.messages import (
 from litellm.messages import (
     anthropic_messages_handler as _sync_anthropic_messages,
 )
+from litellm.messages.dispatch import MessagesResult
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -40,7 +42,7 @@ async def acreate(
     top_p: float | None = None,
     container: dict | None = None,
     **kwargs,
-) -> AnthropicMessagesResponse | AsyncIterator:
+) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator:
     """
     Async wrapper for Anthropic's messages API
 
@@ -64,7 +66,8 @@ async def acreate(
     Returns:
         Dict: Response from the API
     """
-    return await _async_anthropic_messages(
+    call: Final[partial[Coroutine[object, object, MessagesResult]]] = partial(_async_anthropic_messages)
+    return await call(
         max_tokens=max_tokens,
         messages=messages,
         model=model,
@@ -127,7 +130,8 @@ def create(
     Returns:
         Dict: Response from the API
     """
-    return _sync_anthropic_messages(
+    call: Final[partial[MessagesResult | Coroutine[object, object, MessagesResult]]] = partial(_sync_anthropic_messages)
+    return call(
         max_tokens=max_tokens,
         messages=messages,
         model=model,
