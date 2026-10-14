@@ -42,6 +42,7 @@ WILDCARD_API_KEY: Final = "integration-rag-wildcard-key"
 SHARED_API_KEY: Final = "integration-rag-shared-key"
 ENVIRONMENT_API_KEY: Final = "integration-rag-environment-key"
 CALLER_API_KEY: Final = "integration-rag-caller-key"
+FORWARDED_API_KEY: Final = "integration-rag-forwarded-key"
 CREDENTIAL_API_KEY: Final = "integration-rag-credential-key"
 GEMINI_API_KEY: Final = "integration-rag-gemini-key"
 AZURE_API_KEY: Final = "integration-rag-azure-key"
@@ -141,7 +142,7 @@ class RagRig:
     signing_key: rsa.RSAPrivateKey
     scenario: Scenario
 
-    def jwt(self, subject: str, *team_ids: str) -> str:
+    def jwt(self, subject: str, *team_ids: JsonValue) -> str:
         issued_at: Final = int(time.time())
         return jwt.encode(
             {"sub": subject, "groups": list(team_ids), "iat": issued_at, "exp": issued_at + 300},
@@ -523,6 +524,7 @@ def _proxy_config(directory: Path) -> Path:
             **general_settings,
             "enable_jwt_auth": True,
             "litellm_jwtauth": {"user_id_jwt_field": "sub", "team_ids_jwt_field": "groups"},
+            "forward_llm_provider_auth_headers": True,
         },
         "files_settings": [{"custom_llm_provider": "openai"}, {"custom_llm_provider": "azure"}],
     }
@@ -2025,5 +2027,116 @@ def test_query_without_a_vector_store_id_is_rejected_before_search(rag_rig: RagR
     response: Final = _query(rag_rig.gateway, tenants.team_a_key, tenants.team_a_model, OPENAI)
 
     assert response.status_code == 400, response.text
-    assert "vector_store_id" in response.text, response.text
+    assert "retrieval_config must contain 'vector_store_id'" in response.text, response.text
     assert rag_rig.calls() == ()
+
+
+def _forwarding(key: str) -> Mapping[str, str]:
+    return MappingProxyType({"Authorization": f"Bearer {key}", "x-api-key": FORWARDED_API_KEY})
+
+
+@pytest.mark.parametrize(
+    ("stored", "stream", "search"),
+    (
+        (None, False, ("environment", FORWARDED_API_KEY)),
+        (None, True, ("environment", FORWARDED_API_KEY)),
+        ("own_key", False, ("caller", CALLER_API_KEY)),
+        ("null_key", False, ("environment", FORWARDED_API_KEY)),
+    ),
+    ids=("unmanaged_json", "unmanaged_stream", "managed_own_key", "managed_null_key"),
+)
+def test_forwarded_provider_key_on_query_wins_over_team_provider_credentials(
+    rag_rig: RagRig, stored: Literal["own_key", "null_key"] | None, stream: bool, search: tuple[str, str]
+) -> None:
+    tenants: Final = rag_rig.tenants
+    with rag_rig.gateway.scenario() as scenario:
+        store_id: Final = (
+            f"vs_unmanaged_{uuid.uuid4().hex}"
+            if stored is None
+            else _managed_store(
+                rag_rig,
+                scenario,
+                {"api_key": CALLER_API_KEY, "api_base": f"{rag_rig.upstream.url}/caller/v1"}
+                if stored == "own_key"
+                else {"api_key": None},
+            )
+        )
+
+        response: Final = rag_rig.gateway.request(
+            "POST",
+            "/v1/rag/query",
+            {
+                "model": tenants.team_a_model,
+                "messages": [{"role": "user", "content": f"query forwarded key {uuid.uuid4().hex}"}],
+                "retrieval_config": {**OPENAI, "top_k": 1, "vector_store_id": store_id},
+                **({"stream": True} if stream else {}),
+            },
+            headers=_forwarding(tenants.team_a_key),
+        )
+
+        assert response.status_code == 200, response.text
+        assert "integration response" in response.text, response.text
+        assert rag_rig.signatures() == (
+            _search_signature(search[0], search[1], store_id),
+            _chat_signature("team", FORWARDED_API_KEY),
+        )
+
+
+def test_forwarded_provider_key_on_ingest_wins_over_team_provider_credentials(rag_rig: RagRig) -> None:
+    tenants: Final = rag_rig.tenants
+
+    response: Final = rag_rig.gateway.client.post(
+        "/v1/rag/ingest",
+        data=dict(_ingest_request("litellm-rag-forwarded-key", OPENAI)),
+        files={"file": DOCUMENT},
+        headers=dict(_forwarding(tenants.team_a_key)),
+    )
+
+    store_id: Final = _completed_store(rag_rig, response)
+    assert rag_rig.signatures() == _ingest_signatures("environment", FORWARDED_API_KEY, store_id)
+
+
+@pytest.mark.parametrize("caller", ("team_a_key", "wildcard_bare_key"), ids=("team_key", "restricted_wildcard_key"))
+def test_forwarded_provider_key_on_files_and_batches_wins_over_team_provider_credentials(
+    rag_rig: RagRig, caller: Literal["team_a_key", "wildcard_bare_key"]
+) -> None:
+    headers: Final = _forwarding(getattr(rag_rig.tenants, caller))
+    uploaded: Final = rag_rig.gateway.client.post(
+        "/v1/files", data={"purpose": "batch"}, files={"file": BATCH_INPUT}, headers=dict(headers)
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    file_id: Final = string_value(object_value(uploaded.json())["id"])
+
+    created: Final = rag_rig.gateway.request(
+        "POST",
+        "/v1/batches",
+        {"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        headers=headers,
+    )
+
+    assert created.status_code == 200, created.text
+    calls: Final = rag_rig.calls()
+    assert [(call.prefix, call.authorization) for call in calls] == [
+        ("environment", f"Bearer {FORWARDED_API_KEY}")
+    ] * len(calls), calls
+    assert {(call.method, call.route) for call in calls} >= {("POST", "/v1/files"), ("POST", "/v1/batches")}, calls
+
+
+@pytest.mark.parametrize("stray_claim", (7, None), ids=("int", "null"))
+@pytest.mark.parametrize("route", ("/v1/chat/completions", "/v1/rag/query"))
+def test_jwt_team_claim_with_a_non_string_entry_still_resolves_the_string_team(
+    rag_rig: RagRig, route: str, stray_claim: JsonValue
+) -> None:
+    tenants: Final = rag_rig.tenants
+    token: Final = rag_rig.jwt(tenants.jwt_member, tenants.team_a, stray_claim)
+    store_id: Final = f"vs_unmanaged_{uuid.uuid4().hex}"
+
+    response: Final = (
+        _query(rag_rig.gateway, token, tenants.team_a_model, {**OPENAI, "vector_store_id": store_id})
+        if route == "/v1/rag/query"
+        else rag_rig.gateway.request("POST", route, _llm_body(route, tenants.team_a_model), key=token)
+    )
+
+    assert response.status_code == 200, response.text
+    search: Final = (_search_signature("team", TEAM_API_KEY, store_id),) if route == "/v1/rag/query" else ()
+    assert rag_rig.signatures() == (*search, _chat_signature("team", TEAM_API_KEY))

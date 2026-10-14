@@ -520,6 +520,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """
         from litellm.proxy.openai_files_endpoints.common_utils import (
             decode_model_from_file_id,
+            explicit_request_credentials,
             get_credentials_for_model,
             get_original_file_id,
             get_team_provider_credentials,
@@ -566,6 +567,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     pass
             return file_id, fetch_kwargs
 
+        request_credentials: Final = explicit_request_credentials(data)
+        if request_credentials:
+            fetch_kwargs.update(extract_file_access_credentials(request_credentials))
+            return file_id, fetch_kwargs
         if user_api_key_dict is None:
             return file_id, fetch_kwargs
         team_credentials: Final = get_team_provider_credentials(

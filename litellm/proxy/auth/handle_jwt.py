@@ -1936,7 +1936,7 @@ class JWTAuthManager:
             status_code=403,
             detail=(
                 f"x-litellm-team-id '{header_value}' does not resolve to a team id or a unique team alias in your "
-                f"JWT's allowed teams. Allowed team ids: {sorted(allowed_team_ids)}"
+                f"JWT's allowed teams. Allowed team ids: {sorted(allowed_team_ids, key=str)}"
             ),
         )
 

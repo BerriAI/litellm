@@ -7128,6 +7128,23 @@ async def test_resolve_team_from_header_denies_aliases_of_teams_the_jwt_does_not
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stray_claim", [1, None])
+async def test_resolve_team_from_header_denies_an_unknown_team_with_403_when_the_jwt_claim_holds_a_non_string(
+    stray_claim: object,
+):
+    jwt_handler: Final = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_ids_jwt_field="groups")
+    allowed_team_ids: Final = set(jwt_handler.get_team_ids_from_jwt({"groups": ["team_a", stray_claim]}))
+
+    with pytest.raises(HTTPException) as denied:
+        await _resolve_header("no_such", allowed_team_ids, False, _team_lookup_404, _teams_by_alias({}))
+
+    assert denied.value.status_code == 403
+    assert "'no_such' does not resolve" in denied.value.detail
+    assert "'team_a'" in denied.value.detail
+
+
+@pytest.mark.asyncio
 async def test_resolve_team_from_header_under_db_fallback_tries_the_id_before_the_alias():
     """Under fallback_to_db_teams a claimless JWT's header is provisional: a value
     that is an existing team id resolves to itself without an alias lookup, a

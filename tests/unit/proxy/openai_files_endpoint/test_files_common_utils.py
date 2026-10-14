@@ -10,6 +10,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    apply_team_provider_credentials,
     apply_unified_file_ids,
     get_credentials_for_model,
     get_team_provider_credentials,
@@ -713,6 +714,33 @@ def test_a_restricted_key_resolves_the_team_deployment_its_wildcard_or_model_cov
 @pytest.mark.parametrize("key_models", [["claude-opus-4-6"], ["anthropic/*"]])
 def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentials(key_models: list[str]):
     assert _team_only_openai_credentials("openai/*", "openai/*", key_models) is None
+
+
+@pytest.mark.parametrize(
+    "request_credentials, sent_api_key",
+    [
+        ({}, "team-openai-key"),
+        ({"api_key": ""}, "team-openai-key"),
+        ({"api_key": "sk-forwarded"}, "sk-forwarded"),
+        ({"api_base": "https://caller.example/v1"}, None),
+        ({"litellm_credential_name": "caller-openai"}, None),
+    ],
+)
+def test_team_provider_credentials_never_replace_credentials_the_request_already_carries(
+    request_credentials: dict[str, str], sent_api_key: str | None
+):
+    data: Final[dict[str, object]] = dict(request_credentials)
+
+    apply_team_provider_credentials(
+        data=data,
+        llm_router=_team_openai_router("openai/*", "openai/*"),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
+        ),
+        custom_llm_provider="openai",
+    )
+
+    assert data.get("api_key") == sent_api_key
 
 
 def _team_openai_deployment(

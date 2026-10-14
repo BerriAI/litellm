@@ -528,6 +528,18 @@ async def test_batch_input_without_a_model_is_read_through_the_team_deployment(
     assert environment_route.calls.last.request.headers["authorization"] == "Bearer sk-test"
     assert team_usage.total_tokens == teamless_usage.total_tokens == _token_counter_total(rows)
 
+    forwarded_usage: Final = await batch_limiter.count_input_file_usage(
+        file_id="file-abc123",
+        custom_llm_provider="openai",
+        user_api_key_dict=team_key,
+        data={"api_key": "sk-forwarded"},
+    )
+
+    assert team_route.call_count == 1
+    assert environment_route.call_count == 2
+    assert environment_route.calls.last.request.headers["authorization"] == "Bearer sk-forwarded"
+    assert forwarded_usage.total_tokens == _token_counter_total(rows)
+
 
 async def _install_managed_file_hook(
     openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rows: str

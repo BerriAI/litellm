@@ -446,6 +446,32 @@ def test_rag_ingest_forwards_team_provider_credentials_without_persisting_them(c
     assert _TEAM_PROVIDER_KEY not in json.dumps(saved_data, default=str)
 
 
+def test_rag_ingest_uses_the_forwarded_provider_key_over_team_provider_credentials(client_team_a):
+    forwarded_provider_key: Final = "sk-forwarded-provider-key"
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch.dict("litellm.proxy.proxy_server.general_settings", {"forward_llm_provider_auth_headers": True}),
+        _patched_prisma_client(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            headers={"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": forwarded_provider_key},
+            **_ingest_form({"custom_llm_provider": "openai"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == forwarded_provider_key
+    assert "api_base" not in forwarded
+
+
 def test_rag_ingest_caller_credential_name_suppresses_team_provider_credentials(client_team_a):
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
@@ -714,6 +740,24 @@ def test_rag_query_search_uses_the_forwarded_provider_key_over_team_provider_cre
     assert response.status_code == 200, response.json()
     assert search.call_count == 1
     assert search.calls.last.request.headers["authorization"] == f"Bearer {forwarded_provider_key}"
+
+
+@pytest.mark.parametrize(
+    "retrieval_config, error",
+    [
+        ({"custom_llm_provider": "openai"}, "retrieval_config must contain 'vector_store_id'"),
+        ({"vector_store_id": 7, "custom_llm_provider": "openai"}, "vector_store_id must be a non-empty string"),
+    ],
+)
+def test_rag_query_names_what_is_wrong_with_the_vector_store_id(
+    client_team_a: TestClient, retrieval_config: Mapping[str, object], error: str
+) -> None:
+    response: Final = _post_rag_query(
+        client_team_a, retrieval_config=retrieval_config, managed_stores=(), router=_team_provider_router()
+    )
+
+    assert response.status_code == 400, response.json()
+    assert error in response.text
 
 
 @pytest.mark.usefixtures("httpx_transport")
