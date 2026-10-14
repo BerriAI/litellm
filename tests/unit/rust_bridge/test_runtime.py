@@ -41,7 +41,7 @@ class NativeFn(Protocol):
     def __call__(self) -> str: ...
 
 
-CONTEXT: Final = RouteContext(Route.MESSAGES, provider="anthropic", model="model")
+CONTEXT: Final = RouteContext(Route.MESSAGES, target=Route.MESSAGES, provider="anthropic", model="model")
 RUST: Final = "rust"
 PYTHON: Final = "python"
 
@@ -148,8 +148,20 @@ def test_context_outside_rule_stays_on_python() -> None:
     calls: Final = recorder()
     configuration.rust(True)
 
-    assert run(Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.MESSAGES, provider="openai")) == "python"
-    assert run(Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.RESPONSES, provider="anthropic")) == "python"
+    assert (
+        run(
+            Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.MESSAGES, target=Route.MESSAGES, provider="openai")
+        )
+        == "python"
+    )
+    assert (
+        run(
+            Rollout.RUST_REQUIRED,
+            calls,
+            context=RouteContext(Route.RESPONSES, target=Route.RESPONSES, provider="anthropic"),
+        )
+        == "python"
+    )
     assert calls.calls == (PYTHON, PYTHON)
 
 
@@ -157,10 +169,10 @@ def test_context_outside_rule_stays_on_python() -> None:
 @pytest.mark.parametrize(
     "context",
     (
-        RouteContext(Route.CHAT_COMPLETIONS, provider="anthropic"),
-        RouteContext(Route.CHAT_COMPLETIONS, provider="bedrock"),
-        RouteContext(Route.RESPONSES, provider="openai"),
-        RouteContext(Route.TRANSCRIPTION, provider="openai"),
+        RouteContext(Route.CHAT_COMPLETIONS, target=Route.CHAT_COMPLETIONS, provider="anthropic"),
+        RouteContext(Route.CHAT_COMPLETIONS, target=Route.CHAT_COMPLETIONS, provider="bedrock"),
+        RouteContext(Route.RESPONSES, target=Route.RESPONSES, provider="openai"),
+        RouteContext(Route.TRANSCRIPTION, target=Route.TRANSCRIPTION, provider="openai"),
     ),
 )
 async def test_shipped_python_routes_never_load_native(monkeypatch: pytest.MonkeyPatch, context: RouteContext) -> None:
@@ -498,7 +510,10 @@ async def test_route_without_python_raises_when_native_cannot_serve_the_call(
         (Rollout.PYTHON_ONLY, CONTEXT),
         (Rollout.RUST_OPT_IN, CONTEXT),
         (Rollout.RUST_OPT_OUT, CONTEXT),
-        (Rollout.RUST_REQUIRED, RouteContext(Route.MESSAGES, provider="unmatched", model="model")),
+        (
+            Rollout.RUST_REQUIRED,
+            RouteContext(Route.MESSAGES, target=Route.MESSAGES, provider="unmatched", model="model"),
+        ),
     ),
     ids=("python-only", "opt-in", "opt-out", "no-matching-rule"),
 )

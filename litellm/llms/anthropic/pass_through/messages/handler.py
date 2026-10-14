@@ -78,7 +78,7 @@ def _responses_mode_is_lost_by_prefix_strip(
     )
 
 
-def _should_route_to_responses_api(
+def should_route_to_responses_api(
     custom_llm_provider: str | None,
     requested_model: str | None = None,
     resolved_model: str | None = None,
@@ -131,7 +131,7 @@ def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
     return isinstance(model_info, dict) and model_info.get("cache_control_ttl") is True
 
 
-def _native_messages_config(
+def native_messages_config(
     model: str, custom_llm_provider: str | None, model_info: object
 ) -> BaseAnthropicMessagesConfig | None:
     provider_config: Final = (
@@ -154,7 +154,7 @@ def _native_messages_config(
 def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
     """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
     safeguards: Final = kwargs.get("safeguards")
-    if _native_messages_config(model, custom_llm_provider, kwargs.get("model_info")) is not None:
+    if native_messages_config(model, custom_llm_provider, kwargs.get("model_info")) is not None:
         return native_route_classifies(model, safeguards)
     return requested_dangerous_tool_use(safeguards) is not None and read_classifier_model_setting() is not None
 
@@ -600,12 +600,12 @@ def anthropic_messages_handler(
                 **kwargs,
             )
 
-    anthropic_messages_provider_config: Final = _native_messages_config(
+    anthropic_messages_provider_config: Final = native_messages_config(
         model, custom_llm_provider, kwargs.get("model_info")
     )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        if kwargs.get("compaction") is None and _should_route_to_responses_api(
+        if kwargs.get("compaction") is None and should_route_to_responses_api(
             custom_llm_provider, original_model, model
         ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(

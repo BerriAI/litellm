@@ -67,7 +67,7 @@ class BedrockAudioTranscriptionRustDispatch:
             return TranscriptionResponse(**rust(call))
 
         return runtime.run(
-            RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
+            RouteContext(Route.TRANSCRIPTION, target=Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
             binding=NATIVE_TRANSCRIPTION,
             native=native,
             python=runtime.NO_PYTHON,
@@ -100,7 +100,7 @@ class BedrockAudioTranscriptionRustDispatch:
             return TranscriptionResponse(**await rust(call))
 
         return await runtime.arun(
-            RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
+            RouteContext(Route.TRANSCRIPTION, target=Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
             binding=NATIVE_ATRANSCRIPTION,
             native=native,
             python=runtime.NO_PYTHON,

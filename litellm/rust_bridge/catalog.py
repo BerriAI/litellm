@@ -28,6 +28,7 @@ class Route(str, Enum):
 @dataclass(frozen=True, slots=True)
 class RouteContext:
     route: Route
+    target: Route
     provider: str | None = None
     model: str | None = None
 
@@ -38,11 +39,13 @@ class RouteRule:
     rollout: Rollout
     providers: frozenset[str] | None = None
     models: frozenset[str] | None = None
+    targets: frozenset[Route] | None = None
 
     def matches(self, context: Context) -> bool:
         return (
             isinstance(context, RouteContext)
             and context.route is self.route
+            and context.target in (self.targets or frozenset({self.route}))
             and (self.providers is None or context.provider in self.providers)
             and (self.models is None or context.model in self.models)
         )

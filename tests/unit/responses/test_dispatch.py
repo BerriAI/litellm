@@ -10,6 +10,9 @@ from litellm.responses import main as python_responses
 from litellm.responses.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
+    _RESPONSES,  # pyright: ignore[reportPrivateUsage]  # builds the NativeCall the dispatch sees
+    _context,  # pyright: ignore[reportPrivateUsage]  # asserts the route target the catalog matches on
+    _public_request,  # pyright: ignore[reportPrivateUsage]  # builds the NativeCall the dispatch sees
 )
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
@@ -131,17 +134,17 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
 def test_native_receives_normalized_request_and_original_call_shape() -> None:
     metadata: Final = {"user_id": "u"}
     extra_headers: Final = {"x-test": "1"}
-    args: Final[tuple[object, ...]] = (INPUT, "anthropic/claude-sonnet-4-5")
+    args: Final[tuple[object, ...]] = (INPUT, "openai/gpt-5.6")
     kwargs: Final[Mapping[str, object]] = {
         "stream": True,
         "api_key": "sk-test",
         "base_url": "https://example.invalid",
         "extra_headers": extra_headers,
-        "custom_llm_provider": "anthropic",
+        "custom_llm_provider": "openai",
         "litellm_metadata": metadata,
     }
     captured: Final[list[tuple[NativeCall, tuple[object, ...], Mapping[str, object]]]] = []
-    response: Final = _response("anthropic/claude-sonnet-4-5")
+    response: Final = _response("openai/gpt-5.6")
 
     def python(*call_args: object, **call_kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: rejected fallback
         pytest.fail("Required Rust dispatch must not call Python")
@@ -165,12 +168,12 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
 
     request, call_args, call_kwargs = captured[0]
     assert result is response
-    assert request.resolved["model"] == "anthropic/claude-sonnet-4-5"
+    assert request.resolved["model"] == "openai/gpt-5.6"
     assert request.resolved["input"] is INPUT
     assert request.resolved["stream"] is True
     assert request.resolved["api_key"] == "sk-test"
     assert request.resolved["base_url"] == "https://example.invalid"
-    assert request.resolved["custom_llm_provider"] == "anthropic"
+    assert request.resolved["custom_llm_provider"] == "openai"
     assert request.resolved["extra_headers"] is extra_headers
     assert request.kwargs == kwargs
     assert request.kwargs["litellm_metadata"] is metadata
@@ -310,3 +313,36 @@ def test_positional_parameters_remain_available_to_native_projection() -> None:
     assert request.resolved["include"] is include
     assert request.resolved["instructions"] == "Be brief"
     assert request.resolved["max_output_tokens"] == 16
+
+
+@pytest.mark.parametrize(
+    ("model", "kwargs", "expected"),
+    (
+        ("openai/gpt-5.6", {"custom_llm_provider": "openai"}, Route.RESPONSES),
+        ("openai/gpt-5.6", {}, Route.RESPONSES),
+        (
+            "openai/gpt-5.6",
+            {"custom_llm_provider": "openai", "use_chat_completions_api": True},
+            Route.CHAT_COMPLETIONS,
+        ),
+    ),
+    ids=("explicit provider", "provider resolved from the model", "chat completions bridge requested"),
+)
+def test_context_target_is_the_api_the_call_reaches(model: str, kwargs: Mapping[str, object], expected: Route) -> None:
+    request: Final = _public_request(_RESPONSES, (INPUT, model), kwargs)
+
+    assert request is not None
+    assert _context(request).target is expected
+
+
+def test_context_target_for_anthropic_follows_the_bridge_check() -> None:
+    model: Final = "anthropic/claude-sonnet-5-5"
+    expected: Final = (
+        Route.CHAT_COMPLETIONS
+        if python_responses.will_bridge_to_chat_completions(model, "anthropic", False, None, None)
+        else Route.RESPONSES
+    )
+    request: Final = _public_request(_RESPONSES, (INPUT, model), {"custom_llm_provider": "anthropic"})
+
+    assert request is not None
+    assert _context(request).target is expected

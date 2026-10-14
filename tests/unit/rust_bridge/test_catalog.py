@@ -30,21 +30,27 @@ def isolated_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
 @pytest.mark.parametrize(
     "provider", (None, "bedrock", "mistral", "anthropic", "deepseek", "vertex_ai", "openai", "azure_ai", "unknown")
 )
+@pytest.mark.parametrize("bridged", (False, True))
 @pytest.mark.parametrize("process", (None, False, True))
 @pytest.mark.parametrize("environment", (None, "0", "1"))
 def test_shipped_decisions(
     monkeypatch: pytest.MonkeyPatch,
     route: Route,
     provider: str | None,
+    bridged: bool,
     process: bool | None,
     environment: str | None,
 ) -> None:
     configuration.rust(process)
     if environment is not None:
         monkeypatch.setenv("LITELLM_RUST", environment)
-    context: Final = RouteContext(route, provider=provider, model="test-model")
+    target: Final = Route.RESPONSES if route is Route.CHAT_COMPLETIONS else Route.CHAT_COMPLETIONS
+    context: Final = RouteContext(route, target=target if bridged else route, provider=provider, model="test-model")
 
-    if route is Route.OCR or (route is Route.TRANSCRIPTION and provider == "bedrock"):
+    if bridged:
+        assert catalog.rollout(context) is Rollout.PYTHON_ONLY
+        assert catalog.decision(context) is Decision.PYTHON
+    elif route is Route.OCR or (route is Route.TRANSCRIPTION and provider == "bedrock"):
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED
         assert catalog.decision(context) is Decision.RUST_REQUIRED
     elif route is Route.MESSAGES and provider in ("anthropic", "deepseek", "vertex_ai"):
@@ -61,8 +67,8 @@ def test_missing_rule_stays_on_python_even_when_rust_is_enabled(monkeypatch: pyt
     configuration.rust(True)
     monkeypatch.setenv("LITELLM_RUST", "1")
 
-    assert catalog.rollout(RouteContext(route), rules=()) is Rollout.PYTHON_ONLY
-    assert catalog.decision(RouteContext(route), rules=()) is Decision.PYTHON
+    assert catalog.rollout(RouteContext(route, target=route), rules=()) is Rollout.PYTHON_ONLY
+    assert catalog.decision(RouteContext(route, target=route), rules=()) is Decision.PYTHON
 
 
 def test_logger_rollout_obeys_the_global_switch() -> None:
@@ -76,12 +82,12 @@ def test_logger_rollout_obeys_the_global_switch() -> None:
     ("context", "expected"),
     (
         (
-            RouteContext(Route.RESPONSES, provider="openai", model="m"),
+            RouteContext(Route.RESPONSES, target=Route.RESPONSES, provider="openai", model="m"),
             Decision.RUST_REQUIRED,
         ),
-        (RouteContext(Route.RESPONSES, provider="openai", model="other"), Decision.PYTHON),
-        (RouteContext(Route.RESPONSES, provider="anthropic", model="m"), Decision.PYTHON),
-        (RouteContext(Route.MESSAGES, provider="openai", model="m"), Decision.PYTHON),
+        (RouteContext(Route.RESPONSES, target=Route.RESPONSES, provider="openai", model="other"), Decision.PYTHON),
+        (RouteContext(Route.RESPONSES, target=Route.RESPONSES, provider="anthropic", model="m"), Decision.PYTHON),
+        (RouteContext(Route.MESSAGES, target=Route.MESSAGES, provider="openai", model="m"), Decision.PYTHON),
     ),
 )
 def test_first_matching_rule_respects_every_constraint(context: RouteContext, expected: Decision) -> None:
@@ -107,16 +113,19 @@ def test_ocr_has_no_python_path_to_opt_out_to(
     if environment is not None:
         monkeypatch.setenv("LITELLM_RUST", environment)
 
-    assert catalog.decision(RouteContext(Route.OCR, model="m")) is Decision.RUST_REQUIRED
-    assert catalog.decision(RouteContext(Route.OCR, provider="aws_textract", model="m")) is Decision.RUST_REQUIRED
+    assert catalog.decision(RouteContext(Route.OCR, target=Route.OCR, model="m")) is Decision.RUST_REQUIRED
+    assert (
+        catalog.decision(RouteContext(Route.OCR, target=Route.OCR, provider="aws_textract", model="m"))
+        is Decision.RUST_REQUIRED
+    )
 
 
 @pytest.mark.parametrize(
     ("context", "expected"),
     (
-        (RouteContext(Route.OCR, provider="local"), Decision.RUST_REQUIRED),
-        (RouteContext(Route.OCR, provider="other"), Decision.PYTHON),
-        (RouteContext(Route.MESSAGES, provider="local"), Decision.PYTHON),
+        (RouteContext(Route.OCR, target=Route.OCR, provider="local"), Decision.RUST_REQUIRED),
+        (RouteContext(Route.OCR, target=Route.OCR, provider="other"), Decision.PYTHON),
+        (RouteContext(Route.MESSAGES, target=Route.MESSAGES, provider="local"), Decision.PYTHON),
         (LoggerContext(), Decision.RUST_REQUIRED),
     ),
 )
@@ -130,7 +139,7 @@ def test_mixed_rules_select_only_the_matching_domain(context: Context, expected:
     assert catalog.decision(context, rules) is expected
 
 
-@pytest.mark.parametrize("context", (RouteContext(Route.OCR), LoggerContext()))
+@pytest.mark.parametrize("context", (RouteContext(Route.OCR, target=Route.OCR), LoggerContext()))
 @pytest.mark.parametrize(
     ("rollout", "process", "environment", "expected"),
     (
@@ -165,7 +174,7 @@ def test_all_domains_share_rollout_switches_and_first_match(
     assert catalog.decision(context, ()) is Decision.PYTHON
 
 
-@pytest.mark.parametrize("context", (RouteContext(Route.OCR),))
+@pytest.mark.parametrize("context", (RouteContext(Route.OCR, target=Route.OCR),))
 def test_empty_constraints_match_nothing(context: Context) -> None:
     rules: Final[Rules] = (
         RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset()),
@@ -173,3 +182,45 @@ def test_empty_constraints_match_nothing(context: Context) -> None:
     )
 
     assert catalog.decision(context, rules) is Decision.PYTHON
+
+
+@pytest.mark.parametrize("target", (Route.MESSAGES, Route.CHAT_COMPLETIONS))
+def test_a_rule_without_targets_never_matches_a_bridged_target(target: Route) -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED, providers=frozenset({"vertex_ai"})),
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
+    )
+
+    assert catalog.decision(RouteContext(Route.MESSAGES, target=target, provider="vertex_ai", model="m"), rules) is (
+        Decision.RUST_REQUIRED if target is Route.MESSAGES else Decision.PYTHON
+    )
+
+
+def test_a_rule_with_targets_matches_only_the_listed_targets() -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, targets=frozenset({Route.CHAT_COMPLETIONS})),
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
+    )
+    configuration.rust(True)
+
+    assert (
+        catalog.decision(RouteContext(Route.MESSAGES, target=Route.CHAT_COMPLETIONS, model="m"), rules)
+        is Decision.RUST_WITH_FALLBACK
+    )
+    assert catalog.decision(RouteContext(Route.MESSAGES, target=Route.MESSAGES, model="m"), rules) is Decision.PYTHON
+
+
+def test_first_match_still_wins_across_targets() -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, targets=frozenset({Route.CHAT_COMPLETIONS})),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+
+    assert (
+        catalog.decision(RouteContext(Route.MESSAGES, target=Route.CHAT_COMPLETIONS, model="m"), rules)
+        is Decision.PYTHON
+    )
+    assert (
+        catalog.decision(RouteContext(Route.MESSAGES, target=Route.MESSAGES, model="m"), rules)
+        is Decision.RUST_REQUIRED
+    )

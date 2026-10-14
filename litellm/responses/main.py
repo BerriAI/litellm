@@ -434,7 +434,7 @@ async def aresponses_api_with_mcp(
     return response
 
 
-def _bridges_to_chat_completions(
+def bridges_to_chat_completions(
     responses_api_provider_config: BaseResponsesAPIConfig | None, use_chat_completions_api: bool
 ) -> bool:
     """Whether the request reaches its provider as a chat completion, not a Responses call."""
@@ -473,7 +473,7 @@ def _encrypted_task_support_failure(
 ) -> _ResponsesCompatibilityFailure | None:
     if (
         responses_api_provider_config is None
-        or _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
+        or bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
         or not responses_api_provider_config.supports_encrypted_agent_messages()
     ):
         return "encrypted_task_unsupported"
@@ -540,14 +540,14 @@ def _dispatched_model_name(model: str, custom_llm_provider: str, api_base: str |
     return _strip_responses_routing_prefix(provider_model)
 
 
-def _will_bridge_to_chat_completions(
+def will_bridge_to_chat_completions(
     model: str,
     custom_llm_provider: str | None,
     use_chat_completions_api: bool,
     model_info: object,
     api_base: str | None,
 ) -> bool:
-    """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
+    """``bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
     Resolving the config is a pure lookup, so this asks the same question the dispatch
     asks rather than restating its condition, with the model name the dispatch hands the
@@ -560,7 +560,7 @@ def _will_bridge_to_chat_completions(
     normalized_model: Final = _normalize_openai_chat_completions_responses_model(model)
     if custom_llm_provider is None:
         return True
-    return _bridges_to_chat_completions(
+    return bridges_to_chat_completions(
         _resolve_responses_api_provider_config(
             _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
             custom_llm_provider,
@@ -742,7 +742,7 @@ async def aresponses(
             client_input: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(input)
             with _prompt_management_sees_a_provisional_message_list(
                 kwargs,
-                bridged=_will_bridge_to_chat_completions(
+                bridged=will_bridge_to_chat_completions(
                     model,
                     custom_llm_provider,
                     bool(kwargs.get("use_chat_completions_api")),
@@ -914,7 +914,7 @@ def _apply_prompt_management_to_responses_call(
     ):
         with _prompt_management_sees_a_provisional_message_list(
             kwargs,
-            bridged=_will_bridge_to_chat_completions(
+            bridged=will_bridge_to_chat_completions(
                 model,
                 custom_llm_provider,
                 use_chat_completions_api,
@@ -1482,7 +1482,7 @@ def responses(
         if _file_search_dispatch is not None:
             return _file_search_dispatch
 
-        if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
+        if bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,

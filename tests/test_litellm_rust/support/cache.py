@@ -63,7 +63,7 @@ async def invoke(
             },
         )
         return await runtime.arun(
-            RouteContext(Route.RESPONSES),
+            RouteContext(Route.RESPONSES, target=Route.RESPONSES),
             binding=NATIVE_ARESPONSES,
             native=lambda hook: hook(request),
             python=runtime.NO_PYTHON,
@@ -80,7 +80,7 @@ async def invoke(
             return await litellm.acompletion(**parameters)
         chat: Final = NativeCall(args=(), kwargs=parameters, base={})
         return await runtime.arun(
-            RouteContext(Route.CHAT_COMPLETIONS),
+            RouteContext(Route.CHAT_COMPLETIONS, target=Route.CHAT_COMPLETIONS),
             binding=NATIVE_ACOMPLETION,
             native=lambda hook: hook(chat),
             python=runtime.NO_PYTHON,
@@ -103,7 +103,7 @@ async def invoke(
         },
     )
     return await runtime.arun(
-        RouteContext(Route.MESSAGES),
+        RouteContext(Route.MESSAGES, target=Route.MESSAGES),
         binding=NATIVE_AMESSAGES,
         native=lambda hook: hook(messages),
         python=runtime.NO_PYTHON,

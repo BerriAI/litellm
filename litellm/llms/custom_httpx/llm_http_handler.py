@@ -196,7 +196,7 @@ def _rust_responses_websocket_enabled(
     from litellm.rust_bridge.catalog import Route, RouteContext, decision
     from litellm.rust_bridge.configuration import Decision
 
-    context: Final = RouteContext(Route.RESPONSES, provider=custom_llm_provider)
+    context: Final = RouteContext(Route.RESPONSES, target=Route.RESPONSES, provider=custom_llm_provider)
     return decision(context) is not Decision.PYTHON
 
 

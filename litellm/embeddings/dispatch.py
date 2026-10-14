@@ -41,6 +41,7 @@ def _public_request(
 def _context(request: NativeCall) -> RouteContext:
     return RouteContext(
         Route.EMBEDDINGS,
+        target=Route.EMBEDDINGS,
         provider=optional_str(request.resolved.get("custom_llm_provider")),
         model=str(request.resolved["model"]),
     )

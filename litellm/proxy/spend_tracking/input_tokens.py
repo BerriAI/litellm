@@ -87,7 +87,7 @@ async def _count_group(
         return await python()
     try:
         return await runtime.arun(
-            RouteContext(Route.TOKEN_COUNTER, provider=tokenizer),
+            RouteContext(Route.TOKEN_COUNTER, target=Route.TOKEN_COUNTER, provider=tokenizer),
             binding=TOKEN_COUNTER,
             native=lambda factory: _native_counts(factory, tokenizer, raw_body, models),
             python=python,

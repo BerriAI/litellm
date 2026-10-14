@@ -659,7 +659,7 @@ def test_native_projection_errors_never_select_python(
 
     with pytest.raises(RuntimeError if failure == "schema" else ValueError, match="http_settings"):
         runtime.run(
-            RouteContext(Route.OCR, provider="mistral"),
+            RouteContext(Route.OCR, target=Route.OCR, provider="mistral"),
             binding=NATIVE_OCR,
             native=lambda native: native(request),
             python=python_fallback,
