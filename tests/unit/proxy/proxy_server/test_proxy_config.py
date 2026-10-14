@@ -187,6 +187,26 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 
 
 @pytest.mark.asyncio
+async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(monkeypatch, caplog) -> None:
+    from litellm.proxy.tracing_runtime import manage_tracing
+
+    monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
+    monkeypatch.delenv("LITELLM_LENS_SERVICE_TOKEN", raising=False)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        async with manage_tracing(enabled=True) as receiver:
+            assert receiver is None
+
+    failures: Final = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.ERROR and "lens" in record.getMessage()
+    ]
+    assert len(failures) == 1
+    assert "LITELLM_LENS_URL" in failures[0]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "config_text",
     (
