@@ -1,9 +1,10 @@
+import json
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -12,14 +13,17 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
+from litellm.llms.anthropic.chat.transformation import JsonModeRequest
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -173,15 +177,34 @@ class AmazonCohereChatConfig:
         return optional_params
 
 
+_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+def response_format_schema_from_request(data: str, json_mode: bool | None) -> ResponseFormatSchema | None:
+    if not json_mode:
+        return None
+    try:
+        body: Final = _REQUEST_BODY.validate_python(json.loads(data))
+    except (json.JSONDecodeError, ValidationError):
+        return None
+    return JsonModeRequest.model_validate(body).tool_schema()
+
+
 def _stream_decoder(
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None,
     *,
     model: str,
     json_mode: bool | None,
     sync_stream: bool,
+    response_format_schema: ResponseFormatSchema | None = None,
 ) -> "AWSEventStreamDecoder":
     if bedrock_invoke_provider == "anthropic":
-        return AmazonAnthropicClaudeStreamDecoder(model=model, sync_stream=sync_stream, json_mode=json_mode)
+        return AmazonAnthropicClaudeStreamDecoder(
+            model=model,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+            response_format_schema=response_format_schema,
+        )
     if bedrock_invoke_provider == "deepseek_r1":
         return AmazonDeepSeekR1StreamDecoder(model=model, sync_stream=sync_stream)
     if bedrock_invoke_provider == "moonshot":
@@ -249,7 +272,11 @@ async def make_call(
             )
         else:
             decoder: Final = _stream_decoder(
-                bedrock_invoke_provider, model=model, json_mode=json_mode, sync_stream=False
+                bedrock_invoke_provider,
+                model=model,
+                json_mode=json_mode,
+                sync_stream=False,
+                response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.aiter_bytes(
                 response.aiter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
@@ -264,7 +291,7 @@ async def make_call(
         )
 
         return completion_stream, response.headers
-    except BedrockError:
+    except (BedrockError, ImportError):
         raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
@@ -297,7 +324,7 @@ def make_sync_call(
 ) -> "tuple[MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
     try:
         if client is None:
-            client = _get_httpx_client(
+            client = get_httpx_client(
                 params=(
                     {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
                     if logging_obj and logging_obj.litellm_params and logging_obj.litellm_params.get("ssl_verify")
@@ -340,7 +367,11 @@ def make_sync_call(
             )
         else:
             decoder: Final = _stream_decoder(
-                bedrock_invoke_provider, model=model, json_mode=json_mode, sync_stream=True
+                bedrock_invoke_provider,
+                model=model,
+                json_mode=json_mode,
+                sync_stream=True,
+                response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.iter_bytes(
                 response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
@@ -355,7 +386,7 @@ def make_sync_call(
         )
 
         return completion_stream, response.headers
-    except BedrockError:
+    except (BedrockError, ImportError):
         raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
@@ -440,6 +471,7 @@ class _EventStreamTally:
 
 class AWSEventStreamDecoder:
     def __init__(self, model: str, json_mode: bool | None = False) -> None:
+        ensure_optional_import("botocore")
         from botocore.parsers import EventStreamJSONParser
 
         self.model = model
@@ -787,6 +819,12 @@ class AWSEventStreamDecoder:
             tool_use=None,
         )
 
+    def chunk_parser(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> GChunk | ModelResponseStream | dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._chunk_parser(chunk_data)
+
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> Iterator[GChunk | ModelResponseStream | dict]:
@@ -803,7 +841,7 @@ class AWSEventStreamDecoder:
                 if message:
                     # sse_event = ServerSentEvent(data=message, event="completion")
                     _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
@@ -823,7 +861,7 @@ class AWSEventStreamDecoder:
                 message = self._decode_event(event, tally)
                 if message:
                     _data = json.loads(message)
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self.chunk_parser(chunk_data=_data)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
@@ -880,6 +918,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         model: str,
         sync_stream: bool,
         json_mode: bool | None = None,
+        response_format_schema: ResponseFormatSchema | None = None,
     ) -> None:
         """
         Child class of AWSEventStreamDecoder that handles the streaming response from the Anthropic family of models
@@ -891,6 +930,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             streaming_response=None,
             sync_stream=sync_stream,
             json_mode=json_mode,
+            response_format_schema=response_format_schema,
         )
 
     def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
@@ -965,7 +1005,7 @@ class MockResponseIterator:  # for returning ai21 streaming responses
         """
         tool_use: ChatCompletionToolCallChunk | None = None
         if self.json_mode is True and tool_calls is not None:
-            message: Final = litellm.AnthropicConfig()._convert_tool_response_to_message(tool_calls=tool_calls)
+            message: Final = litellm.AnthropicConfig().convert_tool_response_to_message(tool_calls=tool_calls)
             if message is not None:
                 text = message.content or ""
                 tool_use = None

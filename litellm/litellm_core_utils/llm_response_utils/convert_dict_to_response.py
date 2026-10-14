@@ -6,9 +6,13 @@ import traceback
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, cast
 
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_reasoning_content,
 )
@@ -372,6 +376,20 @@ def convert_to_streaming_response(
 from collections import defaultdict
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
+class _FakeToolUse(TypedDict):
+    parameters: ReadOnly[object]
+    recipient_name: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ParallelToolUseArgs(TypedDict):
+    tool_uses: ReadOnly[Sequence[_FakeToolUse]]
+
+
+_PARALLEL_TOOL_USE_ARGS: Final = TypeAdapter(_ParallelToolUseArgs)
+
+
 def handle_invalid_parallel_tool_calls(
     tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall],
 ) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None:
@@ -392,7 +410,9 @@ def handle_invalid_parallel_tool_calls(
             function_args = json.loads(tool_call.function.arguments)
             if current_function == "multi_tool_use.parallel":
                 verbose_logger.debug("OpenAI did a weird pseudo-multi-tool-use call, fixing call structure..")
-                for _fake_i, _fake_tool_use in enumerate(function_args["tool_uses"]):
+                for _fake_i, _fake_tool_use in enumerate(
+                    _PARALLEL_TOOL_USE_ARGS.validate_python(function_args)["tool_uses"]
+                ):
                     _function_args = _fake_tool_use["parameters"]
                     _current_function = _fake_tool_use["recipient_name"]
                     _current_function = _current_function.removeprefix("functions.")
@@ -516,7 +536,8 @@ class LiteLLMResponseObjectHandler:
 
         text_completion_response["choices"] = choices_list
         text_completion_response["usage"] = response.get("usage", None)
-        text_completion_response._hidden_params = HiddenParams(**response._hidden_params)
+        response_hidden_params: Final = get_hidden_params(response) or {}
+        text_completion_response.hidden_params = HiddenParams.model_validate(response_hidden_params)
         return text_completion_response
 
     @staticmethod
@@ -688,7 +709,7 @@ def convert_to_model_response_object(
 
                     message = Message(
                         content=content,
-                        role=choice["message"]["role"] or "assistant",
+                        role=choice["message"].get("role") or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
                         audio=choice["message"].get("audio", None),
@@ -699,6 +720,8 @@ def convert_to_model_response_object(
                         images=_normalize_images_for_message(choice["message"].get("images", None)),
                     )
                     finish_reason = choice.get("finish_reason", None)
+                if "refusal" in choice["message"]:
+                    message.refusal = choice["message"]["refusal"]
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
@@ -707,9 +730,10 @@ def convert_to_model_response_object(
 
                 ## PROVIDER SPECIFIC FIELDS ##
                 provider_specific_fields = {f: choice[f] for f in choice.keys() - _CHOICES_FIELDS}
-
                 logprobs = choice.get("logprobs", None)
+                provider_sent_logprobs = "logprobs" in choice
                 enhancements = choice.get("enhancements", None)
+
                 choice = Choices(
                     finish_reason=finish_reason,
                     index=idx,
@@ -718,6 +742,9 @@ def convert_to_model_response_object(
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
                 )
+                if provider_sent_logprobs and logprobs is None:
+                    choice.logprobs = None
+
                 choice_list.append(choice)
             model_response_object.choices = choice_list
 
@@ -747,9 +774,9 @@ def convert_to_model_response_object(
                     model_response_object._response_ms = (end_time - start_time).total_seconds() * 1000
 
             if hidden_params is not None:
-                if model_response_object._hidden_params is None:
-                    model_response_object._hidden_params = {}
-                model_response_object._hidden_params.update(hidden_params)
+                if model_response_object.hidden_params is None:
+                    model_response_object.hidden_params = {}
+                model_response_object.hidden_params.update(hidden_params)
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
@@ -787,7 +814,7 @@ def convert_to_model_response_object(
                 ).total_seconds() * 1000  # return response latency in ms like openai
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                model_response_object.hidden_params = hidden_params
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
@@ -833,13 +860,13 @@ def convert_to_model_response_object(
                     setattr(model_response_object, "usage", tr_usage_object)
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                model_response_object.hidden_params = hidden_params
 
             # Store internally-calculated duration in _hidden_params for cost
             # tracking without exposing it in the response body. Must be set
             # after hidden_params assignment to avoid being overwritten.
             if "_audio_transcription_duration" in response_object:
-                model_response_object._hidden_params["audio_transcription_duration"] = response_object[
+                model_response_object.hidden_params["audio_transcription_duration"] = response_object[
                     "_audio_transcription_duration"
                 ]
 

@@ -10,6 +10,7 @@ from openai.types.responses.function_tool_param import FunctionToolParam
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.utils import (
     iter_known_server_prefixes,
     logging_safe_mcp_headers,
@@ -41,8 +42,8 @@ if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.ui_session_utils import GrantedToolsetIds
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
 
@@ -112,6 +113,7 @@ async def _toolset_exists(name: str) -> bool:
         return False
 
 
+@catalog_operation(global_manager)
 async def _gateway_served_names(
     names: Collection[str],
     servers: Callable[[], Collection[MCPServer]] = _registered_mcp_servers,
@@ -185,6 +187,7 @@ class LiteLLM_Proxy_MCP_Handler:
     _split_mcp_tools = split_mcp_tools
 
     @staticmethod
+    @catalog_operation(global_manager)
     async def routes_through_gateway(
         tools: Iterable[Mapping[str, object]] | None,
         served_names: Callable[[Collection[str]], Awaitable[frozenset[str]]] = _gateway_served_names,
@@ -238,6 +241,7 @@ class LiteLLM_Proxy_MCP_Handler:
             return user_api_key_auth
 
     @staticmethod
+    @catalog_operation(global_manager)
     async def _get_mcp_tools_from_manager(
         user_api_key_auth: "UserAPIKeyAuth | None",
         mcp_tools_with_litellm_proxy: Iterable[Mapping[str, object]] | None,
@@ -294,10 +298,10 @@ class LiteLLM_Proxy_MCP_Handler:
                                     granted_toolset_ids,
                                 )
                                 from litellm.proxy.management_endpoints.common_utils import (
-                                    _user_has_admin_view,
+                                    user_api_key_has_admin_view,
                                 )
 
-                                if not _user_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
+                                if not user_api_key_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
                                     await (granted_toolsets or granted_toolset_ids)(user_api_key_auth)
                                 ):
                                     verbose_logger.debug("Key does not have access to toolset '%s', skipping.", name)
@@ -704,6 +708,7 @@ class LiteLLM_Proxy_MCP_Handler:
         return result_text or "Tool executed successfully"
 
     @staticmethod
+    @catalog_operation(global_manager)
     async def execute_tool_calls(
         tool_server_map: dict[str, str],
         tool_calls: Sequence[object],
@@ -759,7 +764,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
                     server_name
-                ) or global_mcp_server_manager._get_mcp_server_from_tool_name(tool_name)
+                ) or global_mcp_server_manager.get_mcp_server_from_tool_name(tool_name)
                 resolved_tool_name = (
                     _resolve_display_name_to_original(tool_name, [mcp_server]) if mcp_server else tool_name
                 )

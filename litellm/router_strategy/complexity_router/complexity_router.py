@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     is_codex_user_agent,
 )
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     as_openai_image_part,
@@ -58,6 +59,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in
 from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -121,6 +123,7 @@ from .jev_classifier import (
     HttpJevClassifierClient,
     JevClassifierClient,
     JevVerdict,
+    RouterJevClassifierClient,
     build_jev_request,
     jev_classifier_cost,
 )
@@ -413,9 +416,9 @@ def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mappi
     return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
 
 
-def _response_cost_or_none(response: ModelResponse | ResponsesAPIResponse) -> float | None:
-    hidden_params: Final = response._hidden_params
-    if not isinstance(hidden_params, dict):
+def _response_cost_or_none(response: object) -> float | None:
+    hidden_params: Final = get_hidden_params(response)
+    if hidden_params is None:
         return None
     cost: Final = hidden_params.get("response_cost")
     if isinstance(cost, bool) or not isinstance(cost, (int, float)):
@@ -1329,8 +1332,9 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
-    @staticmethod
-    def _build_jev_client(config: OpenSourceClassifierConfig) -> JevClassifierClient:
+    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient:
+        if config.deployment_name is not None:
+            return RouterJevClassifierClient(self.litellm_router_instance, config.deployment_name)
         if config.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import oss_connection
 
@@ -1340,6 +1344,14 @@ class ComplexityRouter(CustomLogger):
                 api_base=connection.api_base,
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider=config.provider,
+            )
+        if config.provider == "databricks":
+            databricks: Final = DATABRICKS_DECISIONS_CONFIG.connection(config.api_base, config.api_key)
+            return HttpJevClassifierClient(
+                api_key=databricks.api_key,
+                api_base=databricks.api_base,
+                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+                provider="databricks",
             )
         api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
         if not api_key:
@@ -2308,13 +2320,23 @@ class ComplexityRouter(CustomLogger):
             if not self._tier_pools().get(tier_name):
                 raise ValueError(f"Jev classifier returned tier {tier_name!r}, which has no models configured")
             model: Final = response.model or config.model
-            accounting_provider: Final = "typesafe" if config.provider == "jev" else config.provider
+            accounting_provider: Final = (
+                response.classifier_provider
+                if config.deployment_name and response.classifier_provider
+                else "typesafe"
+                if config.provider == "jev"
+                else config.provider
+            )
             verdict: Final = JevVerdict(
                 label=answer.choice,
                 probabilities=answer.probabilities,
                 confidence=answer.confidence,
                 model=model,
-                cost=jev_classifier_cost(response, config.model, accounting_provider),
+                cost=response.classifier_cost
+                if config.deployment_name
+                else jev_classifier_cost(
+                    response, config.model, "typesafe" if config.provider == "jev" else config.provider
+                ),
                 provider=accounting_provider,
             )
             if breaker is not None and permit is not None:

@@ -45,7 +45,7 @@ from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # OpenAI parser module is private
 from openai.types.chat.completion_create_params import ResponseFormat
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, with_config
 
 import litellm
 import litellm.litellm_core_utils
@@ -59,6 +59,7 @@ from litellm._lazy_imports import (
     get_messages_reach_token_count,
     get_token_counter_new,
 )
+from litellm._logging import redact_secrets
 from litellm._uuid import uuid
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
@@ -90,7 +91,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
-from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
+from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
@@ -369,6 +370,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.rules import Rules
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.litellm_core_utils.thread_pool_executor import BoundedLoggingThreadPoolExecutor
+    from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
@@ -379,6 +381,7 @@ if TYPE_CHECKING:
     # Type stubs for lazy-loaded config classes and types
     from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
     from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+    from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
     from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.llms.base_llm.google_genai.transformation import (
@@ -601,20 +604,38 @@ def add_custom_logger_callback_to_specific_event(callback: str, logging_event: L
     )
 
     if callback_class:
-        if logging_event == "success" and _custom_logger_class_exists_in_success_callbacks(callback_class) is False:
-            litellm.logging_callback_manager.add_litellm_success_callback(callback_class)
-            litellm.logging_callback_manager.add_litellm_async_success_callback(callback_class)
-            if callback in litellm.success_callback:
-                litellm.success_callback.remove(callback)  # remove the string from the callback list
-            if callback in litellm._async_success_callback:
-                litellm._async_success_callback.remove(callback)  # remove the string from the callback list
-        elif logging_event == "failure" and _custom_logger_class_exists_in_failure_callbacks(callback_class) is False:
-            litellm.logging_callback_manager.add_litellm_failure_callback(callback_class)
-            litellm.logging_callback_manager.add_litellm_async_failure_callback(callback_class)
-            if callback in litellm.failure_callback:
-                litellm.failure_callback.remove(callback)  # remove the string from the callback list
-            if callback in litellm._async_failure_callback:
-                litellm._async_failure_callback.remove(callback)  # remove the string from the callback list
+        register_custom_logger_for_event(callback, callback_class, logging_event)
+
+
+def add_configured_callback_to_specific_event(callback: str, logging_event: Literal["success", "failure"]) -> None:
+    from litellm.litellm_core_utils.litellm_logging import (
+        init_custom_logger_compatible_class_at_startup,
+    )
+
+    callback_class: Final = init_custom_logger_compatible_class_at_startup(
+        callback, internal_usage_cache=None, llm_router=None
+    )
+    if callback_class is not None:
+        register_custom_logger_for_event(callback, callback_class, logging_event)
+
+
+def register_custom_logger_for_event(
+    callback: str, callback_class: CustomLogger, logging_event: Literal["success", "failure"]
+) -> None:
+    if logging_event == "success" and _custom_logger_class_exists_in_success_callbacks(callback_class) is False:
+        litellm.logging_callback_manager.add_litellm_success_callback(callback_class)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(callback_class)
+        if callback in litellm.success_callback:
+            litellm.success_callback.remove(callback)  # remove the string from the callback list
+        if callback in litellm._async_success_callback:
+            litellm._async_success_callback.remove(callback)  # remove the string from the callback list
+    elif logging_event == "failure" and _custom_logger_class_exists_in_failure_callbacks(callback_class) is False:
+        litellm.logging_callback_manager.add_litellm_failure_callback(callback_class)
+        litellm.logging_callback_manager.add_litellm_async_failure_callback(callback_class)
+        if callback in litellm.failure_callback:
+            litellm.failure_callback.remove(callback)  # remove the string from the callback list
+        if callback in litellm._async_failure_callback:
+            litellm._async_failure_callback.remove(callback)  # remove the string from the callback list
 
 
 _add_custom_logger_callback_to_specific_event = add_custom_logger_callback_to_specific_event
@@ -971,6 +992,12 @@ def _ocr_document_summary(document: object) -> str:
 
 
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+
+_DECISION_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    (CallTypes.decisions.value, CallTypes.adecisions.value, CallTypes.systemone.value, CallTypes.asystemone.value)
+)
+
+
 def function_setup(
     original_function: str,
     rules_obj: Rules,
@@ -1217,9 +1244,9 @@ def function_setup(
                 if isinstance(search_query, list)
                 else search_query
             )
-        elif call_type in (CallTypes.decisions.value, CallTypes.adecisions.value):
-            decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state", "")
-            messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state)
+        elif call_type in _DECISION_CALL_TYPES:
+            decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state") or kwargs.get("input") or ""
+            messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state, default=str)
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
             messages = args[1] if len(args) > 1 else kwargs.get("prompt")
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
@@ -1393,10 +1420,10 @@ def _schedule_async_success_logging(
             )
         )
 
-    if not getattr(logging_obj, "defer_async_logging", False):
+    if not logging_obj.defer_async_logging:
         _enqueue_async_logging()
         return
-    if getattr(logging_obj, "enqueue_deferred_logging", None) is not None:
+    if logging_obj.enqueue_deferred_logging is not None:
         return
     logging_obj.enqueue_deferred_logging = _enqueue_async_logging
 
@@ -1737,6 +1764,9 @@ def client(original_function):
 
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
+            from litellm.llms.github_copilot.per_user_auth import attach_github_copilot_user_session
+
+            attach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             kwargs["litellm_logging_obj"] = logging_obj
             LLMCachingHandler: Final = _get_cached_llm_caching_handler()
             _llm_caching_handler: Final[LLMCachingHandler] = LLMCachingHandler(
@@ -1894,17 +1924,18 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            # Copy the current context to propagate it to the background thread
-            # This is essential for OpenTelemetry span context propagation
-            ctx: Final = contextvars.copy_context()
-            executor: Final[BoundedLoggingThreadPoolExecutor] = getattr(sys.modules[__name__], "executor")
-            executor.submit(
-                ctx.run,
-                logging_obj.success_handler,
-                result,
-                start_time,
-                end_time,
-            )
+            if not is_internal_call.get():
+                # Copy the current context to propagate it to the background thread
+                # This is essential for OpenTelemetry span context propagation
+                ctx: Final = contextvars.copy_context()
+                executor: Final[BoundedLoggingThreadPoolExecutor] = getattr(sys.modules[__name__], "executor")
+                executor.submit(
+                    ctx.run,
+                    logging_obj.success_handler,
+                    result,
+                    start_time,
+                    end_time,
+                )
             # RETURN RESULT
             return result
         except Exception as e:
@@ -2024,6 +2055,9 @@ def client(original_function):
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
+            from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
+
+            await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             logging_obj.llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
@@ -2237,7 +2271,7 @@ def client(original_function):
                 is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not is_acompletion_litellm_router_call
+                    num_retries and not is_acompletion_litellm_router_call and not isinstance(e, ImportError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -2268,7 +2302,7 @@ def client(original_function):
                 is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not is_aresponses_litellm_router_call
+                    num_retries and not is_aresponses_litellm_router_call and not isinstance(e, ImportError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -2421,7 +2455,12 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
 
         if isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
-        verbose_logger.debug("Error selecting tokenizer: %s", e)
+        verbose_logger.warning(
+            "Falling back to tiktoken for %s; token counts may be approximate. "
+            "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. Error: %s",
+            json.dumps(redact_secrets(model)),
+            json.dumps(redact_secrets(str(e))),
+        )
 
     # default - tiktoken
     return _return_openai_tokenizer(model)
@@ -2492,7 +2531,7 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
     tokenizer_json: Final = custom_tokenizer or select_tokenizer(model=model)
     if tokenizer_json["type"] == "openai_tokenizer":
         openai_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
-            Encoding, tokenizer_json["tokenizer"]
+            "Encoding", tokenizer_json["tokenizer"]
         )
         return openai_tokenizer.encode(text, disallowed_special=())
     encoded: Final = tokenizer_json["tokenizer"].encode(text)
@@ -2517,7 +2556,7 @@ def decode(
     if tokenizer_json["type"] == "huggingface_tokenizer":
         ids: Final = strip_special_tokens(tokenizer_json["tokenizer"], tokens) if skip_special_tokens else tokens
         hf_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
-            HuggingFace, tokenizer_json["tokenizer"]
+            "HuggingFace", tokenizer_json["tokenizer"]
         )
         return hf_tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
     return tokenizer_json["tokenizer"].decode(tokens)
@@ -2954,6 +2993,10 @@ def supports_audio_input(model: str, custom_llm_provider: str | None = None) -> 
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
 
 
+def supports_video_input(model: str, custom_llm_provider: str | None = None) -> bool:
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_video_input")
+
+
 def supports_pdf_input(model: str, custom_llm_provider: str | None = None) -> bool:
     """Check if a given model supports pdf input in a chat completion call"""
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_pdf_input")
@@ -2961,7 +3004,7 @@ def supports_pdf_input(model: str, custom_llm_provider: str | None = None) -> bo
 
 def supports_audio_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """Check if a given model supports audio output in a chat completion call"""
-    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_output")
 
 
 def supports_prompt_caching(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -3251,7 +3294,7 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
     return key not in litellm.model_cost and match_capability_generalizations(key) is not None
 
 
-def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
+def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
     Returns ``None`` when the lookup raises or when it resolved via a
@@ -3260,7 +3303,7 @@ def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
     inheritance for prefix-mangled keys.
     """
     try:
-        info: Final = get_model_info(model=model)
+        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
     return None if is_generalized_model_info(info) else info
@@ -3335,6 +3378,7 @@ def register_model(
     *,
     persist_across_reloads: bool = True,
     warning_display_name: str | None = None,
+    custom_llm_provider: str | None = None,
 ):
     """
     Register new / Override existing models (and their pricing) to specific providers.
@@ -3359,6 +3403,10 @@ def register_model(
     ``warning_display_name`` names the model in the missing-cache-pricing
     warning instead of the registered key, for callers that register under an
     opaque key (e.g. the router's hashed deployment ids).
+
+    ``custom_llm_provider`` scopes the built-in cost-map match to entries for
+    that provider, so a deployment id that happens to equal another provider's
+    catalog key stays its own provider-less entry instead of merging into it.
     """
 
     loaded_model_cost = {}
@@ -3385,7 +3433,9 @@ def register_model(
             existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key
         else:
-            builtin_model_info = _get_builtin_model_info_for_registration(model=_key_str)
+            builtin_model_info = _get_builtin_model_info_for_registration(
+                model=_key_str, custom_llm_provider=custom_llm_provider
+            )
             if builtin_model_info is not None:
                 existing_model = cast(dict, builtin_model_info)
                 model_cost_key = existing_model["key"]
@@ -5041,6 +5091,13 @@ def get_optional_params(
             model=model,
             drop_params=bool(drop_params),
         )
+    if (litellm.drop_params or drop_params) and custom_llm_provider != "litellm_proxy":
+        litellm.AnthropicConfig.maybe_drop_speed_param(
+            model=model,
+            optional_params=passed_params,
+            drop_params=True,
+            custom_llm_provider=custom_llm_provider or None,
+        )
     # if user passed in non-default kwargs for specific providers/models, pass them along
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
@@ -5506,7 +5563,7 @@ def get_max_tokens(model: str) -> int | None:
             response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
             # Parse the JSON response
-            config_json: Final[Mapping[str, int]] = response.json()
+            config_json: Final = _HUGGINGFACE_MODEL_CONFIG.validate_python(response.json())
             # Extract and return the max_position_embeddings
             max_position_embeddings: Final = config_json.get("max_position_embeddings")
             if max_position_embeddings is not None:
@@ -5724,7 +5781,7 @@ def get_model_cost_key(potential_key: str) -> str | None:
 _get_model_cost_key = get_model_cost_key
 
 
-def _get_model_info_from_model_cost(key: str) -> dict[str, Any]:
+def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
     return litellm.model_cost[key]
 
 
@@ -5774,6 +5831,14 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
 
 
 from typing_extensions import ReadOnly, TypedDict
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _HuggingFaceModelConfig(TypedDict, total=False):
+    max_position_embeddings: ReadOnly[int | None]
+
+
+_HUGGINGFACE_MODEL_CONFIG: Final = TypeAdapter(_HuggingFaceModelConfig)
 
 
 class PotentialModelNamesAndCustomLLMProvider(TypedDict):
@@ -5872,9 +5937,18 @@ def get_potential_model_names(model: str, custom_llm_provider: str | None) -> Po
         provider_prefixed_model_name = combined_model_name
 
     if custom_llm_provider in ("bedrock", "bedrock_converse"):
-        from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+        from litellm.llms.bedrock.common_utils import (
+            extract_model_name_from_bedrock_arn,
+            split_bedrock_region_path,
+            strip_bedrock_routing_prefix,
+        )
 
-        split_model = strip_bedrock_routing_prefix(split_model)
+        region_free_bedrock_model: Final = split_bedrock_region_path(split_model)[1]
+        split_model = (
+            extract_model_name_from_bedrock_arn(region_free_bedrock_model)
+            if region_free_bedrock_model.startswith("arn:")
+            else strip_bedrock_routing_prefix(split_model)
+        )
 
     region_free_split_model: Final = (
         _strip_mantle_region_prefix(split_model) if custom_llm_provider == "bedrock_mantle" else split_model
@@ -5923,7 +5997,7 @@ def _get_max_position_embeddings(model_name: str) -> int | None:
         response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
         # Parse the JSON response
-        config_json: Final[Mapping[str, int]] = response.json()
+        config_json: Final = _HUGGINGFACE_MODEL_CONFIG.validate_python(response.json())
 
         # Extract and return the max_position_embeddings
         max_position_embeddings: Final = config_json.get("max_position_embeddings")
@@ -6349,6 +6423,7 @@ def get_model_info_helper(
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
                 supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
+                supports_video_input=_model_info.get("supports_video_input", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
@@ -6499,6 +6574,7 @@ def get_model_info(
             supports_prompt_caching: Optional[bool]
             supports_prompt_cache_breakpoint: Optional[bool]
             supports_audio_input: Optional[bool]
+            supports_video_input: Optional[bool]
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
             supports_web_search: Optional[bool]
@@ -8277,13 +8353,18 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
         raise TypeError(f"Invalid message type: {type(message)}. Expected dict or Pydantic model.")
 
 
-def convert_list_message_to_dict(messages: Sequence):
-    new_messages: Final = []
-    for message in messages:
-        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
-        cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
-        new_messages.append(cleaned_message)
-    return new_messages
+def convert_list_message_to_dict(
+    messages: Sequence[BaseModel | Mapping[str, object]],
+) -> list[dict[str, object]]:  # mutable-ok: callers mutate the returned message dicts
+    def _as_message_value(message: BaseModel | Mapping[str, object]) -> AllMessageValues:
+        return cast(  # cast-ok: message dicts satisfy the TypedDict shape
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: messages are dicts or pydantic models at runt
+            ),
+        )
+
+    return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
 def validate_and_fix_openai_messages(messages: list):
@@ -8299,7 +8380,12 @@ def validate_and_fix_openai_messages(messages: list):
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
-        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        convert_msg_to_dict = cast(  # cast-ok: message dicts satisfy the TypedDict shape
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: dicts or pydantic models at runtime
+            ),
+        )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)
@@ -8464,7 +8550,7 @@ _get_bundled_model_cost_map = get_bundled_model_cost_map
 def _get_model_cost_entry_for_provider_config(
     model: str,
     provider: LlmProviders,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     candidate_keys: Final = (model, f"{provider.value}/{model}")
     for model_key in candidate_keys:
         model_info = litellm.model_cost.get(model_key)
@@ -8615,6 +8701,7 @@ class ProviderConfigManager:
                 False,
             ),
             LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
+            LlmProviders.SCALEDOWN: (lambda: litellm.ScaleDownChatConfig(), False),
             LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
@@ -8645,6 +8732,10 @@ class ProviderConfigManager:
             LlmProviders.AMAZON_NOVA: (lambda: litellm.AmazonNovaChatConfig(), False),
             LlmProviders.LANGGRAPH: (
                 lambda: ProviderConfigManager._get_langgraph_config(),
+                False,
+            ),
+            LlmProviders.MICROSOFT_365_COPILOT: (
+                lambda: ProviderConfigManager._get_microsoft_365_copilot_config(),
                 False,
             ),
             LlmProviders.SAIL: (ProviderConfigManager._get_sail_chat_config, False),
@@ -8740,6 +8831,12 @@ class ProviderConfigManager:
         from litellm.llms.langgraph.chat.transformation import LangGraphConfig
 
         return LangGraphConfig()
+
+    @staticmethod
+    def _get_microsoft_365_copilot_config() -> BaseConfig:
+        from litellm.llms.microsoft_365_copilot.chat.transformation import Microsoft365CopilotChatConfig
+
+        return Microsoft365CopilotChatConfig()
 
     @staticmethod
     def _get_langflow_config() -> BaseConfig:
@@ -8952,6 +9049,34 @@ class ProviderConfigManager:
 
             return get_dashscope_family_rerank_config(provider.value)
         return litellm.CohereRerankConfig()
+
+    @staticmethod
+    def get_provider_decisions_config(model: str, provider: LlmProviders) -> BaseDecisionsConfig | None:
+        if provider == LlmProviders.PERPLEXITY:
+            return litellm.PerplexityDecisionsConfig()
+        if provider == LlmProviders.TYPESAFE:
+            return litellm.TypeSafeDecisionsConfig()
+        if provider == LlmProviders.OPENROUTER:
+            return litellm.OpenRouterDecisionsConfig()
+        if provider == LlmProviders.FIREWORKS_AI:
+            return litellm.FireworksAIDecisionsConfig()
+        if provider == LlmProviders.CLOUDFLARE:
+            return litellm.CloudflareDecisionsConfig()
+        if provider == LlmProviders.STRANDS_DECIDER:
+            return litellm.StrandsDeciderDecisionsConfig()
+        if provider == LlmProviders.DATABRICKS:
+            return litellm.DatabricksDecisionsConfig()
+        if provider == LlmProviders.HOSTED_VLLM:
+            return litellm.HostedVLLMDecisionsConfig()
+        if provider == LlmProviders.LAYA:
+            return litellm.LayaDecisionsConfig()
+        if provider == LlmProviders.BESPOKE:
+            return litellm.BespokeDecisionsConfig()
+        if provider == LlmProviders.OPENAI:
+            return litellm.OpenAIDecisionsConfig()
+        if provider == LlmProviders.AZURE_AI:
+            return litellm.AzureAIDecisionsConfig()
+        return None
 
     @staticmethod
     def get_provider_anthropic_messages_config(
@@ -9734,6 +9859,16 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 
             return VertexAIVideoConfig()
+        elif provider in (
+            LlmProviders.DASHSCOPE,
+            LlmProviders.QWENCLOUD,
+            LlmProviders.QWEN_AI_PLATFORM,
+        ):
+            from litellm.llms.dashscope.common_utils import (
+                get_dashscope_family_video_config,
+            )
+
+            return get_dashscope_family_video_config(provider.value)
         elif LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 

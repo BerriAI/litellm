@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/networking", () => ({ serverRootPath: "" }));
 
-import { modelGroupHref, teamDetailHref, userDetailHref } from "./entityLinks";
+import { accessGroupHref, modelGroupHref, modelOrAccessGroupHref, teamDetailHref, userDetailHref } from "./entityLinks";
 
 describe("userDetailHref", () => {
   it("targets the users page filtered to the encoded user id", () => {
@@ -38,4 +38,31 @@ describe("modelGroupHref", () => {
       expect(modelGroupHref(sentinel)).toBeUndefined();
     },
   );
+});
+
+describe("accessGroupHref", () => {
+  it("targets the models page filtered to the encoded access group", () => {
+    expect(accessGroupHref("a b/c")).toMatch(/\/models-and-endpoints\?access_group=a%20b%2Fc$/);
+  });
+});
+
+describe("modelOrAccessGroupHref", () => {
+  it("uses the access-group filter for a known access group", () => {
+    expect(modelOrAccessGroupHref("repro-access-group", new Set(["repro-access-group"]))).toMatch(
+      /\?access_group=repro-access-group$/,
+    );
+  });
+
+  it("uses the model-group filter for a name outside the access-group set", () => {
+    expect(modelOrAccessGroupHref("gpt-4.1", new Set(["repro-access-group"]))).toMatch(/\?model_group=gpt-4\.1$/);
+  });
+
+  it("keeps grant sentinels without a link unless they are access groups", () => {
+    expect(modelOrAccessGroupHref("all-team-models", new Set())).toBeUndefined();
+  });
+
+  it("keeps model names unlinked until access group names are available", () => {
+    expect(modelOrAccessGroupHref("repro-access-group", undefined)).toBeUndefined();
+    expect(modelOrAccessGroupHref("gpt-4.1", undefined)).toBeUndefined();
+  });
 });

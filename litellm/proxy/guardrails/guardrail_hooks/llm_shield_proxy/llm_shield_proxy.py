@@ -2,7 +2,7 @@ import copy
 import functools
 import os
 import uuid
-from collections.abc import AsyncGenerator, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__
@@ -10,9 +10,11 @@ from typing import (
     Final,
     Literal,
     Optional,
+    Protocol,
 )
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -80,6 +82,8 @@ _VAULT_PREFIX: Final = f"litellm-{uuid.uuid4().hex}"
 
 _DEFAULT_TIMEOUT_SECONDS: Final = 10.0
 
+_SHIELD_BODY: Final = TypeAdapter(dict[str, object])
+
 
 def _string_tool_arguments(calls: Sequence[object]) -> Iterator[tuple[object, str]]:
     for call in calls:
@@ -87,6 +91,15 @@ def _string_tool_arguments(calls: Sequence[object]) -> Iterator[tuple[object, st
         arguments = read_field(function, "arguments") if function is not None else None
         if isinstance(arguments, str) and arguments:
             yield function, arguments
+
+
+class _ContentDelta(Protocol):
+    content: object
+
+
+class _FinishingDelta(Protocol):
+    content: object
+    tool_calls: object
 
 
 class LLMShieldProxyGuardrail(CustomGuardrail):
@@ -215,7 +228,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 timeout=_DEFAULT_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
-            return response.json()
+            return _SHIELD_BODY.validate_python(response.json(), strict=True)
         except httpx.HTTPStatusError as exc:
             verbose_proxy_logger.exception("LLM Shield Proxy returned %s for %s", exc.response.status_code, path)
             raise GuardrailRaisedException(
@@ -329,8 +342,8 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         self,
         data: MutableRequest,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-    ) -> Any:
+        response: object,
+    ) -> object:
         """Restores the original values in a copy of a non-streaming response.
 
         The copy is what keeps plaintext out of the response cache. LiteLLM caches the
@@ -345,8 +358,9 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             return response
         response = detached(response)  # rebind-ok: everything below restores the copy.
 
-        if self._is_anthropic_message_response(response):
-            return await self._restore_anthropic_response(response, data)
+        anthropic_body: Final = as_object(response)
+        if anthropic_body is not None and self._is_anthropic_message_response(anthropic_body):
+            return await self._restore_anthropic_response(anthropic_body, data)
 
         response_slots: Final = self._responses_api_slots(response)
         if response_slots:
@@ -357,8 +371,10 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             return response
 
         pending: Final[SlotSink] = []
+        choice: object
+        tool_call: object
         for choice in choices:
-            message = getattr(choice, "message", None)
+            message: object = getattr(choice, "message", None)
             if message is None:
                 text = read_field(choice, "text")
                 if isinstance(text, str) and text:
@@ -368,11 +384,11 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             if isinstance(content, str) and content:
                 pending.append((content, functools.partial(setattr, message, "content")))
             for tool_call in getattr(message, "tool_calls", None) or ():
-                function = getattr(tool_call, "function", None)
+                function: object = getattr(tool_call, "function", None)
                 arguments = getattr(function, "arguments", None) if function is not None else None
                 if isinstance(arguments, str) and arguments:
                     pending.append((arguments, functools.partial(setattr, function, "arguments")))
-            legacy = getattr(message, "function_call", None)
+            legacy: object = getattr(message, "function_call", None)
             legacy_arguments = getattr(legacy, "arguments", None) if legacy is not None else None
             if isinstance(legacy_arguments, str) and legacy_arguments:
                 pending.append((legacy_arguments, functools.partial(setattr, legacy, "arguments")))
@@ -434,6 +450,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         function_call_output holds `output` -- so the two directions stay symmetric.
         """
         slots: Final[SlotSink] = []
+        item: object
         for item in getattr(response, "output", None) or ():
             collect_response_item(item, slots)
         return tuple(slots)
@@ -448,7 +465,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: MutableRequest,
     ) -> AsyncGenerator[Any, None]:
         """Restores original values incrementally, without buffering the stream.
@@ -487,6 +504,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 continue
             restored_chunk = detached(chunk)
             last_chunk = restored_chunk
+            choice: object
             for choice in getattr(restored_chunk, "choices", None) or ():
                 await self._restore_choice(choice, carries, session_id)
             yield restored_chunk
@@ -518,6 +536,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
         await self._restore_content_window(delta, (index, None), carries, session_id, is_final)
 
+        tool_call: object
         for tool_call in getattr(delta, "tool_calls", None) or ():
             await self._restore_tool_call_window(tool_call, index, carries, session_id)
 
@@ -545,7 +564,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
     async def _restore_content_window(
         self,
-        delta: Any,
+        delta: _ContentDelta,
         key: CarryKey,
         carries: CarryWindows,
         session_id: str,
@@ -597,7 +616,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
     async def _flush_finished_choice(
         self,
-        delta: Any,
+        delta: _FinishingDelta,
         choice_index: int,
         carries: CarryWindows,
         session_id: str,

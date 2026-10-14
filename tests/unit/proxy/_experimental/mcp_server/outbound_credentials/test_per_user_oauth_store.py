@@ -26,6 +26,63 @@ class _RecordingStore:
         self.invalidations.append((user_id, server_id))
 
 
+@pytest.fixture
+def credential_database(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+
+    prisma = MagicMock()
+    table = prisma.db.litellm_mcpusercredentials
+    table.upsert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "credential-persistence-test-salt")
+    return table
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scopes, expected", [(None, None), ((), []), (("read",), ["read"])])
+async def test_credential_persistence_preserves_known_and_unknown_scopes(credential_database, scopes, expected):
+    from litellm.proxy._experimental.mcp_server.db import decode_oauth_payload
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import _persist_credential
+
+    await _persist_credential("alice", "srv", "access", "refresh", 60, scopes)
+    row = credential_database.upsert.call_args.kwargs["data"]["create"]
+    payload = decode_oauth_payload(row["credential_b64"])
+    assert payload is not None and payload.get("scopes") == expected
+    assert row["user_id"] == "alice" and row["server_id"] == "srv"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prior_scopes, response_scope, expected",
+    [((), None, []), (("read", "write"), "", []), (("read", "write"), None, ["read", "write"])],
+)
+async def test_native_refresh_persists_actual_grant_through_storage_adapter(
+    credential_database, prior_scopes, response_scope, expected,
+):
+    from litellm.proxy._experimental.mcp_server.db import decode_oauth_payload
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeRefresher
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import _persist_credential
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv", name="srv", transport="http", auth_type="oauth2",
+        token_url="https://idp.example/token", client_id="client", client_secret="secret",
+    )
+
+    async def token_endpoint(url, form, headers):
+        assert url == server.token_url and form["grant_type"] == "refresh_token"
+        return {"access_token": "rotated", **({"scope": response_scope} if response_scope is not None else {})}
+
+    refresher = AuthorizationCodeRefresher(lambda _: server, token_endpoint, _persist_credential)
+    refreshed = await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="refresh", scopes=prior_scopes))
+    assert refreshed is not None and refreshed.scopes == tuple(expected)
+    payload = decode_oauth_payload(credential_database.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    assert payload is not None and payload.get("scopes") == expected
+    assert payload["access_token"] == "rotated"
+
+
 class _BlockingStore:
     def __init__(self, access_token: str) -> None:
         self._access_token = access_token

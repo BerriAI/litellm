@@ -50,7 +50,7 @@ from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
     from litellm.caching.caching_handler import LLMCachingHandler
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.responses.streaming_websocket import (
         PresidioGuardrailCallback,
         ResponsesBackendWebSocket,
@@ -216,6 +216,7 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
         "invalid_request_error": 400,
         "context_length_exceeded": 400,
         "content_policy_violation": 400,
+        "cyber_policy": 400,
         "model_not_found": 400,
     }
 )
@@ -591,7 +592,7 @@ class BaseResponsesAPIStreamingIterator:
         target: Final[object] = getattr(logging_response, "response", None)
         if not isinstance(target, ResponsesAPIResponse):
             return
-        existing: Final[Mapping[str, object]] = target._hidden_params
+        existing: Final[Mapping[str, object]] = target.hidden_params
         source_hidden: Final[object] = getattr(
             getattr(self.completed_response, "response", None), "_hidden_params", None
         )
@@ -602,7 +603,7 @@ class BaseResponsesAPIStreamingIterator:
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
         # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
-        target._hidden_params = {
+        target.hidden_params = {
             "additional_headers": {**headers},
             "headers": {**raw_headers},
             **existing,

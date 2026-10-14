@@ -45,7 +45,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         api_key: str,
         *,
         openai_beta_realtime: bool = False,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Headers for the upstream OpenAI Realtime WebSocket.
 
@@ -54,7 +54,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         so the legacy beta API is used. GA clients omit that header on the client
         connection and must send GA-shaped ``session.update`` payloads.
         """
-        headers: Final[dict] = {"Authorization": f"Bearer {api_key}"}
+        headers: Final[dict[str, str]] = {"Authorization": f"Bearer {api_key}"}
         if openai_beta_realtime:
             headers["OpenAI-Beta"] = "realtime=v1"
         return headers
@@ -107,6 +107,13 @@ class OpenAIRealtime(OpenAIChatCompletion):
         if upstream_params:
             url = url.copy_with(params=upstream_params)
         return str(url)
+
+    def construct_url(
+        self,
+        api_base: str,
+        query_params: RealtimeQueryParams,
+    ) -> str:
+        return self._construct_url(api_base, query_params)
 
     def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:
         """Return a per-session GA event normalizer, or None for passthrough.

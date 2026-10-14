@@ -93,7 +93,7 @@ from litellm.types.router import (
     TaggedPreRoutingStrategy,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -2748,6 +2748,7 @@ def _llm_response(content: str, response_cost: float | None = None):
     response.choices = [MagicMock()]
     response.choices[0].message.content = content
     response._hidden_params = {} if response_cost is None else {"response_cost": response_cost}
+    response.hidden_params = response._hidden_params
     return response
 
 

@@ -29,6 +29,7 @@ import httpx
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure_ai.agents.transformation import (
     AzureAIAgentsConfig,
@@ -231,9 +232,7 @@ class AzureAIAgentsHandler:
         model_response.model = model
 
         # Store thread_id for conversation continuity
-        if not hasattr(model_response, "_hidden_params") or model_response._hidden_params is None:
-            model_response._hidden_params = {}
-        model_response._hidden_params["thread_id"] = thread_id
+        set_hidden_param(model_response, "thread_id", thread_id)
 
         # Estimate token usage
         try:
@@ -280,7 +279,7 @@ class AzureAIAgentsHandler:
             headers["Authorization"] = f"Bearer {api_key}"
 
         api_version: Final = optional_params.get("api_version", self.config.DEFAULT_API_VERSION)
-        agent_id: Final = self.config._get_agent_id(model, optional_params)
+        agent_id: Final = self.config.get_agent_id(model, optional_params)
         thread_id: Final = optional_params.get("thread_id")
         api_base = api_base.rstrip("/")
 
@@ -314,10 +313,10 @@ class AzureAIAgentsHandler:
         headers: dict | None = None,
     ) -> ModelResponse:
         """Execute synchronous completion using Azure Agent Service."""
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
         if client is None:
-            client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
 
         (
             headers,
@@ -660,7 +659,7 @@ class AzureAIAgentsHandler:
                         ],
                     )
                     if thread_id:
-                        final_chunk._hidden_params = {"thread_id": thread_id}
+                        final_chunk.hidden_params = {"thread_id": thread_id}
                     yield final_chunk
                     return
 
@@ -706,7 +705,7 @@ class AzureAIAgentsHandler:
                                     ],
                                 )
                                 if thread_id:
-                                    chunk._hidden_params = {"thread_id": thread_id}
+                                    chunk.hidden_params = {"thread_id": thread_id}
                                 yield chunk
 
 

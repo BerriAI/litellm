@@ -1,8 +1,9 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -43,11 +44,17 @@ from ..common_utils import (
     FIREROUTER,
     FireworksAIException,
     FireworksAIMixin,
+    get_fireworks_forwarded_user_id,
     resolve_fireworks_resource_name,
+    without_caller_user,
 )
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str)
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -674,13 +681,24 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                     **stream_options,
                     "include_usage": True,
                 }
-        return super().transform_request(
+        request: Final = super().transform_request(
             model=resolved_model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
+        forwarded_user_id: Final = get_fireworks_forwarded_user_id(litellm_params)
+        return request if forwarded_user_id is None else {**request, "user": forwarded_user_id}
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return without_caller_user(extra_body, get_fireworks_forwarded_user_id(litellm_params))
 
     def _handle_message_content_with_tool_calls(
         self,
@@ -744,7 +762,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         additional_headers: Final = get_response_headers(raw_response_headers)
 
-        response: Final = ModelResponse(**completion_response)
+        completion_fields: Final = _JSON_DICT.validate_python(completion_response)
+        response: Final = ModelResponse(**completion_fields)
 
         if response.model is not None:
             response.model = "fireworks_ai/" + response.model
@@ -756,9 +775,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 tool_calls=optional_params.get("tools", None),
             )
 
-        response._hidden_params = {
+        response.hidden_params = {
             "additional_headers": additional_headers,
-            **_extract_fireworks_hidden_params(completion_response),
+            **_extract_fireworks_hidden_params(completion_fields),
         }
 
         return response
@@ -787,6 +806,13 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         )
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_models(self, api_key: str | None = None, api_base: str | None = None):
         api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
         if api_base is None or api_key is None:
@@ -812,9 +838,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 f"Failed to fetch models from Fireworks AI. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models: Final = response.json()["models"]
+        models: Final = _JSON_OBJECTS.validate_python(_JSON_DICT.validate_python(response.json())["models"])
 
-        return ["fireworks_ai/" + model["name"] for model in models]
+        return ["fireworks_ai/" + _STR.validate_python(model["name"]) for model in models]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
