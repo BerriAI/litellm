@@ -6399,7 +6399,7 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
-async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
+async def set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
     """
     Set a Redis-backed spend counter to `value`, mirror it into the short-lived
     spend_db_floor marker `_authoritative_floor_spend` reads, and broadcast both
@@ -6515,7 +6515,7 @@ async def _reset_key_budget_windows(
         duration = window.get("budget_duration")
         if isinstance(duration, str) and duration:
             counter_key = f"spend:key:{hashed_api_key}:window:{duration}"
-            await _set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
+            await set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
 
 
 @router.post(
@@ -6589,7 +6589,7 @@ async def reset_key_spend_fn(
         # amount for every enforcement check immediately instead of the stale
         # pre-reset value.
         _counter_key: Final = f"spend:key:{hashed_api_key}"
-        await _set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
+        await set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
         await _reset_key_budget_windows(
             prisma_client=prisma_client,
             hashed_api_key=hashed_api_key,

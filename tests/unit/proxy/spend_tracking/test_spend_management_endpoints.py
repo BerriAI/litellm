@@ -8105,7 +8105,7 @@ def test_global_spend_reset_zeroes_live_spend_counters(monkeypatch):
 
     monkeypatch.setattr(
         kme,
-        "_set_spend_counter_with_floor_and_broadcast",
+        "set_spend_counter_with_floor_and_broadcast",
         mock_set_counter,
     )
 

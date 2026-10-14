@@ -305,20 +305,20 @@ async def _reset_spend_counters(prisma_client: PrismaClient) -> None:
     floor marker and broadcast) rather than deleting it.
     """
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _set_spend_counter_with_floor_and_broadcast,
+        set_spend_counter_with_floor_and_broadcast,
     )
 
     key_rows: Final = await _verification_token_table(prisma_client).find_many(where={})
     for row in key_rows:
-        token: Final[str | None] = row.model_dump().get("token")
-        if token:
-            await _set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:key:{token}", value=0.0)
+        token: Final[object] = row.model_dump().get("token", "")
+        if isinstance(token, str) and token:
+            await set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:key:{token}", value=0.0)
 
     team_rows: Final = await _team_table(prisma_client).find_many(where={})
     for row in team_rows:
-        team_id: Final[str | None] = row.model_dump().get("team_id")
-        if team_id:
-            await _set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:team:{team_id}", value=0.0)
+        team_id: Final[object] = row.model_dump().get("team_id", "")
+        if isinstance(team_id, str) and team_id:
+            await set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:team:{team_id}", value=0.0)
 
 
 def _spend_logs_daily_summary_sql(
