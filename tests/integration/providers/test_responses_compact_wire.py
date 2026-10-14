@@ -134,8 +134,8 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
                 )
                 assert response.status_code == 200, response.text
                 compacted: Final = CompactedResponse.model_validate_json(response.content)
-                assert compacted.id != completed_id
-                assert same_response(compacted.id, completed_id)
+                assert compacted.id != completed_id, compacted.model_dump_json()
+                assert same_response(compacted.id, completed_id), compacted.model_dump_json()
                 assert compacted.model_dump(mode="json") == {
                     "id": compacted.id,
                     "created_at": 1,

@@ -13,6 +13,18 @@ from pydantic import JsonValue, TypeAdapter
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-cursor-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_THINKING_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+_CHAT_THINKING_LEVELS: Final = ("none", "minimal", "low", "medium", "high", "max")
+_RESPONSES_SUFFIXES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = tuple(
+    (f"-thinking-{level}", {"reasoning": {"effort": level}}) for level in _THINKING_LEVELS
+) + (
+    ("-fast", {}),
+    ("-thinking-low-fast", {"reasoning": {"effort": "low"}}),
+    ("-thinking-high-fast", {"reasoning": {"effort": "high"}}),
+)
+_CHAT_SUFFIXES: Final[tuple[tuple[str, str], ...]] = (("", ""),) + tuple(
+    (f"-thinking-{level}", level) for level in _CHAT_THINKING_LEVELS
+)
 _PROMPT: Final = "Inspect the requested change."
 _INPUT: Final = [{"role": "user", "content": [{"type": "input_text", "text": _PROMPT}]}]
 _CUSTOM_TOOL: Final = {
@@ -96,6 +108,7 @@ def _chat_completion(stream: bool) -> bytes | tuple[bytes, ...]:
             "object": "chat.completion",
             "created": 1,
             "model": _MODEL,
+            "system_fingerprint": "fp_cursor",
             "choices": [
                 {
                     "index": 0,
@@ -118,11 +131,7 @@ def _deployment(scenario: Scenario, wire: Wire) -> str:
 
 @pytest.mark.parametrize(
     ("suffix", "reasoning"),
-    (
-        ("-thinking-high", {"reasoning": {"effort": "high"}}),
-        ("-fast", {}),
-        ("-thinking-high-fast", {"reasoning": {"effort": "high"}}),
-    ),
+    _RESPONSES_SUFFIXES,
 )
 @pytest.mark.parametrize("stream", (False, True))
 def test_cursor_responses_input_uses_responses_wire_and_chat_output(
@@ -310,27 +319,22 @@ def test_cursor_stream_reports_usage_when_the_client_asks_for_it(gateway: Gatewa
         assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses"]
 
 
-def test_cursor_messages_body_uses_chat_completions_wire(gateway: Gateway) -> None:
+@pytest.mark.parametrize(("suffix", "reasoning_effort"), _CHAT_SUFFIXES)
+@pytest.mark.parametrize("stream", (False, True))
+def test_cursor_messages_body_uses_chat_completions_wire(
+    gateway: Gateway,
+    stream: bool,
+    suffix: str,
+    reasoning_effort: str,
+) -> None:
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
             return model_discovery_reply(_MODEL)
+        completion: Final = _chat_completion(stream)
         return Reply(
-            body=json.dumps(
-                {
-                    "id": "chat_cursor_1",
-                    "object": "chat.completion",
-                    "created": 1,
-                    "model": _MODEL,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "Chat response."},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
-                }
-            ).encode()
+            content_type="text/event-stream" if stream else "application/json",
+            chunks=completion if isinstance(completion, tuple) else None,
+            body=completion if isinstance(completion, bytes) else b"",
         )
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -342,28 +346,65 @@ def test_cursor_messages_body_uses_chat_completions_wire(gateway: Gateway) -> No
             "POST",
             "/cursor/chat/completions",
             {
-                "model": model,
+                "model": f"{model}{suffix}",
                 "messages": [{"role": "user", "content": "genuine chat request"}],
                 "tools": [_FUNCTION_TOOL, _CUSTOM_TOOL],
                 "tool_choice": {"type": "function", "name": "lookup"},
+                "stream": stream,
             },
             key=key,
         )
         assert response.status_code == 200, response.text
-        payload: Final = _JSON_OBJECT.validate_json(response.content)
-        assert payload["object"] == "chat.completion", response.text
-        assert payload["choices"] == [
-            {
-                "index": 0,
-                "finish_reason": "stop",
-                "message": {
-                    "role": "assistant",
-                    "content": "Chat response.",
-                    "provider_specific_fields": {"refusal": None},
+        if stream:
+            events: Final = tuple(
+                _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+                for line in response.text.splitlines()
+                if line.startswith("data: ") and line != "data: [DONE]"
+            )
+            assert [
+                {key: value for key, value in event.items() if key not in ("id", "created")} for event in events
+            ] == [
+                {
+                    "object": "chat.completion.chunk",
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Patch inspected."}}],
                 },
-                "provider_specific_fields": {},
-            }
-        ], response.text
+                {
+                    "object": "chat.completion.chunk",
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+            ], response.text
+        else:
+            payload: Final = _JSON_OBJECT.validate_json(response.content)
+            identity: Final = payload.get("id")
+            created: Final = payload.get("created")
+            assert isinstance(identity, str) and same_response(identity, "chat_cursor_1"), response.text
+            assert isinstance(created, int) and created > 0, response.text
+            assert payload == {
+                "id": identity,
+                "created": created,
+                "model": model,
+                "object": "chat.completion",
+                "system_fingerprint": "fp_cursor",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "message": {
+                            "content": "Patch inspected.",
+                            "role": "assistant",
+                            "provider_specific_fields": {"refusal": None},
+                        },
+                        "provider_specific_fields": {},
+                    }
+                ],
+                "usage": {
+                    "completion_tokens": 3,
+                    "prompt_tokens": 4,
+                    "total_tokens": 7,
+                },
+            }, response.text
         requests: Final = drain_contract_requests(wire)
         assert [(request.method, request.target) for request in requests] == [("POST", "/v1/chat/completions")], (
             requests
@@ -398,4 +439,7 @@ def test_cursor_messages_body_uses_chat_completions_wire(gateway: Gateway) -> No
                 },
             ],
             "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+            **({"stream": True} if stream else {}),
+            **({"stream_options": {"include_usage": True}} if stream else {}),
+            **({"reasoning_effort": reasoning_effort} if reasoning_effort else {}),
         }, requests[0].body

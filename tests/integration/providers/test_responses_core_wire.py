@@ -2,23 +2,22 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import uuid
 from typing import Final
 
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.worker_readiness import wait_for_worker_readiness
 from openai.types.responses import ResponseCompletedEvent
 from pydantic import JsonValue, TypeAdapter
-
-from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROXY_WORKERS: Final = max(1, int(os.environ.get("INTEGRATION_PROXY_WORKERS", "1")))
+_ALIASES: Final = ("/v1", "", "/openai/v1")
 
 
 def _deployments_in_group(gateway: Gateway, group: str) -> int:
@@ -28,12 +27,7 @@ def _deployments_in_group(gateway: Gateway, group: str) -> int:
 
 
 def _wait_for_workers(gateway: Gateway, group: str, deployments: int) -> None:
-    ready_after: Final = time.monotonic() + (0 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS + 1)
-    eventually(
-        lambda: (_deployments_in_group(gateway, group), time.monotonic()),
-        lambda observation: observation[0] == deployments and observation[1] >= ready_after,
-        seconds=30 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS * 2 + 30,
-    )
+    wait_for_worker_readiness(gateway, group, deployments, _PROXY_WORKERS)
 
 
 def model_discovery_reply(model: str) -> Reply:
@@ -123,9 +117,11 @@ def _enable_responses_affinity(scenario: Scenario) -> None:
     )
 
 
+@pytest.mark.parametrize("prefix", _ALIASES)
 @pytest.mark.parametrize("stream", (False, True))
 def test_previous_response_id_uses_the_raw_id_and_affinity(
     gateway: Gateway,
+    prefix: str,
     stream: bool,
 ) -> None:
     first_raw_id: Final = f"resp_turn_one_{uuid.uuid4().hex}"
@@ -160,7 +156,7 @@ def test_previous_response_id_uses_the_raw_id_and_affinity(
         _enable_responses_affinity(scenario)
         assert _register(scenario, first_wire, model) == model
         client: Final = openai.OpenAI(
-            base_url=f"{gateway.client.base_url}/v1",
+            base_url=f"{gateway.client.base_url}{prefix}",
             api_key=gateway.key,
             max_retries=0,
         )
@@ -196,7 +192,8 @@ def test_previous_response_id_uses_the_raw_id_and_affinity(
         ], [request.body for request in requests]
 
 
-def test_codex_responses_request_preserves_all_supported_fields(gateway: Gateway) -> None:
+@pytest.mark.parametrize("prefix", _ALIASES)
+def test_codex_responses_request_preserves_all_supported_fields(gateway: Gateway, prefix: str) -> None:
     response_id: Final = f"resp_codex_{uuid.uuid4().hex}"
     input_items: Final = [
         {
@@ -287,7 +284,7 @@ def test_codex_responses_request_preserves_all_supported_fields(gateway: Gateway
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = _register(scenario, wire)
         client: Final = openai.OpenAI(
-            base_url=f"{gateway.client.base_url}/v1",
+            base_url=f"{gateway.client.base_url}{prefix}",
             api_key=gateway.key,
             max_retries=0,
         )
@@ -327,6 +324,55 @@ def test_codex_responses_request_preserves_all_supported_fields(gateway: Gateway
         assert len(requests) == 1, requests
         assert _JSON_OBJECT.validate_json(requests[0].body) == expected_body, requests[0].body
         assert [request.target for request in requests] == ["/v1/responses"]
+
+
+@pytest.mark.parametrize("prefix", _ALIASES)
+@pytest.mark.parametrize("case", ("mixed", "many"))
+def test_responses_metadata_reaches_the_provider_as_typed(
+    gateway: Gateway,
+    prefix: str,
+    case: str,
+) -> None:
+    metadata: Final = (
+        {
+            "string_value": "keep this",
+            "integer_value": 7,
+            "boolean_value": True,
+            "nested_value": {"key": "drop this"},
+            "second_string": "keep this too",
+        }
+        if case == "mixed"
+        else {f"key_{index:02d}": f"value_{index:02d}" for index in range(17)}
+    )
+    expected_metadata: Final = dict(
+        tuple((key, value) for key, value in metadata.items() if isinstance(value, str))[:16]
+    )
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        assert (request.method, request.target) == ("POST", "/v1/responses"), request.target
+        return Reply(body=_response(f"resp_metadata_{uuid.uuid4().hex}"))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _register(scenario, wire)
+        response: Final = gateway.request(
+            "POST",
+            f"{prefix}/responses",
+            {
+                "model": model,
+                "input": "metadata propagation",
+                "metadata": metadata,
+            },
+        )
+        assert response.status_code == 200, response.text
+        requests: Final = drain_contract_requests(wire)
+        assert len(requests) == 1, requests
+        assert _JSON_OBJECT.validate_json(requests[0].body) == {
+            "model": _MODEL,
+            "input": "metadata propagation",
+            "metadata": expected_metadata,
+        }, requests[0].body
 
 
 def test_conversation_is_forwarded_as_a_separate_responses_parameter(gateway: Gateway) -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -12,14 +11,12 @@ from urllib.parse import urlsplit
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, object_value
+from integration._support.client import Gateway, Scenario, object_value
 from integration._support.process import owned_proxy
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.worker_readiness import wait_for_worker_readiness
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
-
-from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
-from litellm.responses.utils import ResponsesAPIRequestUtils
 
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
@@ -58,12 +55,7 @@ def _deployments_in_group(gateway: Gateway, group: str) -> int:
 
 
 def _wait_for_workers(gateway: Gateway, group: str, deployments: int) -> None:
-    ready_after: Final = time.monotonic() + (0 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS + 1)
-    eventually(
-        lambda: (_deployments_in_group(gateway, group), time.monotonic()),
-        lambda observation: observation[0] == deployments and observation[1] >= ready_after,
-        seconds=30 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS * 2 + 30,
-    )
+    wait_for_worker_readiness(gateway, group, deployments, _PROXY_WORKERS)
 
 
 def _model_discovery_reply() -> Reply:
@@ -326,7 +318,7 @@ def test_compact_previous_response_id_is_scoped_to_the_issuing_user_and_team(
         assert _contract_requests(wire) == ()
 
 
-def test_allow_unmanaged_response_ids_forward_the_vendor_id_on_every_route(
+def test_allow_unmanaged_response_ids_forward_the_vendor_id_on_create(
     gateway: Gateway,
     tmp_path: Path,
 ) -> None:
@@ -340,7 +332,7 @@ def test_allow_unmanaged_response_ids_forward_the_vendor_id_on_every_route(
 
     config: Final = tmp_path / "allow_unmanaged_responses.yaml"
     config.write_text("general_settings:\n  allow_unmanaged_response_ids: true\n")
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with wire_server(respond) as wire, wire_server(respond) as decoy, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire)
         team: Final = scenario.team(models=[model])
         user: Final = scenario.member(team)
@@ -350,8 +342,8 @@ def test_allow_unmanaged_response_ids_forward_the_vendor_id_on_every_route(
             tmp_path,
             {
                 "INTEGRATION_PROXY_WORKERS": "1",
-                "OPENAI_BASE_URL": f"{wire.url}/v1",
-                "OPENAI_API_KEY": _API_KEY,
+                "OPENAI_BASE_URL": f"{decoy.url}/v1",
+                "OPENAI_API_KEY": "synthetic-env-fallback-key",
             },
             config=config,
         ) as allowed_gateway:
@@ -372,17 +364,32 @@ def test_allow_unmanaged_response_ids_forward_the_vendor_id_on_every_route(
                 "tool_choice": "auto",
                 "tools": [],
             }, followed.model_dump_json()
-            assert ResponsesAPIRequestUtils.get_model_id_from_response_id(followed.id) is None, followed.id
+            retrieved_response: Final = client.responses.with_raw_response.retrieve(followed.id)
+            retrieved: Final = retrieved_response.parse()
+            assert same_response(retrieved.id, followed.id), retrieved_response.text
+            assert retrieved.model_dump(mode="json", exclude_none=True) == {
+                "id": retrieved.id,
+                "object": "response",
+                "created_at": 1.0,
+                "status": "completed",
+                "model": _MODEL,
+                "output": [],
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+            }, retrieved_response.text
             requests: Final = _contract_requests(wire)
+        assert decoy.drain() == (), "The environment fallback deployment received a request"
         assert [(request.method, request.target, request.body) for request in requests] == [
-            ("POST", "/v1/responses", requests[-1].body),
+            ("POST", "/v1/responses", requests[0].body),
+            ("GET", f"/v1/responses/{raw_followup_id}", b""),
         ], requests
         assert all(request.headers["authorization"] == f"Bearer {_API_KEY}" for request in requests), requests
-        assert _JSON_OBJECT.validate_json(requests[-1].body) == {
+        assert _JSON_OBJECT.validate_json(requests[0].body) == {
             "model": _MODEL,
             "input": "allowed vendor follow-up",
             "previous_response_id": raw_id,
-        }, requests[-1].body
+        }, requests[0].body
 
 
 @pytest.mark.parametrize("route", ("retrieve", "delete", "cancel", "input_items"))
@@ -409,7 +416,7 @@ def test_allow_unmanaged_response_id_lifecycle_route_reaches_provider(
 
     config: Final = tmp_path / "allow_unmanaged_responses.yaml"
     config.write_text("general_settings:\n  allow_unmanaged_response_ids: true\n")
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with wire_server(respond) as wire, wire_server(respond) as decoy, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire)
         team: Final = scenario.team(models=[model])
         user: Final = scenario.member(team)
@@ -419,8 +426,8 @@ def test_allow_unmanaged_response_id_lifecycle_route_reaches_provider(
             tmp_path,
             {
                 "INTEGRATION_PROXY_WORKERS": "1",
-                "OPENAI_BASE_URL": f"{wire.url}/v1",
-                "OPENAI_API_KEY": _API_KEY,
+                "OPENAI_BASE_URL": f"{decoy.url}/v1",
+                "OPENAI_API_KEY": "synthetic-env-fallback-key",
             },
             config=config,
         ) as allowed_gateway:
@@ -477,3 +484,4 @@ def test_allow_unmanaged_response_id_lifecycle_route_reaches_provider(
             requests
         )
         assert all(request.headers["authorization"] == f"Bearer {_API_KEY}" for request in requests), requests
+        assert decoy.drain() == (), "The environment fallback deployment received a request"

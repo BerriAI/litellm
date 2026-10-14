@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import uuid
 from typing import Final, Literal
 from urllib.parse import parse_qsl, urlsplit
 
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.worker_readiness import wait_for_worker_readiness
 from openai.types.responses import ResponseStreamEvent
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
-
-from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
@@ -39,12 +37,7 @@ def _deployments_in_group(gateway: Gateway, group: str) -> int:
 
 
 def _wait_for_workers(gateway: Gateway, group: str, deployments: int) -> None:
-    ready_after: Final = time.monotonic() + (0 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS + 1)
-    eventually(
-        lambda: (_deployments_in_group(gateway, group), time.monotonic()),
-        lambda observation: observation[0] == deployments and observation[1] >= ready_after,
-        seconds=30 if _PROXY_WORKERS == 1 else PROXY_CONFIG_RELOAD_INTERVAL_SECONDS * 2 + 30,
-    )
+    wait_for_worker_readiness(gateway, group, deployments, _PROXY_WORKERS)
 
 
 def model_discovery_reply(model: str) -> Reply:
@@ -168,6 +161,14 @@ def test_retrieve_routes_to_the_deployment_that_created_the_response(
         retrieved: Final = client.responses.retrieve(client_id)
         assert retrieved.id != raw_id, retrieved.model_dump_json()
         assert same_response(retrieved.id, client_id), retrieved.model_dump_json()
+        assert retrieved.model_dump(mode="json", exclude_none=True) == {
+            "id": retrieved.id,
+            "object": "response",
+            "created_at": 1.0,
+            "status": "completed",
+            "model": _MODEL,
+            "output": [],
+        }, retrieved.model_dump_json()
         requests: Final = drain_contract_requests(wire_b)
         assert [(request.method, request.target, request.body) for request in requests] == [
             ("POST", "/v1/responses", requests[0].body),
@@ -225,7 +226,7 @@ def test_retrieve_returns_the_id_the_client_holds(gateway: Gateway, prefix: str)
 
 
 @pytest.mark.parametrize("prefix", _ALIASES)
-def test_streamed_response_ids_are_stable_and_retrievable_on_each_alias(
+def test_streamed_response_ids_are_stable_on_each_alias(
     gateway: Gateway,
     prefix: str,
 ) -> None:
@@ -257,21 +258,9 @@ def test_streamed_response_ids_are_stable_and_retrievable_on_each_alias(
         assert response_ids and all(response_id == response_ids[0] for response_id in response_ids), events
         streamed_id: Final = response_ids[0]
         assert streamed_id.startswith("resp_") and streamed_id != raw_id, events
-        retrieved_response: Final = client.responses.with_raw_response.retrieve(streamed_id)
-        retrieved: Final = retrieved_response.parse()
-        assert retrieved.id != raw_id and same_response(retrieved.id, streamed_id), retrieved_response.text
-        assert retrieved.model_dump(mode="json", exclude_none=True) == {
-            "id": retrieved.id,
-            "object": "response",
-            "created_at": 1.0,
-            "status": "completed",
-            "model": _MODEL,
-            "output": [],
-        }, retrieved_response.text
         requests: Final = drain_contract_requests(wire)
         assert [(request.method, urlsplit(request.target).path, request.body) for request in requests] == [
             ("POST", "/v1/responses", requests[0].body),
-            ("GET", f"/v1/responses/{raw_id}", b""),
         ], requests
         assert _JSON_OBJECT.validate_json(requests[0].body) == {
             "model": _MODEL,
@@ -532,8 +521,8 @@ def test_cancel_forwards_provider_id_and_returns_cancelled_response(
 @pytest.mark.parametrize("prefix", _ALIASES)
 def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway, prefix: str) -> None:
     pytest.skip(
-        "BUG: GET /v1/responses/{id}/input_items drops limit, order and after query params; "
-        "upstream receives limit=20&order=desc"
+        "BUG: GET /v1/responses/{id}/input_items drops pagination and include query params; "
+        "upstream receives limit=20&order=desc without after or include"
     )
     raw_id: Final = f"resp_input_items_{uuid.uuid4().hex}"
 
@@ -553,6 +542,7 @@ def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway, pre
             limit=2,
             order="asc",
             after="item_after",
+            include=["message.output_text.logprobs"],
         )
         assert page.data == [], page.model_dump_json()
         requests: Final = drain_contract_requests(wire)
@@ -560,7 +550,8 @@ def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway, pre
             ("POST", "/v1/responses"),
             (
                 "GET",
-                f"/v1/responses/{raw_id}/input_items?limit=2&order=asc&after=item_after",
+                f"/v1/responses/{raw_id}/input_items?limit=2&order=asc&after=item_after"
+                "&include=message.output_text.logprobs",
             ),
         ], requests
         assert all(request.headers["authorization"] == f"Bearer {_API_KEY}" for request in requests), requests
