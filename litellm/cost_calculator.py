@@ -930,7 +930,7 @@ def select_model_name_for_cost_calc(
             and (custom_llm_provider == "bedrock" or model.startswith("bedrock/") or "/bedrock/" in model)
             and _is_bedrock_region_stripped_form(model, return_model)
         ):
-            return_model = model
+            return_model = model  # rebind-ok: prefer the prefixed deployment id over the region-stripped response id
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
