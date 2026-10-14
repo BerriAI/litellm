@@ -400,7 +400,7 @@ def test_messages_count_tokens_surfaces_the_peer_error_when_peer_errors(gateway:
     with wire_server(_peer(_rejecting(status))) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url)
         response: Final = _count(gateway, _full(model))
-        assert response.status_code == status, response.text
+        assert response.status_code == (529 if status == 503 else status), response.text
         assert "input_tokens" not in response.text, response.text
         assert _counted_bodies(wire) == (_PEER_FULL,)
 

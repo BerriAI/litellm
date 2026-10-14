@@ -251,6 +251,65 @@ def test_messages_529_after_the_keepalive_opened_the_response_ends_with_an_overl
         _one_post(wire, "/v1/messages")
 
 
+def _late_bedrock_deployment(scenario: Scenario, wire: Wire) -> str:
+    return scenario.model(
+        model=f"bedrock/{_BEDROCK_MODEL}",
+        api_key=_BEDROCK_TOKEN,
+        aws_region_name="us-east-1",
+        api_base=wire.url,
+        keepalive_seconds=_KEEPALIVE_SECONDS,
+    )
+
+
+def _one_bedrock_post(wire: Wire) -> None:
+    (request,) = wire.drain()
+    assert unquote(request.target).startswith(f"/model/{_BEDROCK_MODEL}/"), request
+
+
+def test_messages_bedrock_503_after_the_keepalive_opened_the_response_ends_with_an_overloaded_error_event(
+    gateway: Gateway,
+) -> None:
+    with (
+        wire_server(_late(Reply(status=503, body=_BEDROCK_503), _LATE_ANSWER_SECONDS)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _late_bedrock_deployment(scenario, wire)
+        response: Final = gateway.request("POST", "/v1/messages", _messages_body(model, _prompt(), stream=True))
+        assert response.status_code == 200, response.text
+        assert response.text.startswith(":"), response.text
+        assert "[DONE]" not in response.text, response.text
+        (failure,) = (event for event in parse_sse(response.text) if event.data and event.event != "ping")
+        assert failure.event == "error", response.text
+        error: Final = object_value(failure.data["error"])
+        assert error["type"] == "overloaded_error", response.text
+        assert "Bedrock is unable to process your request." in string_value(error["message"]), response.text
+        _one_bedrock_post(wire)
+        _assert_logged_failure(model, rows=1, error_class="ServiceUnavailableError")
+
+
+def test_chat_completions_bedrock_503_after_the_keepalive_opened_the_response_keeps_the_openai_error_frame(
+    gateway: Gateway,
+) -> None:
+    with (
+        wire_server(_late(Reply(status=503, body=_BEDROCK_503), _LATE_ANSWER_SECONDS)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _late_bedrock_deployment(scenario, wire)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": _prompt()}], "stream": True, "num_retries": 0},
+        )
+        assert response.status_code == 200, response.text
+        assert response.text.startswith(":"), response.text
+        assert "event: error" not in response.text, response.text
+        (frame,) = _error_frames(response.text)
+        assert object_value(frame["error"])["code"] == "503", response.text
+        assert response.text.rstrip().endswith("data: [DONE]"), response.text
+        _one_bedrock_post(wire)
+        _assert_logged_failure(model, rows=1, error_class="ServiceUnavailableError", code="503")
+
+
 def test_chat_completions_overloaded_frame_after_content_ends_with_a_500_error_frame(gateway: Gateway) -> None:
     prompt: Final = _prompt()
     upstream: Final = (*message_stream(prompt, _MODEL, _TEXT)[:3], error_frame(529, "Overloaded"))
@@ -573,6 +632,45 @@ def test_messages_other_upstream_statuses_keep_their_status_and_type(
         assert response.status_code == upstream_status, response.text
         assert _anthropic_error(response)["type"] == error_type, response.text
         _one_post(wire, "/v1/messages")
+
+
+def _anthropic_rejection(status: int, error_type: str, message: str) -> Reply:
+    return Reply(
+        status=status, body=json.dumps({"type": "error", "error": {"type": error_type, "message": message}}).encode()
+    )
+
+
+_REJECTIONS_SAYING_OVERLOADED: Final = {
+    "400-tool-name": _anthropic_rejection(
+        400, "invalid_request_error", "tools.0.name: 'Overloaded' is not a valid tool name"
+    ),
+    "404-model": _anthropic_rejection(404, "not_found_error", "model: claude-Overloaded"),
+}
+
+
+@pytest.mark.parametrize("shape", ("non-stream", "stream"))
+@pytest.mark.parametrize("rejection", _REJECTIONS_SAYING_OVERLOADED.keys())
+def test_messages_4xx_whose_text_says_overloaded_is_not_answered_as_an_overload(
+    gateway: Gateway, rejection: str, shape: Shape
+) -> None:
+    with wire_server(_always(_REJECTIONS_SAYING_OVERLOADED[rejection])) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request(
+            "POST", "/v1/messages", _messages_body(model, _prompt(), stream=shape == "stream")
+        )
+        assert response.status_code == 500, response.text
+        error: Final = _anthropic_error(response)
+        assert error["type"] == "api_error", response.text
+        assert "Overloaded" in string_value(error["message"]), response.text
+        _one_post(wire, "/v1/messages")
+        assert _spend_rows(model, 1) == [
+            {
+                "status": "failure",
+                "code": "500",
+                "error_class": "InternalServerError",
+                "normalized_error": _OVERLOAD_CLASS,
+            }
+        ]
 
 
 def _string_values(cache: Redis) -> tuple[bytes, ...]:

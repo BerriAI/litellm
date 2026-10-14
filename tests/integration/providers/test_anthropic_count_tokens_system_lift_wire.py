@@ -464,7 +464,7 @@ def test_messages_count_tokens_surfaces_the_peer_status_when_the_peer_rejects_th
     with _listening(deployment, _rejecting(status)) as peer:
         body: Final = count_request(deployment.model, STRING_CASE)
         response: Final = _count(gateway, body)
-        assert response.status_code == status, response.text
+        assert response.status_code == (529 if status == 503 else status), response.text
         assert "input_tokens" not in response.text, response.text
         assert _bodies(peer, deployment.provider) == (_STRING_BODY,)
 

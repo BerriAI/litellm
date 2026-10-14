@@ -931,7 +931,7 @@ def test_messages_count_tokens_surfaces_the_mantle_status_when_mantle_errors(
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = _count(gateway, _full(model))
-        assert response.status_code == status, response.text
+        assert response.status_code == (529 if status == 503 else status), response.text
         assert "input_tokens" not in response.text, response.text
         assert len(_runtime_count_targets(runtime)) == 1
         assert _mantle_bodies(mantle) == (_MANTLE_FULL,)
