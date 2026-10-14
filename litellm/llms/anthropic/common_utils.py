@@ -26,11 +26,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    THOUGHT_SIGNATURE_SEPARATOR,
+from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     find_anthropic_server_tool_result,
+    message_field,
+    parts_of,
 )
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.wif import (
     aget_anthropic_wif_token,
     anthropic_base_without_chat_suffix,

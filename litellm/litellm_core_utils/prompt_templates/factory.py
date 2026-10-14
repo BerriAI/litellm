@@ -6,7 +6,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Container, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
@@ -20,7 +20,13 @@ import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import anthropic_system_messages
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    answered_tool_call_ids,
+    anthropic_system_messages,
+    find_anthropic_server_tool_result,
+    is_anthropic_tool_search_use,
+    tool_search_ids_dropped_with_their_answers,
+)
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
@@ -1815,39 +1821,6 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
-def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
-    return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
-
-
-def _tool_result_ids(answers: Iterable[AllMessageValues]) -> Iterator[str]:
-    for message in answers:
-        if message["role"] == "tool":
-            yield message["tool_call_id"]
-        elif message["role"] == "function" and (tool_call_id := message.get("tool_call_id")):
-            yield tool_call_id
-
-
-def answered_tool_call_ids(messages: Sequence[AllMessageValues], assistant_index: int) -> frozenset[str]:
-    from_assistant: Final = (messages[index] for index in range(assistant_index, len(messages)))
-    following: Final = itertools.dropwhile(lambda message: message["role"] == "assistant", from_assistant)
-    answers: Final = itertools.takewhile(lambda message: message["role"] in ("tool", "function"), following)
-    return frozenset(_tool_result_ids(answers))
-
-
-def find_anthropic_server_tool_result(
-    tool_id: str,
-    web_search_results: Sequence[object] | None,
-    tool_results: Sequence[object] | None,
-) -> dict[str, object] | None:
-    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
-        return None
-    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
-    return next(
-        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
-        None,
-    )
-
-
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
 
 
@@ -2502,6 +2475,7 @@ def anthropic_messages_pt(
     is_bedrock_invoke = model.lower().startswith("invoke/")
     is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
     force_base64 = is_bedrock_invoke or is_vertex_ai
+    dropped_tool_search_ids: Final = tool_search_ids_dropped_with_their_answers(messages)
 
     msg_i = 0
     while msg_i < len(messages):
@@ -2602,7 +2576,9 @@ def anthropic_messages_pt(
 
                     user_content.append(_anthropic_content_text_element)
 
-            elif user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function":
+            elif (
+                user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function"
+            ) and user_message_types_block.get("tool_call_id") not in dropped_tool_search_ids:
                 # OpenAI's tool message content will always be a string
                 user_content.append(
                     convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
@@ -2617,7 +2593,7 @@ def anthropic_messages_pt(
         unique_tool_ids: set[str] = set()
 
         assistant_content: list[AnthropicMessagesAssistantMessageValues] = []
-        answered_tool_ids = answered_tool_call_ids(messages, msg_i)
+        answered_tool_ids = answered_tool_call_ids(messages, msg_i) - dropped_tool_search_ids
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]

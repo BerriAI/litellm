@@ -3,7 +3,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
-from litellm.litellm_core_utils.prompt_templates.factory import is_anthropic_tool_search_use
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import is_anthropic_tool_search_use
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES, AnthropicToolSearchToolRegex
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.responses.main import OutputToolSearchCall
