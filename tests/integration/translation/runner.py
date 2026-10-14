@@ -3,15 +3,16 @@ import json
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import JsonValue
-
-from openai.lib.streaming.chat import ChatCompletionStreamState
-from openai.types.chat import ChatCompletionChunk
-
+import pytest
+from _pytest.mark.structures import ParameterSet
 from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.provider import SharedProvider
 from integration._support.wire import Reply, Request
 from integration.translation.case import SSEFrame, StreamingTranslationTestCase, TranslationTestCase
+from openai.lib.streaming.chat import ChatCompletionStreamState
+from openai.types.chat import ChatCompletionChunk
+from pydantic import JsonValue
+
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
 TRANSPORT_HEADERS: Final = frozenset(
@@ -28,10 +29,19 @@ def expected_response_for_deployment(
     assert model_id, "An encoded response ID must identify the selected deployment"
     provider, _, response = base64.b64decode(identifier.removeprefix("resp_")).decode().split(";", 2)
     updated: Final = f"{provider};model_id:{model_id};{response}"
-    return {
-        **expected,
-        "id": "resp_" + base64.b64encode(updated.encode()).decode(),
-    }
+    return {**expected, "id": "resp_" + base64.b64encode(updated.encode()).decode()}
+
+
+def translation_params(*cases: TranslationTestCase) -> tuple[ParameterSet, ...]:
+    """Parametrize values for the cases. A case with `known_bug` set is a strict xfail until LiteLLM fixes it."""
+    return tuple(
+        pytest.param(
+            case,
+            id=case.id,
+            marks=(pytest.mark.xfail(strict=True, reason=f"BUG: {case.known_bug}"),) if case.known_bug else (),
+        )
+        for case in cases
+    )
 
 
 def assert_translation(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
@@ -39,10 +49,7 @@ def assert_translation(case: TranslationTestCase, gateway: Gateway, provider: Sh
     response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request)
     received: Final = provider.received()
     _assert_provider_request(
-        received,
-        case.expected_provider_endpoint,
-        case.expected_provider_headers,
-        case.expected_provider_request,
+        received, case.expected_provider_endpoint, case.expected_provider_headers, case.expected_provider_request
     )
     assert response.status_code == case.expected_litellm_status_code, response.text
     model_id: Final = response.headers.get("x-litellm-model-id")
@@ -61,10 +68,7 @@ def assert_translation(case: TranslationTestCase, gateway: Gateway, provider: Sh
 
 
 def _assert_provider_request(
-    received: tuple[Request, ...],
-    endpoint: str,
-    headers: Mapping[str, str],
-    request: Mapping[str, JsonValue],
+    received: tuple[Request, ...], endpoint: str, headers: Mapping[str, str], request: Mapping[str, JsonValue]
 ) -> None:
     assert [(sent_request.method, sent_request.target) for sent_request in received] == [("POST", endpoint)]
     sent: Final = received[0]

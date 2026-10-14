@@ -21,6 +21,7 @@ class TranslationTestCase:
     mock_provider_response: Mapping[str, JsonValue]
     expected_litellm_status_code: int = 200
     expected_litellm_response: Mapping[str, JsonValue]
+    known_bug: str | None = None
 
     @property
     def id(self) -> str:
