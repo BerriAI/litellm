@@ -2506,6 +2506,18 @@ def _provider_error(status_code: int) -> httpx.Response:
             id="client-side rejection",
         ),
         pytest.param(
+            litellm.UnsupportedParamsError(message="stop is not supported"),
+            True,
+            id="client-side rejection without a provider",
+        ),
+        pytest.param(
+            litellm.BadRequestError(
+                message="Deployment ptu is reserved for another team", model="ptu", llm_provider=""
+            ),
+            False,
+            id="router-raised 400 keeps falling back",
+        ),
+        pytest.param(
             litellm.BadRequestError(
                 message="VertexAIException BadRequestError - 403",
                 model="m",

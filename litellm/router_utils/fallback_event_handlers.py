@@ -225,9 +225,11 @@ def has_unattempted_fallback_target(
 def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupported_params: bool) -> bool:
     if fallback_on_unsupported_params or not isinstance(exception, litellm.BadRequestError):
         return False
+    if isinstance(exception, litellm.UnsupportedParamsError):
+        return True
     if isinstance(exception, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError)):
         return False
-    return exception.status_code == 400
+    return exception.status_code == 400 and bool(exception.llm_provider)
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:

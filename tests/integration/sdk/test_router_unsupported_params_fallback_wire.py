@@ -77,12 +77,19 @@ def _deployments_hit(wire: Wire) -> tuple[str, ...]:
     return tuple(request.target.lstrip("/").partition("/")[0] for request in wire.drain())
 
 
-def _router(wire: Wire, **settings: object) -> Router:
+_ALL_DAY_FOR_TEAM_A: Final = (
+    {"start": "00:00", "end": "12:00", "timezone": "UTC", "team_ids": ["team-a"]},
+    {"start": "12:00", "end": "00:00", "timezone": "UTC", "team_ids": ["team-a"]},
+)
+
+
+def _router(wire: Wire, primary_model_info: Mapping[str, object] | None = None, **settings: object) -> Router:
     return Router(
         model_list=[
             {
                 "model_name": "primary",
                 "litellm_params": {"model": f"openai/{_MODEL}", "api_base": f"{wire.url}/primary", "api_key": _API_KEY},
+                "model_info": dict(primary_model_info or {}),
             },
             {
                 "model_name": "backup",
@@ -146,6 +153,17 @@ def test_upstream_500_still_falls_back_when_bad_requests_raise(client: str) -> N
         router: Final = _router(wire, fallback_on_unsupported_params=False)
         assert _complete(client, router) == "answered by the backup"
         assert _deployments_hit(wire) == ("primary", "backup")
+
+
+@pytest.mark.parametrize("client", _CLIENTS)
+def test_router_raised_400_still_falls_back_when_bad_requests_raise(client: str) -> None:
+    with wire_server(_peer({"backup": _BACKUP_ANSWERS})) as wire:
+        router: Final = _router(
+            wire, primary_model_info={"access_windows": _ALL_DAY_FOR_TEAM_A}, fallback_on_unsupported_params=False
+        )
+        answer: Final = _complete(client, router, metadata={"user_api_key_team_id": "team-b"})
+        assert answer == "answered by the backup"
+        assert _deployments_hit(wire) == ("backup",)
 
 
 @pytest.mark.parametrize("client", _CLIENTS)
