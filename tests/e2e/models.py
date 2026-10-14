@@ -233,6 +233,7 @@ ContentPart = TextContentPart | ImageContentPart
 class ChatMessage(BaseModel):
     role: str
     content: str | list[ContentPart]
+    cache_control: CacheControl | None = None
 
 
 class CacheControl(BaseModel):
@@ -337,7 +338,7 @@ class ChatAssistantTurn(BaseModel):
 class ChatToolResultTurn(BaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
-    content: str
+    content: str | list[ContentPart]
 
 
 type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
@@ -465,6 +466,7 @@ class ChatChoice(BaseModel):
 
 class PromptTokensDetails(BaseModel):
     cached_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 class CompletionTokensDetails(BaseModel):
@@ -1344,6 +1346,10 @@ class CacheControlInjectionPoint(BaseModel):
     index: int | None = None
 
 
+class PromptCacheOptions(BaseModel):
+    mode: Literal["implicit", "explicit"]
+
+
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
@@ -1391,6 +1397,10 @@ class LiteLLMParamsBody(BaseModel):
     input_cost_per_token_flex: float | None = None
     output_cost_per_token_flex: float | None = None
     cache_read_input_token_cost_flex: float | None = None
+    max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    custom_llm_provider: str | None = None
+    reasoning_effort: str | None = None
     extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
@@ -1404,12 +1414,13 @@ class LiteLLMParamsBody(BaseModel):
     cooldown_time: float | None = None
     extra_body: DeploymentExtraBody | None = None
     cache_control_injection_points: list[CacheControlInjectionPoint] | None = None
+    prompt_cache_options: PromptCacheOptions | None = None
     tpm: int | None = None
     weight: int | None = None
     order: int | None = None
 
 
-ModelMode = Literal["batch", "realtime", "image_generation"]
+ModelMode = Literal["chat", "batch", "realtime", "image_generation"]
 
 
 class ModelInfoBody(BaseModel):
@@ -1419,6 +1430,7 @@ class ModelInfoBody(BaseModel):
     # constraint when a prior run's teardown had not removed the row.
     id: str | None = None
     mode: ModelMode | None = None
+    supported_endpoints: list[str] | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
     allowed_fails: int | None = None
@@ -1660,6 +1672,7 @@ class UserNewBody(BaseModel):
     user_role: UserRole
     user_id: str | None = None
     auto_create_key: bool | None = None
+    max_budget: float | None = None
 
 
 class UserNewResponse(BaseModel):
