@@ -71,6 +71,7 @@ from litellm.types.passthrough_endpoints.managed_id_rewriter import (
     PrismaWhere,
     PrismaWhereValue,
     ResourceKind,
+    ResponseIdIssuance,
     SortOrder,
 )
 
@@ -480,7 +481,7 @@ def _addressed_raw_response_ids(path: str, body: Mapping[str, object]) -> frozen
     return path_ids
 
 
-async def _passthrough_issued_response_id(raw_id: str, provider: str, prisma_client: PrismaClient) -> bool:
+async def _response_id_issuance(raw_id: str, provider: str, prisma_client: PrismaClient) -> ResponseIdIssuance:
     from prisma.errors import PrismaError
 
     try:
@@ -488,25 +489,28 @@ async def _passthrough_issued_response_id(raw_id: str, provider: str, prisma_cli
             where={"model_object_id": f"passthrough:{provider}:{raw_id}"}
         )
     except (PrismaError, *DB_CONNECTION_ERROR_TYPES):
-        verbose_proxy_logger.warning(
-            "managed_id_rewriter: response id ownership lookup failed, refusing the id", exc_info=True
-        )
-        return False
-    return row is not None
+        verbose_proxy_logger.warning("managed_id_rewriter: response id ownership lookup failed", exc_info=True)
+        return "unverified"
+    return "unissued" if row is None else "issued"
 
 
-async def addresses_unissued_response_id(
+async def addressed_response_id_issuance(
     path: str,
     body: Mapping[str, object],
     provider: str,
     prisma_client: PrismaClient | None,
-) -> bool:
+) -> ResponseIdIssuance:
     if prisma_client is None:
-        return False
-    for raw_id in _addressed_raw_response_ids(path, body):
-        if not await _passthrough_issued_response_id(raw_id, provider, prisma_client):
-            return True
-    return False
+        return "issued"
+    outcomes: Final = frozenset(
+        [
+            await _response_id_issuance(raw_id, provider, prisma_client)
+            for raw_id in _addressed_raw_response_ids(path, body)
+        ]
+    )
+    if "unissued" in outcomes:
+        return "unissued"
+    return "unverified" if "unverified" in outcomes else "issued"
 
 
 # ---------------------------------------------------------------------------

@@ -2128,6 +2128,8 @@ def _router_relay_managed_ids(
 ) -> _RouterRelayManagedIds | None:
     from litellm.proxy.proxy_server import general_settings_view, prisma_client, proxy_logging_obj
 
+    if "responses" not in route.split("/"):
+        return None
     managed_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
     if (
         not general_settings_view().get("passthrough_managed_object_ids", False)

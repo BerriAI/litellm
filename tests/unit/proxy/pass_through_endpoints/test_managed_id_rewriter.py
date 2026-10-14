@@ -19,7 +19,7 @@ from litellm.proxy.pass_through_endpoints.managed_id_rewriter import(
     _MAX_RAW_ID_GUARD_LOOKUPS,
     _passthrough_provider_marker,
     _resolve_one,
-    addresses_unissued_response_id,
+    addressed_response_id_issuance,
     is_passthrough_list_route,
     list_passthrough_ids_from_db,
     rewrite_body_ids,
@@ -1722,7 +1722,7 @@ def _object_lookup(row: object) -> MagicMock:
     return pc
 
 
-class TestAddressesUnissuedResponseId:
+class TestAddressedResponseIdIssuance:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("path", "body"),
@@ -1738,7 +1738,7 @@ class TestAddressesUnissuedResponseId:
     async def test_response_id_without_a_passthrough_row_is_unissued(self, path, body):
         pc = _object_lookup(None)
 
-        assert await addresses_unissued_response_id(path, body, "openai", pc) is True
+        assert await addressed_response_id_issuance(path, body, "openai", pc) == "unissued"
         pc.db.litellm_managedobjecttable.find_first.assert_awaited_once_with(
             where={"model_object_id": f"passthrough:openai:{UNISSUED_RESPONSE_ID}"}
         )
@@ -1747,7 +1747,10 @@ class TestAddressesUnissuedResponseId:
     async def test_response_id_with_a_passthrough_row_is_issued(self):
         pc = _object_lookup(_batch_row(encode("azure", "user-1", UNISSUED_RESPONSE_ID)))
 
-        assert await addresses_unissued_response_id(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "azure", pc) is False
+        assert (
+            await addressed_response_id_issuance(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "azure", pc)
+            == "issued"
+        )
         pc.db.litellm_managedobjecttable.find_first.assert_awaited_once_with(
             where={"model_object_id": f"passthrough:azure:{UNISSUED_RESPONSE_ID}"}
         )
@@ -1761,10 +1764,10 @@ class TestAddressesUnissuedResponseId:
         )
 
         assert (
-            await addresses_unissued_response_id(
+            await addressed_response_id_issuance(
                 f"/v1/responses/{issued_id}", {"previous_response_id": UNISSUED_RESPONSE_ID}, "openai", pc
             )
-            is True
+            == "unissued"
         )
 
     @pytest.mark.asyncio
@@ -1781,7 +1784,7 @@ class TestAddressesUnissuedResponseId:
     async def test_requests_that_address_no_response_id_skip_the_lookup(self, path, body):
         pc = _object_lookup(None)
 
-        assert await addresses_unissued_response_id(path, body, "openai", pc) is False
+        assert await addressed_response_id_issuance(path, body, "openai", pc) == "issued"
         pc.db.litellm_managedobjecttable.find_first.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -1790,29 +1793,55 @@ class TestAddressesUnissuedResponseId:
         pc = _object_lookup(None)
 
         assert (
-            await addresses_unissued_response_id(
+            await addressed_response_id_issuance(
                 f"/v1/responses/{managed_id}", {"previous_response_id": managed_id}, "openai", pc
             )
-            is False
+            == "issued"
         )
         pc.db.litellm_managedobjecttable.find_first.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("lookup_error", [httpx.ConnectError("db down"), PrismaError("query failed")])
-    async def test_failed_lookup_is_never_read_as_issued(self, lookup_error):
+    async def test_failed_lookup_is_unverified_rather_than_issued_or_unissued(self, lookup_error):
         pc = _prisma_client_passthrough_managed()
         pc.db.litellm_managedobjecttable.find_first = AsyncMock(side_effect=lookup_error)
 
-        assert await addresses_unissued_response_id(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", pc) is True
+        assert (
+            await addressed_response_id_issuance(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", pc)
+            == "unverified"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("issued_row", "expected"), [(None, "unissued"), (_batch_row("x"), "unverified")])
+    async def test_a_failed_lookup_beside_another_id_never_hides_an_unissued_one(self, issued_row, expected):
+        failing_id = "resp_2222222222222222failing"
+
+        async def find_first(where):
+            if where["model_object_id"].endswith(failing_id):
+                raise PrismaError("query failed")
+            return issued_row
+
+        pc = _prisma_client_passthrough_managed()
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(side_effect=find_first)
+
+        assert (
+            await addressed_response_id_issuance(
+                f"/v1/responses/{failing_id}", {"previous_response_id": UNISSUED_RESPONSE_ID}, "openai", pc
+            )
+            == expected
+        )
 
     @pytest.mark.asyncio
     async def test_without_a_database_the_pass_through_issues_only_raw_ids_so_none_is_refused(self):
-        assert await addresses_unissued_response_id(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", None) is False
         assert (
-            await addresses_unissued_response_id(
+            await addressed_response_id_issuance(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", None)
+            == "issued"
+        )
+        assert (
+            await addressed_response_id_issuance(
                 "/v1/responses", {"previous_response_id": UNISSUED_RESPONSE_ID}, "openai", None
             )
-            is False
+            == "issued"
         )
 
 

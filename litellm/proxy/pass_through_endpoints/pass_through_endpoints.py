@@ -30,6 +30,7 @@ from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.routing import BaseRoute, Route
 from starlette.websockets import WebSocketState
+from typing_extensions import assert_never
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
     ConnectionClosedError,
@@ -2911,14 +2912,26 @@ async def refuse_unissued_response_ids(
         unmanaged_response_ids_allowed,
     )
     from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
-        addresses_unissued_response_id,
+        addressed_response_id_issuance,
     )
     from litellm.proxy.proxy_server import general_settings_view
 
     if unmanaged_response_ids_allowed(general_settings_view(), proxy_signing_key(), user_api_key_dict):
         return
-    if await addresses_unissued_response_id(path, body, managed_id_provider, prisma_client):
-        raise HTTPException(status_code=403, detail=UNMANAGED_RESPONSE_ID_DETAIL)
+    issuance: Final = await addressed_response_id_issuance(path, body, managed_id_provider, prisma_client)
+    match issuance:
+        case "issued":
+            return
+        case "unissued":
+            raise HTTPException(status_code=403, detail=UNMANAGED_RESPONSE_ID_DETAIL)
+        case "unverified":
+            raise HTTPException(
+                status_code=503,
+                detail="The proxy could not check who owns this response id because its database lookup failed. "
+                "Retry the request.",
+            )
+        case _:
+            assert_never(issuance)
 
 
 def _should_buffer_passthrough_response(response: httpx.Response) -> bool:

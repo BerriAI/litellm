@@ -3816,6 +3816,24 @@ async def test_managed_pass_through_forwards_ids_it_may_address(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "target", "body"), _RESPONSE_ID_ROUTES)
+async def test_managed_pass_through_answers_a_retryable_503_when_it_cannot_check_a_response_id(method, target, body):
+    unreachable_database: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_managedobjecttable=SimpleNamespace(find_first=AsyncMock(side_effect=httpx.ConnectError("db down")))
+        )
+    )
+
+    outcome, upstream_calls = await _run_managed_responses_pass_through(
+        method, target, body, {}, UserAPIKeyAuth(user_id="user-1"), unreachable_database
+    )
+
+    assert outcome.startswith("503 ")
+    assert "Retry the request" in outcome
+    assert upstream_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_managed_pass_through_still_hides_a_response_issued_to_someone_else():
     outcome, upstream_calls = await _run_managed_responses_pass_through(
         "GET",

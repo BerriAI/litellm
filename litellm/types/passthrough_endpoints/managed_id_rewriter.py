@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 SortOrder: TypeAlias = Literal["asc", "desc"]
 ResourceKind: TypeAlias = Literal["files", "batches"]
+ResponseIdIssuance: TypeAlias = Literal["issued", "unissued", "unverified"]
 
 PrismaWhereValue: TypeAlias = (
     "str | int | bool | datetime | None | Mapping[str, PrismaWhereValue] | Sequence[PrismaWhereValue]"

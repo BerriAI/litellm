@@ -7197,6 +7197,28 @@ class TestAzureRouterRelayManagedIds:
         assert len(captured) == relayed_before_the_stranger
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "endpoint", "upstream_body"),
+        [
+            ("GET", "gpt-5.4/openai/v1/batches/batch_1", {"id": "batch_1", "object": "batch"}),
+            ("POST", "gpt-5.4/openai/v1/batches/batch_1/cancel", {"id": "batch_1", "object": "batch"}),
+        ],
+    )
+    async def test_router_relay_leaves_ids_off_the_responses_routes_as_they_were(
+        self, monkeypatch, method, endpoint, upstream_body
+    ):
+        async def upstream() -> httpx.Response:
+            return httpx.Response(200, json=upstream_body)
+
+        captured, store = self._install(monkeypatch, iter([{}]), upstream)
+
+        result = await self._call(method, endpoint, "user-1")
+
+        assert json.loads(result.body) == upstream_body
+        assert captured[-1]["endpoint"] == endpoint
+        assert store.rows == []
+
+    @pytest.mark.asyncio
     async def test_a_streamed_create_through_the_router_relay_hands_out_an_owned_id(self, monkeypatch):
         from litellm.proxy.pass_through_endpoints.managed_id_codec import decode
 
