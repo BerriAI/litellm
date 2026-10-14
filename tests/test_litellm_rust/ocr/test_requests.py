@@ -19,6 +19,7 @@ from tests.test_litellm_rust.support.requests import (
     call_native_aocr,
     call_native_ocr,
 )
+from tests.test_litellm_rust.support.served import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -169,7 +170,7 @@ async def test_ocr_contract_native_format_supported(
     assert response.get_provider_native_response() == payload
     assert len(ocr_server.requests) == 1
     if ocr_backend:
-        assert_native_request(ocr_server)
+        assert_served_natively(ocr_server, response)
 
 
 @pytest.mark.asyncio
@@ -217,7 +218,7 @@ async def test_native_azure_ocr_uses_token_provider_result_as_bearer_token(
 
     assert calls == ["token"]
     assert response.pages[0].markdown == "native OCR response"
-    assert_native_request(ocr_server)
+    assert_served_natively(ocr_server, response)
     assert ocr_server.requests[0].headers["authorization"] == "Bearer callback-token"
 
 
@@ -225,11 +226,6 @@ async def test_native_azure_ocr_uses_token_provider_result_as_bearer_token(
 def ocr_server(recording_server: RecordingServer) -> RecordingServer:
     recording_server.default_response = ResponseSpec(body=OCR_RESPONSE)
     return recording_server
-
-
-def assert_native_request(server: RecordingServer) -> None:
-    assert len(server.requests) == 1
-    assert not server.requests[0].headers.get("user-agent", "").startswith("python-httpx")
 
 
 def test_native_ocr_maps_provider_400_with_public_provider_details(ocr_server: RecordingServer) -> None:
@@ -252,7 +248,7 @@ def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(ocr_se
     )
 
     assert response.pages[0].markdown == "native OCR response"
-    assert_native_request(ocr_server)
+    assert_served_natively(ocr_server, response)
     assert ocr_server.requests[0].body == {
         "model": "mistral-ocr-latest",
         "document": {"type": "image_url", "image_url": "data:image/png;base64,YWJj"},
@@ -614,7 +610,7 @@ async def test_native_settings_observe_mutation_between_calls(
     monkeypatch.setattr(litellm, "user_url_allowed_hosts", "EXAMPLE.TEST.")
     response: Final = await call_native(ocr_server, asynchronous, num_retries=0)
     assert response.pages[0].markdown == "native OCR response"
-    assert_native_request(ocr_server)
+    assert_served_natively(ocr_server, response)
     monkeypatch.setattr(litellm, "ssl_certificate", 1)
     with pytest.raises(ValueError, match=r"http_settings\.ssl_certificate"):
         await call_native(ocr_server, asynchronous, num_retries=0)

@@ -17,6 +17,7 @@ from litellm.rust_bridge.configuration import Rollout
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_RESPONSE
+from tests.test_litellm_rust.support.served import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -47,10 +48,9 @@ def arguments(server: RecordingServer, **kwargs: object) -> dict[str, object]:
     }
 
 
-def sent(server: RecordingServer) -> tuple[dict[str, object], dict[str, str]]:
-    assert len(server.requests) == 1
+def sent(server: RecordingServer, response: object) -> tuple[dict[str, object], dict[str, str]]:
+    assert_served_natively(server, response)
     request: Final = server.requests[0]
-    assert not request.headers.get("user-agent", "").startswith("python-httpx")
     assert isinstance(request.body, dict)
     return request.body, request.headers
 
@@ -59,9 +59,9 @@ def sent(server: RecordingServer) -> tuple[dict[str, object], dict[str, str]]:
 async def test_reasoning_effort_becomes_adaptive_thinking_and_effort_on_the_wire(
     messages_server: RecordingServer,
 ) -> None:
-    await litellm.anthropic.messages.acreate(**arguments(messages_server, reasoning_effort="high"))
+    response: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server, reasoning_effort="high"))
 
-    body, _ = sent(messages_server)
+    body, _ = sent(messages_server, response)
     assert "reasoning_effort" not in body
     assert body["thinking"] == {"type": "adaptive", "display": "summarized"}
     assert body["output_config"] == {"effort": "high"}
@@ -71,7 +71,7 @@ async def test_reasoning_effort_becomes_adaptive_thinking_and_effort_on_the_wire
 async def test_claude_code_adaptive_payload_is_downgraded_to_a_capped_budget_for_a_legacy_model(
     messages_server: RecordingServer,
 ) -> None:
-    await litellm.anthropic.messages.acreate(
+    response: Final = await litellm.anthropic.messages.acreate(
         **arguments(
             messages_server,
             model=LEGACY_THINKING_MODEL,
@@ -82,7 +82,7 @@ async def test_claude_code_adaptive_payload_is_downgraded_to_a_capped_budget_for
         )
     )
 
-    body, _ = sent(messages_server)
+    body, _ = sent(messages_server, response)
     assert body["thinking"] == {"type": "enabled", "budget_tokens": 2999}
     assert "output_config" not in body
     assert "temperature" not in body
@@ -90,11 +90,11 @@ async def test_claude_code_adaptive_payload_is_downgraded_to_a_capped_budget_for
 
 @pytest.mark.asyncio
 async def test_removed_sampling_params_are_dropped_under_drop_params(messages_server: RecordingServer) -> None:
-    await litellm.anthropic.messages.acreate(
+    response: Final = await litellm.anthropic.messages.acreate(
         **arguments(messages_server, temperature=0.2, top_p=0.9, top_k=5, drop_params=True)
     )
 
-    body, _ = sent(messages_server)
+    body, _ = sent(messages_server, response)
     assert not {"temperature", "top_p", "top_k"} & body.keys()
 
 
@@ -130,9 +130,9 @@ async def test_replayed_history_is_sanitized_before_it_reaches_the_provider(
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
     ]
 
-    await litellm.anthropic.messages.acreate(**arguments(messages_server, messages=history))
+    response: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server, messages=history))
 
-    body, _ = sent(messages_server)
+    body, _ = sent(messages_server, response)
     assert body["messages"] == [
         {"role": "user", "content": "run it"},
         {"role": "assistant", "content": [{"type": "tool_use", "id": "functions_Bash_0", "name": "Bash", "input": {}}]},
@@ -142,7 +142,7 @@ async def test_replayed_history_is_sanitized_before_it_reaches_the_provider(
 
 @pytest.mark.asyncio
 async def test_feature_betas_merge_into_the_forwarded_beta_header(messages_server: RecordingServer) -> None:
-    await litellm.anthropic.messages.acreate(
+    response: Final = await litellm.anthropic.messages.acreate(
         **arguments(
             messages_server,
             output_format={"type": "json_schema", "schema": {"type": "object"}},
@@ -150,15 +150,17 @@ async def test_feature_betas_merge_into_the_forwarded_beta_header(messages_serve
         )
     )
 
-    _, headers = sent(messages_server)
+    _, headers = sent(messages_server, response)
     assert headers["anthropic-beta"] == "structured-outputs-2025-11-13,web-search-2025-03-05"
 
 
 @pytest.mark.asyncio
 async def test_oauth_token_authenticates_as_a_bearer_with_the_oauth_beta(messages_server: RecordingServer) -> None:
-    await litellm.anthropic.messages.acreate(**arguments(messages_server, api_key="sk-ant-oat01-token"))
+    response: Final = await litellm.anthropic.messages.acreate(
+        **arguments(messages_server, api_key="sk-ant-oat01-token")
+    )
 
-    _, headers = sent(messages_server)
+    _, headers = sent(messages_server, response)
     assert "x-api-key" not in headers
     assert headers["authorization"] == "Bearer sk-ant-oat01-token"
     assert headers["anthropic-beta"] == "oauth-2025-04-20"
@@ -167,11 +169,11 @@ async def test_oauth_token_authenticates_as_a_bearer_with_the_oauth_beta(message
 
 @pytest.mark.asyncio
 async def test_metadata_is_reduced_to_the_fields_anthropic_accepts(messages_server: RecordingServer) -> None:
-    await litellm.anthropic.messages.acreate(
+    response: Final = await litellm.anthropic.messages.acreate(
         **arguments(messages_server, metadata={"user_id": "u-1", "trace_id": "internal"})
     )
 
-    body, _ = sent(messages_server)
+    body, _ = sent(messages_server, response)
     assert body["metadata"] == {"user_id": "u-1"}
 
 
@@ -179,17 +181,17 @@ async def test_metadata_is_reduced_to_the_fields_anthropic_accepts(messages_serv
 async def test_additional_drop_params_remove_nested_fields_from_the_wire(messages_server: RecordingServer) -> None:
     tools: Final = [{"name": "lookup", "input_schema": {"type": "object"}, "input_examples": [{"q": "x"}]}]
 
-    await litellm.anthropic.messages.acreate(
+    response: Final = await litellm.anthropic.messages.acreate(
         **arguments(messages_server, tools=tools, additional_drop_params=["tools[*].input_examples"])
     )
 
-    body, _ = sent(messages_server)
+    body, _ = sent(messages_server, response)
     assert body["tools"] == [{"name": "lookup", "input_schema": {"type": "object"}}]
 
 
 @pytest.mark.asyncio
 async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(messages_server: RecordingServer) -> None:
-    await litellm.anthropic.messages.acreate(
+    response: Final = await litellm.anthropic.messages.acreate(
         **arguments(
             messages_server,
             provider_specific_header=[
@@ -199,7 +201,7 @@ async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(mess
         )
     )
 
-    _, headers = sent(messages_server)
+    _, headers = sent(messages_server, response)
     assert headers["x-scoped"] == "yes"
     assert "x-other" not in headers
 
@@ -208,7 +210,7 @@ async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(mess
 async def test_scoped_headers_override_extra_headers_which_override_forwarded_headers(
     messages_server: RecordingServer,
 ) -> None:
-    await litellm.anthropic.messages.acreate(
+    response: Final = await litellm.anthropic.messages.acreate(
         **arguments(
             messages_server,
             headers={"x-priority": "forwarded", "x-forwarded-only": "kept"},
@@ -217,7 +219,7 @@ async def test_scoped_headers_override_extra_headers_which_override_forwarded_he
         )
     )
 
-    _, headers = sent(messages_server)
+    _, headers = sent(messages_server, response)
     assert {name: headers.get(name) for name in ("x-priority", "x-forwarded-only", "x-extra-only")} == {
         "x-priority": "scoped",
         "x-forwarded-only": "kept",
@@ -298,20 +300,12 @@ async def test_native_messages_observes_runtime_capabilities_and_separate_caller
 
 @pytest.mark.asyncio
 async def test_native_messages_reads_optional_positional_body_parameters(messages_server: RecordingServer) -> None:
-    from litellm.messages.dispatch import _MESSAGES, _public_request
-    from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
-
-    native: Final = NATIVE_AMESSAGES.load()
-    assert native is not None
     metadata: Final = {"user_id": "caller"}
     args: Final = (16, MESSAGES, "anthropic/claude-test", metadata, None, False, "Be brief", 0.25)
     kwargs: Final = {"api_key": "test-key", "api_base": messages_server.base_url}
-    call: Final = _public_request(_MESSAGES, args, kwargs)
-    assert call is not None
+    response: Final = await litellm.anthropic.messages.acreate(*args, **kwargs)
 
-    await native(call)
-
-    body, _ = sent(messages_server)
+    body, _ = sent(messages_server, response)
     assert body["temperature"] == args[7]
     assert body["system"] == args[6]
     assert body["metadata"] == metadata

@@ -66,14 +66,11 @@ _SDK_CONTRACT = textwrap.dedent(
 
     import litellm
     from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+    from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             self.rfile.read(int(self.headers["Content-Length"]))
-            if self.headers.get("User-Agent", "").startswith("python-httpx"):
-                self.send_response(418)
-                self.end_headers()
-                return
             body = json.dumps({
                 "pages": [{"index": 0, "markdown": "native", "images": [], "dimensions": None}],
                 "model": "mistral-ocr-latest",
@@ -108,7 +105,10 @@ _SDK_CONTRACT = textwrap.dedent(
             return REFUSED
         except Exception:
             return OTHER
-        return SERVED if response.pages[0].markdown == "native" else OTHER
+        return SERVED if (
+            response.pages[0].markdown == "native"
+            and get_hidden_params_dict(response).get("additional_headers", {}).get("x-litellm-rust") == "true"
+        ) else OTHER
 
     def forked(asynchronous):
         pid = os.fork()
