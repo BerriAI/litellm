@@ -538,6 +538,7 @@ def _delete_team_if_present(gateway: Gateway, team_id: str) -> None:
         "post_user",
         "put_user",
         "patch_user",
+        "delete_user",
         "post_group",
         "put_group",
         "patch_group",
@@ -607,6 +608,7 @@ def test_non_admin_keys_cannot_write_scim_users_or_groups(gateway: Gateway, team
                     ],
                 },
             ),
+            "delete_user": ("DELETE", f"/scim/v2/Users/{caller}", None),
             "post_group": (
                 "POST",
                 "/scim/v2/Groups",
