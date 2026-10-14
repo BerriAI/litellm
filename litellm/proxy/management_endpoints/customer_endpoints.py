@@ -6,12 +6,14 @@ All /customer management endpoints
 /customer/new
 /customer/info
 /customer/update
+/customer/bulk_update
 /customer/delete
 """
 
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
@@ -21,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma.models import LiteLLM_BudgetTable as PrismaBudgetRow
     from prisma.models import LiteLLM_EndUserTable as PrismaEndUserRow
 
@@ -39,7 +42,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
-    ObjectPermissionClient,
     ObjectPermissionUpsert,
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     prepare_object_permission_upsert,
@@ -62,10 +64,31 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
     UnblockUsersResponse,
 )
 
+
+@dataclass(frozen=True, slots=True)
+class TransactionClient:
+    db: "Prisma"
+
+
 _RowT_co: Final = TypeVar("_RowT_co", covariant=True)
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 _STRING_IDS: Final = TypeAdapter(tuple[str, ...])
 _CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
+_CUSTOMER_BUDGET_LOCK_SQL: Final = 'SELECT "budget_id" FROM "LiteLLM_BudgetTable" WHERE "budget_id" = $1 FOR UPDATE'
+_CUSTOMER_SHARED_BUDGET_SQL: Final = """
+SELECT "budget_id" FROM "LiteLLM_BudgetTable" WHERE "budget_id" = $1 AND EXISTS (
+    SELECT 1 FROM "LiteLLM_EndUserTable" WHERE "budget_id" = $1 AND "user_id" <> $2
+    UNION ALL SELECT 1 FROM "LiteLLM_VerificationToken" WHERE "budget_id" = $1
+        OR "metadata"->>'end_user_budget_id' = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_OrganizationTable" WHERE "budget_id" = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_ProjectTable" WHERE "budget_id" = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_TagTable" WHERE "budget_id" = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_ModelAccessGroupBudgetTable" WHERE "budget_id" = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_TeamMembership" WHERE "budget_id" = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_OrganizationMembership" WHERE "budget_id" = $1
+    UNION ALL SELECT 1 FROM "LiteLLM_TeamTable" WHERE "metadata"->>'team_member_budget_id' = $1
+)
+"""
 _CUSTOMER_UPDATE_LOCK_SQL: Final = 'SELECT "user_id" FROM "LiteLLM_EndUserTable" WHERE "user_id" = $1 FOR UPDATE'
 
 
@@ -315,7 +338,7 @@ def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
 async def _prepare_customer_object_permission_update(
     data: UpdateCustomerRequest,
     existing_object_permission_id: str | None,
-    prisma_client: ObjectPermissionClient,
+    prisma_client: TransactionClient,
 ) -> ObjectPermissionUpsert | None:
     if data.object_permission is None:
         return None
@@ -326,8 +349,31 @@ async def _prepare_customer_object_permission_update(
     )
 
 
+async def _customer_budget_update_error(
+    tx: TransactionClient,
+    budget_id: str,
+    user_id: str,
+) -> ProxyException | None:
+    budget_locked: Final = bool(await tx.db.query_raw(_CUSTOMER_BUDGET_LOCK_SQL, budget_id))
+    if not budget_locked:
+        return ProxyException(message="Budget does not exist", type="not_found", code=404, param="budget_id")
+    shared: Final = budget_id == litellm.max_end_user_budget_id or bool(
+        await tx.db.query_raw(_CUSTOMER_SHARED_BUDGET_SQL, budget_id, user_id)
+    )
+    if shared:
+        return ProxyException(
+            message=(
+                "Cannot update max_budget for a shared budget. Update the budget directly or assign a different budget."
+            ),
+            type="bad_request",
+            code=400,
+            param="max_budget",
+        )
+    return None
+
+
 async def _write_customer_budget_update(
-    tx: ObjectPermissionClient,
+    tx: TransactionClient,
     budget_data: Mapping[str, object],
     existing_budget: LiteLLM_BudgetTable | None,
     updated_by: str,
@@ -653,7 +699,7 @@ async def _update_single_customer(
             )
         }
         async with prisma_client.tx() as transaction:
-            tx: Final = ObjectPermissionClient(db=transaction)
+            tx: Final = TransactionClient(db=transaction)
             customer_locked: Final = bool(await transaction.query_raw(_CUSTOMER_UPDATE_LOCK_SQL, data.user_id))
             end_user_table_data: Final = (
                 await _typed_table(EndUserRepository(tx)).find_first(
@@ -670,6 +716,13 @@ async def _update_single_customer(
                     param="user_id",
                 )
             end_user_table_data_typed: Final = LiteLLM_EndUserTable.model_validate(end_user_table_data.model_dump())
+            budget_error: Final = (
+                await _customer_budget_update_error(tx, end_user_table_data_typed.budget_id, data.user_id)
+                if "max_budget" in budget_table_data and end_user_table_data_typed.budget_id is not None
+                else None
+            )
+            if budget_error is not None:
+                return budget_error
             permission_upsert: Final = await _prepare_customer_object_permission_update(
                 data=data,
                 existing_object_permission_id=end_user_table_data_typed.object_permission_id,
@@ -822,7 +875,15 @@ async def bulk_customer_update(
     `success`, and either `updated_customer` or `error`, in request order. A failed update
     does not prevent the remaining customers from being updated. Object permission fields
     omitted from an update retain their existing values, and supplied permission lists
-    replace that field. Only proxy admins can update customers.
+    replace that field. Null permission fields retain their stored values and explicit empty
+    lists or objects clear that field. Each item is a locked transaction, so failed items
+    roll back their permission, budget, and customer writes. Only proxy admins can update customers.
+
+    `max_budget` can update a budget used only by that customer. Shared budgets and default
+    budgets must be edited through the budget endpoints. Sending both `budget_id` and
+    `max_budget`, even with a null value, fails request validation with HTTP 422 before
+    any item is processed. A valid item rejected for sharing a budget does not prevent
+    the other items from succeeding.
 
     Example request body:
     ```json

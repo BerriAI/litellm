@@ -4189,7 +4189,15 @@ export interface paths {
          *     `success`, and either `updated_customer` or `error`, in request order. A failed update
          *     does not prevent the remaining customers from being updated. Object permission fields
          *     omitted from an update retain their existing values, and supplied permission lists
-         *     replace that field. Only proxy admins can update customers.
+         *     replace that field. Null permission fields retain their stored values and explicit empty
+         *     lists or objects clear that field. Each item is a locked transaction, so failed items
+         *     roll back their permission, budget, and customer writes. Only proxy admins can update customers.
+         *
+         *     `max_budget` can update a budget used only by that customer. Shared budgets and default
+         *     budgets must be edited through the budget endpoints. Sending both `budget_id` and
+         *     `max_budget`, even with a null value, fails request validation with HTTP 422 before
+         *     any item is processed. A valid item rejected for sharing a budget does not prevent
+         *     the other items from succeeding.
          *
          *     Example request body:
          *     ```json
@@ -4903,7 +4911,15 @@ export interface paths {
          *     `success`, and either `updated_customer` or `error`, in request order. A failed update
          *     does not prevent the remaining customers from being updated. Object permission fields
          *     omitted from an update retain their existing values, and supplied permission lists
-         *     replace that field. Only proxy admins can update customers.
+         *     replace that field. Null permission fields retain their stored values and explicit empty
+         *     lists or objects clear that field. Each item is a locked transaction, so failed items
+         *     roll back their permission, budget, and customer writes. Only proxy admins can update customers.
+         *
+         *     `max_budget` can update a budget used only by that customer. Shared budgets and default
+         *     budgets must be edited through the budget endpoints. Sending both `budget_id` and
+         *     `max_budget`, even with a null value, fails request validation with HTTP 422 before
+         *     any item is processed. A valid item rejected for sharing a budget does not prevent
+         *     the other items from succeeding.
          *
          *     Example request body:
          *     ```json
