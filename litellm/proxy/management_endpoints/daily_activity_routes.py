@@ -107,9 +107,7 @@ async def _user_aggregate_scope_by_owned_keys(
         return resolved
     user_ids: Final = scope.entity_ids
     api_keys: Final = (
-        await get_user_api_key_filter(prisma_client, user_ids[0], query.api_key)
-        if len(user_ids) == 1
-        else ()
+        await get_user_api_key_filter(prisma_client, user_ids[0], query.api_key) if len(user_ids) == 1 else ()
     )
     return replace(resolved, scope=replace(scope, entity_ids=None, api_keys=tuple(api_keys)))
 
