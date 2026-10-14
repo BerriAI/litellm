@@ -1,0 +1,115 @@
+from typing import Final
+
+import click
+import pytest
+from click.testing import CliRunner, Result
+
+from litellm.proxy.client.cli import cli
+from litellm.proxy.client.cli.interface import run_shell_line
+
+GATEWAY: Final = "https://gateway.example.com"
+
+
+def _shell(*lines: str) -> Result:
+    """Type each line into a bare `lite` shell against the gateway, then quit"""
+    typed: Final = "".join(f"{line}\n" for line in (*lines, "quit"))
+    return CliRunner().invoke(cli, ["--base-url", GATEWAY, "--api-key", "sk-shell"], input=typed, prog_name="lite")
+
+
+@pytest.fixture
+def credentials_endpoint(requests_mock):
+    return requests_mock.get(
+        f"{GATEWAY}/credentials",
+        json={"credentials": [{"credential_name": "shared-openai", "credential_info": {}}]},
+    )
+
+
+def test_a_group_typed_alone_prints_its_own_usage_and_opens_a_prompt_inside_it(credentials_endpoint):
+    result: Final = _shell("credentials", "list")
+
+    assert "Usage: lite credentials [OPTIONS] COMMAND [ARGS]..." in result.output
+    assert "lite lite" not in result.output
+    assert "credentials > " in result.output
+    assert "Unknown command" not in result.output
+    assert credentials_endpoint.call_count == 1
+    assert credentials_endpoint.last_request.headers["Authorization"] == "Bearer sk-shell"
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        ("credentials list",),
+        ("lite credentials list",),
+        ("credentials", "list"),
+        ("credentials", "credentials list"),
+        ("credentials", "lite credentials list"),
+    ],
+)
+def test_every_spelling_of_a_group_subcommand_runs_it(lines, credentials_endpoint):
+    result: Final = _shell(*lines)
+
+    assert "Unknown command" not in result.output
+    assert "shared-openai" in result.output
+    assert credentials_endpoint.call_count == 1
+
+
+def test_quoted_arguments_reach_the_gateway_as_typed(requests_mock):
+    create: Final = requests_mock.post(f"{GATEWAY}/credentials", json={"credential_name": "shell-made"})
+
+    _shell(
+        "credentials",
+        """create shell-made --info '{"custom_llm_provider": "openai"}' --values '{"api_key": "sk-placeholder"}'""",
+    )
+
+    assert create.call_count == 1
+    assert create.last_request.json() == {
+        "credential_name": "shell-made",
+        "credential_info": {"custom_llm_provider": "openai"},
+        "credential_values": {"api_key": "sk-placeholder"},
+    }
+
+
+def test_an_unclosed_quote_runs_nothing_and_keeps_the_group(requests_mock, credentials_endpoint):
+    create: Final = requests_mock.post(f"{GATEWAY}/credentials", json={})
+
+    result: Final = _shell("credentials", "create shell-made --info '{", "list")
+
+    assert "Could not read that command" in result.output
+    assert create.call_count == 0
+    assert credentials_endpoint.call_count == 1
+
+
+def test_an_unknown_command_inside_a_group_keeps_the_group(credentials_endpoint):
+    result: Final = _shell("credentials", "frobnicate", "list")
+
+    assert "Unknown command: frobnicate" in result.output
+    assert credentials_endpoint.call_count == 1
+
+
+@pytest.mark.parametrize("leaving_line", ["models list", "help", "lite"])
+def test_a_top_level_line_inside_a_group_leaves_the_group(leaving_line, requests_mock, credentials_endpoint):
+    requests_mock.get(f"{GATEWAY}/models", json={"data": []})
+
+    result: Final = _shell("credentials", leaving_line, "list")
+
+    assert "Unknown command: list" in result.output
+    assert credentials_endpoint.call_count == 0
+
+
+def test_a_group_that_runs_on_its_own_does_not_become_the_scope(capsys):
+    @click.group()
+    def root() -> None:
+        pass
+
+    @root.group(invoke_without_command=True)
+    def wizard() -> None:
+        click.echo("wizard ran")
+
+    @wizard.command()
+    def undo() -> None:
+        pass
+
+    scope: Final = run_shell_line("wizard", (), click.Context(root, info_name="lite", obj={}), root)
+
+    assert scope == ()
+    assert "wizard ran" in capsys.readouterr().out

@@ -34,7 +34,8 @@ The base URL is resolved in this order of precedence:
 1. `--base-url` command-line option
 2. `LITELLM_PROXY_URL` environment variable
 3. `base_url` from `~/.litellm/config.json`
-4. `http://localhost:4000`
+4. the server you last signed in to with `lite login`
+5. `http://localhost:4000`
 
 ### Hiding commands from the listings
 

@@ -151,6 +151,52 @@ def test_default_base_url_unchanged_without_config_file(cli_runner, isolated_hom
     assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
 
 
+def _write_login_token(home: Path, base_url: str, key: str) -> None:
+    token_dir = home / ".litellm"
+    token_dir.mkdir(exist_ok=True)
+    (token_dir / "token.json").write_text(json.dumps({"base_url": base_url, "key": key, "user_id": "u-1"}))
+
+
+LOGIN_SERVER: Final = "https://login-gateway.example.com"
+
+
+def test_bare_lite_connects_to_the_server_it_logged_in_to(cli_runner, isolated_home, requests_mock, secret_vault_factory):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    requests_mock.get(f"{LOGIN_SERVER}/health/readiness", json={"litellm_version": "1.2.3"})
+    context: Final[dict[str, object]] = {"secret_vault": secret_vault_factory()}
+
+    result = cli_runner.invoke(cli, ["version"], obj=context)
+
+    assert result.exit_code == 0
+    assert f"LiteLLM Proxy Server URL: {LOGIN_SERVER}" in result.output
+    assert requests_mock.last_request.headers.get("Authorization") == "Bearer sk-from-login"
+    assert context["base_url_explicit"] is False
+
+
+@pytest.mark.parametrize(
+    ("args", "env", "config", "expected_base_url"),
+    [
+        (["--base-url", "https://flag-proxy.example.com"], {}, {}, "https://flag-proxy.example.com"),
+        ([], {"LITELLM_PROXY_URL": "https://env-proxy.example.com"}, {}, "https://env-proxy.example.com"),
+        ([], {}, {"base_url": "https://config-proxy.example.com"}, "https://config-proxy.example.com"),
+    ],
+)
+def test_a_named_server_beats_the_logged_in_one_and_never_gets_its_key(
+    cli_runner, isolated_home, monkeypatch, requests_mock, secret_vault_factory, args, env, config, expected_base_url
+):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    _write_config_file(isolated_home, config)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    requests_mock.get(f"{expected_base_url}/health/readiness", json={"litellm_version": "1.2.3"})
+
+    result = cli_runner.invoke(cli, [*args, "version"], obj={"secret_vault": secret_vault_factory()})
+
+    assert result.exit_code == 0
+    assert f"LiteLLM Proxy Server URL: {expected_base_url}" in result.output
+    assert requests_mock.last_request.headers.get("Authorization") is None
+
+
 def test_corrupt_config_file_falls_back_to_default(cli_runner, isolated_home):
     """A corrupt config file must never crash the CLI. Exactly one warning proves
     the config file is read once per invocation, not once per lookup."""
