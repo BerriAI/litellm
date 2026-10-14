@@ -1,6 +1,7 @@
 import copy
 import enum
 import re
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -21,12 +22,12 @@ from litellm.llms.azure_ai.common_utils import (
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
-from litellm.llms.openai.openai import OpenAIConfig
+from litellm.llms.openai.openai import OpenAIChatCompletionResponseIterator, OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ModelResponse, ProviderField
+from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
 from litellm.utils import add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
@@ -43,6 +44,18 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "provider_specific_fields",
     "cache_control",
 )
+
+
+def _is_grok_model(model: str) -> bool:
+    return "grok" in model
+
+
+class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:
+        usage: Final = chunk.get("usage")
+        if _is_grok_model(str(chunk.get("model") or "")) and isinstance(usage, dict):
+            XAIChatConfig.fold_reasoning_tokens_into_completion(usage)
+        return super().chunk_parser(chunk)
 
 
 class AzureAIGPT5Config(OpenAIGPT5Config):
@@ -114,7 +127,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Check if the model supports stop tokens.
         """
-        if "grok" in model:
+        if _is_grok_model(model):
             # Reuse Xai method for Grok model
             xai_config: Final = XAIChatConfig()
             return xai_config.supports_stop_reason(model)
@@ -319,7 +332,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         model_response.model = f"azure_ai/{model}"
-        return super().transform_response(
+        response: Final = super().transform_response(
             model=model,
             raw_response=raw_response,
             model_response=model_response,
@@ -330,6 +343,21 @@ class AzureAIStudioConfig(OpenAIConfig):
             litellm_params=litellm_params,
             encoding=encoding if encoding is not None else None,
             api_key=api_key,
+            json_mode=json_mode,
+        )
+        if _is_grok_model(model):
+            XAIChatConfig.fold_reasoning_tokens_into_completion(response)
+        return response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> "AzureAIChatCompletionResponseIterator":
+        return AzureAIChatCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
             json_mode=json_mode,
         )
 

@@ -345,6 +345,80 @@ def test_azure_ai_grok_stop_parameter_handling():
     assert "stop" in gpt_params, "GPT models should support stop parameter"
 
 
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_grok_bills_reasoning_tokens_reported_outside_completion_tokens(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-grok",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "grok-4.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 14,
+                    "completion_tokens": 10,
+                    "total_tokens": 336,
+                    "completion_tokens_details": {"reasoning_tokens": 312},
+                },
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/grok-4.6",
+        messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+    )
+    model_info: Final = litellm.get_model_info(model="grok-4.6", custom_llm_provider="azure_ai")
+    expected_cost: Final = 14 * model_info["input_cost_per_token"] + 322 * model_info["output_cost_per_token"]
+
+    assert route.call_count == 1
+    assert response.usage.completion_tokens == 322
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-9)
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_grok_stream_folds_reasoning_tokens_into_the_usage_chunk(respx_mock: respx.MockRouter) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    stream_body: Final = (
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.6",'
+        '"choices":[{"index":0,"delta":{"role":"assistant","content":"42"},"finish_reason":null}]}\n\n'
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.6",'
+        '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.6",'
+        '"choices":[],"usage":{"prompt_tokens":14,"completion_tokens":10,"total_tokens":336,'
+        '"completion_tokens_details":{"reasoning_tokens":312}}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    chunks: Final = tuple(
+        litellm.completion(
+            model="azure_ai/grok-4.6",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            api_base="https://example-resource.services.ai.azure.com/models",
+            api_key="azure-ai-test-key",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    )
+    usage_chunks: Final = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+
+    assert route.call_count == 1
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].completion_tokens == 322
+    assert usage_chunks[0].total_tokens == usage_chunks[0].prompt_tokens + usage_chunks[0].completion_tokens
+
+
 def test_azure_model_router_response_shows_actual_model():
     """
     Test that Azure Model Router returns the actual model used in the response,
