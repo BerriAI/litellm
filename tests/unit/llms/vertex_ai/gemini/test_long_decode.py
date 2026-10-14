@@ -531,6 +531,26 @@ async def test_streaming_long_decode_reads_every_chunk_of_each_continuation_stre
 
 @pytest.mark.parametrize("is_async", [True, False])
 @pytest.mark.asyncio
+async def test_streaming_continuation_stream_is_read_whole_after_a_stream_that_ended_on_an_unfinished_frame(
+    is_async: bool,
+):
+    sent: Final[list[dict[str, object]]] = []
+    first_stream, next_stream = _stream_hops()
+    cut_off_first_stream: Final = httpx.Response(
+        200,
+        content=first_stream.content + b'data: {"candidates": [{"content": {"parts": [{"text": "lo\r\n\r\n',
+        headers=first_stream.headers,
+    )
+
+    chunks: Final = await _collect_stream(is_async, (cut_off_first_stream, next_stream), sent)
+
+    assert len(sent) == 2
+    assert _stream_text(chunks) == "hello world"
+    assert _stream_finish_reasons(chunks) == ["stop"]
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
 async def test_streaming_initial_prompt_tokens_is_the_prompt_count_the_first_stream_ends_with(is_async: bool):
     sent: Final[list[dict[str, object]]] = []
     first_stream: Final = _sse(

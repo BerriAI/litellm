@@ -3652,6 +3652,7 @@ class ModelResponseIterator:
         self._hop_usage = UsageMetadata()
         self._grounding_offset = (*self._grounding_offset, *self._hop_grounding)
         self._hop_grounding = ()
+        self._json_buffer = JSONFragmentAccumulator()
         self.response = response
 
     def _truncated_stream_end(self, token: str) -> "ModelResponseStream":
