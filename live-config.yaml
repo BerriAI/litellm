@@ -1,0 +1,7 @@
+model_list:
+  - model_name: drex
+    litellm_params:
+      model: nace/drex-v2.0
+      api_key: os.environ/NACE_API_KEY
+    model_info:
+      mode: evaluation

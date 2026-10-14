@@ -1,0 +1,1 @@
+{"error":{"message":"litellm.BadRequestError: You passed in model=drex. There are no healthy deployments for this model\n\nLiteLLM: model group 'drex' failed with the error above. No fallback was attempted.","type":"invalid_request_error","param":null,"code":"400"}}
