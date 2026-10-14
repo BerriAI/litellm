@@ -9420,6 +9420,93 @@ def test_converse_leaves_the_cap_to_markers_when_a_marked_tool_is_not_sent(unsen
     ]
     assert cache_point not in request.get("toolConfig", {}).get("tools", [])
 
+def _converse_tool_turn(*result_parts: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": list(result_parts)},
+    ]
+
+
+def _marked_text_parts(count: int) -> list[dict[str, object]]:
+    return [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        for index in range(count)
+    ]
+
+
+def _marked_tool_result_parts() -> list[dict[str, object]]:
+    return [
+        {"type": "text", "text": f"result {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        for index in range(2)
+    ]
+
+
+def test_converse_counts_one_cache_point_for_a_tool_result_with_several_marks():
+    request = litellm.AmazonConverseConfig()._transform_request(
+        model="anthropic.claude-sonnet-5-5",
+        messages=[
+            {"role": "user", "content": _marked_text_parts(3)},
+            *_converse_tool_turn(*_marked_tool_result_parts()),
+        ],
+        optional_params={"tools": [_CONVERSE_CAP_TOOL]},
+        litellm_params={},
+    )
+
+    assert len(_collect_cache_points(request["messages"])) == 4
+
+
+def test_converse_drops_marks_until_a_merged_tool_result_fits_the_cap():
+    messages = [
+        {"role": "user", "content": _marked_text_parts(4)},
+        *_converse_tool_turn(*_marked_tool_result_parts()),
+    ]
+
+    def transform(litellm_params: dict) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="anthropic.claude-sonnet-5-5",
+            messages=copy.deepcopy(messages),
+            optional_params={"tools": [_CONVERSE_CAP_TOOL]},
+            litellm_params=litellm_params,
+        )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="this request has 5"):
+        transform({})
+
+    request = transform({"drop_params": True})
+    assert len(_collect_cache_points(request["messages"][:1])) == 4
+    assert _collect_cache_points(request["messages"][1:]) == []
+
+
+def test_converse_drops_prompt_cache_breakpoint_from_a_nova_tool_result():
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "You are terse.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        },
+        {"role": "user", "content": "Look it up."},
+        *_converse_tool_turn(*_marked_tool_result_parts()),
+    ]
+
+    def transform(litellm_params: dict) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="us.amazon.nova-lite-v1:0",
+            messages=copy.deepcopy(messages),
+            optional_params={"tools": [_CONVERSE_CAP_TOOL]},
+            litellm_params=litellm_params,
+        )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="tool result"):
+        transform({})
+
+    request = transform({"drop_params": True})
+    assert request["system"] == [{"text": "You are terse."}, {"cachePoint": {"type": "default"}}]
+    assert _collect_cache_points(request["messages"]) == []
+
+
 def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_when_flagged(local_model_cost_map):
     from litellm import Router
 

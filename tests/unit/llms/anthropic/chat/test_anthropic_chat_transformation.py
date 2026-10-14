@@ -1,4 +1,5 @@
 import copy
+import itertools
 import json
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -4194,6 +4195,41 @@ def test_transform_request_keeps_the_earliest_prompt_cache_breakpoints_within_th
         None,
     ]
     assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+@pytest.mark.parametrize(
+    "unsent_marks",
+    [
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Noted.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+                }
+            ],
+            id="assistant_part",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Also this.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            id="message_level",
+        ),
+    ],
+)
+def test_transform_request_caps_only_the_marks_claude_receives(unsent_marks: list[dict]):
+    marked_parts = [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}} for index in range(4)
+    ]
+
+    body = _anthropic_body(
+        [{"role": "user", "content": marked_parts}, *unsent_marks, {"role": "user", "content": "Go on."}]
+    )
+
+    sent_marks = [
+        part.get("cache_control")
+        for part in itertools.chain.from_iterable(message["content"] for message in body["messages"])
+        if isinstance(part, dict)
+    ]
+    assert sent_marks.count({"type": "ephemeral"}) == 4
 
 
 def test_compaction_block_empty_list_not_added():

@@ -1522,9 +1522,15 @@ class AmazonConverseConfig(BaseConfig):
     ) -> Sequence[AllMessageValues]:
         if not bedrock_model_known_to_accept_cache_points(model):
             return messages
+        markable: Final = (
+            AnthropicCacheControlHook.prompt_cache_breakpoints_dropped_from_tool_results(messages, drop_params, model)
+            if "nova" in model.lower()
+            else messages
+        )
         return AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
-            messages,
+            markable,
             drop_params,
+            AnthropicCacheControlHook.count_converse_cache_points,
             lambda: self._tool_cache_points_on_the_wire(model, optional_params, litellm_params),
         )
 

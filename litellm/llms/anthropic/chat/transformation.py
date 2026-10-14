@@ -2060,6 +2060,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
                 messages,
                 drop_params,
+                AnthropicCacheControlHook.count_anthropic_cache_controls,
                 lambda: AnthropicCacheControlHook.count_chat_external_cache_breakpoints(optional_params),
             )
         )
