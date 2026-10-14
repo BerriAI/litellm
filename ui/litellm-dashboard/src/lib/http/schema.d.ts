@@ -74010,6 +74010,22 @@ export interface operations {
                         content_type: string;
                     })[];
                     /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
+                    /**
                      * Model
                      * @description A decision model from the proxy model_list
                      */
@@ -82668,6 +82684,22 @@ export interface operations {
                          */
                         content_type: string;
                     })[];
+                    /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
                     /**
                      * Model
                      * @description A decision model from the proxy model_list

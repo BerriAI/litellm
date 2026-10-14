@@ -10533,6 +10533,49 @@
                       "title": "Audio",
                       "type": "array"
                     },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
+                    },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
@@ -11380,6 +11423,49 @@
                       "maxItems": 4,
                       "title": "Audio",
                       "type": "array"
+                    },
+                    "images": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
+                                "type": "string"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
+                                    "title": "Base64",
+                                    "type": "string"
+                                  },
+                                  "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
+                                    "title": "Content Type",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "content_type",
+                                  "base64"
+                                ],
+                                "title": "DecisionsBase64Image",
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Images as data URLs or content_type plus base64, for providers that look at images",
+                      "title": "Images"
                     },
                     "model": {
                       "description": "A decision model from the proxy model_list",
