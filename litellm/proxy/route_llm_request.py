@@ -416,14 +416,27 @@ class _RouterFallbacks(Protocol):
     def fallbacks(self) -> Sequence[object] | None: ...
 
 
-def _echoed_from_cost_map(model_info: Mapping[str, object]) -> frozenset[str]:
+def _loaded_catalog_entry(model_info: Mapping[str, object]) -> Mapping[str, object]:
     catalog_key: Final = model_info.get(COST_MAP_LOOKUP_KEY)
     if not isinstance(catalog_key, str):
-        return frozenset()
-    return frozenset(
-        echoed_cost_map_fields(
-            model_info, GetModelCostMap.loaded_model_cost_map().get(catalog_key) or MappingProxyType({})
-        )
+        return MappingProxyType({})
+    return GetModelCostMap.loaded_model_cost_map().get(catalog_key) or MappingProxyType({})
+
+
+def _catalog_serves_chat(catalog_entry: Mapping[str, object]) -> bool:
+    try:
+        declared: Final = _DeploymentEndpointDeclaration.model_validate(dict(catalog_entry))
+    except ValidationError:
+        return False
+    return (declared.mode or "").strip().lower() in CHAT_SHAPED_MODES or not CHAT_SHAPED_ENDPOINTS.isdisjoint(
+        declared.supported_endpoints or ()
+    )
+
+
+def _declaration_overruled_by_catalog(model_info: Mapping[str, object]) -> bool:
+    catalog_entry: Final = _loaded_catalog_entry(model_info)
+    return _catalog_serves_chat(catalog_entry) or "supported_endpoints" in echoed_cost_map_fields(
+        model_info, catalog_entry
     )
 
 
@@ -439,7 +452,7 @@ def _declared_non_chat_endpoints(deployment: Mapping[str, object]) -> frozenset[
     endpoints: Final = frozenset(declared.supported_endpoints)
     if not endpoints.isdisjoint(CHAT_SHAPED_ENDPOINTS):
         return None
-    return None if "supported_endpoints" in _echoed_from_cost_map(model_info) else endpoints
+    return None if _declaration_overruled_by_catalog(model_info) else endpoints
 
 
 def _group_deployments(model: str, llm_router: LitellmRouter, team_id: str | None) -> tuple[Mapping[str, object], ...]:

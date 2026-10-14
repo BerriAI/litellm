@@ -2061,6 +2061,45 @@ def test_endpoint_unsupported_ignores_endpoints_copied_from_the_loaded_catalog(d
     assert isinstance(_unsupported("acompletion", "catalog-row", router), ProxyUnsupportedEndpointError) is rejected
 
 
+def _catalog_key_serving_chat_by_mode() -> str:
+    return min(
+        key
+        for key, entry in GetModelCostMap.loaded_model_cost_map().items()
+        if entry.get("mode") == "chat" and "supported_endpoints" not in entry
+    )
+
+
+def _catalog_key_serving_chat_by_endpoints() -> str:
+    return min(
+        key
+        for key, entry in GetModelCostMap.loaded_model_cost_map().items()
+        if entry.get("mode") not in CHAT_SHAPED_MODES
+        and isinstance(endpoints := entry.get("supported_endpoints"), list)
+        and not CHAT_SHAPED_ENDPOINTS.isdisjoint(endpoints)
+    )
+
+
+@pytest.mark.parametrize(
+    "catalog_key, rejected",
+    [
+        pytest.param(_catalog_key_serving_chat_by_mode, False, id="key-of-a-chat-mode-catalog-entry"),
+        pytest.param(_catalog_key_serving_chat_by_endpoints, False, id="key-of-a-catalog-entry-listing-chat"),
+        pytest.param(_catalog_key_declaring_non_chat, True, id="key-of-a-non-chat-catalog-entry"),
+        pytest.param(lambda: "not-in-the-catalog", True, id="key-missing-from-the-catalog"),
+    ],
+)
+def test_endpoint_unsupported_ignores_non_chat_values_on_a_row_whose_catalog_entry_serves_chat(catalog_key, rejected):
+    router: Final = _router_with(
+        {
+            "model_name": "catalog-row",
+            "litellm_params": {"model": "openai/catalog-row", "api_key": "test-key"},
+            "model_info": {"key": catalog_key(), **EMBEDDING_ONLY},
+        }
+    )
+
+    assert isinstance(_unsupported("acompletion", "catalog-row", router), ProxyUnsupportedEndpointError) is rejected
+
+
 class _LookupCountingRouter(Router):
     def __init__(self, **router_kwargs: object) -> None:
         self.looked_up: list[str | None] = []
