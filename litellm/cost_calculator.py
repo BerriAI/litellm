@@ -60,6 +60,7 @@ from litellm.llms.azure_ai.cost_calculator import (
     is_azure_model_router as azure_ai_is_model_router_name,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.llms.bedrock.common_utils import get_bedrock_cross_region_inference_regions
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
 )
@@ -855,9 +856,6 @@ def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | Non
     return own_model_info["litellm_provider"]
 
 
-_BEDROCK_CROSS_REGION_PREFIXES: Final = ("us.", "eu.", "apac.", "us-gov.", "global.", "au.", "ca.")
-
-
 def _is_bedrock_region_stripped_form(deployment_model: str, response_model: str) -> bool:
     """True when ``response_model`` is ``deployment_model`` with a Bedrock
     cross-region inference-profile prefix (``eu.``/``us.``/``apac.``/...)
@@ -868,7 +866,10 @@ def _is_bedrock_region_stripped_form(deployment_model: str, response_model: str)
     if not deployment_bare.endswith(response_model):
         return False
     prefix: Final = deployment_bare[: len(deployment_bare) - len(response_model)]
-    return prefix in _BEDROCK_CROSS_REGION_PREFIXES
+    # Derived from get_bedrock_cross_region_inference_regions() so the two
+    # lists cannot drift: a profile abbreviation added there (e.g. ``jp.``)
+    # is priced at its regional rate without touching this module.
+    return prefix.rstrip(".") in get_bedrock_cross_region_inference_regions()
 
 
 def select_model_name_for_cost_calc(

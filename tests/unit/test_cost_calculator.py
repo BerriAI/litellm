@@ -9059,3 +9059,14 @@ def test_bedrock_cross_region_profile_prices_at_deployment_model():
     )
     assert selected_plain is not None
     assert selected_plain.endswith("anthropic.claude-3-5-sonnet-20241022-v2:0")
+
+    # Every abbreviation get_bedrock_cross_region_inference_regions() lists is
+    # honored - not just the ones a hardcoded prefix tuple happened to name
+    # (jp. was missing before the list was derived from the source of truth).
+    selected_jp = select_model_name_for_cost_calc(
+        model="bedrock/jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+        completion_response={"model": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+        custom_llm_provider="bedrock",
+    )
+    assert selected_jp is not None
+    assert "jp.anthropic.claude-haiku-4-5-20251001-v1:0" in selected_jp
