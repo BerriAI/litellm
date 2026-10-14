@@ -177,7 +177,6 @@ def _video_error(raw_response: httpx.Response, status_code: int, message: str) -
         status_code=raw_response.status_code if raw_response.status_code >= 400 else status_code,
         message=message,
         headers=raw_response.headers,
-        response=raw_response,
     )
 
 

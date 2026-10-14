@@ -31,7 +31,7 @@ from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_video_id_with_provider,
 )
-from litellm.videos.main import avideo_content, avideo_generation, video_content
+from litellm.videos.main import avideo_content, avideo_generation, avideo_status, video_content
 
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -849,10 +849,28 @@ class TestDashScopeVideoContentDownload:
             handler: Final = AsyncHTTPHandler()
             await handler.close()
             handler.client = http_client
-            with pytest.raises(litellm.BadRequestError) as raised:
+            with pytest.raises(litellm.BadRequestError, match="still processing") as raised:
                 await avideo_content(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
 
         assert raised.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_polling_an_expired_task_says_why_it_is_gone(self):
+        """Regression: the caller got DashScope's bare UNKNOWN body, with nothing saying
+        task ids expire after 24 hours or only exist in the region that created them."""
+        encoded = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3.0-video")
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "UNKNOWN"}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            with pytest.raises(litellm.NotFoundError, match="24 hours") as raised:
+                await avideo_status(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
+
+        assert raised.value.status_code == 404
 
     def test_sync_download_reuses_the_client_that_served_the_task_lookup(self):
         encoded = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3.0-video")
