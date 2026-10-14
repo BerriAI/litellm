@@ -1181,7 +1181,13 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
 
-async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
+async def user_api_key_auth_live_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(websocket, model=None)
+
+
+async def user_api_key_auth_websocket_for_model(
+    websocket: WebSocket, model: str | None, *, close_on_auth_error: bool = True
+) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -1236,11 +1242,23 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     try:
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
+        if not close_on_auth_error:
+            raise
         if is_invalid_virtual_key_error(e):
             raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
         log_model_access_denial(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
+
+
+async def user_api_key_auth_accepted_websocket_for_model(websocket: WebSocket, model: str) -> UserAPIKeyAuth:
+    """Re-authorize an already accepted WebSocket for a model it named after the upgrade.
+
+    Runs the same key, team, member, user, project and agent checks, plus budget reservation, as
+    the upgrade does for ``?model=``, but raises auth errors without closing the socket so the
+    caller can reply with an error frame.
+    """
+    return await user_api_key_auth_websocket_for_model(websocket, model, close_on_auth_error=False)
 
 
 def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_user_params: dict) -> UserAPIKeyAuth:
@@ -3671,12 +3689,23 @@ async def run_centralized_common_checks(
     # may have a non-admin user_role and would otherwise demote the
     # caller. The token is the source of truth for these paths — force
     # the admin user_object whenever the token says PROXY_ADMIN, even
-    # if a DB row was fetched.
+    # if a DB row was fetched. Every admin token except the built-in admin
+    # identity (litellm_proxy_admin_name: the master key and the UI
+    # username/password login) keeps the row's personal budget (max_budget,
+    # and user_email for budget alerts) so common_checks enforces it; every
+    # other field keeps its default.
     if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
+        budget_row: Final = (
+            user_object
+            if isinstance(user_object, LiteLLM_UserTable) and user_api_key_auth_obj.user_id != litellm_proxy_admin_name
+            else None
+        )
         user_object = LiteLLM_UserTable(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
+            max_budget=budget_row.max_budget if budget_row is not None else None,
+            user_email=budget_row.user_email if budget_row is not None else None,
             object_permission_id=(
                 user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
             ),

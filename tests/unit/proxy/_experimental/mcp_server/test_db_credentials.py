@@ -1856,3 +1856,15 @@ async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_repl
     assert parse_qs(upstream.calls[0].request.content.decode())["client_id"] == [identity]
     assert "client_secret" not in parse_qs(upstream.calls[0].request.content.decode())
     assert server.client_id is None and server.client_id_metadata_document_supported is capability
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_scope, expected", [(None, ["a"]), ("b", ["b"]), ("", [])])
+async def test_silent_refresh_preserves_omitted_scope_but_accepts_explicit_grant(monkeypatch, provider_scope, expected):
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    await _run_refresh(monkeypatch, _refresh_server(), {
+        "access_token": "new-access",
+        **({"scope": provider_scope} if provider_scope is not None else {}),
+    })
+    assert db_mod.store_user_oauth_credential.await_args.kwargs["scopes"] == expected

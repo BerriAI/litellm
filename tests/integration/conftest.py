@@ -4,27 +4,32 @@ import hashlib
 import json
 import os
 import re
-from collections.abc import Generator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Generator, Iterator, Mapping, Sequence
 from contextlib import ExitStack
 from copy import copy
+from functools import partial
 from importlib.metadata import version
 from pathlib import Path
-from typing import Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import httpx
 import pytest
+import pytest_asyncio
 from execnet import XSpec
 from pydantic import TypeAdapter
 from redis import Redis
 
-from tests.integration._support.client import Gateway, eventually, gateway_from_environment
+from tests.integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.ordering import collected_case, fixture_groups, scheduling_groups
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
-from tests.integration._support.workers import worker_endpoints, worker_gateway
+from tests.integration._support.workers import gateway_profile, start_worker_stacks, worker_stack
 from tests.integration.run import GITHUB_FILES
+
+if TYPE_CHECKING:
+    from tests.integration._support.actors import ActorSet, GatewayClient, ManagementDatabase, ScratchResources
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 INVENTORY: Final = pytest.StashKey[tuple[str, ...]]()
@@ -80,24 +85,14 @@ def pytest_xdist_setupnodes(config: pytest.Config, specs: Sequence[XSpec]) -> No
     resources: Final = ExitStack()
     config.add_cleanup(resources.close)
     destination: Final = Path(os.environ["INTEGRATION_RESULTS_DIR"])
-    peer_needed: Final = bool(os.environ.get("INTEGRATION_PEER_URL"))
-    replica_needed: Final = bool(os.environ.get("INTEGRATION_PROXY_READ_REPLICA_URL"))
-    for index, spec in enumerate(specs):
-        results: Final = destination / f"gw{index}"
-        endpoints: Final = worker_endpoints()
-        with pytest.MonkeyPatch.context() as environment:
-            for name, value in endpoints.items():
-                environment.setenv(name, value)
-            environment.setenv("INTEGRATION_RESULTS_DIR", str(results))
-            services: Final = resources.enter_context(
-                worker_gateway(results / "runtime", peer=peer_needed, replica=replica_needed)
-            )
-        spec.env = {
-            **STRING_ENVIRONMENT.validate_python(spec.env),
-            **endpoints,
-            **services,
-            "INTEGRATION_RESULTS_DIR": str(results),
-        }
+    stacks: Final = start_worker_stacks(
+        tuple(destination / f"gw{index}" for index in range(len(specs))),
+        partial(worker_stack, profile=gateway_profile(os.environ)),
+        resources,
+        os.cpu_count() or 1,
+    )
+    for spec, stack in zip(specs, stacks, strict=True):
+        spec.env = {**STRING_ENVIRONMENT.validate_python(spec.env), **stack}
 
 
 class IntegrationReportPlugin:
@@ -290,6 +285,55 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 @pytest.fixture
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
+        yield value
+
+
+@pytest.fixture(scope="session")
+def session_gateway() -> Iterator[Gateway]:
+    with gateway_from_environment() as value:
+        yield value
+
+
+@pytest.fixture
+def scenario(gateway: Gateway) -> Iterator[Scenario]:
+    value: Final[Scenario]
+    with gateway.scenario() as value:
+        yield value
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def actors(
+    session_gateway: Gateway, db: ManagementDatabase
+) -> AsyncIterator[ActorSet]:
+    with session_gateway.scenario() as scenario:
+        from tests.integration._support.actors import create_actor_set
+
+        value: Final[ActorSet] = await create_actor_set(session_gateway, scenario, db)
+        yield value
+
+
+@pytest.fixture(scope="session")
+def gateway_client(session_gateway: Gateway, actors: ActorSet) -> GatewayClient:
+    from tests.integration._support.actors import create_gateway_client
+
+    return create_gateway_client(session_gateway, actors)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def db(session_gateway: Gateway) -> AsyncIterator[ManagementDatabase]:
+    from tests.integration._support.actors import management_database
+
+    value: Final[ManagementDatabase]
+    async with management_database(session_gateway) as value:
+        yield value
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def resources(db: ManagementDatabase) -> AsyncIterator[ScratchResources]:
+    from tests.integration._support.actors import scratch_resources
+
+    value: Final[ScratchResources]
+    async with scratch_resources(db) as value:
         yield value
 
 

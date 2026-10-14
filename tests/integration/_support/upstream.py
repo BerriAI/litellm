@@ -496,6 +496,7 @@ class Provider:
                     .encode(),
                     media_type=response.content_type,
                     status_code=response.status,
+                    headers=response.headers,
                 )
             case BinaryResponse():
                 return Response(
@@ -518,13 +519,13 @@ class Provider:
                             ).encode()
                             await asyncio.sleep(response.frame_delay_ms / 1000)
 
-                    return StreamingResponse(stream(), media_type=response.content_type)
+                    return StreamingResponse(stream(), media_type=response.content_type, headers=response.headers)
                 stream_body: Final = (
                     ("\n\n".join(response.frames) + "\n\n")
                     .replace("$REQUEST_ID", scenario_id)
                     .replace("$UNIQUE_ID", unique_id)
                 )
-                return Response(content=stream_body.encode(), media_type=response.content_type)
+                return Response(content=stream_body.encode(), media_type=response.content_type, headers=response.headers)
             case EventStreamResponse():
                 events: Final = (
                     tuple(
@@ -753,6 +754,7 @@ def main() -> None:
         port=cast(int, arguments.port),
         access_log=False,
         timeout_keep_alive=125,
+        timeout_graceful_shutdown=5,
         ssl_certfile=cast(str | None, arguments.ssl_certfile),
         ssl_keyfile=cast(str | None, arguments.ssl_keyfile),
     )
