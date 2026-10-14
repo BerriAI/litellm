@@ -27,7 +27,7 @@ WEATHER_TOOLS: Final = (
 )
 
 
-def _openai_response(content: str | None, tool_calls: list | None = None) -> dict:
+def _openai_response(content: str | None, tool_calls: list | None = None, **message_fields: object) -> dict:
     return {
         "id": "chatcmpl-tool-loop",
         "object": "chat.completion",
@@ -41,6 +41,7 @@ def _openai_response(content: str | None, tool_calls: list | None = None) -> dic
                     "role": "assistant",
                     "content": content,
                     "tool_calls": tool_calls,
+                    **message_fields,
                 },
             }
         ],
@@ -516,3 +517,32 @@ async def test_arun_tool_loop_answers_after_a_search_that_found_nothing(
     assert answer == "I have no flight tool."
     assert executed == []
     assert route.call_count == 1
+
+
+def test_client_tool_turn_is_replayed_without_its_provider_specific_fields(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_openai_response(
+                    None,
+                    [_tool_call("call_1", "get_weather", {"city": "Paris"})],
+                    reasoning_details=[{"type": "reasoning.text", "text": "Check the weather tool"}],
+                ),
+            ),
+            httpx.Response(200, json=_openai_response("Paris is 72F")),
+        ]
+    )
+
+    answer: Final = litellm.run_tool_loop(
+        model="openai/gpt-5-mini",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=_tool_result,
+        api_key="sk-test",
+    )
+
+    assert answer == "Paris is 72F"
+    replayed_assistant: Final = _request_bodies(respx_mock)[1]["messages"][1]
+    assert replayed_assistant["tool_calls"][0]["id"] == "call_1"
+    assert "provider_specific_fields" not in replayed_assistant

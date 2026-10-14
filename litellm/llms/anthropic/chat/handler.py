@@ -1051,8 +1051,11 @@ class ModelResponseIterator:
                     else:
                         self.tool_results.append(content_block_start["content_block"])
                         provider_specific_fields["tool_results"] = self.tool_results
-                        # Convert to provider-neutral code_interpreter_results
-                        provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
+                        if content_type != "tool_search_tool_result":
+                            # Convert to provider-neutral code_interpreter_results
+                            provider_specific_fields["code_interpreter_results"] = (
+                                self._build_code_interpreter_results()
+                            )
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)

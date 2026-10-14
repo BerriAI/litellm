@@ -56,7 +56,7 @@ def _assistant_tool_call(tool_call: ChatCompletionMessageToolCall) -> ChatComple
 
 
 def _assistant_message(
-    message: Message, tool_calls: tuple[ChatCompletionMessageToolCall, ...]
+    message: Message, tool_calls: tuple[ChatCompletionMessageToolCall, ...], replays_server_tool_results: bool
 ) -> ChatCompletionAssistantMessage:
     return cast(  # cast-ok: dict literal with thinking_blocks, reasoning_items and provider_specific_fields spread in only when set
         "ChatCompletionAssistantMessage",
@@ -69,7 +69,10 @@ def _assistant_message(
                 for key, value in (
                     ("thinking_blocks", getattr(message, "thinking_blocks", None)),
                     ("reasoning_items", getattr(message, "reasoning_items", None)),
-                    ("provider_specific_fields", getattr(message, "provider_specific_fields", None)),
+                    (
+                        "provider_specific_fields",
+                        getattr(message, "provider_specific_fields", None) if replays_server_tool_results else None,
+                    ),
                 )
                 if value is not None
             },
@@ -143,7 +146,11 @@ def run_tool_loop(
         if round_number == max_rounds:
             break
         tool_results = tuple(execute_tool(tool_call) for tool_call in client_tool_calls)
-        history = (*history, _assistant_message(message, tool_calls), *tool_results)
+        history = (
+            *history,
+            _assistant_message(message, tool_calls, client_tool_calls != tool_calls),
+            *tool_results,
+        )
     raise ToolLoopMaxRoundsExceeded(max_rounds)
 
 
@@ -188,5 +195,9 @@ async def arun_tool_loop(
         if round_number == max_rounds:
             break
         tool_results = tuple([await execute_tool(tool_call) for tool_call in client_tool_calls])
-        history = (*history, _assistant_message(message, tool_calls), *tool_results)
+        history = (
+            *history,
+            _assistant_message(message, tool_calls, client_tool_calls != tool_calls),
+            *tool_results,
+        )
     raise ToolLoopMaxRoundsExceeded(max_rounds)

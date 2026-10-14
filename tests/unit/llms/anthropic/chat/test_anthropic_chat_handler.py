@@ -1377,7 +1377,7 @@ def test_streamed_tool_search_tool_result_is_kept_in_tool_results():
         chunk={"type": "content_block_start", "index": 1, "content_block": search_result}
     )
 
-    assert parsed.choices[0].delta.provider_specific_fields["tool_results"] == [search_result]
+    assert parsed.choices[0].delta.provider_specific_fields == {"tool_results": [search_result]}
 
 
 def test_streaming_chunks_have_stable_ids():

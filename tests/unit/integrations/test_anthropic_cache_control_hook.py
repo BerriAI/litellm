@@ -1173,6 +1173,14 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
             1,
             id="replayed_with_the_client_answer",
         ),
+        pytest.param(
+            (
+                {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"},
+                {"role": "user", "content": "Go on"},
+            ),
+            0,
+            id="client_answer_replaced_by_the_kept_result",
+        ),
     ],
 )
 def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_the_call_replays_as_tool_use(

@@ -3574,30 +3574,46 @@ def _web_search_turn(last_block: dict[str, object]) -> list[dict[str, object]]:
     ]
 
 
-@pytest.mark.parametrize("modify_params", [False, True], ids=["modify_params_off", "modify_params_on"])
+@pytest.mark.parametrize(
+    ("server_call_answered", "client_call_answered", "modify_params"),
+    [
+        pytest.param(False, True, False, id="client_answers_its_own_call"),
+        pytest.param(False, True, True, id="client_answers_its_own_call_with_modify_params"),
+        pytest.param(True, True, False, id="client_also_answers_the_server_call"),
+        pytest.param(False, False, True, id="modify_params_answers_the_unanswered_client_call"),
+    ],
+)
 @pytest.mark.parametrize(
     "content",
     [_tool_search_turn(["get_weather"], _WEATHER_CALL), _web_search_turn(_WEATHER_CALL)],
     ids=["tool_search", "web_search"],
 )
 def test_server_tool_result_round_trips_right_after_its_call(
-    content: list[dict[str, object]], modify_params: bool, monkeypatch: pytest.MonkeyPatch
+    content: list[dict[str, object]],
+    server_call_answered: bool,
+    client_call_answered: bool,
+    modify_params: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
     message: Final = _parsed_assistant_message(content, "tool_use")
     monkeypatch.setattr(litellm, "modify_params", modify_params)
+    server_answer: Final = {"role": "tool", "tool_call_id": content[0]["id"], "content": "Error: unknown tool"}
+    client_answer: Final = {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}
 
     replayed: Final = anthropic_messages_pt(
         messages=[
             {"role": "user", "content": "What is the weather in Paris?"},
             message.model_dump(),
-            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+            *((server_answer,) if server_call_answered else ()),
+            *((client_answer,) if client_call_answered else ()),
         ],
         model="claude-opus-5-5",
         llm_provider="anthropic",
     )
     assert replayed[1]["content"] == content
+    assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
     assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
 
 
@@ -3605,62 +3621,39 @@ def _block_ids(message: dict[str, object], block_type: str, id_key: str) -> list
     return sorted(block[id_key] for block in message["content"] if block["type"] == block_type)
 
 
+_SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn([], {"type": "text", "text": "I have no tool that books flights."})
+
+
 @pytest.mark.parametrize(
-    ("content", "stop_reason", "follow_ups", "modify_params"),
+    ("follow_ups", "modify_params", "server_tool_use_ids"),
     [
         pytest.param(
-            _tool_search_turn(["get_weather"], _WEATHER_CALL),
-            "tool_use",
-            (
-                {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"},
-                {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
-            ),
-            False,
-            id="client_answers_every_tool_call",
-        ),
-        pytest.param(
-            _web_search_turn(_WEATHER_CALL),
-            "tool_use",
-            (
-                {"role": "tool", "tool_call_id": "srvtoolu_01Web", "content": "Error: unknown tool"},
-                {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
-            ),
-            False,
-            id="client_answers_every_web_search_call",
-        ),
-        pytest.param(
-            _tool_search_turn(["get_weather"], _WEATHER_CALL),
-            "tool_use",
-            ({"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},),
-            True,
-            id="modify_params_fills_in_missing_results",
-        ),
-        pytest.param(
-            _tool_search_turn([], {"type": "text", "text": "I have no tool that books flights."}),
-            "end_turn",
             ({"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "no tool found"},),
             False,
+            [],
             id="client_answers_a_search_that_found_nothing",
         ),
         pytest.param(
-            _tool_search_turn([], {"type": "text", "text": "I have no tool that books flights."}),
-            "end_turn",
-            (),
-            True,
-            id="modify_params_with_nothing_after_a_search_that_found_nothing",
+            (
+                {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "no tool found"},
+                {"role": "user", "content": "Book it anyway"},
+            ),
+            False,
+            ["srvtoolu_01Search"],
+            id="client_answers_a_search_that_found_nothing_and_writes_again",
         ),
+        pytest.param((), True, [], id="modify_params_with_nothing_after_a_search_that_found_nothing"),
     ],
 )
-def test_replayed_server_tool_turn_answers_every_tool_use_and_ends_on_a_user_turn(
-    content: list[dict[str, object]],
-    stop_reason: str,
+def test_replayed_search_that_found_nothing_answers_every_tool_use_and_ends_on_a_user_turn(
     follow_ups: tuple[dict[str, str], ...],
     modify_params: bool,
+    server_tool_use_ids: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ):
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
-    message: Final = _parsed_assistant_message(content, stop_reason)
+    message: Final = _parsed_assistant_message(_SEARCH_THAT_FOUND_NOTHING, "end_turn")
     monkeypatch.setattr(litellm, "modify_params", modify_params)
 
     replayed: Final = anthropic_messages_pt(
@@ -3670,6 +3663,42 @@ def test_replayed_server_tool_turn_answers_every_tool_use_and_ends_on_a_user_tur
     )
     assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
     assert _block_ids(replayed[2], "tool_result", "tool_use_id") == _block_ids(replayed[1], "tool_use", "id")
+    assert _block_ids(replayed[1], "server_tool_use", "id") == server_tool_use_ids
+
+
+_CODE_EXECUTION_BLOCKS: Final = [
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Bash",
+        "name": "bash_code_execution",
+        "input": {"command": "python3 -c 'print(2 + 2)'"},
+    },
+    {
+        "type": "bash_code_execution_tool_result",
+        "tool_use_id": "srvtoolu_01Bash",
+        "content": {"type": "bash_code_execution_result", "stdout": "4\n", "stderr": "", "return_code": 0},
+    },
+]
+
+
+@pytest.mark.parametrize(
+    ("code_execution_blocks", "code_interpreter_call_ids"),
+    [
+        pytest.param([], None, id="tool_search_only"),
+        pytest.param(_CODE_EXECUTION_BLOCKS, ["srvtoolu_01Bash"], id="tool_search_and_code_execution"),
+    ],
+)
+def test_parsed_tool_search_turn_adds_code_interpreter_results_only_for_code_execution(
+    code_execution_blocks: list[dict[str, object]], code_interpreter_call_ids: list[str] | None
+):
+    search_turn: Final = _tool_search_turn(["get_weather"], {"type": "text", "text": "2 + 2 is 4"})
+    message: Final = _parsed_assistant_message([*code_execution_blocks, *search_turn], "end_turn")
+    code_interpreter_results: Final = message.provider_specific_fields.get("code_interpreter_results")
+
+    assert search_turn[1] in message.provider_specific_fields["tool_results"]
+    assert (
+        None if code_interpreter_results is None else [call.id for call in code_interpreter_results]
+    ) == code_interpreter_call_ids
 
 
 def test_web_search_tool_result_backwards_compatibility():

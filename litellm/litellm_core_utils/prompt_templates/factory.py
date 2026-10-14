@@ -1836,10 +1836,58 @@ def find_anthropic_server_tool_result(
     )
 
 
-def tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
+def _tool_call_ids_in_tool_messages(messages: Sequence[object]) -> frozenset[str]:
     return frozenset(
         tool_call_id for message in messages if isinstance(tool_call_id := message_field(message, "tool_call_id"), str)
     )
+
+
+def _messages_until_the_next_assistant(messages: Sequence[object], index: int) -> tuple[object, ...]:
+    return tuple(
+        itertools.takewhile(
+            lambda message: message_field(message, "role") != "assistant",
+            (messages[following_index] for following_index in range(index + 1, len(messages))),
+        )
+    )
+
+
+def _tool_call_ids_with_a_kept_server_result(message: object) -> frozenset[str]:
+    from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
+
+    provider_specific_fields: Final = message_field(message, "provider_specific_fields")
+    return frozenset(
+        tool_call_id
+        for tool_call in parts_of(message_field(message, "tool_calls"))
+        if isinstance(tool_call_id := message_field(tool_call, "id"), str)
+        and tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields)
+    )
+
+
+def _server_tool_answers_replaced_after(messages: Sequence[object], index: int) -> frozenset[str]:
+    kept_server_result_ids: Final = _tool_call_ids_with_a_kept_server_result(messages[index])
+    if not kept_server_result_ids:
+        return frozenset()
+    following: Final = _messages_until_the_next_assistant(messages, index)
+    a_user_turn_remains: Final = any(
+        message_field(message, "role") in ("user", "tool", "function")
+        and message_field(message, "tool_call_id") not in kept_server_result_ids
+        for message in following
+    )
+    return _tool_call_ids_in_tool_messages(following) & kept_server_result_ids if a_user_turn_remains else frozenset()
+
+
+def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> frozenset[str]:
+    return frozenset(
+        itertools.chain.from_iterable(
+            _server_tool_answers_replaced_after(messages, index)
+            for index, message in enumerate(messages)
+            if message_field(message, "role") == "assistant"
+        )
+    )
+
+
+def tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
+    return _tool_call_ids_in_tool_messages(messages) - server_tool_answers_replaced_by_their_result(messages)
 
 
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
@@ -2145,18 +2193,6 @@ def _sanitize_empty_text_content(
     return message
 
 
-def _tool_call_ids_with_a_kept_server_result(message: AllMessageValues) -> frozenset[str]:
-    from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
-
-    provider_specific_fields: Final = message_field(message, "provider_specific_fields")
-    return frozenset(
-        tool_call_id
-        for tool_call in parts_of(message_field(message, "tool_calls"))
-        if isinstance(tool_call_id := message_field(tool_call, "id"), str)
-        and tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields)
-    )
-
-
 def _add_missing_tool_results(
     current_message: AllMessageValues,
     messages: list[AllMessageValues],
@@ -2210,11 +2246,8 @@ def _add_missing_tool_results(
 
         j += 1
 
-    missing_tool_call_ids: Final = (
-        expected_tool_call_ids - found_tool_call_ids - _tool_call_ids_with_a_kept_server_result(current_message)
-        if current_index + 1 < len(messages)
-        else expected_tool_call_ids - found_tool_call_ids
-    )
+    # Find missing tool results
+    missing_tool_call_ids: Final = expected_tool_call_ids - found_tool_call_ids
 
     if missing_tool_call_ids:
         verbose_logger.debug(
@@ -2492,7 +2525,8 @@ def anthropic_messages_pt(
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
-    client_answered_tool_ids: Final = tool_call_ids_answered_by_client(messages)
+    replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
+    client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
@@ -2614,7 +2648,9 @@ def anthropic_messages_pt(
 
                     user_content.append(_anthropic_content_text_element)
 
-            elif user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function":
+            elif (
+                user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function"
+            ) and message_field(user_message_types_block, "tool_call_id") not in replaced_server_tool_answers:
                 # OpenAI's tool message content will always be a string
                 user_content.append(
                     convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
