@@ -3847,6 +3847,28 @@ def test_transform_response_incomplete_reasoning_only_returns_empty_length_choic
     assert result.usage.completion_tokens_details.reasoning_tokens == 16
 
 
+@pytest.mark.parametrize(
+    ("status", "incomplete_reason", "finish_reason"),
+    [("completed", None, "stop"), ("incomplete", "max_output_tokens", "length")],
+)
+def test_search_only_turn_keeps_tool_search_items_for_the_next_request(status, incomplete_reason, finish_reason):
+    search_items = [
+        {"type": "tool_search_call", "id": "tsc_1", "arguments": {"paths": ["get_weather"]}, "status": "completed"},
+        {"type": "tool_search_output", "id": "tso_1", "status": "completed", "tools": [{"name": "get_weather"}]},
+    ]
+    raw_response = _make_incomplete_responses_api_response(
+        incomplete_reason,
+        [_make_reasoning_only_output_item(), *search_items],
+        status=status,
+    )
+
+    choice = _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response).choices[0]
+
+    assert choice.message.provider_specific_fields == {"tool_search_items": search_items}
+    assert [item["id"] for item in choice.message.reasoning_items] == ["rs_incomplete"]
+    assert choice.finish_reason == finish_reason
+
+
 def test_transform_response_incomplete_content_filter_maps_finish_reason():
     handler = LiteLLMResponsesTransformationHandler()
     raw_response = _make_incomplete_responses_api_response("content_filter", [_make_reasoning_only_output_item()])

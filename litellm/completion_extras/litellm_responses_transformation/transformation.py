@@ -1081,7 +1081,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else:
                 pass  # don't fail request if item in list is not supported
 
-        if not choices and not accumulated_tool_calls:
+        tool_search_items: Final = _tool_search_items_from_output_items(output_items)
+        if not choices and not accumulated_tool_calls and not tool_search_items:
             return choices
         return [
             _fold_choices_into_one(
@@ -1089,7 +1090,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 tool_calls=accumulated_tool_calls,
                 trailing_reasoning_content=reasoning_content,
                 trailing_reasoning_item=pending_reasoning_item,
-                tool_search_items=_tool_search_items_from_output_items(output_items),
+                tool_search_items=tool_search_items,
             )
         ]
 
