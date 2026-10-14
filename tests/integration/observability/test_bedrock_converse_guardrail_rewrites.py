@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -14,7 +15,14 @@ import pytest
 import yaml
 from pydantic import JsonValue, TypeAdapter
 
-from tests.integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, list_value, object_value
+from tests.integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    gateway_from_environment,
+    held,
+    list_value,
+    object_value,
+)
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
@@ -410,6 +418,8 @@ def _guardrails(vendor_url: str) -> tuple[dict[str, JsonValue], ...]:
             "akto", {"guardrail": "akto", "akto_base_url": f"{vendor_url}/akto", "akto_api_key": "synthetic-akto-key"}
         ),
         _guardrail("headroom", {"guardrail": "headroom", "api_base": f"{vendor_url}/headroom"}),
+        _guardrail("tool-policy", {"guardrail": "tool_policy"}),
+        _guardrail("mcp-end-user", {"guardrail": "mcp_end_user_permission"}),
         _guardrail(
             "crowdstrike",
             {"guardrail": "crowdstrike_aidr", "api_base": f"{vendor_url}/crowdstrike", "api_key": "synthetic-cs-key"},
@@ -1113,3 +1123,49 @@ def test_headroom_leaves_converse_requests_unchanged(rig: _Rig) -> None:
     sent: Final = _forwarded(rig, _converse(rig, "headroom", body))
     assert sent == body
     assert rig.vendor.drain() == ()
+
+
+def _named_tools(*names: str) -> dict[str, JsonValue]:
+    return {"tools": [{"toolSpec": {"name": name, "inputSchema": {"json": {"type": "object"}}}} for name in names]}
+
+
+def test_tool_policy_refuses_a_converse_tool_whose_input_policy_is_blocked(rig: _Rig) -> None:
+    blocked: Final = f"converse_blocked_{uuid.uuid4().hex[:8]}"
+    rig.gateway.post("/v1/tool/policy", {"tool_name": blocked, "input_policy": "blocked"})
+    body: Final = {"messages": [_user({"text": "Refund my order."})], "toolConfig": _named_tools(blocked, "refund")}
+    held(lambda: _converse(rig, "tool-policy", body).status_code, lambda status: status == 400, holding=2, seconds=60)
+    rig.bedrock.drain()
+    assert "Violated tool policy" in _refused(rig, _converse(rig, "tool-policy", body))
+
+
+def _end_user_on_github_only(rig: _Rig) -> dict[str, str]:
+    end_user: Final = f"converse-mcp-{uuid.uuid4().hex[:8]}"
+    rig.gateway.post("/customer/new", {"user_id": end_user, "object_permission": {"mcp_servers": ["github"]}})
+    return {"x-litellm-end-user-id": end_user}
+
+
+def test_mcp_end_user_permission_drops_tools_of_servers_the_end_user_cannot_use(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [_user({"text": "File the bug."})],
+        "toolConfig": _named_tools("github-create_issue", "slack-post_message", "get_weather"),
+    }
+    response: Final = rig.gateway.request(
+        "POST",
+        f"/bedrock/model/{_MODEL}/converse",
+        body,
+        key=rig.keys["mcp-end-user"],
+        headers=_end_user_on_github_only(rig),
+    )
+    assert _forwarded(rig, response)["toolConfig"] == _named_tools("github-create_issue", "get_weather")
+
+
+def test_mcp_end_user_permission_removing_every_tool_is_refused_before_bedrock(rig: _Rig) -> None:
+    body: Final = {"messages": [_user({"text": "Post the update."})], "toolConfig": _named_tools("slack-post_message")}
+    response: Final = rig.gateway.request(
+        "POST",
+        f"/bedrock/model/{_MODEL}/converse",
+        body,
+        key=rig.keys["mcp-end-user"],
+        headers=_end_user_on_github_only(rig),
+    )
+    assert _UNAPPLIABLE in _refused(rig, response)

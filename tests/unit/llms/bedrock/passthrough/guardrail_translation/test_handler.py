@@ -21,12 +21,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.db import tool_registry_writer
 from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.conduct import conduct as conduct_module
@@ -37,6 +40,9 @@ from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
     HiddenlayerGuardrailV2,
 )
 from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import LLMAsAJudgeGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission.mcp_end_user_permission import (
+    MCPEndUserPermissionGuardrail,
+)
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import OpenAIModerationGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix import OvalixGuardrail, OvalixGuardrailBlockedException
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs import PanwPrismaAirsHandler
@@ -44,6 +50,7 @@ from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security im
 from litellm.proxy.guardrails.guardrail_hooks.promptguard.promptguard import PromptGuardGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.qualifire.qualifire import QualifireGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.singulr.singulr import SingulrGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.tool_policy.tool_policy_guardrail import ToolPolicyGuardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -2848,6 +2855,77 @@ class TestConverseToolDefinitionRewrites:
         assert headroom.received[-1]["texts"] == ["list files", "Listing them.", "ls", "a.txt", "now delete them"]
         assert "structured_messages" not in headroom.received[-1]
         assert "tools" not in headroom.received[-1]
+
+
+class _RefundBlockedRegistry:
+    def is_initialized(self) -> bool:
+        return True
+
+    def get_effective_policies(
+        self,
+        tool_names: list[str],
+        object_permission_id: str | None = None,
+        team_object_permission_id: str | None = None,
+    ) -> dict[str, str]:
+        return {name: "blocked" if name == "refund" else "untrusted" for name in tool_names}
+
+
+def _mcp_tools_data(*names: str) -> dict:
+    return {
+        "endpoint": "model/test/converse",
+        "data": {
+            "messages": [{"role": "user", "content": [{"text": "File the bug"}]}],
+            "toolConfig": {
+                "tools": [{"toolSpec": {"name": name, "inputSchema": {"json": {"type": "object"}}}} for name in names]
+            },
+        },
+    }
+
+
+def _github_only_end_user(monkeypatch: pytest.MonkeyPatch) -> MCPEndUserPermissionGuardrail:
+    permission = LiteLLM_ObjectPermissionTable(object_permission_id="end-user", mcp_servers=["github"])
+    monkeypatch.setattr(
+        MCPEndUserPermissionGuardrail, "_resolve_end_user_object_permission", AsyncMock(return_value=permission)
+    )
+    return MCPEndUserPermissionGuardrail(guardrail_name="mcp_end_user_permission")
+
+
+class TestConverseToolEnforcementGuardrails:
+    @pytest.mark.asyncio
+    async def test_tool_policy_blocks_a_converse_tool_whose_input_policy_is_blocked(self, monkeypatch):
+        monkeypatch.setattr(tool_registry_writer, "get_tool_policy_registry", _RefundBlockedRegistry)
+
+        with pytest.raises(HTTPException) as blocked:
+            await BedrockPassthroughGuardrailHandler().process_input_messages(
+                _tool_config_data(), ToolPolicyGuardrail(guardrail_name="tool_policy")
+            )
+
+        assert blocked.value.status_code == 400
+        assert blocked.value.detail["blocked_tools"] == ["refund"]
+
+    @pytest.mark.asyncio
+    async def test_mcp_end_user_permission_drops_tools_of_servers_the_end_user_cannot_use(self, monkeypatch):
+        guardrail = _github_only_end_user(monkeypatch)
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            _mcp_tools_data("github-create_issue", "slack-post_message", "get_weather"), guardrail
+        )
+
+        assert [tool["toolSpec"]["name"] for tool in result["data"]["toolConfig"]["tools"]] == [
+            "github-create_issue",
+            "get_weather",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_mcp_end_user_permission_removing_every_tool_fails_closed_without_mutation(self, monkeypatch):
+        guardrail = _github_only_end_user(monkeypatch)
+        data = _mcp_tools_data("slack-post_message")
+        original = copy.deepcopy(data["data"])
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+        assert data["data"] == original
 
 
 class _ConductPluginGuard(CustomGuardrail):
