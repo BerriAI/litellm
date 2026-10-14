@@ -6,7 +6,9 @@ import re
 from typing import Final, List
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -22,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
+    convert_to_ollama_image,
     encode_tool_call_id_with_signature,
     function_call_prompt,
     get_thought_signature_from_tool,
@@ -45,6 +48,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_pt,
     claude_2_1_pt,
+    convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_anthropic_tool_invoke,
     convert_url_to_base64,
@@ -283,6 +287,23 @@ def test_ollama_pt_rejects_a_malformed_content_part_as_a_bad_request(part: objec
     assert excinfo.value.status_code == 400
     assert "user message at index 0" in excinfo.value.message
     assert expected_detail in excinfo.value.message
+
+
+def test_convert_to_ollama_image_downloads_an_http_image_url_to_bare_base64(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    png_bytes: Final = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+    image_url: Final = f"https://images.example.com/{uuid.uuid4()}.png"
+
+    with respx.mock:
+        route: Final = respx.get(image_url).mock(
+            return_value=httpx.Response(200, content=png_bytes, headers={"content-type": "image/png"})
+        )
+        result: Final = convert_to_ollama_image(image_url)
+
+    assert route.call_count == 1
+    assert result == base64.b64encode(png_bytes).decode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -5368,6 +5389,18 @@ def test_convert_url(monkeypatch):
     expected = "data:image/png;base64," + base64.b64encode(image_bytes).decode("utf-8")
     assert result == expected
     mock_client.get.assert_called_once()
+
+
+def test_convert_generic_image_chunk_to_openai_image_obj_preserves_data_uri():
+    image_chunk: Final = {
+        "type": "base64",
+        "media_type": "image/jpeg",
+        "data": "/9j/4AAQSkZJRg==",
+    }
+
+    converted: Final = convert_generic_image_chunk_to_openai_image_obj(image_chunk)
+
+    assert converted == "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
 
 
 def test_azure_tool_call_invoke_helper():

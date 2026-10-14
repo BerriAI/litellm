@@ -213,7 +213,6 @@ if TYPE_CHECKING:
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.google_genai.main import GenerateContentResponse
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
@@ -225,6 +224,7 @@ if TYPE_CHECKING:
         Run,
         RunDeleteResponse,
     )
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -1489,6 +1489,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj | None,
         provider_config: BaseDecisionsConfig,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1498,7 +1499,7 @@ class BaseLLMHTTPHandler:
         data: Final = dict(body)
         if logging_obj is not None:
             logging_obj.pre_call(
-                input=data,
+                input=dict(logged_body),
                 api_key=api_key,
                 model=model,
                 additional_args={"api_base": url, "complete_input_dict": data, "headers": outbound_headers},
@@ -1513,6 +1514,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseDecisionsConfig,
         request: DecisionsIRRequest,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1525,6 +1527,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             provider_config=provider_config,
             body=body,
+            logged_body=logged_body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,
@@ -1561,6 +1564,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseDecisionsConfig,
         request: DecisionsIRRequest,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1573,6 +1577,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             provider_config=provider_config,
             body=body,
+            logged_body=logged_body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,
@@ -2458,7 +2463,7 @@ class BaseLLMHTTPHandler:
         api_base: str | None = None,
         stream: bool | None = False,
         kwargs: dict[str, object] | None = None,
-    ) -> AnthropicMessagesResponse | Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator]:
+    ) -> AnthropicMessagesResponse | Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]:
         """
         LLM HTTP Handler for Anthropic Messages
         """
@@ -7719,6 +7724,7 @@ class BaseLLMHTTPHandler:
             return video_content_provider_config.transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                client=sync_httpx_client,
             )
 
         except Exception as e:
@@ -7798,6 +7804,7 @@ class BaseLLMHTTPHandler:
             return await video_content_provider_config.async_transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                client=async_httpx_client,
             )
 
         except Exception as e:

@@ -23,7 +23,6 @@ from typing import Final
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from pydantic import JsonValue, TypeAdapter
@@ -273,17 +272,6 @@ def _status(candidate: Gateway, path: str) -> int:
     return candidate.request("GET", path).status_code
 
 
-def _workers(owned: OwnedProxy) -> tuple[psutil.Process, ...]:
-    return tuple(child for child in psutil.Process(owned.process.pid).children() if _is_worker(child))
-
-
-def _is_worker(child: psutil.Process) -> bool:
-    try:
-        return "spawn_main" in " ".join(child.cmdline()) and child.status() != psutil.STATUS_ZOMBIE
-    except psutil.Error:
-        return False
-
-
 @pytest.mark.parametrize("spelling", ("1", "Yes", "ON"))
 def test_every_truthy_spelling_of_the_flag_registers_the_ticket_features_at_startup(
     gateway: Gateway, tmp_path: Path, spelling: str
@@ -457,18 +445,19 @@ def test_disable_lazy_routes_flag_route_table_survives_a_boot_burst_and_a_killed
         assert statuses == (200,) * len(probes), statuses
         assert _routed_features(owned.gateway) == at_boot, "the boot burst changed the route table"
 
-        victim: Final = eventually(lambda: _workers(owned), lambda workers: len(workers) == 2)[0]
-        victim.kill()
-        with httpx.Client(base_url=owned.gateway.client.base_url, timeout=15, trust_env=False) as fresh:
-            survivor: Final = Gateway(fresh, owned.gateway.key, owned.gateway.upstream_url)
-            during: Final = tuple(survivor.request("GET", "/v1/mcp/server").status_code for _ in range(10))
+        victim: Final = min(eventually(owned.worker_pids, lambda workers: len(workers) == 2))
+        with owned.replacing_worker(victim) as kill:
+            kill()
+            with httpx.Client(base_url=owned.gateway.client.base_url, timeout=15, trust_env=False) as fresh:
+                survivor: Final = Gateway(fresh, owned.gateway.key, owned.gateway.upstream_url)
+                during: Final = tuple(survivor.request("GET", "/v1/mcp/server").status_code for _ in range(10))
         assert during == (200,) * 10, during
         respawned: Final = eventually(
-            lambda: frozenset(worker.pid for worker in _workers(owned)),
-            lambda pids: len(pids) == 2 and victim.pid not in pids,
+            owned.worker_pids,
+            lambda pids: len(pids) == 2 and victim not in pids,
             seconds=30,
         )
-        assert f"Child process [{victim.pid}] died" in owned.log.read_text(), respawned
+        assert f"Child process [{victim}] died" in owned.log.read_text(), respawned
         tables: Final = tuple(_routed_features(owned.gateway) for _ in range(4))
         assert all(table == at_boot for table in tables), "the respawned worker disagrees on the route table"
 
@@ -582,12 +571,25 @@ def _assert_config_declared_features_serve(owned: OwnedProxy, features: _Configu
         ]
         assert [(params["name"], params["arguments"]) for params in reached_peer] == [("add", {"marker": marker})]
 
+    bare: Final = owned.gateway.request("GET", "/langfuse")
+    assert bare.status_code == 200, bare.text
+    assert JSON.validate_json(bare.content) == {"status": "OK"}, bare.text
+    reached_bare: Final = tuple(request.target for request in features.langfuse.drain())
+    assert reached_bare == (SELF_HOSTED_LANGFUSE,), reached_bare
+
     forwarded: Final = owned.gateway.request("GET", "/langfuse/api/public/health")
     assert forwarded.status_code == 200, forwarded.text
     reached_langfuse: Final = tuple(request.target for request in features.langfuse.drain())
     assert reached_langfuse == (SELF_HOSTED_LANGFUSE + "/api/public/health",), (
         f"the config pass-through for /langfuse lost to the built-in Langfuse route: {reached_langfuse}"
     )
+
+
+def _canonical_langfuse_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
+    configured: Final = ("/langfuse", "/langfuse/{subpath:path}")
+    remaining: Final = tuple(path for path in paths if path not in configured)
+    langfuse: Final = tuple(sorted(path for path in paths if path in configured))
+    return (*remaining, *langfuse)
 
 
 def test_disable_lazy_routes_flag_serves_config_declared_features_like_the_warmed_lazy_proxy(
@@ -601,5 +603,5 @@ def test_disable_lazy_routes_flag_serves_config_declared_features_like_the_warme
             warmed_openapi: Final = _openapi_paths(lazy.gateway)
         with owned_proxy_process(gateway, tmp_path, {FLAG: "true"}, config=features.config) as eager:
             _assert_config_declared_features_serve(eager, features, provider)
-            assert _paths(eager.gateway) == warmed_paths
+            assert _canonical_langfuse_paths(_paths(eager.gateway)) == _canonical_langfuse_paths(warmed_paths)
             assert _openapi_paths(eager.gateway) == warmed_openapi

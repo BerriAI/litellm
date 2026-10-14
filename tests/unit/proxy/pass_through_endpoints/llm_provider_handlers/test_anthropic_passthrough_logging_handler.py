@@ -7,10 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import litellm
 import pytest
+from pydantic import ValidationError
 
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -2288,9 +2290,7 @@ class TestAnthropicUsageOnlyFallback:
     def test_extract_sse_data_handles_malformed_and_sentinel_lines(
         self, event_str, expected
     ):
-        assert (
-            AnthropicPassthroughLoggingHandler._extract_sse_data(event_str) == expected
-        )
+        assert extract_sse_data(event_str) == expected
 
     def _real_logging_obj(self):
         from litellm.litellm_core_utils.litellm_logging import Logging as RealLoggingObj
@@ -2863,6 +2863,51 @@ def test_build_complete_streaming_response(all_chunks):
     assert result.usage.prompt_tokens == 17
     assert result.usage.completion_tokens == 249
     assert result.usage.total_tokens == 266
+
+
+_USABLE_MESSAGE_START: Final = 'data: {"type": "message_start", "message": {"id": "msg_real", "model": "claude-real"}}'
+
+
+@pytest.mark.parametrize(
+    "unusable_line",
+    [
+        "data: [1, 2]",
+        'data: "message_start"',
+        "data: 7",
+        "data: null",
+        "data: not json",
+        'data: {"type": "message_start"}',
+        'data: {"type": "message_start", "message": null}',
+        'data: {"type": "message_start", "message": {}}',
+        'data: {"type": "message_start", "message": ""}',
+        'data: {"type": "message_start", "message": []}',
+        'data: {"type": "message_start", "message": {"id": 7, "model": ["claude"]}}',
+        'data: {"type": "message_start", "message": {"id": "", "model": null}}',
+        'data: {"type": "ping", "message": "not an object"}',
+    ],
+)
+def test_model_and_response_id_come_from_the_first_message_start_that_carries_them(unusable_line: str):
+    all_chunks: Final = [f"event: message_start\n{unusable_line}\n\n".encode(), _USABLE_MESSAGE_START]
+
+    extracted: Final = (
+        AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(all_chunks),
+        AnthropicPassthroughLoggingHandler._extract_response_id_from_anthropic_chunks(all_chunks),
+    )
+
+    assert extracted == ("claude-real", "msg_real"), unusable_line
+
+
+@pytest.mark.parametrize("message", ['"upstream text"', "7", "[1, 2]", "true"])
+def test_message_start_whose_message_is_not_an_object_fails_without_echoing_the_upstream_value(message: str):
+    all_chunks: Final = [f'data: {{"type": "message_start", "message": {message}}}', _USABLE_MESSAGE_START]
+
+    with pytest.raises(ValidationError) as exc_info:
+        AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(all_chunks)
+
+    assert str(exc_info.value).splitlines()[:2] == [
+        "1 validation error for dict[str,any]",
+        "  Input should be a valid dictionary [type=dict_type]",
+    ], message
 
 
 @pytest.mark.parametrize(

@@ -1,9 +1,17 @@
+from typing import Final
+
 import pytest
 from fastapi import HTTPException
 
 from litellm.models.team import BudgetLimitEntry
 from litellm.models.verification_token import LiteLLM_VerificationToken
-from litellm.proxy._types import LiteLLM_ModelTable, LiteLLM_TeamTable, UpdateKeyRequest, UpdateTeamRequest
+from litellm.proxy._types import (
+    LiteLLM_ModelTable,
+    LiteLLM_TeamTable,
+    LiteLLMKeyType,
+    UpdateKeyRequest,
+    UpdateTeamRequest,
+)
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TeamAdminEditAllowed,
     TeamAdminEditingDisabled,
@@ -16,9 +24,16 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     team_admin_edit_verdict,
     team_admin_key_edit_verdict,
     team_admin_key_request_or_raise,
+    team_admin_may_create_member_keys,
     team_admin_may_edit_member_key_budgets,
     team_admin_may_manage_projects,
     team_admin_may_raise_max_budget,
+    team_admin_member_key_creation_or_raise,
+    team_admin_member_key_creation_verdict,
+    TeamAdminMemberKeyCreationAllowed,
+    TeamAdminMemberKeyCreationDisabled,
+    TeamAdminMemberKeyOwnerNotPermitted,
+    TeamAdminMemberKeyTypeNotPermitted,
     team_admin_request_or_raise,
 )
 
@@ -88,6 +103,30 @@ class TestChangedTeamFields:
     def test_folded_field_sent_inside_metadata_is_named_not_metadata(self):
         data = UpdateTeamRequest(team_id="team-1", metadata={"guardrails": ["b"]})
         assert changed_team_fields(data, _team(metadata={"guardrails": ["a"]})) == frozenset({"guardrails"})
+
+    def test_top_level_require_trace_id_change_is_attributed_to_the_folded_field(self):
+        existing: Final = _team(metadata={"require_trace_id": True})
+        data: Final = UpdateTeamRequest(team_id="team-1", require_trace_id=False)
+
+        assert changed_team_fields(data, existing) == frozenset({"require_trace_id"})
+        assert team_admin_edit_verdict(data, existing, frozenset({"tpm_limit"})) == TeamAdminFieldNotPermitted(
+            field="require_trace_id"
+        )
+        assert changed_team_fields(UpdateTeamRequest(team_id="team-1", require_trace_id=True), existing) == frozenset()
+
+    def test_metadata_replacement_cannot_drop_stored_require_trace_id(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", metadata={})
+        existing: Final = _team(metadata={"require_trace_id": True})
+
+        assert changed_team_fields(data, existing) == frozenset({"require_trace_id"})
+        assert team_admin_edit_verdict(data, existing, frozenset({"tpm_limit"})) == TeamAdminFieldNotPermitted(
+            field="require_trace_id"
+        )
+
+    def test_resending_stored_require_trace_id_is_not_a_change(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", metadata={"require_trace_id": True})
+
+        assert changed_team_fields(data, _team(metadata={"require_trace_id": True})) == frozenset()
 
     def test_custom_metadata_key_change_is_attributed_to_metadata(self):
         data = UpdateTeamRequest(team_id="team-1", metadata={"guardrails": ["a"], "cost_center": "b"})
@@ -190,6 +229,65 @@ class TestTeamAdminMayEditMemberKeyBudgets:
     @pytest.mark.parametrize("raw", ["member_key_budgets", 7, [1, 2]])
     def test_malformed_setting_denies(self, raw):
         assert team_admin_may_edit_member_key_budgets({"team_admin_editable_team_fields": raw}) is False
+
+
+class TestTeamAdminMayCreateMemberKeys:
+    def test_missing_setting_denies(self):
+        assert team_admin_may_create_member_keys({}) is False
+
+    def test_other_permissions_do_not_grant(self):
+        configured = {"team_admin_editable_team_fields": ["tpm_limit", "projects", "member_key_budgets"]}
+        assert team_admin_may_create_member_keys(configured) is False
+
+    def test_create_member_keys_entry_grants(self):
+        configured = {"team_admin_editable_team_fields": ["create_member_keys"]}
+        assert team_admin_may_create_member_keys(configured) is True
+
+    @pytest.mark.parametrize("raw", ["create_member_keys", 7, [1, 2]])
+    def test_malformed_setting_denies(self, raw):
+        assert team_admin_may_create_member_keys({"team_admin_editable_team_fields": raw}) is False
+
+
+_MEMBER_KEYS_ON = {"team_admin_editable_team_fields": ["create_member_keys"]}
+
+
+class TestTeamAdminMemberKeyCreationVerdict:
+    @pytest.mark.parametrize("owner_role", ["internal_user", "internal_user_viewer"])
+    @pytest.mark.parametrize("key_type", [None, LiteLLMKeyType.DEFAULT, LiteLLMKeyType.LLM_API])
+    def test_an_ordinary_member_and_an_llm_key_are_allowed(self, owner_role, key_type):
+        verdict = team_admin_member_key_creation_verdict(_MEMBER_KEYS_ON, key_type=key_type, owner_role=owner_role)
+        assert verdict == TeamAdminMemberKeyCreationAllowed()
+        assert team_admin_member_key_creation_or_raise(verdict) is None
+
+    def test_disabled_is_a_403_naming_the_permission_and_where_to_enable_it(self):
+        verdict = team_admin_member_key_creation_verdict(
+            {"team_admin_editable_team_fields": ["member_key_budgets"]}, key_type=None, owner_role="internal_user"
+        )
+        assert verdict == TeamAdminMemberKeyCreationDisabled()
+        with pytest.raises(HTTPException) as exc:
+            team_admin_member_key_creation_or_raise(verdict)
+        assert exc.value.status_code == 403
+        assert "'create_member_keys'" in exc.value.detail
+        assert "Settings > UI > Team admin editable fields" in exc.value.detail
+
+    @pytest.mark.parametrize("owner_role", ["proxy_admin", "proxy_admin_viewer", "org_admin", "team", "customer", None])
+    def test_an_owner_who_is_not_an_ordinary_internal_user_is_refused(self, owner_role):
+        """A key authenticates with its owner's role, so a privileged owner would hand that role to the team admin."""
+        verdict = team_admin_member_key_creation_verdict(_MEMBER_KEYS_ON, key_type=None, owner_role=owner_role)
+        assert verdict == TeamAdminMemberKeyOwnerNotPermitted(owner_role=owner_role)
+        with pytest.raises(HTTPException) as exc:
+            team_admin_member_key_creation_or_raise(verdict)
+        assert exc.value.status_code == 403
+        assert f"'{owner_role}'" in exc.value.detail
+
+    @pytest.mark.parametrize("key_type", [LiteLLMKeyType.MANAGEMENT, LiteLLMKeyType.READ_ONLY])
+    def test_a_key_type_that_reaches_beyond_llm_routes_is_refused(self, key_type):
+        verdict = team_admin_member_key_creation_verdict(_MEMBER_KEYS_ON, key_type=key_type, owner_role="internal_user")
+        assert verdict == TeamAdminMemberKeyTypeNotPermitted(key_type=key_type)
+        with pytest.raises(HTTPException) as exc:
+            team_admin_member_key_creation_or_raise(verdict)
+        assert exc.value.status_code == 403
+        assert f"'{key_type.value}'" in exc.value.detail
 
 
 class TestTeamAdminMayRaiseMaxBudget:
