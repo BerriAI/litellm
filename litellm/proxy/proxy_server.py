@@ -5956,7 +5956,10 @@ class ProxyConfig:
         to_set: Final = {k: v for k, v in updates.items() if v is not None}
         encrypted: Final = (
             self.encrypt_env_variables_for_db(
-                environment_variables=to_set, stored_environment_variables=cast("Mapping[str, object]", existing)
+                environment_variables=to_set,
+                stored_environment_variables=cast(  # cast-ok: the stored config row is a str-keyed JSON mapping at runtime
+                    "Mapping[str, object]", existing
+                ),
             )
             if to_set
             else {}
@@ -7920,9 +7923,13 @@ class ProxyConfig:
         require_legacy_reader_for(
             (
                 value
-                for key, value in cast("Mapping[object, object]", environment_variables).items()
+                for key, value in cast(  # cast-ok: the env-vars dict param predates generics; pin the iteration types at this read
+                    "Mapping[object, object]", environment_variables
+                ).items()
                 if stored_environment_variables is not None
-                and needs_legacy_reader(stored_environment_variables.get(cast("str", key)))
+                and needs_legacy_reader(
+                    stored_environment_variables.get(cast("str", key))  # cast-ok: env-var keys are strings
+                )
             ),
             "re-encrypt environment variables for the config save",
         )
@@ -18545,7 +18552,9 @@ async def update_config(
             existing.update(
                 proxy_config.encrypt_env_variables_for_db(
                     environment_variables=config_info.environment_variables,
-                    stored_environment_variables=cast("Mapping[str, object]", existing),
+                    stored_environment_variables=cast(  # cast-ok: the stored config row is a str-keyed JSON mapping at runtime
+                        "Mapping[str, object]", existing
+                    ),
                 )
             )
             await _upsert_section("environment_variables", existing)
