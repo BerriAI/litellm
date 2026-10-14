@@ -3570,6 +3570,64 @@ class TestDropParamsWithPromptCacheKey:
         assert result.get("temperature") == 0.7
 
 
+class TestGetOptionalParamsSpeedGate:
+    UNSUPPORTED_LEGS: Final = (
+        ("bedrock", "anthropic.claude-opus-4-8-v1:0"),
+        ("bedrock", "invoke/anthropic.claude-opus-4-8-v1:0"),
+        ("vertex_ai", "claude-opus-4-8"),
+        ("azure_ai", "claude-opus-4-8"),
+        ("openai", "gpt-5.6"),
+        ("azure", "gpt-5.6"),
+    )
+
+    @staticmethod
+    def _speed_anywhere(optional_params: Mapping[str, object]) -> bool:
+        extra_body: Final = optional_params.get("extra_body")
+        return "speed" in optional_params or (isinstance(extra_body, dict) and "speed" in extra_body)
+
+    @pytest.mark.parametrize("global_drop_params", [True, False])
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), UNSUPPORTED_LEGS)
+    def test_drop_params_strips_speed_on_providers_without_fast_mode(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str, global_drop_params: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+        result: Final = litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=not global_drop_params
+        )
+        assert not self._speed_anywhere(result), result
+
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), [("openai", "gpt-5.6"), ("hosted_vllm", "my-model")])
+    def test_speed_is_forwarded_untouched_without_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=False
+        )
+        assert self._speed_anywhere(result), result
+
+    def test_drop_params_keeps_speed_for_a_downstream_litellm_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="claude-opus-4-8", custom_llm_provider="litellm_proxy", speed="fast", drop_params=True
+        )
+        assert self._speed_anywhere(result), result
+
+    def test_speed_survives_on_a_direct_anthropic_fast_mode_model(
+        self, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        fast_mode_model: Final = next(
+            name
+            for name, info in litellm.model_cost.items()
+            if info.get("supports_speed") is True and info.get("litellm_provider") == "anthropic"
+        )
+        result: Final = litellm.get_optional_params(
+            model=fast_mode_model, custom_llm_provider="anthropic", speed="fast", drop_params=True
+        )
+        assert result.get("speed") == "fast"
+
+
 class TestGetOptionalParamsDeepSeek:
     """Tests that deepseek provider uses DeepSeekChatConfig for parameter mapping."""
 
