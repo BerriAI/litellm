@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
@@ -228,6 +229,13 @@ def test_oidc_circleci_success(monkeypatch):
     result = get_secret(secret_name)
 
     assert result == "circleci_token"
+
+
+def test_oidc_circleci_v2_returns_the_environment_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    token: Final = "circleci-v2-token"
+    monkeypatch.setenv("CIRCLE_OIDC_TOKEN_V2", token)
+
+    assert get_secret("oidc/circleci_v2/test-audience") == token
 
 
 def test_oidc_circleci_failure(monkeypatch):

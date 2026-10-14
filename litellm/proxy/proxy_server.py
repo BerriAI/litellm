@@ -32,6 +32,7 @@ from itertools import chain
 from types import MappingProxyType, UnionType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -73,6 +74,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -114,7 +116,6 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
-    ModelAccessDeniedProxyException,
     PassThroughGenericEndpoint,
     ProxyErrorTypes,
     ProxyException,
@@ -335,6 +336,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_keys,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
@@ -348,6 +350,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
 from litellm.proxy.auth.auth_checks import (
     ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
+    can_agent_call_model,
     can_key_call_resolved_model,
     get_team_object,
     log_db_metrics,
@@ -356,10 +359,11 @@ from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
+    log_model_access_denial,
     log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
 )
-from litellm.proxy.auth.fallback_budget import router_fallback_budget_check
+from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
@@ -391,6 +395,8 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # lega
     _fetch_global_spend_with_event_coordination,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     fetch_global_spend_with_event_coordination,
     user_api_key_auth,
+    user_api_key_auth_accepted_websocket_for_model,
+    user_api_key_auth_live_websocket,
     user_api_key_auth_websocket,
 )
 from litellm.proxy.batches_endpoints.endpoints import router as batches_router
@@ -408,6 +414,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
     is_azure_model_router_request,
     log_llm_api_exception,
     open_sse_before_first_byte,
+    proxy_exception_from_route_error,
     request_litellm_call_id,
     resolve_litellm_call_id,
     should_return_raw_model_name,
@@ -560,6 +567,11 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
     ProxyWorkerHeartbeat,
 )
+from litellm.proxy.db.request_error_tracking import (
+    RequestErrorRedisBuffer,
+    flush_request_errors,
+    request_error_accumulator,
+)
 from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
@@ -594,18 +606,8 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF10
     run_spend_event,
 )
 from litellm.proxy.image_endpoints.endpoints import router as image_router
-from litellm.proxy.lens.dataset_endpoints import router as lens_dataset_router
-from litellm.proxy.lens.endpoints import router as lens_router
-from litellm.proxy.lens.repository import WriterDatabase
-from litellm.proxy.lens.signal_repository import SignalRepository
-from litellm.proxy.lens.signals import (
-    SIGNAL_BACKLOG_SWEEP,
-    SIGNAL_LIVE_SWEEP,
-    DecisionQuestions,
-    DecisionsCall,
-    DecisionState,
-    run_signal_loop,
-)
+from litellm.proxy.lens.adapter import router as lens_router
+from litellm.proxy.lens.internal import LensInternalMiddleware
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,
@@ -696,6 +698,9 @@ from litellm.proxy.management_endpoints.password_endpoints import (
 from litellm.proxy.management_endpoints.prompt_caching_requests import (
     router as prompt_caching_requests_router,
 )
+from litellm.proxy.management_endpoints.request_error_endpoints import (
+    router as request_error_router,
+)
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -752,6 +757,11 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
+from litellm.proxy.telemetry.endpoints import router as telemetry_router
+from litellm.proxy.telemetry.middleware import TelemetryMiddleware
+from litellm.proxy.telemetry.runtime import TelemetryRuntime
+from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
+from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -768,6 +778,7 @@ except ImportError:
     shutdown_billing_metrics_recorder = None
 from fastapi.exception_handlers import http_exception_handler
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.websockets import WebSocketState
 
 from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
@@ -886,7 +897,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     hash_password,
     hash_token,
     invalidate_config_param,
-    is_projected_spend_over_limit,
+    is_projected_spend_over_limit,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     is_valid_team_configs,
     litellm_config_cache,
     migrate_passwords_to_scrypt_async,
@@ -1190,6 +1201,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         # ClientNotConnectedError rather than persisting anything. Ordering this
         # inside the same guard is what keeps the two from drifting apart.
         await flush_gateway_requests(prisma_client, gateway_request_accumulator)
+        await flush_request_errors(prisma_client, request_error_accumulator)
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
@@ -1316,27 +1328,6 @@ async def _connect_to_count_stored_values() -> SupportsRawQueries:
     )
     await client.connect()
     return client.writer_db
-
-
-async def _call_current_lens_signal_router(
-    *,
-    model: str,
-    state: DecisionState,
-    questions: DecisionQuestions,
-    timeout: float,
-    metadata: Mapping[str, object],
-) -> object:
-    current_router: Final = llm_router
-    if current_router is None:
-        raise RuntimeError("The proxy router is not initialized")
-    decisions: Final[DecisionsCall] = cast(DecisionsCall, current_router.adecisions)
-    return await decisions(
-        model=model,
-        state=state,
-        questions=questions,
-        timeout=timeout,
-        metadata=metadata,
-    )
 
 
 @asynccontextmanager
@@ -1713,34 +1704,33 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
-        signal_completion: Final[DecisionsCall] = _call_current_lens_signal_router
-        signal_tasks: Final = (
-            tuple(
-                asyncio.create_task(
-                    run_signal_loop(
-                        receiver.storage,
-                        SignalRepository(WriterDatabase(writer_wrapper(prisma_client.db))),
-                        signal_completion,
-                        router_ready=lambda: llm_router is not None,
-                        sweep=sweep,
-                    )
-                )
-                for sweep in (SIGNAL_LIVE_SWEEP, SIGNAL_BACKLOG_SWEEP)
+        telemetry_settings: Final = load_telemetry_settings()
+        if isinstance(telemetry_settings, ValidationError):
+            verbose_proxy_logger.warning(
+                "telemetry: invalid settings, leaving it off: %s", describe_telemetry_errors(telemetry_settings)
             )
-            if receiver is not None and prisma_client is not None
-            else ()
+        telemetry_start: Final = (
+            None
+            if isinstance(telemetry_settings, ValidationError)
+            else asyncio.create_task(
+                telemetry_runtime.start(
+                    litellm_version=version,
+                    settings=telemetry_settings,
+                    db=lambda: (  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
+                        getattr(prisma_client.db, "writer", prisma_client.db) if prisma_client is not None else None
+                    ),
+                    register=litellm.logging_callback_manager.add_litellm_callback,
+                )
+            )
         )
-
+        if telemetry_start is not None:
+            telemetry_start.add_done_callback(_log_telemetry_start_failure)
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
                     yield state
                 finally:
-                    for signal_task in signal_tasks:
-                        signal_task.cancel()
-                    await asyncio.gather(*signal_tasks, return_exceptions=True)
-
                     if model_info_scheduler is not None and model_info_scheduler.running:
                         model_info_scheduler.remove_job("refresh_model_info")
                         if model_info_scheduler is not scheduler:
@@ -1788,6 +1778,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
             await _drain_spend_event_producer_on_shutdown()
+            if telemetry_start is not None:
+                telemetry_start.cancel()
+                await asyncio.gather(telemetry_start, return_exceptions=True)
+            await telemetry_runtime.stop()
 
             # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
             if scheduler is not None and scheduler_executor is not None:
@@ -2057,7 +2051,7 @@ class UserAPIKeyCacheTTLEnum(enum.Enum):
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
-    _log_model_access_denial(exc)
+    log_model_access_denial(exc)
     headers: Final = exc.headers
     error_dict: Final = with_call_id(
         JSON_OBJECT.validate_python(exc.to_dict()),
@@ -2076,18 +2070,32 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 @app.exception_handler(StarletteHTTPException)
-async def otlp_http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
-    response: Final = tracing_endpoints.otlp_error_response(request, exc.status_code, exc.headers)
+async def otlp_http_exception_handler(connection: Request | WebSocket, exc: StarletteHTTPException) -> Response | None:
+    if isinstance(connection, WebSocket):
+        return await _websocket_http_exception_response(connection, exc)
+    response: Final = tracing_endpoints.otlp_error_response(connection, exc.status_code, exc.headers)
     if response is not None:
-        _close_dangling_otel_server_span(request, exc.status_code, exc=exc)
+        _close_dangling_otel_server_span(connection, exc.status_code, exc=exc)
         return response
-    return await http_exception_handler(request, exc)
+    return await http_exception_handler(connection, exc)
 
 
-def _log_model_access_denial(exc: ProxyException) -> None:
-    if not isinstance(exc, ModelAccessDeniedProxyException):
-        return
-    verbose_proxy_logger.warning(exc.sanitized_internal_message())
+async def _websocket_http_exception_response(websocket: WebSocket, exc: StarletteHTTPException) -> Response | None:
+    state: Final = websocket.application_state
+    match state:
+        case WebSocketState.CONNECTING:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+        case WebSocketState.CONNECTED:
+            await websocket.close(code=_websocket_close_code(exc.status_code))
+            return None
+        case WebSocketState.RESPONSE | WebSocketState.DISCONNECTED:
+            return None
+        case _:
+            assert_never(state)
+
+
+def _websocket_close_code(status_code: int) -> int:
+    return status.WS_1011_INTERNAL_ERROR if status_code >= 500 else status.WS_1008_POLICY_VIOLATION
 
 
 def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Exception | None = None) -> None:
@@ -2632,8 +2640,24 @@ app.add_middleware(
     # it sees prisma_client as of the first request rather than import time.
     sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
 )
+telemetry_runtime: Final = TelemetryRuntime()
+
+
+def _log_telemetry_start_failure(task: asyncio.Task[None]) -> None:
+    error: Final = None if task.cancelled() else task.exception()
+    if error is not None:
+        verbose_proxy_logger.warning("telemetry: failed to start, leaving it off: %s", error)
+
+
+app.add_middleware(
+    TelemetryMiddleware,
+    sink_provider=lambda: telemetry_runtime.sink,
+    spawn=telemetry_runtime.spawn,
+    settle_timeout_s=lambda: telemetry_runtime.settings.settle_timeout_seconds,
+)
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(RedisRequestBatchMiddleware)
+app.add_middleware(LensInternalMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
@@ -2833,6 +2857,14 @@ def _gateway_request_redis_buffer() -> GatewayRequestRedisBuffer | None:
     if redis_cache is None or not writer.redis_update_buffer.should_commit_spend_updates_to_redis():
         return None
     return GatewayRequestRedisBuffer(redis_cache=redis_cache, pod_lock_manager=writer.pod_lock_manager)
+
+
+def _request_error_redis_buffer() -> RequestErrorRedisBuffer | None:
+    writer: Final = proxy_logging_obj.db_spend_update_writer
+    redis_cache: Final = writer.redis_update_buffer.redis_cache
+    if redis_cache is None or not writer.redis_update_buffer.should_commit_spend_updates_to_redis():
+        return None
+    return RequestErrorRedisBuffer(redis_cache=redis_cache, pod_lock_manager=writer.pod_lock_manager)
 
 
 ### REDIS QUEUE ###
@@ -3937,14 +3969,8 @@ async def invalidate_spend_counter(counter_key: str) -> None:
     forget_spend_counter(counter_key)
     spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
     if spend_counter_cache.redis_cache is not None:
-        try:
+        with contextlib.suppress(Exception):
             await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Unable to delete stale spend counter %s after increment failure",
-                counter_key,
-                exc_info=True,
-            )
 
 
 _invalidate_spend_counter: Final = invalidate_spend_counter
@@ -4150,21 +4176,18 @@ async def update_cache(
         new_spend: Final = existing_spend + response_cost
 
         ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
-        if (
-            existing_spend_obj.soft_budget_cooldown is False
-            and existing_spend_obj.soft_budget is not None
-            and (
-                is_projected_spend_over_limit(
-                    current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.soft_budget,
-                )
-                is True
-            )
-        ):
-            projected_spend, projected_exceeded_date = get_projected_spend_over_limit(
+        projection: Final = (
+            get_projected_spend_over_limit(
                 current_spend=new_spend,
                 soft_budget_limit=existing_spend_obj.soft_budget,
+                budget_duration=existing_spend_obj.budget_duration,
+                budget_reset_at=existing_spend_obj.budget_reset_at,
             )
+            if existing_spend_obj.soft_budget_cooldown is False and existing_spend_obj.soft_budget is not None
+            else None
+        )
+        if projection is not None:
+            projected_spend, projected_exceeded_date = projection
             soft_limit: Final = existing_spend_obj.soft_budget
             call_info: Final = CallInfo(
                 token=existing_spend_obj.token or "",
@@ -6301,7 +6324,10 @@ class ProxyConfig:
         credential_list_dict: Final = config.get("credential_list")
         credential_list = []
         if credential_list_dict:
-            credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
+            credential_list = [
+                CredentialItem.model_validate({**cred, "display_name": None, "source": "config"})
+                for cred in credential_list_dict
+            ]
         return credential_list
 
     def parse_search_tools(self, config: dict) -> list[SearchToolTypedDict] | None:
@@ -6938,6 +6964,13 @@ class ProxyConfig:
                     ).user_api_key_cache_max_size
                 )
 
+            if "spend_logs_metadata_fields" in general_settings:
+                _ = ConfigGeneralSettings.model_validate(
+                    MappingProxyType(
+                        {"spend_logs_metadata_fields": typed_general_settings["spend_logs_metadata_fields"]}
+                    )
+                )
+
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).
@@ -7209,7 +7242,10 @@ class ProxyConfig:
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
             fallback_access_check=router_fallback_access_check,
-            fallback_budget_check=router_fallback_budget_check,
+            fallback_budget_check=RouterFallbackBudgetCheck(
+                is_enforced=router_fallback_budget_check.is_enforced,
+                team_member_model_budget_limiter=model_max_budget_limiter,
+            ),
             auto_router_capability_limit=_license_check.auto_router_capability_limit,
         )
 
@@ -7444,7 +7480,7 @@ class ProxyConfig:
             else:
                 raise ValueError("Invalid Key Management System selected")
 
-            from litellm.rust_bridge.secret_manager import capture_secret_manager
+            from litellm.rust_bridge.host.secret_manager import capture_secret_manager
 
             if litellm.secret_manager_client is not previous_client:
                 capture_secret_manager(litellm.secret_manager_client, key_management_system)
@@ -7704,7 +7740,10 @@ class ProxyConfig:
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
                         fallback_access_check=router_fallback_access_check,
-                        fallback_budget_check=router_fallback_budget_check,
+                        fallback_budget_check=RouterFallbackBudgetCheck(
+                            is_enforced=router_fallback_budget_check.is_enforced,
+                            team_member_model_budget_limiter=model_max_budget_limiter,
+                        ),
                         auto_router_capability_limit=_license_check.auto_router_capability_limit,
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
@@ -10957,6 +10996,17 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
+        ### UPDATE FAILED REQUEST COUNTS BY CALLER AND STATUS ###
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+            flush_request_errors,
+            "interval",
+            seconds=batch_writing_interval,
+            args=(prisma_client, request_error_accumulator, _request_error_redis_buffer()),
+            id="update_request_errors_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
         ### MONITOR SPEND LOGS QUEUE (queue-size-based job) ###
         if general_settings.get("disable_spend_logs", False) is False:
             from litellm.proxy.utils import monitor_spend_logs_queue
@@ -11328,6 +11378,14 @@ class ProxyStartupEvent:
         )
 
         await MavvrikFocusLogger.init_mavvrik_focus_background_job(scheduler=scheduler)
+
+        from litellm.integrations.ternary.ternary_logger import (  # noqa: PLC0415  # lazy import avoids a circular import at module load
+            TernaryLogger,
+        )
+
+        await TernaryLogger.init_ternary_background_job(
+            scheduler=scheduler,  # pyright: ignore[reportUnknownArgumentType]  # APScheduler ships no type information
+        )
 
         ########################################################
         # Prometheus Background Job
@@ -12915,7 +12973,7 @@ async def audio_speech(
 
         requested_format: Final = data.get("response_format")
         upstream_content_type: Final = (
-            response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
+            response.content_type if isinstance(response, HttpxBinaryResponseContent) else None
         )
         media_type: Final = resolve_speech_media_type(
             upstream_content_type=upstream_content_type,
@@ -13184,6 +13242,17 @@ async def _release_realtime_max_parallel_slot(user_api_key_dict: UserAPIKeyAuth)
     await release_like_http_disconnect(user_api_key_dict)
 
 
+class _RealtimeErrorBody(TypedDict):
+    type: ReadOnly[str]
+    message: ReadOnly[str]
+    code: NotRequired[ReadOnly[str]]
+
+
+class _RealtimeErrorEvent(TypedDict):
+    type: ReadOnly[str]
+    error: ReadOnly[_RealtimeErrorBody]
+
+
 async def _reject_realtime_session(
     websocket: WebSocket,
     user_api_key_dict: UserAPIKeyAuth,
@@ -13191,13 +13260,19 @@ async def _reject_realtime_session(
     code: int,
     reason: str,
     error_message: str | None = None,
+    error_type: str = "guardrail_error",
+    error_code: str | None = None,
 ) -> None:
     try:
         if error_message is not None:
             try:
-                await websocket.send_text(
-                    json.dumps({"type": "error", "error": {"type": "guardrail_error", "message": error_message}})
-                )
+                error_event: Final[_RealtimeErrorEvent] = {
+                    "type": "error",
+                    "error": {"type": error_type, "message": error_message}
+                    if error_code is None
+                    else {"type": error_type, "message": error_message, "code": error_code},
+                }
+                await websocket.send_text(json.dumps(error_event))
             except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
                 verbose_proxy_logger.debug("Could not send realtime pre-call error event to client; closing anyway")
         await websocket.close(code=code, reason=reason)
@@ -13219,12 +13294,11 @@ async def realtime_websocket_endpoint(
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
-    requested_protocols: Final = [
-        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
-    ]
-    accept_kwargs: Final[dict] = {}
-    if requested_protocols:
-        accept_kwargs["subprotocol"] = requested_protocols[0]
+    requested_protocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
 
     route_model = model
     if route_model is None:
@@ -13244,29 +13318,50 @@ async def realtime_websocket_endpoint(
             llm_router=llm_router,
         )
     except ProxyException as e:
-        _log_model_access_denial(e)
+        log_model_access_denial(e)
         await _reject_realtime_session(websocket, user_api_key_dict, code=1008, reason=e.message[:120])
         return
-    await websocket.accept(**accept_kwargs)
+    await websocket.accept(subprotocol=requested_protocols[0] if requested_protocols else None)
+    await _route_realtime_websocket_session(
+        websocket,
+        user_api_key_dict,
+        route_model=route_model,
+        model=model,
+        intent=intent,
+        guardrails=guardrails,
+    )
 
+
+async def _route_realtime_websocket_session(
+    websocket: WebSocket,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    route_model: str,
+    model: str | None,
+    intent: str | None,
+    guardrails: str | None,
+    request_path: str | None = None,
+    live_session_start: Mapping[str, object] | None = None,
+) -> None:
     # Only use explicit parameters, not all query params
     query_params: Final = cast(RealtimeQueryParams, dict(_realtime_query_params_template(model, intent)))
-
     data: dict[str, object] = {
         "model": route_model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
     }
-
     # Pass guardrails into data so pre-call guardrail processing picks them up
     if guardrails:
         data["guardrails"] = [g.strip() for g in guardrails.split(",") if g.strip()]
+    if live_session_start is not None:
+        data["live_session_start"] = live_session_start
 
     # Use raw ASGI headers (already lowercase bytes) to avoid extra work
     headers_list: Final = list(websocket.scope.get("headers") or [])
-
     scope: Final = REALTIME_REQUEST_SCOPE_TEMPLATE.copy()
     scope["headers"] = headers_list
+    if request_path is not None:
+        scope["path"] = request_path
 
     request: Final = Request(scope=scope)
 
@@ -13309,6 +13404,7 @@ async def realtime_websocket_endpoint(
         )
         return
     except BaseException:
+        await _release_realtime_budget_reservation(user_api_key_dict)
         await _release_realtime_max_parallel_slot(user_api_key_dict)
         raise
 
@@ -13344,6 +13440,141 @@ async def realtime_websocket_endpoint(
             await _release_realtime_budget_reservation(user_api_key_dict)
             if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_FAILURE_LOGGED_KEY):
                 await _release_realtime_max_parallel_slot(user_api_key_dict)
+
+
+async def _reject_invalid_live_session_start(
+    websocket: WebSocket,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    await _reject_realtime_session(
+        websocket,
+        user_api_key_dict,
+        code=1008,
+        reason="Invalid session.start frame",
+        error_message="First message must be a session.start JSON object with a non-empty session.model.",
+        error_type="invalid_request_error",
+        error_code="invalid_session_start",
+    )
+
+
+LiveSessionModelAuthorizer: TypeAlias = Callable[[WebSocket, str], Awaitable[UserAPIKeyAuth]]
+
+
+def live_session_model_authorizer() -> LiveSessionModelAuthorizer:
+    return user_api_key_auth_accepted_websocket_for_model
+
+
+async def _authorize_live_session_model(
+    authorize_session_model: LiveSessionModelAuthorizer,
+    websocket: WebSocket,
+    model: str,
+) -> UserAPIKeyAuth:
+    session_auth: Final = await authorize_session_model(websocket, model)
+    try:
+        await can_key_call_resolved_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=session_auth,
+            llm_router=llm_router,
+        )
+        await can_agent_call_model(
+            model=model,
+            valid_token=session_auth,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except BaseException:
+        await _release_realtime_budget_reservation(session_auth)
+        raise
+    return session_auth
+
+
+def _live_session_denial_code(error: ProxyException | HTTPException) -> str:
+    model_denied: Final = isinstance(error, ProxyException) and str(error.type).endswith("_model_access_denied")
+    return "model_not_allowed" if model_denied else "session_not_allowed"
+
+
+@app.websocket("/openai/v1/live/sessions")
+@app.websocket("/v1/live/sessions")
+@app.websocket("/live/sessions")
+async def live_sessions_websocket_endpoint(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_live_websocket)],
+    authorize_session_model: Annotated[LiveSessionModelAuthorizer, Depends(live_session_model_authorizer)],
+) -> None:
+    requested_protocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+    try:
+        await websocket.accept(subprotocol=requested_protocols[0] if requested_protocols else None)
+    except BaseException:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
+
+    try:
+        first_message: Final = await asyncio.wait_for(
+            websocket.receive_text(),
+            timeout=OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+    except WebSocketDisconnect:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        return
+    except RuntimeError:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+    except BaseException:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
+
+    session_start: Final = parse_live_session_start(first_message)
+    if session_start is None:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+
+    upgrade_auth: Final = user_api_key_dict.model_copy()
+    await _release_realtime_budget_reservation(upgrade_auth)
+    try:
+        session_auth: Final = await _authorize_live_session_model(
+            authorize_session_model, websocket, session_start.model
+        )
+    except (ProxyException, HTTPException) as error:
+        denial_message: Final = error.message if isinstance(error, ProxyException) else str(error.detail)
+        if isinstance(error, ProxyException):
+            log_model_access_denial(error)
+        await _reject_realtime_session(
+            websocket,
+            upgrade_auth,
+            code=1008,
+            reason=websocket_close_reason(denial_message, fallback="Session not allowed"),
+            error_message=denial_message,
+            error_type="invalid_request_error",
+            error_code=_live_session_denial_code(error),
+        )
+        return
+    except BaseException:
+        await _release_realtime_max_parallel_slot(upgrade_auth)
+        raise
+
+    await _route_realtime_websocket_session(
+        websocket,
+        session_auth,
+        route_model=session_start.model,
+        model=None,
+        intent=None,
+        guardrails=None,
+        request_path=websocket.url.path,
+        live_session_start=session_start.frame,
+    )
 
 
 ######################################################################
@@ -13426,22 +13657,7 @@ async def get_assistants(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.get_assistants(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
-            )
+        raise proxy_exception_from_route_error(e)
 
 
 @router.post(
@@ -13517,21 +13733,7 @@ async def create_assistant(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.create_assistant(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
-            )
+        raise proxy_exception_from_route_error(e)
 
 
 @router.delete(
@@ -13606,21 +13808,7 @@ async def delete_assistant(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.delete_assistant(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
-            )
+        raise proxy_exception_from_route_error(e)
 
 
 @router.post(
@@ -13695,21 +13883,7 @@ async def create_threads(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.create_threads(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
-            )
+        raise proxy_exception_from_route_error(e)
 
 
 @router.get(
@@ -13782,21 +13956,7 @@ async def get_thread(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.get_thread(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
-            )
+        raise proxy_exception_from_route_error(e)
 
 
 @router.post(
@@ -13873,21 +14033,7 @@ async def add_messages(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.add_messages(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
-            )
+        raise proxy_exception_from_route_error(e)
 
 
 @router.get(
@@ -13960,21 +14106,7 @@ async def get_messages(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.get_messages(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
-            )
+        raise proxy_exception_from_route_error(e)
 
 
 @router.post(
@@ -14082,21 +14214,7 @@ async def run_thread(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.run_thread(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-            )
-        else:
-            error_msg: Final = f"{e}"
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
-            )
+        raise proxy_exception_from_route_error(e)
 
 
 #### DEV UTILS ####
@@ -14108,7 +14226,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
@@ -14211,19 +14329,12 @@ async def _try_provider_token_count(
             code=status_code,
         )
     if result is not None and result.error is True:
-        if litellm.disable_token_counter is True:
-            raise ProxyException(
-                message=result.error_message or "Token counting failed",
-                type="token_counting_error",
-                param="model",
-                code=result.status_code or 500,
-            )
-        verbose_proxy_logger.warning(
-            "Provider token counting failed (%s): %s. Falling back to local tokenizer.",
-            result.status_code,
-            result.error_message,
+        raise ProxyException(
+            message=result.error_message or "Token counting failed",
+            type="token_counting_error",
+            param="model",
+            code=result.status_code or 500,
         )
-        return None
     return result
 
 
@@ -15046,7 +15157,7 @@ async def _apply_search_filter_to_models(
     size: int = 50,
     sort_by: str | None = None,
     model_name: str | None = None,
-) -> tuple[list[dict[str, Any]], int | None]:
+) -> tuple[list[dict[str, object]], int | None]:
     """
     Apply search filter to models, querying database for additional matching models.
 
@@ -15196,10 +15307,10 @@ def _normalize_datetime_for_sorting(dt: object) -> datetime | None:
 
 
 def _sort_models(
-    all_models: list[dict[str, Any]],
+    all_models: list[dict[str, object]],
     sort_by: str | None,
     sort_order: str = "asc",
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Sort models by the specified field and order.
 
@@ -15489,7 +15600,7 @@ async def _filter_models_by_team_id(
     prisma_client: PrismaClient,
     llm_router: Router,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Filter models by team ID. Returns models where:
     - team_id matches the model's BYOK team_id, OR
@@ -18508,6 +18619,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
+        "disable_fallbacks_on_per_model_rate_limits": "Boolean",
         "maximum_spend_logs_retention_period": "String",
         "maximum_health_check_retention_period": "String",
         "maximum_daily_tag_spend_retention_period": "String",
@@ -18520,6 +18632,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "mcp_client_id_header": "String",
         "mcp_trusted_proxy_ranges": "List",
         "mcp_xff_num_trusted_hops": "Integer",
+        "mcp_prefer_client_id_metadata_document": "Boolean",
         "always_include_stream_usage": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
         "mcp_required_fields": "List",
@@ -18944,6 +19057,14 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "description": (
             "Carry spend beyond max_budget into the next window when budgets reset, instead of "
             "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
+        ),
+    },
+    "personal_key_model_access_from_teams": {
+        "type": "Boolean",
+        "description": (
+            "Caps each personal key (a key with no team) to the models its owner's current teams can call, "
+            "re-evaluated on every request. A user in no team gets no model access. A user in several teams "
+            "can call any model one of those teams can call. Team keys are unaffected."
         ),
     },
     "max_ui_session_budget": {
@@ -20304,7 +20425,6 @@ app.include_router(auto_router_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
-app.include_router(lens_dataset_router)
 app.include_router(lens_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
@@ -20315,6 +20435,8 @@ app.include_router(cache_settings_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
+app.include_router(request_error_router)
+app.include_router(telemetry_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_skills_discovery_router)

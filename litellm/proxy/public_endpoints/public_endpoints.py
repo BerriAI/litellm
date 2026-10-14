@@ -13,11 +13,11 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
-    BlogPost,
     BlogPostsResponse,
     GetBlogPosts,
     get_blog_posts,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
@@ -453,15 +453,16 @@ async def get_public_fuse_presets() -> FusePresetCatalog:
     "/public/litellm_model_cost_map",
     tags=["public", "model management"],
 )
-async def get_litellm_model_cost_map():
+async def get_litellm_model_cost_map(catalog_only: bool = False):
     """
     Public endpoint to get the LiteLLM model cost map.
     Returns pricing information for all supported models.
+    With catalog_only=true, returns the catalog as loaded, without entries registered at runtime for proxy deployments.
     """
     import litellm
 
     try:
-        _model_cost_map: Final = litellm.model_cost
+        _model_cost_map: Final = GetModelCostMap.loaded_model_cost_map() if catalog_only else litellm.model_cost
         return _model_cost_map
     except Exception as e:
         raise HTTPException(
@@ -475,21 +476,18 @@ async def get_litellm_model_cost_map():
     tags=["public"],
     response_model=BlogPostsResponse,
 )
-async def get_litellm_blog_posts():
+async def get_litellm_blog_posts() -> BlogPostsResponse:
     """
-    Public endpoint to get the latest LiteLLM blog posts.
+    Public endpoint to get the latest LiteLLM blog posts, each with its RSS categories as ``tags``.
 
-    Fetches from GitHub with a 1-hour in-process cache.
+    Fetches the docs RSS feed with a 1-hour in-process cache.
     Falls back to the bundled local backup on any failure.
     """
     try:
-        posts_data = get_blog_posts(url=litellm.blog_posts_url)
+        return BlogPostsResponse(posts=get_blog_posts(url=litellm.blog_posts_url))
     except Exception as e:
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
-        posts_data = GetBlogPosts.load_local_blog_posts()
-
-    posts: Final = [BlogPost(**p) for p in posts_data[:5]]
-    return BlogPostsResponse(posts=posts)
+        return BlogPostsResponse(posts=GetBlogPosts.load_local_blog_posts())
 
 
 _AUTOROUTER_PRESETS_ADAPTER: Final = TypeAdapter(dict[str, AutoRouterPresetRecord])
@@ -503,14 +501,18 @@ def _load_bundled_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
     )
 
 
-async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+async def _fetch_remote_bytes(url: str) -> bytes:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.UI)
     response: Final = await client.get(url, timeout=5.0)
     response.raise_for_status()
-    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_python(response.json())
+    return response.content
+
+
+async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_json(await _fetch_remote_bytes(url))
     if not presets:
         raise ValueError("remote auto-router preset catalog is empty")
     return presets
