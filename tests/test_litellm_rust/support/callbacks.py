@@ -8,25 +8,13 @@ from typing import Final
 import pytest
 from pydantic import BaseModel
 
-import litellm
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.rust_bridge import catalog
-from litellm.rust_bridge.catalog import Route, RouteRule
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.catalog import Route
 from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.requests import (
-    MESSAGES,
-    MESSAGES_EVENTS,
-    MESSAGES_MODEL,
-    MESSAGES_RESPONSE,
-    RESPONSES_EVENTS,
-    RESPONSES_MODEL,
-    RESPONSES_RESPONSE,
-)
+from tests.test_litellm_rust.support.routing import native_route
 
 CALL_ID: Final = "callback-contract"
 
@@ -50,8 +38,7 @@ class Surface:
             "litellm_call_id": CALL_ID,
             **kwargs,
         }
-        rule: Final = RouteRule(self.route, Rollout.RUST_REQUIRED)
-        with rebound(catalog, "RULES", (rule, *catalog.RULES)):
+        with native_route(self.route):
             if asynchronous:
                 return await self.acreate(**arguments)
             return await asyncio.to_thread(self.create, **arguments)
@@ -59,11 +46,6 @@ class Surface:
 
 def gap(reason: str, raises: type[Exception] = AssertionError) -> pytest.MarkDecorator:
     return pytest.mark.xfail(reason=reason, raises=raises, strict=True)
-
-
-def assert_transport(server: RecordingServer, count: int = 1) -> None:
-    assert len(server.requests) == count
-    assert not any(request.headers.get("user-agent", "").startswith("python-httpx") for request in server.requests)
 
 
 def response_id(response: object) -> object:
@@ -166,31 +148,7 @@ class LegacyAgenticLoop(RecordingLogger):
         return with_id(response, "agentic-replaced")
 
 
-def _anthropic_error(kind: str) -> Mapping[str, object]:
-    return {"type": "error", "error": {"type": kind, "message": kind}}
-
-
-def _openai_error(kind: str) -> Mapping[str, object]:
-    return {"error": {"type": kind, "message": kind, "param": None, "code": None}}
-
-
-MESSAGES_SURFACE: Final = Surface(
-    route=Route.MESSAGES,
-    request={"model": MESSAGES_MODEL, "messages": list(MESSAGES), "max_tokens": 64},
-    response=MESSAGES_RESPONSE,
-    events=MESSAGES_EVENTS,
-    bad_request=_anthropic_error("invalid_request_error"),
-    rate_limited=_anthropic_error("rate_limit_error"),
-    create=litellm.anthropic.messages.create,
-    acreate=litellm.anthropic.messages.acreate,
-)
-RESPONSES_SURFACE: Final = Surface(
-    route=Route.RESPONSES,
-    request={"model": RESPONSES_MODEL, "input": "Hello"},
-    response=RESPONSES_RESPONSE,
-    events=RESPONSES_EVENTS,
-    bad_request=_openai_error("invalid_request_error"),
-    rate_limited=_openai_error("rate_limit_exceeded"),
-    create=litellm.responses,
-    acreate=litellm.aresponses,
-)
+def relaxed(server: RecordingServer) -> Iterator[RecordingServer]:
+    server.expected_requests = None
+    yield server
+    server.responses.clear()

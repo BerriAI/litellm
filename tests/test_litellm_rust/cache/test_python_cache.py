@@ -21,14 +21,13 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.dispatch import call_hook
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.caching import CachingSupportedCallTypes
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.test_litellm_rust.responses.data import RESPONSES_RESPONSE
 from tests.test_litellm_rust.support.cache import cache_key, collect, invoke, payload
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.test_inference import RESPONSES_RESPONSE
 
 pytestmark = pytest.mark.requires_rust_extension
 

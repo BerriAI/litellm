@@ -13,11 +13,11 @@ from litellm.caching.caching_handler import (
 )
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.utils import ModelResponse
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_RESPONSE, RESPONSES_TEXT
 from tests.test_litellm_rust.support.cache import cache_key, invoke, payload
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.test_inference import RESPONSES_MODEL, RESPONSES_RESPONSE
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -153,7 +153,7 @@ async def test_v2_cache_does_not_force_native_responses_streaming(
     assert isinstance(response, AsyncIterator)
     chunks: Final = [chunk async for chunk in response]
     assert chunks[-1].type == "response.completed"
-    assert chunks[-1].response.output[0].content[0].text == "native response"
+    assert chunks[-1].response.output[0].content[0].text == RESPONSES_TEXT
 
 
 @pytest.mark.asyncio
