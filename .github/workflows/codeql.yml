@@ -81,6 +81,19 @@ jobs:
         if: matrix.language == 'python'
         uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
         with:
+          # Each suppression below is an adjudicated intentional use, not a
+          # lingering weakness:
+          # - litellm/llms/oci/common_utils.py: the OCI request-signing spec
+          #   mandates a SHA-256 digest (FIPS-approved, content integrity —
+          #   not password hashing).
+          # - litellm/proxy/auth/password_policy.py: the HIBP k-anonymity
+          #   protocol requires SHA-1 prefixes for its range queries.
+          # - litellm/proxy/utils.py: read-only legacy verifier that must hash
+          #   submitted passwords with the OLD algorithm to authenticate
+          #   pre-migration rows (no new SHA-256 rows are written).
+          # These patterns suppress the rule for the whole file, so any FUTURE
+          # weak-hashing added to these three files is hidden too — new code
+          # here needs explicit adjudication before it may rely on this filter.
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
             -litellm/proxy/auth/password_policy.py:py/weak-sensitive-data-hashing
