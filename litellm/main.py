@@ -8534,6 +8534,43 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "gradium":
+        from litellm.llms.gradium.text_to_speech.transformation import (
+            GradiumTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = GradiumTextToSpeechConfig()
+
+        gradium_config: Final = cast(GradiumTextToSpeechConfig, text_to_speech_provider_config)
+
+        gradium_voice_id = voice if isinstance(voice, str) else None
+        if gradium_voice_id is None or not gradium_voice_id.strip():
+            raise litellm.BadRequestError(
+                message="'voice' must resolve to a Gradium voice id for Gradium TTS",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=gradium_voice_id.strip(),
+            text_to_speech_provider_config=gradium_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=http_timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
             VertexAILyriaTextToSpeechConfig,
