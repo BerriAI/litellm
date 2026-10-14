@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import boto3
@@ -35,6 +36,8 @@ PRE_CALL: Final = "aws-errors-pre-call"
 BEDROCK: Final = "aws-errors-bedrock"
 VENDOR_DOWN: Final = "aws-errors-vendor-down"
 UNGUARDED: Final = "unguarded"
+OVER_BUDGET: Final = "over-budget"
+ONE_RPM: Final = "one-rpm"
 BLOCKED_WORD: Final = "FORBIDDEN"
 BLOCK_REASON: Final = "synthetic policy says no"
 BEDROCK_BLOCK_MESSAGE: Final = "Violated guardrail policy"
@@ -62,6 +65,18 @@ class UpstreamError:
 
 THROTTLED: Final = UpstreamError(429, THROTTLE_TYPE, THROTTLE_MESSAGE)
 INVALID: Final = UpstreamError(400, INVALID_TYPE, INVALID_MESSAGE)
+UPSTREAM_ERRORS: Final = MappingProxyType({"throttled": THROTTLED, "invalid": INVALID})
+ROUTES: Final = (pytest.param(ROUTER_MODEL, id="router"), pytest.param(MODEL_ID, id="direct"))
+
+
+def upstream_marker(kind: str) -> str:
+    """A prompt the scripted Bedrock answers with the ``UPSTREAM_ERRORS`` entry named ``kind``."""
+    return f"upstream-{kind}-{uuid.uuid4().hex}"
+
+
+def upstream_error_of(marker: str) -> UpstreamError | None:
+    prefix, _, rest = marker.partition("-")
+    return UPSTREAM_ERRORS.get(rest.partition("-")[0]) if prefix == "upstream" else None
 
 
 def event_frame(event_type: str, payload: Mapping[str, JsonValue]) -> bytes:
@@ -92,6 +107,16 @@ def converse_reply(text: str) -> bytes:
     ).encode()
 
 
+def invoke_body(marker: str) -> str:
+    return json.dumps(
+        {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": marker}]}],
+        }
+    )
+
+
 def marker_of(request: Request) -> str:
     return str(json.loads(request.body)["messages"][0]["content"][0]["text"])
 
@@ -105,13 +130,12 @@ class Rig:
     gateway: Gateway
     provider: Wire
     vendor: Wire
-    errors: dict[str, UpstreamError]
     keys: Mapping[str, str]
 
     def provider_calls(self, marker: str) -> int:
         return sum(1 for request in self.provider.drain() if marker.encode() in request.body)
 
-    def boto3(self, guardrail: str, attempts: int = 1):  # noqa: ANN201 - boto3 clients are untyped
+    def client(self, guardrail: str, attempts: int = 1):  # noqa: ANN201  # boto3 clients are untyped
         client: Final = boto3.client(
             "bedrock-runtime",
             region_name="us-east-1",
@@ -131,15 +155,19 @@ class Rig:
         client.meta.events.register("before-send.bedrock-runtime.*", authenticate)
         return client
 
-    def call(self, guardrail: str, action: str, marker: str, attempts: int = 1) -> ClientError | None:
-        client: Final = self.boto3(guardrail, attempts)
+    def call(
+        self, guardrail: str, action: str, marker: str, attempts: int = 1, model: str = ROUTER_MODEL
+    ) -> ClientError | None:
+        client: Final = self.client(guardrail, attempts)
         messages: Final = [{"role": "user", "content": [{"text": marker}]}]
         try:
             if action == "converse-stream":
-                for _ in client.converse_stream(modelId=ROUTER_MODEL, messages=messages)["stream"]:
+                for _ in client.converse_stream(modelId=model, messages=messages)["stream"]:
                     pass
+            elif action == "invoke":
+                client.invoke_model(modelId=model, body=invoke_body(marker))
             else:
-                client.converse(modelId=ROUTER_MODEL, messages=messages)
+                client.converse(modelId=model, messages=messages)
         except ClientError as error:
             return error
         return None
@@ -169,14 +197,14 @@ def _generic_guardrail(name: str, mode: str, vendor: Wire, **settings: JsonValue
 
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    errors: Final[dict[str, UpstreamError]] = {}
-
     def provider(request: Request) -> Reply:
         if request.target == "/v1/messages":
             return Reply(status=429, body=ANTHROPIC_THROTTLE)
-        assert request.target in (f"/model/{MODEL_ID}/converse-stream", f"/model/{MODEL_ID}/converse"), request.target
+        assert request.target in tuple(
+            f"/model/{MODEL_ID}/{action}" for action in ("converse-stream", "converse", "invoke")
+        ), request.target
         marker: Final = marker_of(request)
-        error: Final = errors.get(marker)
+        error: Final = upstream_error_of(marker)
         if error is not None:
             return Reply(status=error.status, body=error.body, headers={"x-amzn-errortype": error.errortype})
         text: Final = f"The answer to {marker} is {BLOCKED_WORD}"
@@ -236,15 +264,16 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             ]
             config["model_list"] = [
                 {
-                    "model_name": ROUTER_MODEL,
+                    "model_name": name,
                     "litellm_params": {
-                        "model": f"bedrock/{MODEL_ID}",
+                        "model": f"bedrock/{model}",
                         "api_base": upstream.url,
                         "aws_access_key_id": "AKIASYNTHETICPROVIDER",
                         "aws_secret_access_key": "synthetic-provider-secret",
                         "aws_region_name": "us-east-1",
                     },
                 }
+                for name, model in ((ROUTER_MODEL, MODEL_ID), ("anthropic.*", "anthropic.*"))
             ]
             config["router_settings"] = {**config.get("router_settings", {}), "num_retries": 0}
             config_path: Final = directory / "bedrock-aws-errors.yaml"
@@ -256,9 +285,10 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                         owned.gateway,
                         upstream,
                         sink,
-                        errors,
                         {
                             UNGUARDED: scenario.key(),
+                            OVER_BUDGET: scenario.key(max_budget=0),
+                            ONE_RPM: scenario.key(rpm_limit=1),
                             **{
                                 name: scenario.key(guardrails=[name])
                                 for name in (POST_CALL, PRE_CALL, BEDROCK, VENDOR_DOWN)
@@ -274,15 +304,17 @@ BLOCKS: Final = (
     pytest.param(PRE_CALL, "converse", BLOCK_REASON, 0, id="pre-call-converse"),
     pytest.param(BEDROCK, "converse-stream", BEDROCK_BLOCK_MESSAGE, 1, id="bedrock-guardrail-converse-stream"),
     pytest.param(BEDROCK, "converse", BEDROCK_BLOCK_MESSAGE, 1, id="bedrock-guardrail-converse"),
+    pytest.param(PRE_CALL, "invoke", BLOCK_REASON, 0, id="pre-call-invoke"),
 )
 
 
+@pytest.mark.parametrize("model", ROUTES)
 @pytest.mark.parametrize(("guardrail", "action", "message", "provider_calls"), BLOCKS)
 def test_guardrail_block_reaches_boto3_as_a_validation_exception_with_the_guardrail_message(
-    rig: Rig, guardrail: str, action: str, message: str, provider_calls: int
+    rig: Rig, guardrail: str, action: str, message: str, provider_calls: int, model: str
 ) -> None:
     marker: Final = f"{BLOCKED_WORD}-{uuid.uuid4().hex}"
-    error: Final = rig.call(guardrail, action, marker)
+    error: Final = rig.call(guardrail, action, marker, model=model)
     assert error is not None, f"{guardrail} {action} was not blocked"
     assert error.response["ResponseMetadata"]["HTTPStatusCode"] == 400, error.response
     assert (error.response["Error"]["Code"], error.response["Error"]["Message"]) == (
@@ -305,14 +337,12 @@ def test_guardrail_block_body_adds_the_aws_message_and_keeps_the_litellm_error(r
     assert response.headers.get("x-litellm-call-id"), dict(response.headers)
 
 
-@pytest.mark.parametrize("upstream", (pytest.param(THROTTLED, id="throttled"), pytest.param(INVALID, id="invalid")))
+@pytest.mark.parametrize("kind", tuple(UPSTREAM_ERRORS))
 @pytest.mark.parametrize("action", ("converse-stream", "converse"))
 @pytest.mark.parametrize("guardrail", (UNGUARDED, POST_CALL))
-def test_bedrock_error_reaches_the_caller_as_bedrock_sent_it(
-    rig: Rig, upstream: UpstreamError, action: str, guardrail: str
-) -> None:
-    marker: Final = f"upstream-{uuid.uuid4().hex}"
-    rig.errors[marker] = upstream
+def test_bedrock_error_reaches_the_caller_as_bedrock_sent_it(rig: Rig, kind: str, action: str, guardrail: str) -> None:
+    upstream: Final = UPSTREAM_ERRORS[kind]
+    marker: Final = upstream_marker(kind)
     response: Final = rig.raw(guardrail, action, marker)
     assert response.status_code == upstream.status, response.text
     assert response.headers.get("x-amzn-errortype") == upstream.errortype, (dict(response.headers), response.text)
@@ -322,12 +352,14 @@ def test_bedrock_error_reaches_the_caller_as_bedrock_sent_it(
     assert rig.provider_calls(marker) == 1
 
 
-@pytest.mark.parametrize("action", ("converse-stream", "converse"))
+@pytest.mark.parametrize("model", ROUTES)
+@pytest.mark.parametrize("action", ("converse-stream", "converse", "invoke"))
 @pytest.mark.parametrize("guardrail", (UNGUARDED, POST_CALL))
-def test_boto3_sees_bedrock_throttling_and_retries_it_as_against_bedrock(rig: Rig, action: str, guardrail: str) -> None:
-    marker: Final = f"upstream-{uuid.uuid4().hex}"
-    rig.errors[marker] = THROTTLED
-    error: Final = rig.call(guardrail, action, marker, attempts=3)
+def test_boto3_sees_bedrock_throttling_and_retries_it_as_against_bedrock(
+    rig: Rig, action: str, guardrail: str, model: str
+) -> None:
+    marker: Final = upstream_marker("throttled")
+    error: Final = rig.call(guardrail, action, marker, attempts=3, model=model)
     assert error is not None, f"{action} was not throttled"
     assert (error.response["Error"]["Code"], error.response["Error"]["Message"]) == (
         THROTTLED.code,
@@ -338,25 +370,43 @@ def test_boto3_sees_bedrock_throttling_and_retries_it_as_against_bedrock(rig: Ri
     assert rig.provider_calls(marker) == 3
 
 
+def converse_with_key(rig: Rig, model: str, key: str) -> httpx.Response:
+    return rig.gateway.client.post(
+        f"/bedrock/model/{model}/converse",
+        json={"messages": [{"role": "user", "content": [{"text": f"plain-{uuid.uuid4().hex}"}]}]},
+        headers={"x-litellm-api-key": key},
+        timeout=case_timeout_seconds(),
+    )
+
+
+def assert_litellm_error(response: httpx.Response, status: int) -> None:
+    assert response.status_code == status, response.text
+    assert "x-amzn-errortype" not in response.headers, dict(response.headers)
+    assert set(response.json()) == {"error"}, response.text
+
+
 @pytest.mark.parametrize(
     ("guardrail", "model", "status"),
     (
         pytest.param(VENDOR_DOWN, ROUTER_MODEL, 500, id="guardrail-vendor-down"),
         pytest.param(UNGUARDED, "not-a-configured-model", 400, id="unknown-model"),
+        pytest.param(OVER_BUDGET, ROUTER_MODEL, 422, id="over-budget"),
     ),
 )
 def test_errors_that_are_not_guardrail_blocks_keep_the_litellm_error(
     rig: Rig, guardrail: str, model: str, status: int
 ) -> None:
-    response: Final = rig.gateway.client.post(
-        f"/bedrock/model/{model}/converse",
-        json={"messages": [{"role": "user", "content": [{"text": f"plain-{uuid.uuid4().hex}"}]}]},
-        headers={"x-litellm-api-key": rig.keys[guardrail]},
-        timeout=case_timeout_seconds(),
-    )
-    assert response.status_code == status, response.text
-    assert "x-amzn-errortype" not in response.headers, dict(response.headers)
-    assert set(response.json()) == {"error"}, response.text
+    assert_litellm_error(converse_with_key(rig, model, rig.keys[guardrail]), status)
+
+
+def test_unknown_key_keeps_the_litellm_error(rig: Rig) -> None:
+    assert_litellm_error(converse_with_key(rig, ROUTER_MODEL, f"sk-unknown-{uuid.uuid4().hex}"), 401)
+
+
+def test_litellm_rate_limit_keeps_the_litellm_error(rig: Rig) -> None:
+    admitted: Final = converse_with_key(rig, ROUTER_MODEL, rig.keys[ONE_RPM])
+    assert admitted.status_code == 200, admitted.text
+    assert_litellm_error(converse_with_key(rig, ROUTER_MODEL, rig.keys[ONE_RPM]), 429)
 
 
 def test_other_provider_passthrough_errors_carry_no_aws_error_type(rig: Rig) -> None:
