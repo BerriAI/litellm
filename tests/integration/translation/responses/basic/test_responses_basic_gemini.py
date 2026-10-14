@@ -7,7 +7,7 @@ from integration.translation.responses.bases.gemini import (
     GEMINI_3_5_FLASH_TEST_CASE,
     GEMINI_3_8_FLASH_TEST_CASE,
 )
-from integration.translation.runner import run
+from integration.translation.runner import assert_translation
 
 
 @pytest.mark.parametrize(
@@ -16,4 +16,4 @@ from integration.translation.runner import run
     ids=lambda case: case.id,
 )
 def test_responses_basic_gemini(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
-    run(case, gateway, provider)
+    assert_translation(case, gateway, provider)

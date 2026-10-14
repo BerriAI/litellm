@@ -93,9 +93,10 @@ interface BodyProps<T> {
   readonly rowHeight: (row: TanStackRow<T>) => number;
   readonly children: (row: TanStackRow<T>) => ReactNode;
   readonly after?: ReactNode;
+  readonly className?: string;
 }
 
-function Body<T>({ rowHeight, children, after }: BodyProps<T>) {
+function Body<T>({ rowHeight, children, after, className }: BodyProps<T>) {
   const { table, scroller } = useInspectorTable<T>();
   const rows = table.getRowModel().rows;
   const virtualizerOptions = {
@@ -110,7 +111,7 @@ function Body<T>({ rowHeight, children, after }: BodyProps<T>) {
   const padTop = items[0]?.start ?? 0;
   const padBottom = virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0);
   return (
-    <TableBody>
+    <TableBody className={className}>
       {padTop > 0 && <tr aria-hidden style={{ height: padTop }} />}
       {items.map(({ key, index }) => (
         <Fragment key={key}>{children(rows[index])}</Fragment>

@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ProviderSpecificHeader {
     #[serde(default)]
@@ -9,7 +9,7 @@ pub struct ProviderSpecificHeader {
     pub extra_headers: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum ProviderSpecificHeaders {
     One(ProviderSpecificHeader),

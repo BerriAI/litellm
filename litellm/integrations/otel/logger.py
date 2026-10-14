@@ -54,9 +54,11 @@ from litellm.integrations.otel.model.spans import SpanRole, span_role_for_servic
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     active_phase,
+    active_phase_span,
     is_recordable_span,
     mcp_message_transport_span,
     post_response_root,
+    request_destinations,
     request_root_http_route,
     request_root_span,
     resolve_internal_call_span_context,
@@ -81,12 +83,13 @@ from litellm.integrations.otel.plumbing.providers import (
     resolve_meter_provider,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
+from litellm.types.utils import captures_span_content
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import MeterProvider
 
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.services import ServiceLoggerPayload
     from litellm.types.utils import (
         CallTypesLiteral,
@@ -252,6 +255,11 @@ class OpenTelemetryV2(CustomLogger):
         if provider is None:
             return None
         return GenAIEventRecorder(get_event_logger(provider, LITELLM_TRACER_NAME), provider.resource)
+
+    def _capture_span_content(self) -> bool:
+        return self.config.capture_span_content or any(
+            captures_span_content(destination.capture_message_content) for destination in request_destinations()
+        )
 
     # ====================================================================== #
     #  Proxy global registration
@@ -432,7 +440,7 @@ class OpenTelemetryV2(CustomLogger):
             return False
         payload: Final = cast("StandardLoggingPayload", raw_payload)
         data: Final = MCPToolCallSpanData.from_standard_logging_payload(
-            payload, capture_content=self.config.capture_span_content
+            payload, capture_content=self._capture_span_content()
         )
         # A stray LLM carrier from a ``pre_call`` that mis-fired for this id would
         # otherwise linger until evicted; drop it so it's neither leaked nor closed
@@ -476,7 +484,7 @@ class OpenTelemetryV2(CustomLogger):
             return False
         payload: Final = cast("StandardLoggingPayload", raw_payload)
         data: Final = MCPListToolsSpanData.from_standard_logging_payload(
-            payload, capture_content=self.config.capture_span_content
+            payload, capture_content=self._capture_span_content()
         )
         if data.identity.call_id:
             self._release_carrier(self._open_llm_calls.pop(data.identity.call_id, None))
@@ -568,12 +576,13 @@ class OpenTelemetryV2(CustomLogger):
             return None
         data: Final = LLMCallSpanData.from_standard_logging_payload(
             payload,
-            capture_content=self.config.capture_span_content,
+            capture_content=self._capture_span_content(),
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
             request_route=request_root_http_route(),
             request_purpose=call.purpose,
             trace=call.trace,
             session_id=call.session_id,
+            metadata_keys=tuple(self.config.baggage_metadata_keys),
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -777,6 +786,11 @@ class OpenTelemetryV2(CustomLogger):
         span: Final = request_root_span() or get_current_span()
         if is_recordable_span(span):
             span.add_event(name, attributes)
+
+    def set_phase_attributes(self, attributes: Mapping[str, str | int | float | bool]) -> None:
+        span: Final = active_phase_span()
+        if span is not None and is_recordable_span(span):
+            span.set_attributes(attributes)
 
     async def async_pre_call_hook(
         self,
@@ -1042,6 +1056,12 @@ def phase_event(name: str, attributes: Mapping[str, str | int] | None = None) ->
         logger.add_phase_event(name, attributes)
 
 
+def phase_attributes(attributes: Mapping[str, str | int | float | bool]) -> None:
+    logger: Final = _registered_v2_logger()
+    if logger is not None:
+        logger.set_phase_attributes(attributes)
+
+
 def build_otel_v2_logger(
     config: OpenTelemetryV2Config,
     callback_name: str | None = None,
@@ -1063,6 +1083,6 @@ def build_otel_v2_logger(
 def _logger_class(config: OpenTelemetryV2Config) -> type[OpenTelemetryV2]:
     if "langfuse" not in config.mapper_names:
         return OpenTelemetryV2
-    from litellm.integrations.otel.langfuse_logger import LangfuseContentOpenTelemetryV2, LangfuseOpenTelemetryV2
+    from litellm.integrations.otel.langfuse_logger import LangfuseContentOpenTelemetryV2
 
-    return LangfuseContentOpenTelemetryV2 if config.capture_span_content else LangfuseOpenTelemetryV2
+    return LangfuseContentOpenTelemetryV2

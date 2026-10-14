@@ -9,7 +9,7 @@ from integration.translation.responses.bases.azure import (
     GPT_6_1_SOL_TEST_CASE,
     GPT_6_LUNA_TEST_CASE,
 )
-from integration.translation.runner import run
+from integration.translation.runner import assert_translation
 
 
 @pytest.mark.parametrize(
@@ -24,4 +24,4 @@ from integration.translation.runner import run
     ids=lambda case: case.id,
 )
 def test_responses_basic_azure(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
-    run(case, gateway, provider)
+    assert_translation(case, gateway, provider)
