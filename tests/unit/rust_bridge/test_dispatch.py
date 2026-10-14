@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar
@@ -12,7 +12,7 @@ from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
 from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementationError
 
-NativeT = TypeVar("NativeT")
+NativeT: Final = TypeVar("NativeT")
 
 ROUTE: Final = Route.MESSAGES
 ARGS: Final[tuple[object, ...]] = ("claude-model",)
@@ -283,3 +283,51 @@ async def test_public_route_fails_loudly_when_no_backend_can_serve_the_call(
 ) -> None:
     with pytest.raises(error, match=message):
         await serve(case, asynchronous=asynchronous)
+
+
+async def chunks() -> AsyncGenerator[int, None]:
+    yield 1
+
+
+RESULTS: Final = pytest.mark.parametrize(
+    "make_result", (lambda: iter((1, 2)), chunks, lambda: None), ids=("stream", "async-stream", "websocket-none")
+)
+BACKENDS: Final = pytest.mark.parametrize("rules", ((), (rule(Rollout.RUST_REQUIRED),)), ids=("python", "rust"))
+
+
+@RESULTS
+@BACKENDS
+def test_public_route_returns_the_backend_result_untouched(make_result: Callable[[], object], rules: Rules) -> None:
+    result: Final = make_result()
+    route: Final = PublicRoute(
+        route=ROUTE,
+        request=lambda args, kwargs: ANTHROPIC,
+        context=context,
+        binding=binding(Case(rules=rules), lambda _: result),
+        python=lambda *args, **kwargs: result,
+    )
+    assert route.run(ARGS, KWARGS, rules=rules) is result
+
+
+@pytest.mark.asyncio
+@RESULTS
+@BACKENDS
+async def test_async_public_route_returns_the_backend_result_untouched(
+    make_result: Callable[[], object], rules: Rules
+) -> None:
+    result: Final = make_result()
+
+    async def native(_: Request) -> object:
+        return result
+
+    async def python(*args: object, **kwargs: object) -> object:  # kwargs-ok: public pass-through shape
+        return result
+
+    route: Final = AsyncPublicRoute(
+        route=ROUTE,
+        request=lambda args, kwargs: ANTHROPIC,
+        context=context,
+        binding=binding(Case(rules=rules), native),
+        python=python,
+    )
+    assert await route.arun(ARGS, KWARGS, rules=rules) is result
