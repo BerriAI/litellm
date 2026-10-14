@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
-import { fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
+import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
 
 import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
 
@@ -13,7 +13,16 @@ const renderForm = (
   const onCancel = vi.fn();
   renderWithProviders(
     <TeamAdminSettingsForm
-      initialValues={{ tpm_limit: 1000, rpm_limit: 50, max_budget: 20, soft_budget: 15 }}
+      initialValues={{
+        tpm_limit: 1000,
+        rpm_limit: 50,
+        max_budget: 20,
+        soft_budget: 15,
+        team_member_budget: 10,
+        team_member_budget_duration: "30d",
+        team_member_tpm_limit: 100,
+        team_member_rpm_limit: 5,
+      }}
       editableFields={editableFields}
       mayRaiseMaxBudget={overrides.mayRaiseMaxBudget ?? false}
       isSaving={overrides.isSaving ?? false}
@@ -82,6 +91,57 @@ describe("TeamAdminSettingsForm", () => {
     expect(save).toBeEnabled();
     fireEvent.change(tpmInput, { target: { value: "1000" } });
     expect(save).toBeDisabled();
+  });
+
+  it("shows the team's member defaults when the proxy lets team admins edit them", () => {
+    renderForm(
+      new Set(["team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"]),
+    );
+
+    expect(screen.getByLabelText("Member Default Budget (USD)")).toHaveValue(10);
+    expect(screen.getByLabelText("Member Default Budget Duration")).toHaveTextContent("monthly");
+    expect(screen.getByLabelText("Member Default TPM Limit")).toHaveValue(100);
+    expect(screen.getByLabelText("Member Default RPM Limit")).toHaveValue(5);
+  });
+
+  it("saves a new member default budget and a weekly reset without resending the unchanged limits", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(
+      new Set(["team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"]),
+    );
+
+    fireEvent.change(screen.getByLabelText("Member Default Budget (USD)"), { target: { value: "25" } });
+    await chooseSelectOption(user, screen.getByLabelText("Member Default Budget Duration"), "weekly");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith({ team_member_budget: 25, team_member_budget_duration: "7d" }),
+    );
+  });
+
+  it("saves a member budget that never resets as a null duration", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(new Set(["team_member_budget_duration"]));
+
+    await chooseSelectOption(user, screen.getByLabelText("Member Default Budget Duration"), "Never resets");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ team_member_budget_duration: null }));
+  });
+
+  it("shows a stored member budget that never resets as Never resets", () => {
+    renderWithProviders(
+      <TeamAdminSettingsForm
+        initialValues={{ team_member_budget: 10, team_member_budget_duration: null }}
+        editableFields={new Set(["team_member_budget_duration"])}
+        mayRaiseMaxBudget={false}
+        isSaving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("Member Default Budget Duration")).toHaveTextContent("Never resets");
   });
 
   it("shows the soft budget when the proxy lets team admins edit it", () => {

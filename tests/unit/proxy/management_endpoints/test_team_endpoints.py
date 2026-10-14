@@ -16951,6 +16951,41 @@ async def test_update_team_team_admin_echoing_unpermitted_fields_unchanged_is_al
 
 
 @pytest.mark.asyncio
+async def test_update_team_team_admin_resending_stored_member_defaults_is_not_an_edit(
+    disable_audit_logging_for_mocked_team,
+):
+    import contextlib
+    from litellm.models.budget import LiteLLM_BudgetTable
+
+    with contextlib.ExitStack() as stack:
+        prisma = _wire_update_team(stack, {"team_member_budget_id": "member-budget-1"})
+        prisma.db.litellm_budgettable.find_unique = AsyncMock(
+            return_value=LiteLLM_BudgetTable(
+                budget_id="member-budget-1", max_budget=10.0, budget_duration="30d", tpm_limit=100, rpm_limit=5
+            )
+        )
+        stack.enter_context(
+            patch("litellm.proxy.proxy_server.general_settings", {"team_admin_editable_team_fields": ["tpm_limit"]})  # test-quality-ok: update_team reads general_settings as a proxy_server module global
+        )
+        result = await update_team(
+            data=UpdateTeamRequest(
+                team_id="test_team_id",
+                team_member_budget=10.0,
+                team_member_budget_duration="30d",
+                team_member_tpm_limit=100,
+                team_member_rpm_limit=5,
+                tpm_limit=6,
+            ),
+            http_request=_update_request_stub(),
+            user_api_key_dict=_TEAM_ADMIN_CALLER,
+        )
+
+    assert result["data"].team_id == "test_team_id"
+    assert prisma.db.litellm_teamtable.update.call_args.kwargs["data"]["tpm_limit"] == 6
+    assert not prisma.db.litellm_budgettable.update.called
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_admin_changes_tpm_limit_once_a_proxy_admin_enables_it(
     disable_audit_logging_for_mocked_team,
 ):
