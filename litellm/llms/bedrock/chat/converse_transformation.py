@@ -136,6 +136,7 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 
 
 _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _tools_the_model_accepts(
@@ -2045,7 +2046,7 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
-                    base_model=self._deployment_base_model(litellm_params),
+                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                 ),
                 model,
             )
@@ -2119,7 +2120,7 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
-                    base_model=self._deployment_base_model(litellm_params),
+                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                 ),
                 model,
             )
