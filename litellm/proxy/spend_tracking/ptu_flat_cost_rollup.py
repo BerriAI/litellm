@@ -522,11 +522,11 @@ def _backfill_window(ptu_models: tuple[PTUModel, ...], end: date) -> tuple[date,
 
 
 def _unpriced_charges(
-    ptu_models: tuple[PTUModel, ...], days: tuple[date, ...], priced: frozenset[tuple[str, str, str]]
+    ptu_models: tuple[PTUModel, ...], days: tuple[date, ...], priced: frozenset[tuple[str, str]]
 ) -> Iterator[tuple[str, _PTUCharge]]:
     for day in days:
         for charge in _aggregate_charges(ptu_models, day):
-            if (charge.team_id, charge.model_id, day.isoformat()) not in priced:
+            if (charge.model_id, day.isoformat()) not in priced:
                 yield (day.isoformat(), charge)
 
 
@@ -535,11 +535,12 @@ async def _existing_sentinel_keys(
     *,
     start: date,
     end: date,
-) -> frozenset[tuple[str, str, str]]:
-    """``(team_id, deployment id, date)`` of every PTU sentinel row within ``[start, end]``.
+) -> frozenset[tuple[str, str]]:
+    """``(deployment id, date)`` of every PTU sentinel row within ``[start, end]``.
 
     The row's ``model`` column holds the deployment id, so this is an exact identity and
-    survives a rename. Nothing here reads the display name.
+    survives a rename. The team is left out on purpose: shares reassigned after a day was
+    billed must not bill that day again to the team that holds the share now.
     """
     date_range: Final = {"gte": start.isoformat(), "lte": end.isoformat()}
     rows: Final = await _daily_team_spend_table(prisma_client).find_many(
@@ -547,7 +548,6 @@ async def _existing_sentinel_keys(
     )
     return frozenset(
         (
-            str(getattr(row, "team_id", "") or ""),
             str(getattr(row, "model", "") or ""),
             str(getattr(row, "date", "") or ""),
         )
@@ -564,9 +564,9 @@ async def run_ptu_flat_cost_backfill(
 
     Writes only the charges that are missing and never rewrites or deletes an existing
     row, so a day already priced keeps the amount it was billed, whatever the config says
-    now. A day counts as priced when a sentinel row exists for that deployment id, so
-    renaming a deployment neither re-prices its history nor files a second charge beside
-    the row already there. Zero-cost days write nothing, which leaves a day
+    now. A day counts as priced when a sentinel row exists for that deployment id, for any
+    team, so neither renaming a deployment nor moving its shares to another team re-prices
+    its history or files a second charge beside the rows already there. Zero-cost days write nothing, which leaves a day
     outside a window reconsidered on each run rather than recorded as done.
 
     It deletes nothing. Removing a deployment stops it accruing new charges and leaves the

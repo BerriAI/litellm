@@ -17688,32 +17688,41 @@ def test_list_team_v2_answers_503_no_db_connection_when_the_callers_user_read_hi
 _ONE_PTU_HOUR_OF_INPUT: Final = AZURE_PTU_CAPACITY["gpt-4.1"].normalized_tokens_per_ptu_hour
 
 
-def _ptu_activity_page():
-    from litellm.types.proxy.management_endpoints.common_daily_activity import (
-        BreakdownMetrics,
-        DailySpendData,
-        DailySpendMetadata,
-        MetricWithMetadata,
-        SpendAnalyticsPaginatedResponse,
-        SpendMetrics,
+def _db_with_one_ptu_hour_of_team_spend(team_id: str) -> MagicMock:
+    """The team's daily spend table holds one day of three requests on the PTU group, carrying
+    one PTU-hour of gpt-4.1 uncached input; the read path behind the endpoint runs as written."""
+    row: Final = SimpleNamespace(
+        date="2026-09-23",
+        team_id=team_id,
+        api_key="ptu-key",
+        model="azure/gpt-4.1",
+        model_group="gpt-4.1-ptu",
+        custom_llm_provider="azure",
+        mcp_namespaced_tool_name=None,
+        endpoint="/chat/completions",
+        spend=0.0,
+        prompt_tokens=_ONE_PTU_HOUR_OF_INPUT,
+        completion_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        compression_saved_tokens=0,
+        compression_savings_spend=0.0,
+        prompt_caching_savings_spend=0.0,
+        gateway_injected_caching_savings_spend=0.0,
+        autorouter_savings_spend=0.0,
+        total_response_time_ms=0,
+        timed_requests=0,
+        api_requests=3,
+        successful_requests=3,
+        failed_requests=0,
     )
-
-    tokens: Final = _ONE_PTU_HOUR_OF_INPUT
-    metrics = SpendMetrics(
-        prompt_tokens=tokens, completion_tokens=0, total_tokens=tokens, api_requests=3, successful_requests=3
-    )
-    return SpendAnalyticsPaginatedResponse(
-        results=[
-            DailySpendData(
-                date=datetime(2026, 9, 23).date(),
-                metrics=metrics,
-                breakdown=BreakdownMetrics(
-                    model_groups={"gpt-4.1-ptu": MetricWithMetadata(metrics=metrics, metadata={}, api_key_breakdown={})}
-                ),
-            )
-        ],
-        metadata=DailySpendMetadata(total_tokens=tokens, total_api_requests=3, total_successful_requests=3),
-    )
+    db_client: Final = MagicMock()
+    db_client.db.litellm_dailyteamspend.count = AsyncMock(return_value=1)
+    db_client.db.litellm_dailyteamspend.find_many = AsyncMock(return_value=[row])
+    db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    db_client.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    return db_client
 
 
 def _shared_ptu_router() -> Router:
@@ -17738,7 +17747,7 @@ def _shared_ptu_router() -> Router:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("attribution_enabled", [True, False])
 async def test_team_daily_activity_reports_ptu_hours_only_while_attribution_is_on(
-    mock_db_client, mock_admin_auth, monkeypatch, attribution_enabled
+    mock_admin_auth, monkeypatch, attribution_enabled
 ):
     """An hour of one PTU's input rate on gpt-4.1, in uncached input tokens, is one PTU-hour;
     the figure appears beside tokens only once the PTU flag is on, and the token totals are
@@ -17746,11 +17755,8 @@ async def test_team_daily_activity_reports_ptu_hours_only_while_attribution_is_o
     from litellm.proxy.management_endpoints.team_endpoints import get_team_daily_activity
 
     monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True" if attribution_enabled else "False")
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
-    page = _ptu_activity_page()
-
     with (
-        patch("litellm.proxy.management_endpoints.team_endpoints.get_daily_activity", AsyncMock(return_value=page)),
+        patch("litellm.proxy.proxy_server.prisma_client", _db_with_one_ptu_hour_of_team_spend("team-a")),
         patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router()),
     ):
         result = await get_team_daily_activity(
@@ -17774,17 +17780,13 @@ async def test_team_daily_activity_reports_ptu_hours_only_while_attribution_is_o
 
 
 @pytest.mark.asyncio
-async def test_team_daily_activity_sizes_a_team_scoped_deployment_by_its_public_name(
-    mock_db_client, mock_admin_auth, monkeypatch
-):
+async def test_team_daily_activity_sizes_a_team_scoped_deployment_by_its_public_name(mock_admin_auth, monkeypatch):
     """A deployment registered for one team is renamed to a unique internal name and keeps the
     name callers use in ``team_public_model_name``, which is the name the activity rows carry,
     so its sizing row is still found."""
     from litellm.proxy.management_endpoints.team_endpoints import get_team_daily_activity
 
     monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
-    page = _ptu_activity_page()
     team_scoped_router: Final = Router(
         model_list=[
             {
@@ -17804,7 +17806,7 @@ async def test_team_daily_activity_sizes_a_team_scoped_deployment_by_its_public_
     )
 
     with (
-        patch("litellm.proxy.management_endpoints.team_endpoints.get_daily_activity", AsyncMock(return_value=page)),
+        patch("litellm.proxy.proxy_server.prisma_client", _db_with_one_ptu_hour_of_team_spend("team-a")),
         patch("litellm.proxy.proxy_server.llm_router", team_scoped_router),
     ):
         result = await get_team_daily_activity(
@@ -17824,19 +17826,14 @@ async def test_team_daily_activity_sizes_a_team_scoped_deployment_by_its_public_
 
 
 @pytest.mark.asyncio
-async def test_team_daily_activity_reports_no_ptu_hours_to_a_team_holding_no_share(
-    mock_db_client, mock_admin_auth, monkeypatch
-):
+async def test_team_daily_activity_reports_no_ptu_hours_to_a_team_holding_no_share(mock_admin_auth, monkeypatch):
     """The deployment is split between team-a and team-b, so team-c's page alone converts none of
     its tokens on the group even though the group is sized."""
     from litellm.proxy.management_endpoints.team_endpoints import get_team_daily_activity
 
     monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
-    page = _ptu_activity_page()
-
     with (
-        patch("litellm.proxy.management_endpoints.team_endpoints.get_daily_activity", AsyncMock(return_value=page)),
+        patch("litellm.proxy.proxy_server.prisma_client", _db_with_one_ptu_hour_of_team_spend("team-c")),
         patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router()),
     ):
         result = await get_team_daily_activity(

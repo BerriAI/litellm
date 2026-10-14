@@ -8028,7 +8028,7 @@ def _ptu_response(usage: Usage) -> ModelResponse:
     return ModelResponse(
         id="ptu-share",
         object="chat.completion",
-        created=int(datetime.now().timestamp()),
+        created=1_760_000_000,
         model="test-model",
         usage=usage,
         choices=[],
@@ -8216,10 +8216,14 @@ async def test_success_settles_the_scope_the_reservation_was_taken_on():
     assert _ptu_increment(handler, ops) == 150 - stash.ptu_reserved_tokens
 
 
-async def _reserve_a_ptu_minute(cache: DualCache, call_id: str) -> tuple[_PROXY_MaxParallelRequestsHandler, str]:
+async def _reserve_a_ptu_minute(
+    cache: DualCache, call_id: str, clock: list[datetime] | None = None
+) -> tuple[_PROXY_MaxParallelRequestsHandler, str]:
     resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)
     handler = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+        internal_usage_cache=InternalUsageCache(cache),
+        ptu_team_ceiling_resolver=resolve,
+        time_provider=(lambda: clock[-1]) if clock is not None else None,
     )
     key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
     await handler.async_pre_call_hook(
@@ -8268,6 +8272,71 @@ async def test_a_proxy_side_rejection_refunds_the_whole_normalized_ptu_reservati
     )
 
     assert int(await cache.async_get_cache(key=ptu_key) or 0) == 0
+
+
+async def _settle_a_ptu_request(handler: _PROXY_MaxParallelRequestsHandler, call_id: str, outcome: str) -> None:
+    team_metadata = {"metadata": {"user_api_key_hash": hash_token("sk-ptu"), "user_api_key_team_id": "t"}}
+    if outcome == "success":
+        await handler.async_log_success_event(
+            kwargs={**_ptu_success_kwargs(), "litellm_call_id": call_id},
+            response_obj=_ptu_response(Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)),
+            start_time=None,
+            end_time=None,
+        )
+    elif outcome == "upstream_failure":
+        await handler.async_log_failure_event(
+            kwargs={"litellm_call_id": call_id, "standard_logging_object": team_metadata},
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+    else:
+        await handler.async_post_call_failure_hook(
+            request_data={**_ptu_request(), "litellm_call_id": call_id},
+            original_exception=Exception("guardrail rejected the request"),
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t"),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "upstream_failure", "proxy_rejection"])
+async def test_a_ptu_reservation_settled_after_its_minute_rolled_leaves_the_next_minute_alone(outcome: str):
+    """A request admitted in one minute that settles after the next minute opened must not move
+    the new minute's PTU counter: its reservation already expired with the window it was taken in."""
+    cache = DualCache()
+    clock = [datetime(2026, 10, 14, 12, 0, 0)]
+    handler, ptu_key = await _reserve_a_ptu_minute(cache, "ptu-late", clock)
+
+    clock.append(clock[-1] + timedelta(seconds=handler.window_size + 1))
+    await handler.atomic_check_and_increment_by_n(
+        descriptors=[
+            {
+                "key": "model_per_team_ptu",
+                "value": "t:test-model",
+                "rate_limit": {"tokens_per_unit": 2000, "window_size": handler.window_size},
+            }
+        ],
+        increments=[{"tokens": 20}],
+    )
+
+    await _settle_a_ptu_request(handler, "ptu-late", outcome)
+
+    assert int(await cache.async_get_cache(key=ptu_key) or 0) == 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "settled_tokens"), [("success", 100 + 4 * 50), ("upstream_failure", 0), ("proxy_rejection", 0)]
+)
+async def test_a_ptu_reservation_settled_inside_its_minute_lands_at_the_normalized_usage(
+    outcome: str, settled_tokens: int
+):
+    cache = DualCache()
+    handler, ptu_key = await _reserve_a_ptu_minute(cache, "ptu-on-time")
+
+    await _settle_a_ptu_request(handler, "ptu-on-time", outcome)
+
+    assert int(await cache.async_get_cache(key=ptu_key) or 0) == settled_tokens
 
 
 def test_usage_that_only_reports_a_total_charges_that_total_to_the_ptu_counter():

@@ -1603,6 +1603,37 @@ async def test_backfill_does_not_double_price_a_day_after_a_rename():
 
 
 @pytest.mark.asyncio
+async def test_backfill_does_not_bill_a_priced_day_again_after_its_shares_moved_to_other_teams():
+    """Days already billed to the team that held the deployment stay its only charge once the
+    shares move, and only the unpriced day is billed to the teams holding the shares now."""
+    table = _FakeSentinelTable()
+    for offset in (-2, -1):
+        table.seed("team-b", _day(offset), "shared", 1200.0)
+    prisma = _prisma_for(
+        [
+            _model_row(
+                model_id="shared",
+                model_info={
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_shares": {"team-a": 30, "team-c": 20},
+                    "ptu_effective_from": _midnight(_day(-2)).isoformat(),
+                },
+            )
+        ],
+        table,
+    )
+
+    result = await run_ptu_flat_cost_backfill(prisma, today=TODAY)
+
+    assert sorted(table.upsert_keys) == [
+        ("team-a", _day(0).isoformat(), PTU_SENTINEL_API_KEY, "shared"),
+        ("team-c", _day(0).isoformat(), PTU_SENTINEL_API_KEY, "shared"),
+    ]
+    assert result.rows_written == 2
+
+
+@pytest.mark.asyncio
 async def test_backfill_still_prices_a_genuinely_missing_day_for_a_renamed_deployment():
     """Rename safety must not swallow real gaps: a day with no row for the deployment at
     all still gets one, and it carries the current display name."""
