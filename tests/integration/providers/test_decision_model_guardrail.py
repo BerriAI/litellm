@@ -284,17 +284,13 @@ def _decision_scenarios(requests: JsonValue, handles: Sequence[ScenarioHandle]) 
     ]
 
 
-@pytest.mark.parametrize(
-    ("caller", "expected_status", "answered_by"), [("owner", 400, "team"), ("other-team", 200, "shared")]
-)
+@pytest.mark.parametrize("caller", ["owner", "other-team"])
 @pytest.mark.parametrize("shared", ["same-name", "wildcard"])
-def test_team_decision_model_wins_over_a_shared_name_only_for_the_owner(
-    gateway: Gateway, shared: str, caller: str, expected_status: int, answered_by: str
-) -> None:
+def test_team_model_cannot_take_over_a_shared_decision_model_name(gateway: Gateway, shared: str, caller: str) -> None:
     with gateway.scenario() as scenario:
-        team_handle: Final = register_scenario(f"dm-own-{uuid.uuid4().hex}", _upstream(_PROBABILITY_ABOVE))
+        team_handle: Final = register_scenario(f"dm-own-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW))
         scenario.cleanups.callback(delete_scenario, team_handle)
-        shared_handle: Final = register_scenario(f"dm-shared-{uuid.uuid4().hex}", _upstream(_PROBABILITY_BELOW))
+        shared_handle: Final = register_scenario(f"dm-shared-{uuid.uuid4().hex}", _upstream(_PROBABILITY_ABOVE))
         scenario.cleanups.callback(delete_scenario, shared_handle)
         chat: Final = scenario.model(api_base=f"{shared_handle.api_base()}/v1", api_key=shared_handle.scenario_id)
         owner: Final = scenario.team(models=[chat])
@@ -318,10 +314,9 @@ def test_team_decision_model_wins_over_a_shared_name_only_for_the_owner(
                 "POST", "/v1/chat/completions", _guarded_body("/v1/chat/completions", chat, guardrail), key=key
             )
             observed: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
-        expected_scenario: Final = (team_handle if answered_by == "team" else shared_handle).scenario_id
         assert (response.status_code, _decision_scenarios(observed["requests"], (team_handle, shared_handle))) == (
-            expected_status,
-            [expected_scenario],
+            400,
+            [shared_handle.scenario_id],
         ), response.text
 
 
@@ -440,8 +435,9 @@ def test_owner_decision_call_skips_a_team_deployment_too_small_for_the_input(gat
         )
 
 
-def test_team_wildcard_name_over_a_fixed_model_keeps_the_public_decision_model(
-    gateway: Gateway, tmp_path: Path
+@pytest.mark.parametrize("team_public_name", ["typesafe/*", "typesafe/jev-latest"], ids=["wildcard-name", "exact-name"])
+def test_team_model_under_a_public_decision_model_name_keeps_the_public_decision_model(
+    gateway: Gateway, tmp_path: Path, team_public_name: str
 ) -> None:
     with gateway.scenario() as scenario:
         public: Final = register_scenario(f"dm-public-{uuid.uuid4().hex}", _upstream(_PROBABILITY_ABOVE))
@@ -465,7 +461,7 @@ def test_team_wildcard_name_over_a_fixed_model_keeps_the_public_decision_model(
             (
                 chat_deployment,
                 _team_decision_deployment(
-                    f"owner-wildcard-{uuid.uuid4().hex}", "typesafe/*", "typesafe/jev-latest", team_handle, owner
+                    f"owner-public-name-{uuid.uuid4().hex}", team_public_name, "typesafe/jev-latest", team_handle, owner
                 ),
             ),
             _guardrail_entry(guardrail, "typesafe/jev-latest"),

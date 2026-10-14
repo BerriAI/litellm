@@ -125,10 +125,10 @@ _PROXY_WIDE_TEAM_DECISION: Final = {
             "team.example",
             ("team-decision", "owner", "owner-team"),
         ),
-        ("team-decision", (_PROXY_WIDE_TEAM_DECISION,), "team.example", ("team-decision", "owner", "owner-team")),
+        ("team-decision", (_PROXY_WIDE_TEAM_DECISION,), "shared.example", ("team-decision", None, None)),
         ("shared-decision", (), "shared.example", ("shared-decision", None, None)),
     ],
-    ids=["team-model", "catch-all-wildcard", "team-name-shadows-proxy-wide-name", "proxy-wide-model"],
+    ids=["team-model", "catch-all-wildcard", "proxy-wide-name-wins-over-the-team-name", "proxy-wide-model"],
 )
 @pytest.mark.asyncio
 async def test_decision_call_goes_to_the_owner_team_deployment_and_charges_the_team(
@@ -191,10 +191,18 @@ async def test_decision_call_goes_to_the_owner_team_deployment_and_charges_the_t
     assert (called_hosts, logged.model_groups_and_teams) == ((expected_host,), [expected_logged])
 
 
-@pytest.mark.parametrize("team_model", ["typesafe/*", "typesafe/jev-fast"], ids=["wildcard-model", "fixed-model"])
+@pytest.mark.parametrize(
+    ("team_model", "team_public_name"),
+    [
+        ("typesafe/*", "typesafe/*"),
+        ("typesafe/jev-fast", "typesafe/*"),
+        ("typesafe/jev-fast", "typesafe/jev-latest"),
+    ],
+    ids=["wildcard-model", "fixed-model", "exact-public-name"],
+)
 @pytest.mark.asyncio
-async def test_decision_on_a_public_name_a_team_wildcard_covers_keeps_the_proxy_key(
-    team_model: str, monkeypatch: pytest.MonkeyPatch
+async def test_decision_on_a_public_name_keeps_the_proxy_key_over_a_team_model(
+    team_model: str, team_public_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-proxy-key")
@@ -207,7 +215,7 @@ async def test_decision_on_a_public_name_a_team_wildcard_covers_keeps_the_proxy_
                     "api_base": "https://team-wildcard.example",
                     "api_key": "synthetic-test-key",
                 },
-                "model_info": {"team_id": "owner", "team_public_model_name": "typesafe/*"},
+                "model_info": {"team_id": "owner", "team_public_model_name": team_public_name},
             }
         ]
     )
@@ -251,7 +259,6 @@ async def test_owner_reaches_a_team_decision_deployment_reserved_for_the_owner(
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     router: Final = Router(
         model_list=[
-            _decision_deployment("team-decision", "shared.example", {"id": "shared-deployment"}),
             _decision_deployment(
                 "owner-decision",
                 "team.example",
@@ -278,12 +285,9 @@ async def test_owner_reaches_a_team_decision_deployment_reserved_for_the_owner(
         team: Final = respx.post("https://team.example/v1/systemone").mock(
             return_value=httpx.Response(200, json=_FLAGGED_ANSWER)
         )
-        shared: Final = respx.post("https://shared.example/v1/systemone").mock(
-            return_value=httpx.Response(200, json=_FLAGGED_ANSWER)
-        )
         with pytest.raises(HTTPException) as blocked:
             await guardrail.apply_guardrail({"texts": ["unsafe"]}, _OWNER_REQUEST, "request")
-    assert (blocked.value.status_code, team.call_count, shared.call_count) == (400, 1, 0)
+    assert (blocked.value.status_code, team.call_count) == (400, 1)
 
 
 @pytest.mark.parametrize("fallback", ["fail_open", "fail_closed"])
@@ -295,7 +299,6 @@ async def test_owner_decision_call_skips_a_team_deployment_too_small_for_the_inp
     router: Final = Router(
         enable_pre_call_checks=True,
         model_list=[
-            _decision_deployment("team-decision", "shared.example", {"id": "shared-deployment"}),
             _decision_deployment(
                 "owner-small",
                 "small.example",
@@ -333,15 +336,12 @@ async def test_owner_decision_call_skips_a_team_deployment_too_small_for_the_inp
         small: Final = respx.post("https://small.example/v1/systemone").mock(
             return_value=httpx.Response(400, json={"error": {"message": "context_length_exceeded"}})
         )
-        shared: Final = respx.post("https://shared.example/v1/systemone").mock(
-            return_value=httpx.Response(200, json=_FLAGGED_ANSWER)
-        )
         statuses: Final[list[int]] = []  # mutable-ok: per-attempt sink
         for _ in range(12):
             with pytest.raises(HTTPException) as blocked:
                 await guardrail.apply_guardrail({"texts": [long_text]}, _OWNER_REQUEST, "request")
             statuses.append(blocked.value.status_code)
-    assert (statuses, big.call_count, small.call_count, shared.call_count) == ([400] * 12, 12, 0, 0)
+    assert (statuses, big.call_count, small.call_count) == ([400] * 12, 12, 0)
 
 
 CUSTOM_CHECK: Final = DecisionModelCheck(name="invoice_policy", instructions="Is this about invoices?")
