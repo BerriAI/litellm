@@ -10,13 +10,13 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from collections.abc import Mapping
 from typing import Final, Literal
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
-
 from mock_common import flag_of, marker_in
+from pydantic import BaseModel, ConfigDict
 
 BLOCK_REASON: Final = "perf-test-block"
 Action = Literal["NONE", "BLOCKED", "GUARDRAIL_INTERVENED"]
@@ -60,24 +60,38 @@ class GuardrailResetResponse(BaseModel):
     cleared: int
 
 
-def decide(body: GuardrailRequest) -> tuple[Action, dict[str, object], str | None]:
+def marker_of(body: GuardrailRequest, remembered: Mapping[str, str]) -> str | None:
+    """The request's marker: in the prompt on the request hook, remembered by `litellm_call_id` on the response
+    hook, since a replayed provider reply does not contain it."""
     texts: Final = body.texts or []
-    marker: Final = next((found for text in texts if (found := marker_in(text)) is not None), None)
+    in_text: Final = next((found for text in texts if (found := marker_in(text)) is not None), None)
+    if in_text is not None or body.litellm_call_id is None:
+        return in_text
+    return remembered.get(body.litellm_call_id)
+
+
+def decide(body: GuardrailRequest, marker: str | None) -> tuple[Action, dict[str, object]]:
+    texts: Final = body.texts or []
     if marker is None:
-        return "NONE", {"action": "NONE"}, None
+        return "NONE", {"action": "NONE"}
     flag: Final = flag_of(marker)
     if flag == "b" and body.input_type == "request":
-        return "BLOCKED", {"action": "BLOCKED", "blocked_reason": BLOCK_REASON}, marker
+        return "BLOCKED", {"action": "BLOCKED", "blocked_reason": BLOCK_REASON}
     if flag == "i":
         suffix: Final = " [pre]" if body.input_type == "request" else " [post]"
-        rewritten: Final = [text + suffix if marker_in(text) else text for text in texts]
-        return "GUARDRAIL_INTERVENED", {"action": "GUARDRAIL_INTERVENED", "texts": rewritten}, marker
-    return "NONE", {"action": "NONE"}, marker
+        rewritten: Final = (
+            [text + suffix if marker_in(text) else text for text in texts]
+            if body.input_type == "request"
+            else [text + suffix for text in texts]
+        )
+        return "GUARDRAIL_INTERVENED", {"action": "GUARDRAIL_INTERVENED", "texts": rewritten}
+    return "NONE", {"action": "NONE"}
 
 
 def build_app() -> FastAPI:
     app: Final = FastAPI(title="perf mock guardrail")
     calls: deque[GuardrailCall] = deque(maxlen=200_000)
+    markers: dict[str, str] = {}  # mutable-ok: the request hook's marker, looked up by the response hook
 
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -86,7 +100,10 @@ def build_app() -> FastAPI:
         latency: Final = body.latency_s()
         if latency > 0:
             await asyncio.sleep(latency)
-        action, content, marker = decide(body)
+        marker: Final = marker_of(body, markers)
+        if marker is not None and body.litellm_call_id is not None and body.input_type == "request":
+            markers[body.litellm_call_id] = marker
+        action, content = decide(body, marker)
         calls.append(
             GuardrailCall(
                 marker=marker,
