@@ -57,7 +57,7 @@ from litellm.types.decisions import (
     UnsupportedDecisionsRequest,
 )
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, get_model_cost_key
 
 SystemOneQuestions: TypeAlias = Mapping[str, DecisionQuestion | Mapping[str, object]]
 OpenAIDecisionQuestions: TypeAlias = Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
@@ -666,7 +666,10 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
         {
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
-            "provider_response_model": f"{call.custom_llm_provider}/{call.model}",
+            "provider_response_model": (
+                get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
+                or f"{call.custom_llm_provider}/{call.model}"
+            ),
             **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )
