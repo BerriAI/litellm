@@ -345,7 +345,7 @@ EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING: Final = 10_000
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT: Final = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
 AIOHTTP_CONNECTOR_LIMIT_PER_HOST: Final = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500))
-AIOHTTP_KEEPALIVE_TIMEOUT: Final = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 20))
+AIOHTTP_KEEPALIVE_TIMEOUT: Final = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 15))
 AIOHTTP_TTL_DNS_CACHE: Final = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 # TCP keep-alive (SO_KEEPALIVE) — opt-in. Required when running behind NAT/LBs
 # whose idle timeout is shorter than provider response timeouts (e.g. AWS NAT
