@@ -31,7 +31,13 @@ import { CommandPaletteTrigger } from "@/components/CommandPalette/CommandPalett
 
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
-export function DashboardHeader({ navigationTrigger }: { navigationTrigger?: ReactNode }) {
+export function DashboardHeader({
+  accessToken,
+  navigationTrigger,
+}: {
+  accessToken: string | null;
+  navigationTrigger?: ReactNode;
+}) {
   const { title } = getBreadcrumb(usePathname());
   const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false);
@@ -78,11 +84,11 @@ export function DashboardHeader({ navigationTrigger }: { navigationTrigger?: Rea
         {!hideCommunityLinks && <CommunityEngagementButtons />}
         <ToolbarSeparator />
         <ThemeToggle />
-        <NotificationsBell />
+        <NotificationsBell accessToken={accessToken} />
       </div>
       <div className="flex shrink-0 items-center gap-1 md:hidden">
         <CommandPaletteTrigger mobile />
-        <NotificationsBell />
+        <NotificationsBell accessToken={accessToken} />
         <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
           <PopoverTrigger render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}>
             <Ellipsis />
