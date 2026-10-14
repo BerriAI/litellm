@@ -16,8 +16,6 @@ pub enum Error {
     ExecutionOutOfOrder,
     #[error("execution was closed while running")]
     ExecutionClosedWhileRunning,
-    #[error("native execution closed")]
-    NativeExecutionClosed,
     #[error("sync call suspended")]
     SyncCallSuspended,
     #[error("synchronous native routes cannot run from a Tokio context; use the async route")]
@@ -37,7 +35,6 @@ impl From<Error> for PyErr {
             | Error::ExecutionClosed
             | Error::ExecutionOutOfOrder
             | Error::ExecutionClosedWhileRunning
-            | Error::NativeExecutionClosed
             | Error::SyncCallSuspended
             | Error::SyncInsideTokio
             | Error::ContextBodyProducedNothing => PyRuntimeError::new_err(error.to_string()),

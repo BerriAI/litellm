@@ -1,7 +1,8 @@
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::task::{Context, Poll, Waker};
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use crate::fork_gate::{ForkGate, Refused, RuntimeAlreadyStarted};
@@ -167,18 +168,132 @@ where
     T: Send,
     F: Future<Output = PyResult<T>> + Send,
 {
-    let runtime = runtime()?;
-    let result = release_gil(py, || {
-        let _runtime = runtime.enter();
-        std::panic::catch_unwind(AssertUnwindSafe(|| {
-            future.poll(&mut Context::from_waker(Waker::noop()))
-        }))
-        .map_err(panic_to_pyerr)
-    })?;
-    match result {
+    match poll_on_runtime(py, future, Waker::noop())? {
         Poll::Ready(result) => result.map(Poll::Ready),
         Poll::Pending => Ok(Poll::Pending),
     }
+}
+
+pub(crate) enum AsyncPoll<T> {
+    Ready(T),
+    /// The future is pending; this asyncio future resolves once its waker fires.
+    Awaiting(Py<PyAny>),
+}
+
+/// Polls `future` once on the caller's task. While it is pending, the caller awaits the
+/// returned asyncio future and polls again, so tokio drives the future's I/O and the
+/// caller's task keeps the GIL work: no task is spawned and nothing outlives the caller.
+pub(crate) fn poll_async_value_or_await<T, F>(
+    py: Python<'_>,
+    future: Pin<&mut F>,
+) -> PyResult<AsyncPoll<T>>
+where
+    T: Send,
+    F: Future<Output = T> + Send + ?Sized,
+{
+    let waker = Arc::new(AsyncioWaker {
+        target: parking_lot::Mutex::new(WakeTarget::Unarmed),
+    });
+    match poll_on_runtime(py, future, &Waker::from(Arc::clone(&waker)))? {
+        Poll::Ready(value) => Ok(AsyncPoll::Ready(value)),
+        Poll::Pending => Ok(AsyncPoll::Awaiting(waker.arm(py)?)),
+    }
+}
+
+fn poll_on_runtime<T, F>(py: Python<'_>, future: Pin<&mut F>, waker: &Waker) -> PyResult<Poll<T>>
+where
+    T: Send,
+    F: Future<Output = T> + Send + ?Sized,
+{
+    let runtime = runtime()?;
+    release_gil(py, || {
+        let _runtime = runtime.enter();
+        std::panic::catch_unwind(AssertUnwindSafe(|| {
+            future.poll(&mut Context::from_waker(waker))
+        }))
+        .map_err(panic_to_pyerr)
+    })
+}
+
+/// Resolves an asyncio future from whichever tokio thread reports progress. The future
+/// exists only once a poll came back pending, so a step that completes in place never
+/// touches the event loop, and a wake that lands before then is replayed on arming.
+struct AsyncioWaker {
+    target: parking_lot::Mutex<WakeTarget>,
+}
+
+enum WakeTarget {
+    Unarmed,
+    Woken,
+    Armed(Arc<Resolution>),
+}
+
+struct Resolution {
+    event_loop: Py<PyAny>,
+    resolve: Py<PyAny>,
+    future: Py<PyAny>,
+}
+
+impl Resolution {
+    fn schedule(&self) {
+        Python::attach(|py| {
+            let _closed_loop = self
+                .event_loop
+                .bind(py)
+                .call_method1("call_soon_threadsafe", (&self.resolve, &self.future));
+        });
+    }
+}
+
+impl Wake for AsyncioWaker {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let armed = {
+            let mut target = self.target.lock();
+            match &*target {
+                WakeTarget::Armed(resolution) => Some(Arc::clone(resolution)),
+                WakeTarget::Unarmed | WakeTarget::Woken => {
+                    *target = WakeTarget::Woken;
+                    None
+                }
+            }
+        };
+        if let Some(resolution) = armed {
+            resolution.schedule();
+        }
+    }
+}
+
+impl AsyncioWaker {
+    fn arm(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let event_loop = py.import("asyncio")?.call_method0("get_running_loop")?;
+        let future = event_loop.call_method0("create_future")?;
+        let resolution = Arc::new(Resolution {
+            event_loop: event_loop.unbind(),
+            resolve: wrap_pyfunction!(resolve_if_pending, py)?
+                .into_any()
+                .unbind(),
+            future: future.clone().unbind(),
+        });
+        let before = std::mem::replace(&mut *self.target.lock(), WakeTarget::Armed(resolution));
+        if matches!(before, WakeTarget::Woken) {
+            future.call_method1("set_result", (py.None(),))?;
+        }
+        Ok(future.unbind())
+    }
+}
+
+#[pyfunction]
+fn resolve_if_pending(future: &Bound<'_, PyAny>) -> PyResult<()> {
+    if future.call_method0("done")?.is_truthy()? {
+        return Ok(());
+    }
+    future
+        .call_method1("set_result", (future.py().None(),))
+        .map(drop)
 }
 
 fn map_core_result<T, E>(result: Result<T, E>, map_error: fn(E) -> PyErr) -> PyResult<T> {

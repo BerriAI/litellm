@@ -3,11 +3,12 @@ mod support;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use litellm_host::{
     hooks::CallHooks,
     lifecycle::{CallEvent, ExecutionEvent, FailureOrigin},
-    machine::CallMachine,
+    machine::{CallMachine, HostFailure, Interrupted, Machine, Step},
     observation::observation_channel,
 };
 use litellm_host_python::{CallOptions, HookChain, PythonOwned, PythonRuntime, run_call};
@@ -22,9 +23,9 @@ use pyo3::{
 };
 use rstest::rstest;
 use support::{
-    HookScript, Interpreter, Log, MachineFactory, OpScript, Synthetic, binding, call_options,
-    failing_machine, hooks, interpreter, lifecycle_binding, open_stream, read_all, run_composed,
-    run_scripted, settled, success_machine,
+    Error, HookScript, Interpreter, Log, MachineFactory, OpScript, Synthetic, binding,
+    call_options, failing_machine, hooks, interpreter, lifecycle_binding, open_stream, read_all,
+    run_composed, run_scripted, settled, success_machine,
 };
 
 fn observed(capacity: usize) -> (CallOptions, impl FnMut() -> Vec<CallEvent>) {
@@ -753,6 +754,209 @@ fn cancellation_ends_the_call_without_terminal_dispatch(
         assert_eq!(
             log,
             ["started", "begin", "project", "adapter.close", "host.close"]
+        );
+    });
+}
+
+/// A route that only finishes after real time passes on tokio, so its first poll is
+/// always pending and the caller has to await it.
+fn sleeping_machine(log: Log) -> CallMachine<Synthetic> {
+    CallMachine::new(None, move |_| {
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            log.push("step done");
+            Ok("slept".to_string())
+        })
+    })
+}
+
+struct Interruptible {
+    inner: CallMachine<Synthetic>,
+    log: Log,
+}
+
+impl Machine for Interruptible {
+    type Protocol = Synthetic;
+    type Complete = String;
+
+    fn resume(&mut self) -> Step<'_, Self> {
+        self.inner.resume()
+    }
+
+    fn interrupt(&mut self, failure: HostFailure<Error>) -> Interrupted<'_, Self> {
+        self.log.push("interrupt");
+        self.inner.interrupt(failure)
+    }
+}
+
+fn run_on_loop<'py>(
+    py: Python<'py>,
+    call: Py<PyAny>,
+    script: &std::ffi::CStr,
+) -> Bound<'py, PyDict> {
+    let locals = PyDict::new(py);
+    locals.set_item("call", call).unwrap();
+    py.run(script, Some(&locals), Some(&locals)).unwrap();
+    locals
+}
+
+#[rstest]
+fn a_pending_native_step_is_awaited_on_the_callers_loop(#[from(interpreter)] _python: Interpreter) {
+    Python::attach(|py| {
+        let log = Log::default();
+        let (options, mut events) = observed(4);
+        let machine_log = log.clone();
+        let call = run_call(
+            py,
+            move |_, _, _| Ok(sleeping_machine(machine_log)),
+            binding(&log, OpScript::Answer),
+            hooks(&log, HookScript::Plain),
+            PyDict::new(py).unbind(),
+            CallOptions {
+                asynchronous: true,
+                ..options
+            },
+        )
+        .unwrap();
+        let locals = run_on_loop(
+            py,
+            call,
+            c"
+import asyncio
+result = asyncio.run(asyncio.wait_for(call, 5))
+",
+        );
+        let result: String = locals
+            .get_item("result")
+            .unwrap()
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(result, "slept");
+        assert!(matches!(
+            events().as_slice(),
+            [CallEvent::Started { .. }, CallEvent::Succeeded { .. }]
+        ));
+        assert_eq!(
+            log.entries(),
+            [
+                "started",
+                "begin",
+                "project",
+                "step done",
+                "complete",
+                "after_success",
+                "succeeded:slept",
+                "adapter.close",
+                "host.close",
+            ]
+        );
+    });
+}
+
+#[rstest]
+fn cancelling_the_caller_mid_step_interrupts_the_machine_after_the_step_finishes(
+    #[from(interpreter)] _python: Interpreter,
+) {
+    Python::attach(|py| {
+        let log = Log::default();
+        let (options, mut events) = observed(4);
+        let machine_log = log.clone();
+        let call = run_call(
+            py,
+            move |_, _, _| {
+                Ok(Interruptible {
+                    inner: sleeping_machine(machine_log.clone()),
+                    log: machine_log,
+                })
+            },
+            binding(&log, OpScript::Answer),
+            hooks(&log, HookScript::Plain),
+            PyDict::new(py).unbind(),
+            CallOptions {
+                asynchronous: true,
+                ..options
+            },
+        )
+        .unwrap();
+        let locals = run_on_loop(
+            py,
+            call,
+            c"
+import asyncio
+async def exercise():
+    task = asyncio.ensure_future(call)
+    await asyncio.sleep(0)
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, 5)
+    except asyncio.CancelledError:
+        return 'cancelled'
+    return 'completed'
+outcome = asyncio.run(exercise())
+",
+        );
+        let outcome: String = locals
+            .get_item("outcome")
+            .unwrap()
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(outcome, "cancelled");
+        assert!(matches!(
+            events().as_slice(),
+            [CallEvent::Started { .. }, CallEvent::Cancelled { .. }]
+        ));
+        assert_eq!(
+            log.entries(),
+            [
+                "started",
+                "begin",
+                "project",
+                "step done",
+                "interrupt",
+                "adapter.close",
+                "host.close",
+            ]
+        );
+    });
+}
+
+#[rstest]
+fn dropping_a_stream_mid_call_reports_cancellation_once(
+    #[from(interpreter)] _python: Interpreter,
+    #[values(false, true)] asynchronous: bool,
+) {
+    Python::attach(|py| {
+        let log = Log::default();
+        let (options, mut events) = observed(4);
+        let stream = open_stream(
+            py,
+            hooks(&log, HookScript::Plain),
+            CallOptions {
+                asynchronous,
+                ..options
+            },
+        );
+        let first: String = if asynchronous {
+            let stop = stream
+                .call_method0("__anext__")
+                .unwrap()
+                .call_method1("send", (py.None(),))
+                .unwrap_err();
+            stop.value(py).getattr("value").unwrap().extract().unwrap()
+        } else {
+            stream.call_method0("__next__").unwrap().extract().unwrap()
+        };
+        assert_eq!(first, "first");
+        drop(stream);
+        assert!(matches!(
+            events().as_slice(),
+            [CallEvent::Started { .. }, CallEvent::Cancelled { .. }]
+        ));
+        assert_eq!(
+            log.entries(),
+            ["started", "begin", "opened", "delivered", "adapter.close"]
         );
     });
 }
