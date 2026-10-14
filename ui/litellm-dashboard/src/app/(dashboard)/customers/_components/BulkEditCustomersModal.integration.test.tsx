@@ -104,9 +104,64 @@ describe("Bulk customer editor", () => {
       accessToken: "sk-test",
       body: {
         customers: [
-          { user_id: "customer-a", object_permission: { mcp_toolsets: ["toolset-new"] } },
-          { user_id: "customer-b", object_permission: { mcp_toolsets: ["toolset-new"] } },
+          { user_id: "customer-a", object_permission: { mcp_toolsets: ["toolset-new"], mcp_tool_permissions: {} } },
+          { user_id: "customer-b", object_permission: { mcp_toolsets: ["toolset-new"], mcp_tool_permissions: {} } },
         ],
+      },
+    });
+  });
+
+  it("describes one selected customer and reveals budget controls only after opting in", async () => {
+    const user = userEvent.setup();
+    mountModal([customers[0]]);
+    expect(screen.getByText(/1 customer to update/)).toHaveTextContent(
+      "Region and default model cannot be cleared in bulk",
+    );
+    expect(screen.queryByRole("combobox", { name: "Budget update" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Update budget" }));
+    expect(screen.getByRole("combobox", { name: "Budget update" })).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Update budget" }));
+    expect(screen.queryByRole("combobox", { name: "Budget update" })).not.toBeInTheDocument();
+  });
+
+  it("requires the server catalog before applying toolsets so retained tool limits can be reconciled", async () => {
+    fetchServers.mockRejectedValue(new Error("Catalog unavailable"));
+    const user = userEvent.setup();
+    mountModal();
+    await optIntoToolsets(user);
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+    expect(await screen.findByRole("alert", { name: "Bulk update error" })).toHaveTextContent(
+      "MCP servers must finish loading before applying changes",
+    );
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "MCP servers", field: "mcp_servers" },
+    { label: "MCP access groups", field: "mcp_access_groups" },
+  ])("waits for the toolset catalog before applying $label and recovers after retry", async ({ label, field }) => {
+    fetchToolsets.mockRejectedValueOnce(new Error("Catalog unavailable"));
+    const user = userEvent.setup();
+    const { onCancel } = mountModal();
+    expect(await screen.findByText("MCP toolsets could not be loaded")).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: `Update ${label}` }));
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+    expect(await screen.findByRole("alert", { name: "Bulk update error" })).toHaveTextContent(
+      "MCP toolsets must finish loading before applying changes",
+    );
+    expect(post).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Retry MCP toolsets" }));
+    await waitFor(() => expect(screen.queryByText("MCP toolsets could not be loaded")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+    await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+    expect(post).toHaveBeenCalledExactlyOnceWith("/customer/bulk_update", {
+      accessToken: "sk-test",
+      body: {
+        customers: customers.map((customer) => ({
+          user_id: customer.user_id,
+          object_permission: { [field]: [], mcp_tool_permissions: {} },
+        })),
       },
     });
   });
@@ -119,7 +174,7 @@ describe("Bulk customer editor", () => {
     );
     await user.click(screen.getByRole("checkbox", { name: "Update budget" }));
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget" }), "replacement-budget");
-    await user.click(screen.getByRole("checkbox", { name: "Update Allowed models" }));
+    await user.click(screen.getByRole("checkbox", { name: "Update allowed models" }));
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Allowed models" }), "model-new");
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("checkbox", { name: "Update allowed region" }));
@@ -180,7 +235,10 @@ describe("Bulk customer editor", () => {
       body: {
         customers: rows.map((customer, index) => ({
           user_id: customer.user_id,
-          object_permission: { mcp_servers: ["server-new"], mcp_tool_permissions: { "server-new": [`read-${index}`] } },
+          object_permission: {
+            mcp_servers: ["server-new"],
+            mcp_tool_permissions: { "Research server": [`read-${index}`] },
+          },
         })),
       },
     });
@@ -192,7 +250,7 @@ describe("Bulk customer editor", () => {
         customers: [
           {
             user_id: "customer-b",
-            object_permission: { mcp_servers: ["server-new"], mcp_tool_permissions: { "server-new": ["read-1"] } },
+            object_permission: { mcp_servers: ["server-new"], mcp_tool_permissions: { "Research server": ["read-1"] } },
           },
         ],
       },
@@ -207,7 +265,7 @@ describe("Bulk customer editor", () => {
     await user.click(checkbox);
     expect(
       screen.getByText(
-        "An empty selection clears direct server grants. Tool grants for servers outside this selection are removed. Clearing all customer MCP grants removes the customer restriction.",
+        "An empty selection clears direct server grants. Tool limits stay for servers retained through access groups or toolsets. Clearing all customer MCP grants removes the customer restriction.",
       ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Apply changes" }));
@@ -249,7 +307,7 @@ describe("Bulk customer editor", () => {
       body: {
         customers: retryRows.map((customer) => ({
           user_id: customer.user_id,
-          object_permission: { mcp_toolsets: ["toolset-new"] },
+          object_permission: { mcp_toolsets: ["toolset-new"], mcp_tool_permissions: {} },
         })),
       },
     });
@@ -338,7 +396,7 @@ describe("Bulk customer editor", () => {
     const user = userEvent.setup();
     mountModal();
     expect(screen.getByText("Loading Allowed models…")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Update Allowed models" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("checkbox", { name: "Update allowed models" })).toHaveAttribute("aria-disabled", "true");
     expect(await screen.findByText("MCP toolsets could not be loaded")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Update MCP toolsets" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("checkbox", { name: "Update allowed region" })).not.toHaveAttribute(
@@ -355,7 +413,7 @@ describe("Bulk customer editor", () => {
     expect(screen.queryByText("MCP toolsets could not be loaded")).not.toBeInTheDocument();
     loadingModels.resolve({ data: [{ id: "model-new" }] });
     await waitFor(() =>
-      expect(screen.getByRole("checkbox", { name: "Update Allowed models" })).not.toHaveAttribute(
+      expect(screen.getByRole("checkbox", { name: "Update allowed models" })).not.toHaveAttribute(
         "aria-disabled",
         "true",
       ),
@@ -366,7 +424,9 @@ describe("Bulk customer editor", () => {
     const user = userEvent.setup();
     const selected = [{ ...customers[0], budget_id: "shared-budget" }];
     mountModal(selected, [...selected, { ...customers[1], budget_id: "shared-budget" }]);
-    expect(screen.getByRole("note")).toHaveTextContent("can affect unselected customers");
+    expect(screen.queryByRole("combobox", { name: "Budget update" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Update budget" }));
+    expect(screen.getByRole("note")).toHaveTextContent("Shared budget maximums must be changed on the Budgets page");
     await user.click(screen.getByRole("combobox", { name: "Budget update" }));
     expect(await screen.findByRole("option", { name: "Set a maximum budget" })).toHaveAttribute(
       "aria-disabled",
@@ -381,8 +441,8 @@ describe("Bulk customer editor", () => {
     const user = userEvent.setup();
     const rows = customers.map((customer) => ({ ...customer, budget_id: `own-${customer.user_id}` }));
     const { onCancel } = mountModal(rows);
-    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget update" }), "Set a maximum budget");
     await user.click(screen.getByRole("checkbox", { name: "Update budget" }));
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget update" }), "Set a maximum budget");
     fireEvent.change(screen.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "25" } });
     await user.click(screen.getByRole("button", { name: "Apply changes" }));
     await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());

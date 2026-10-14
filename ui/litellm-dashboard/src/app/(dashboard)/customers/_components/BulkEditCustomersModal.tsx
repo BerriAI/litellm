@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useBudgetOptions } from "@/app/(dashboard)/hooks/budgets/useBudgetOptions";
 import type { BulkUpdateCustomersResponse } from "@/app/(dashboard)/hooks/customers/customerApi";
 import { useBulkUpdateCustomers } from "@/app/(dashboard)/hooks/customers/useCustomerMutations";
@@ -78,7 +78,7 @@ function EditField({
     <section className="space-y-3 rounded-lg border p-4">
       <div className="flex items-center gap-2">
         <Checkbox id={`${id}-enabled`} checked={enabled} disabled={disabled} onCheckedChange={onEnabledChange} />
-        <Label htmlFor={`${id}-enabled`}>Update {label}</Label>
+        <Label htmlFor={`${id}-enabled`}>Update {label.startsWith("MCP ") ? label : label.toLowerCase()}</Label>
       </div>
       {children}
     </section>
@@ -160,64 +160,68 @@ function BudgetEditField({
       id="bulk-budget"
       label="budget"
       enabled={edit.enabled}
-      disabled={disabled || (budgetUnavailable && !edit.enabled)}
+      disabled={disabled}
       onEnabledChange={(enabled) => onChange({ ...edit, enabled })}
     >
-      <Label htmlFor="bulk-budget-mode">Budget update</Label>
-      <Select
-        items={budgetModes}
-        value={edit.mode}
-        disabled={disabled}
-        onValueChange={(mode) => {
-          if (mode === "link" || mode === "max") onChange({ ...edit, mode });
-        }}
-      >
-        <SelectTrigger id="bulk-budget-mode" className="w-full">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {budgetModes.map((mode) => (
-            <SelectItem key={mode.value} value={mode.value} disabled={mode.value === "max" && hasSharedBudget}>
-              {mode.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {hasSharedBudget && (
-        <p role="note" className="text-sm text-muted-foreground">
-          Some selected customers share a budget with other customers. Changing a shared budget maximum can affect
-          unselected customers, so choose an existing budget instead.
-        </p>
-      )}
-      {edit.mode === "link" && <CatalogFeedback label="Budgets" catalog={catalog} />}
-      {edit.enabled && edit.mode === "link" && (
-        <div className="space-y-2">
-          <Label htmlFor="bulk-budget-id">Budget</Label>
-          <SearchSelect
-            inputId="bulk-budget-id"
-            aria-label="Budget"
-            options={(catalog.data ?? []).map((budget) => ({ label: budget.budget_id, value: budget.budget_id }))}
-            value={edit.budgetId}
-            disabled={disabled || budgetUnavailable}
-            allowClear={false}
-            onValueChange={(budgetId) => onChange({ ...edit, budgetId: budgetId ?? "" })}
-          />
-          <p className="text-sm text-muted-foreground">Replace the budget link for every selected customer.</p>
-        </div>
-      )}
-      {edit.enabled && edit.mode === "max" && (
-        <div className="space-y-2">
-          <Label htmlFor="bulk-max-budget">Max Budget (USD)</Label>
-          <Input
-            id="bulk-max-budget"
-            type="number"
-            min={0}
-            step="any"
-            value={edit.maxBudget}
-            disabled={disabled || hasSharedBudget}
-            onChange={(event) => onChange({ ...edit, maxBudget: event.target.value })}
-          />
-          <p className="text-sm text-muted-foreground">Enter a maximum greater than zero.</p>
+      {edit.enabled && (
+        <div className="space-y-3">
+          <Label htmlFor="bulk-budget-mode">Budget update</Label>
+          <Select
+            items={budgetModes}
+            value={edit.mode}
+            disabled={disabled}
+            onValueChange={(mode) => {
+              if (mode === "link" || mode === "max") onChange({ ...edit, mode });
+            }}
+          >
+            <SelectTrigger id="bulk-budget-mode" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {budgetModes.map((mode) => (
+                <SelectItem key={mode.value} value={mode.value} disabled={mode.value === "max" && hasSharedBudget}>
+                  {mode.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {hasSharedBudget && (
+            <p role="note" className="text-sm text-muted-foreground">
+              Some selected customers share a budget. Shared budget maximums must be changed on the Budgets page, or
+              choose an existing budget instead.
+            </p>
+          )}
+          {edit.mode === "link" && <CatalogFeedback label="Budgets" catalog={catalog} />}
+          {edit.enabled && edit.mode === "link" && (
+            <div className="space-y-2">
+              <Label htmlFor="bulk-budget-id">Budget</Label>
+              <SearchSelect
+                inputId="bulk-budget-id"
+                aria-label="Budget"
+                options={(catalog.data ?? []).map((budget) => ({ label: budget.budget_id, value: budget.budget_id }))}
+                value={edit.budgetId}
+                disabled={disabled || budgetUnavailable}
+                allowClear={false}
+                onValueChange={(budgetId) => onChange({ ...edit, budgetId: budgetId ?? "" })}
+              />
+              <p className="text-sm text-muted-foreground">Replace the budget link for every selected customer.</p>
+            </div>
+          )}
+          {edit.enabled && edit.mode === "max" && (
+            <div className="space-y-2">
+              <Label htmlFor="bulk-max-budget">Max Budget (USD)</Label>
+              <Input
+                id="bulk-max-budget"
+                type="number"
+                min={0}
+                step="any"
+                value={edit.maxBudget}
+                disabled={disabled || hasSharedBudget}
+                onChange={(event) => onChange({ ...edit, maxBudget: event.target.value })}
+              />
+              <p className="text-sm text-muted-foreground">Enter a maximum greater than zero.</p>
+            </div>
+          )}
         </div>
       )}
     </EditField>
@@ -244,8 +248,11 @@ function BulkEditSession({
   const toolsets = useMCPToolsets();
   const mutation = useBulkUpdateCustomers();
   const pending = submitting || mutation.isPending;
-  const budgetCounts = getCustomerBudgetCounts(allCustomers);
-  const hasSharedBudget = customers.some((customer) => hasSharedCustomerBudget(customer, budgetCounts));
+  const budgetCounts = useMemo(() => getCustomerBudgetCounts(allCustomers), [allCustomers]);
+  const hasSharedBudget = useMemo(
+    () => customers.some((customer) => hasSharedCustomerBudget(customer, budgetCounts)),
+    [customers, budgetCounts],
+  );
   const modelOptions = (models.data ?? []).map((model) => ({ label: model, value: model }));
   const modelsUnavailable = models.isLoading || models.isError;
   const actionLabel = results ? "Retry failed customers" : "Apply changes";
@@ -260,17 +267,23 @@ function BulkEditSession({
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (inFlight.current) return;
-    const payload = buildBulkCustomerPayload(customers, edits, servers.data ?? [], allCustomers);
+    const payload = buildBulkCustomerPayload(
+      customers,
+      edits,
+      { servers: servers.data ?? [], toolsets: toolsets.data ?? [] },
+      budgetCounts,
+    );
     if (!payload.ok) {
       setError(payload.error);
       return;
     }
+    const mcpEdited = edits.mcpServers.enabled || edits.mcpAccessGroups.enabled || edits.mcpToolsets.enabled;
     const unavailable = [
       { enabled: edits.budget.enabled && edits.budget.mode === "link", catalog: budgets, label: "Budgets" },
       { enabled: edits.models.enabled || edits.defaultModel.enabled, catalog: models, label: "Models" },
-      { enabled: edits.mcpServers.enabled, catalog: servers, label: "MCP servers" },
+      { enabled: mcpEdited, catalog: servers, label: "MCP servers" },
       { enabled: edits.mcpAccessGroups.enabled, catalog: groups, label: "MCP access groups" },
-      { enabled: edits.mcpToolsets.enabled, catalog: toolsets, label: "MCP toolsets" },
+      { enabled: mcpEdited, catalog: toolsets, label: "MCP toolsets" },
     ].find(({ enabled, catalog }) => enabled && (catalog.isLoading || catalog.isError));
     if (unavailable) {
       setError(`${unavailable.label} must finish loading before applying changes`);
@@ -309,8 +322,8 @@ function BulkEditSession({
         <DialogHeader>
           <DialogTitle>Edit selected customers</DialogTitle>
           <DialogDescription>
-            {customers.length} customers to update. Check each field you want to replace; unchecked fields stay
-            unchanged.
+            {customers.length} customer{customers.length === 1 ? "" : "s"} to update. Check each field you want to
+            replace. Unchecked fields stay unchanged. Region and default model cannot be cleared in bulk.
           </DialogDescription>
         </DialogHeader>
         <section aria-label="Customers to update" className="rounded-lg border p-3">
@@ -405,7 +418,7 @@ function BulkEditSession({
               value: server.server_id,
               label: server.alias || server.server_name || server.server_id,
             }))}
-            description="An empty selection clears direct server grants. Tool grants for servers outside this selection are removed. Clearing all customer MCP grants removes the customer restriction."
+            description="An empty selection clears direct server grants. Tool limits stay for servers retained through access groups or toolsets. Clearing all customer MCP grants removes the customer restriction."
             onChange={(edit) => update("mcpServers", edit)}
           />
           <ArrayEditField
@@ -415,7 +428,7 @@ function BulkEditSession({
             catalog={groups}
             disabled={pending}
             options={(groups.data ?? []).map((group) => ({ value: group, label: group }))}
-            description="An empty selection clears access group grants. Other MCP permissions stay unchanged. Clearing all customer MCP grants removes the customer restriction."
+            description="An empty selection clears access group grants. Tool grants for servers no longer reachable are removed. Clearing all customer MCP grants removes the customer restriction."
             onChange={(edit) => update("mcpAccessGroups", edit)}
           />
           <ArrayEditField
@@ -428,7 +441,7 @@ function BulkEditSession({
               value: toolset.toolset_id,
               label: toolset.toolset_name,
             }))}
-            description="An empty selection removes the customer toolset restriction. Other MCP permissions stay unchanged."
+            description="An empty selection removes the customer toolset restriction. Tool grants for servers no longer reachable are removed."
             onChange={(edit) => update("mcpToolsets", edit)}
           />
           {results && (

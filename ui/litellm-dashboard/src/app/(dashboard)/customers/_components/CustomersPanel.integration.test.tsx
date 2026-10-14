@@ -148,7 +148,7 @@ describe("Customers management", () => {
         body: {
           customers: rows.map((row) => ({
             user_id: row.user_id,
-            object_permission: { mcp_toolsets: ["toolset-new"] },
+            object_permission: { mcp_toolsets: ["toolset-new"], mcp_tool_permissions: {} },
           })),
         },
       }),
@@ -169,7 +169,8 @@ describe("Customers management", () => {
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: `Select customer ${activeCustomer.user_id}` }));
     await user.click(screen.getByRole("button", { name: "Edit selected" }));
-    expect(await screen.findByRole("note")).toHaveTextContent("share a budget with other customers");
+    await user.click(screen.getByRole("checkbox", { name: "Update budget" }));
+    expect(await screen.findByRole("note")).toHaveTextContent("Some selected customers share a budget");
     await user.click(screen.getByRole("combobox", { name: "Budget update" }));
     expect(await screen.findByRole("option", { name: "Set a maximum budget" })).toHaveAttribute(
       "aria-disabled",
@@ -251,13 +252,20 @@ describe("Customers management", () => {
       body: {
         customers: customers.map((customer) => ({
           user_id: customer.user_id,
-          object_permission: { mcp_toolsets: ["toolset-new"] },
+          object_permission: { mcp_toolsets: ["toolset-new"], mcp_tool_permissions: {} },
         })),
       },
     });
     expect(post).toHaveBeenNthCalledWith(2, "/customer/bulk_update", {
       accessToken: "sk-test",
-      body: { customers: [{ user_id: blockedCustomer.user_id, object_permission: { mcp_toolsets: ["toolset-new"] } }] },
+      body: {
+        customers: [
+          {
+            user_id: blockedCustomer.user_id,
+            object_permission: { mcp_toolsets: ["toolset-new"], mcp_tool_permissions: {} },
+          },
+        ],
+      },
     });
     expect(post).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` })).not.toBeChecked();

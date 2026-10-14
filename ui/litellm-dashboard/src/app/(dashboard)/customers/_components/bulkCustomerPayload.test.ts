@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { MCPServer } from "@/components/mcp_tools/types";
+import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
+import { getCustomerBudgetCounts } from "./customerPayload";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import {
   buildBulkCustomerPayload,
@@ -25,20 +26,24 @@ describe("bulk customer edits", () => {
       mcpAccessGroups: { enabled: false, value: ["new-group"] },
       mcpToolsets: { enabled: false, value: ["new-toolset"] },
     };
-    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
+    expect(
+      buildBulkCustomerPayload(customers, edits, { servers: [], toolsets: [] }, getCustomerBudgetCounts(customers)),
+    ).toEqual({
       ok: false,
       error: "Choose at least one field to update",
     });
   });
 
-  it("sends only toolsets and customer IDs when only toolsets are opted in", () => {
+  it("sends toolsets and reconciled tool grants when only toolsets are opted in", () => {
     const edits = { ...emptyBulkCustomerEdits(), mcpToolsets: { enabled: true, value: ["new-toolset"] } };
-    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
+    expect(
+      buildBulkCustomerPayload(customers, edits, { servers: [], toolsets: [] }, getCustomerBudgetCounts(customers)),
+    ).toEqual({
       ok: true,
       payload: {
         customers: [
-          { user_id: "customer-a", object_permission: { mcp_toolsets: ["new-toolset"] } },
-          { user_id: "customer-b", object_permission: { mcp_toolsets: ["new-toolset"] } },
+          { user_id: "customer-a", object_permission: { mcp_toolsets: ["new-toolset"], mcp_tool_permissions: {} } },
+          { user_id: "customer-b", object_permission: { mcp_toolsets: ["new-toolset"], mcp_tool_permissions: {} } },
         ],
       },
     });
@@ -52,10 +57,10 @@ describe("bulk customer edits", () => {
   ] as const)("clears only the opted-in %s field with an explicit empty array", (field, apiField) => {
     const edits = { ...emptyBulkCustomerEdits(), [field]: { enabled: true, value: [] } };
     const update =
-      field === "models"
-        ? { models: [] }
-        : { object_permission: { [apiField]: [], ...(field === "mcpServers" ? { mcp_tool_permissions: {} } : {}) } };
-    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
+      field === "models" ? { models: [] } : { object_permission: { [apiField]: [], mcp_tool_permissions: {} } };
+    expect(
+      buildBulkCustomerPayload(customers, edits, { servers: [], toolsets: [] }, getCustomerBudgetCounts(customers)),
+    ).toEqual({
       ok: true,
       payload: { customers: customers.map((customer) => ({ user_id: customer.user_id, ...update })) },
     });
@@ -68,9 +73,23 @@ describe("bulk customer edits", () => {
       mcpAccessGroups: { enabled: false, value: ["hidden-group"] },
       mcpToolsets: { enabled: true, value: ["replacement-toolset"] },
     };
-    expect(buildBulkCustomerPayload([customers[0]], edits, [], customers)).toEqual({
+    expect(
+      buildBulkCustomerPayload(
+        [customers[0]],
+        edits,
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(customers),
+      ),
+    ).toEqual({
       ok: true,
-      payload: { customers: [{ user_id: "customer-a", object_permission: { mcp_toolsets: ["replacement-toolset"] } }] },
+      payload: {
+        customers: [
+          {
+            user_id: "customer-a",
+            object_permission: { mcp_toolsets: ["replacement-toolset"], mcp_tool_permissions: {} },
+          },
+        ],
+      },
     });
   });
 
@@ -84,7 +103,14 @@ describe("bulk customer edits", () => {
       mcpAccessGroups: { enabled: true, value: ["group-a"] },
       mcpToolsets: { enabled: true, value: ["toolset-a"] },
     };
-    expect(buildBulkCustomerPayload([customers[0]], edits, [], customers)).toEqual({
+    expect(
+      buildBulkCustomerPayload(
+        [customers[0]],
+        edits,
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(customers),
+      ),
+    ).toEqual({
       ok: true,
       payload: {
         customers: [
@@ -141,7 +167,9 @@ describe("bulk customer edits", () => {
       },
     }));
     const edits = { ...emptyBulkCustomerEdits(), mcpServers: { enabled: true, value: ["kept"] } };
-    expect(buildBulkCustomerPayload(rows, edits, servers, customers)).toEqual({
+    expect(
+      buildBulkCustomerPayload(rows, edits, { servers: servers, toolsets: [] }, getCustomerBudgetCounts(customers)),
+    ).toEqual({
       ok: true,
       payload: {
         customers: rows.map((customer, index) => ({
@@ -173,8 +201,8 @@ describe("bulk customer edits", () => {
             ...emptyBulkCustomerEdits(),
             mcpServers: { enabled: true, value: ["kept"] },
           },
-          servers,
-          customers,
+          { servers: servers, toolsets: [] },
+          getCustomerBudgetCounts(customers),
         ),
       ).toEqual({
         ok: true,
@@ -202,8 +230,11 @@ describe("bulk customer edits", () => {
           ...emptyBulkCustomerEdits(),
           mcpServers: { enabled: true, value: [] },
         },
-        [],
-        customers,
+        {
+          servers: [{ server_id: "removed", created_at: "", created_by: "", updated_at: "", updated_by: "" }],
+          toolsets: [],
+        },
+        getCustomerBudgetCounts(customers),
       ),
     ).toEqual({
       ok: true,
@@ -221,12 +252,164 @@ describe("bulk customer edits", () => {
     });
   });
 
+  it("keeps each customer's tool limits on servers retained by unchecked groups and toolsets", () => {
+    const servers: MCPServer[] = ["group-server", "toolset-server", "replacement"].map((server_id) => ({
+      server_id,
+      mcp_access_groups: server_id === "group-server" ? ["retained-group"] : [],
+      created_at: "",
+      created_by: "",
+      updated_at: "",
+      updated_by: "",
+    }));
+    const toolsets: MCPToolset[] = [
+      {
+        toolset_id: "retained-toolset",
+        toolset_name: "Retained tools",
+        tools: [{ server_id: "toolset-server", tool_name: "read" }],
+      },
+    ];
+    const rows = customers.map((customer, index) => ({
+      ...customer,
+      object_permission: {
+        mcp_servers: [],
+        mcp_access_groups: ["retained-group"],
+        mcp_toolsets: ["retained-toolset"],
+        mcp_tool_permissions: { "group-server": [`read-${index}`], "toolset-server": [] },
+      },
+    }));
+    expect(
+      buildBulkCustomerPayload(
+        rows,
+        {
+          ...emptyBulkCustomerEdits(),
+          mcpServers: { enabled: true, value: ["replacement"] },
+        },
+        { servers: servers, toolsets: toolsets },
+        getCustomerBudgetCounts(rows),
+      ),
+    ).toEqual({
+      ok: true,
+      payload: {
+        customers: rows.map((customer) => ({
+          user_id: customer.user_id,
+          object_permission: {
+            mcp_servers: ["replacement"],
+            mcp_tool_permissions: customer.object_permission.mcp_tool_permissions,
+          },
+        })),
+      },
+    });
+  });
+
+  it.each([
+    { field: "mcpAccessGroups", apiField: "mcp_access_groups", group: ["removed-group"], toolsets: [] },
+    { field: "mcpToolsets", apiField: "mcp_toolsets", group: [], toolsets: ["removed-toolset"] },
+  ] as const)("removes stale tool grants when only $field is cleared", ({ field, apiField, group, toolsets }) => {
+    const servers: MCPServer[] = ["removed", "retained"].map((server_id) => ({
+      server_id,
+      mcp_access_groups: server_id === "removed" ? ["removed-group"] : [],
+      created_at: "",
+      created_by: "",
+      updated_at: "",
+      updated_by: "",
+    }));
+    const catalog: MCPToolset[] = [
+      {
+        toolset_id: "removed-toolset",
+        toolset_name: "Removed tools",
+        tools: [{ server_id: "removed", tool_name: "read" }],
+      },
+    ];
+    const rows = customers.map((customer) => ({
+      ...customer,
+      object_permission: {
+        mcp_servers: ["retained"],
+        mcp_access_groups: [...group],
+        mcp_toolsets: [...toolsets],
+        mcp_tool_permissions: { removed: ["read"], retained: [] },
+      },
+    }));
+    expect(
+      buildBulkCustomerPayload(
+        rows,
+        {
+          ...emptyBulkCustomerEdits(),
+          [field]: { enabled: true, value: [] },
+        },
+        { servers: servers, toolsets: catalog },
+        getCustomerBudgetCounts(rows),
+      ),
+    ).toEqual({
+      ok: true,
+      payload: {
+        customers: rows.map((customer) => ({
+          user_id: customer.user_id,
+          object_permission: { [apiField]: [], mcp_tool_permissions: { retained: [] } },
+        })),
+      },
+    });
+  });
+
+  it("keeps a removed group's tool limit when the same server is still granted by a toolset", () => {
+    const servers: MCPServer[] = [
+      {
+        server_id: "retained",
+        mcp_access_groups: ["removed-group"],
+        created_at: "",
+        created_by: "",
+        updated_at: "",
+        updated_by: "",
+      },
+    ];
+    const toolsets: MCPToolset[] = [
+      {
+        toolset_id: "retained-toolset",
+        toolset_name: "Retained tools",
+        tools: [{ server_id: "retained", tool_name: "read" }],
+      },
+    ];
+    const customer = {
+      ...customers[0],
+      object_permission: {
+        mcp_access_groups: ["removed-group"],
+        mcp_toolsets: ["retained-toolset"],
+        mcp_tool_permissions: { retained: ["read"] },
+      },
+    };
+    expect(
+      buildBulkCustomerPayload(
+        [customer],
+        {
+          ...emptyBulkCustomerEdits(),
+          mcpAccessGroups: { enabled: true, value: [] },
+        },
+        { servers: servers, toolsets: toolsets },
+        getCustomerBudgetCounts([customer]),
+      ),
+    ).toEqual({
+      ok: true,
+      payload: {
+        customers: [
+          {
+            user_id: customer.user_id,
+            object_permission: {
+              mcp_access_groups: [],
+              mcp_tool_permissions: { retained: ["read"] },
+            },
+          },
+        ],
+      },
+    });
+  });
+
   it("sends only max_budget in maximum mode even with a hidden budget link", () => {
     const edits = {
       ...emptyBulkCustomerEdits(),
       budget: { enabled: true, mode: "max" as const, budgetId: "hidden-budget", maxBudget: "1.5" },
     };
-    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
+    expect(
+      buildBulkCustomerPayload(customers, edits, { servers: [], toolsets: [] }, getCustomerBudgetCounts(customers)),
+    ).toEqual({
       ok: true,
       payload: {
         customers: [
@@ -242,7 +425,9 @@ describe("bulk customer edits", () => {
       ...emptyBulkCustomerEdits(),
       budget: { enabled: true, mode: "max" as const, budgetId: "", maxBudget },
     };
-    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
+    expect(
+      buildBulkCustomerPayload(customers, edits, { servers: [], toolsets: [] }, getCustomerBudgetCounts(customers)),
+    ).toEqual({
       ok: false,
       error: "Enter a maximum budget greater than zero",
     });
@@ -257,8 +442,8 @@ describe("bulk customer edits", () => {
       buildBulkCustomerPayload(
         [{ ...customers[0], budget_id: "shared-budget" }],
         edits,
-        [],
-        customers.map((customer) => ({ ...customer, budget_id: "shared-budget" })),
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(customers.map((customer) => ({ ...customer, budget_id: "shared-budget" }))),
       ),
     ).toEqual({
       ok: false,
@@ -275,8 +460,8 @@ describe("bulk customer edits", () => {
           ...emptyBulkCustomerEdits(),
           budget: { enabled: true, mode: "max", budgetId: "", maxBudget: "75" },
         },
-        [],
-        rows,
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(rows),
       ),
     ).toEqual({
       ok: true,
@@ -289,7 +474,14 @@ describe("bulk customer edits", () => {
       ...emptyBulkCustomerEdits(),
       budget: { enabled: true, mode: "link" as const, budgetId: "new-budget", maxBudget: "" },
     };
-    expect(buildBulkCustomerPayload([{ ...customers[0], budget_id: "shared-budget" }], edits, [], customers)).toEqual({
+    expect(
+      buildBulkCustomerPayload(
+        [{ ...customers[0], budget_id: "shared-budget" }],
+        edits,
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(customers),
+      ),
+    ).toEqual({
       ok: true,
       payload: { customers: [{ user_id: "customer-a", budget_id: "new-budget" }] },
     });
@@ -303,8 +495,8 @@ describe("bulk customer edits", () => {
           ...emptyBulkCustomerEdits(),
           budget: { enabled: true, mode: "link", budgetId: "", maxBudget: "" },
         },
-        [],
-        customers,
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(customers),
       ),
     ).toEqual({
       ok: false,
@@ -317,8 +509,8 @@ describe("bulk customer edits", () => {
       buildBulkCustomerPayload(
         customers,
         { ...emptyBulkCustomerEdits(), region: { enabled: true, value: "" } },
-        [],
-        customers,
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(customers),
       ),
     ).toEqual({
       ok: false,
@@ -331,8 +523,8 @@ describe("bulk customer edits", () => {
       buildBulkCustomerPayload(
         customers,
         { ...emptyBulkCustomerEdits(), defaultModel: { enabled: true, value: " " } },
-        [],
-        customers,
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(customers),
       ),
     ).toEqual({
       ok: false,
@@ -345,8 +537,8 @@ describe("bulk customer edits", () => {
       buildBulkCustomerPayload(
         [],
         { ...emptyBulkCustomerEdits(), models: { enabled: true, value: [] } },
-        [],
-        customers,
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(customers),
       ),
     ).toEqual({
       ok: false,
@@ -365,8 +557,8 @@ describe("bulk customer edits", () => {
         ...emptyBulkCustomerEdits(),
         models: { enabled: true, value: [] },
       },
-      [],
-      customers,
+      { servers: [], toolsets: [] },
+      getCustomerBudgetCounts(customers),
     );
     expect(result).toEqual({
       ok: true,
@@ -383,8 +575,8 @@ describe("bulk customer edits", () => {
       buildBulkCustomerPayload(
         batch,
         { ...emptyBulkCustomerEdits(), models: { enabled: true, value: [] } },
-        [],
-        customers,
+        { servers: [], toolsets: [] },
+        getCustomerBudgetCounts(customers),
       ),
     ).toEqual({
       ok: false,

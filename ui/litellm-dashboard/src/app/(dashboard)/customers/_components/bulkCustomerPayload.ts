@@ -1,10 +1,10 @@
 import type { BulkUpdateCustomersRequest, UpdateCustomerRequest } from "@/app/(dashboard)/hooks/customers/customerApi";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 
-import type { MCPServer } from "@/components/mcp_tools/types";
-import { mcpAllowedToolsFor, mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
+import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
+import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 
-import { getCustomerBudgetCounts, hasSharedCustomerBudget } from "./customerPayload";
+import { hasSharedCustomerBudget } from "./customerPayload";
 
 export const MAX_BULK_CUSTOMERS = 500;
 
@@ -35,7 +35,7 @@ type BulkCustomerPayloadResult = { ok: true; payload: BulkUpdateCustomersRequest
 const validateBulkCustomerEdits = (
   customers: EndUser[],
   edits: BulkCustomerEdits,
-  allCustomers: readonly EndUser[],
+  budgetCounts: ReadonlyMap<string, number>,
 ): string | null => {
   if (customers.length === 0) return "Select at least one customer";
   if (customers.length > MAX_BULK_CUSTOMERS) {
@@ -48,7 +48,6 @@ const validateBulkCustomerEdits = (
     return "Select an existing budget";
   }
   if (edits.budget.enabled && edits.budget.mode === "max") {
-    const budgetCounts = getCustomerBudgetCounts(allCustomers);
     if (customers.some((customer) => hasSharedCustomerBudget(customer, budgetCounts))) {
       return "Max Budget cannot be changed for customers with shared budgets. Select an existing budget instead";
     }
@@ -68,34 +67,33 @@ const validateBulkCustomerEdits = (
 
 const retainedToolPermissions = (
   customer: EndUser,
-  selectedServers: readonly string[],
-  servers: readonly MCPServer[],
+  edits: BulkCustomerEdits,
+  servers: MCPServer[],
+  toolsets: MCPToolset[],
 ): Record<string, string[]> => {
-  const permissions = customer.object_permission?.mcp_tool_permissions ?? {};
-  const selectedIds = new Set(
-    selectedServers.flatMap((identifier) =>
-      mcpServersForIdentifier(servers, identifier).map((server) => server.server_id),
-    ),
+  const permission = customer.object_permission;
+  const entitlement = extractMcpEntitlement(
+    {
+      mcp_servers_and_groups: {
+        servers: edits.mcpServers.enabled ? edits.mcpServers.value : permission?.mcp_servers,
+        accessGroups: edits.mcpAccessGroups.enabled ? edits.mcpAccessGroups.value : permission?.mcp_access_groups,
+        toolsets: edits.mcpToolsets.enabled ? edits.mcpToolsets.value : permission?.mcp_toolsets,
+      },
+      mcp_tool_permissions: permission?.mcp_tool_permissions,
+    },
+    servers,
+    toolsets,
   );
-  const knownEntries = servers
-    .filter((server) => selectedIds.has(server.server_id))
-    .flatMap((server) => {
-      const tools = mcpAllowedToolsFor(server, permissions, servers);
-      return tools === undefined ? [] : [[server.server_id, [...tools]]];
-    });
-  const unresolvedEntries = Object.entries(permissions).filter(
-    ([identifier]) => selectedServers.includes(identifier) && mcpServersForIdentifier(servers, identifier).length === 0,
-  );
-  return Object.fromEntries([...knownEntries, ...unresolvedEntries]);
+  return entitlement?.mcp_tool_permissions ?? {};
 };
 
 export const buildBulkCustomerPayload = (
   customers: EndUser[],
   edits: BulkCustomerEdits,
-  servers: readonly MCPServer[],
-  allCustomers: readonly EndUser[],
+  catalogs: { servers: MCPServer[]; toolsets: MCPToolset[] },
+  budgetCounts: ReadonlyMap<string, number>,
 ): BulkCustomerPayloadResult => {
-  const error = validateBulkCustomerEdits(customers, edits, allCustomers);
+  const error = validateBulkCustomerEdits(customers, edits, budgetCounts);
   if (error) return { ok: false, error };
 
   const objectPermission = {
@@ -120,9 +118,7 @@ export const buildBulkCustomerPayload = (
           ? {
               object_permission: {
                 ...objectPermission,
-                ...(edits.mcpServers.enabled
-                  ? { mcp_tool_permissions: retainedToolPermissions(customer, edits.mcpServers.value, servers) }
-                  : {}),
+                mcp_tool_permissions: retainedToolPermissions(customer, edits, catalogs.servers, catalogs.toolsets),
               },
             }
           : {}),
