@@ -4,6 +4,7 @@ from datetime import timedelta
 from typing import Annotated, Final
 
 import httpx
+import pytest
 from fastapi import Depends, FastAPI, Security
 from fastapi.testclient import TestClient
 
@@ -11,6 +12,7 @@ from litellm.proxy.control_plane.auth.dependencies import get_principal, get_tok
 from litellm.proxy.control_plane.auth.jwt import Rejected, SessionTokenCodec, TokenVerifier
 from litellm.proxy.control_plane.auth.rbac import ADMIN_ROLE, VIEWER_ROLE, Principal, build_principal, default_policy
 from litellm.proxy.control_plane.common.exceptions import install_exception_handlers
+from tests.unit.proxy.control_plane.support import response, rig
 
 MASTER_KEY: Final = "sk-master"
 POLICY: Final = default_policy()
@@ -90,3 +92,26 @@ def test_security_scopes_show_up_in_openapi() -> None:
     client, _ = _app()
     security: Final = client.get("/openapi.json").json()["paths"]["/usage"]["get"]["security"]
     assert security == [{"ControlPlaneBearer": ["usage:read"]}]
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_scope_denial_flood_preserves_audit_history_and_queue_capacity_for_writes(strict: bool) -> None:
+    client, transport, minter = rig(
+        {
+            "https://eu.test/key/list": [response(200, {})],
+            "https://eu.test/key/generate": [response(200, {})],
+        },
+        audit_strict=strict,
+        audit_queue_size=2,
+        audit_capacity=2,
+    )
+    assert client.get("/api/v1/dataplanes/eu/proxy/key/list", headers=minter.headers("eu")).status_code == 200
+    for _ in range(8):
+        assert client.get("/api/v1/audit", headers=minter.headers()).status_code == 403
+    history: Final = client.get("/api/v1/audit?dataplane=eu", headers=minter.headers(role=ADMIN_ROLE)).json()
+    assert [(event["path"], event["decision"]) for event in history["items"]] == [("/key/list", "allowed")]
+    written: Final = client.post(
+        "/api/v1/dataplanes/eu/proxy/key/generate", json={}, headers=minter.headers("eu", role="editor")
+    )
+    assert written.status_code == 200
+    assert [(method, url) for method, url, _ in transport.writes] == [("POST", "https://eu.test/key/generate")]

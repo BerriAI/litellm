@@ -251,6 +251,8 @@ def without_otel_sdk() -> Iterator[None]:
         if (
             name == "opentelemetry.sdk"
             or name.startswith("opentelemetry.sdk.")
+            or name == "opentelemetry.exporter.otlp"
+            or name.startswith("opentelemetry.exporter.otlp.")
             or name == "litellm.proxy.control_plane"
             or name.startswith("litellm.proxy.control_plane.")
             or name == "litellm.integrations.otel.plumbing.context"
