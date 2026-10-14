@@ -1064,16 +1064,18 @@ AWS_ERROR_TYPE_HEADER: Final = "x-amzn-errortype"
 
 def _guardrail_refusal_status(error: Exception) -> int | None:
     """The status a guardrail blocked the request with. None for a request check that answers with the same 400, 403
-    or 422, and for a guardrail that could not reach its vendor and failed closed with a 5xx.
+    or 422, and for a guardrail that failed closed because it could not get a verdict.
 
     Guardrail hooks stamp ``guardrail_name`` onto the detail of an HTTPException they raise."""
-    if isinstance(error, HTTPException):
-        detail: Final[object] = error.detail
-        stamped: Final = isinstance(detail, dict) and "guardrail_name" in detail
-        return error.status_code if stamped and is_guardrail_intervention(error) else None
-    if isinstance(error, (GuardrailRaisedException, BlockedPiiEntityError)) and error.status_code < 500:
-        return error.status_code
-    return None
+    match error:
+        case HTTPException():
+            detail: Final[object] = error.detail
+            stamped: Final = isinstance(detail, dict) and "guardrail_name" in detail
+            return error.status_code if stamped and is_guardrail_intervention(error) else None
+        case GuardrailRaisedException(blocked_content=True) | BlockedPiiEntityError():
+            return error.status_code
+        case _:
+            return None
 
 
 def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:

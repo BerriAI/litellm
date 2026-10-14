@@ -2056,6 +2056,7 @@ class TestBedrockPassthroughAwsErrors:
                     guardrail_name="block-demo",
                     message="synthetic policy says no",
                     should_wrap_with_default_message=False,
+                    blocked_content=True,
                 ),
                 "synthetic policy says no",
                 "400",
@@ -2097,6 +2098,14 @@ class TestBedrockPassthroughAwsErrors:
             pytest.param(HTTPException(status_code=400, detail={"error": "model not found"}), id="request-check-400"),
             pytest.param(HTTPException(status_code=403, detail="cache control not allowed"), id="request-check-403"),
             pytest.param(HTTPException(status_code=429, detail=_guardrail_detail("vendor rate limited")), id="429"),
+            pytest.param(
+                GuardrailRaisedException(
+                    guardrail_name="fail-closed",
+                    message="guardrail vendor unreachable",
+                    should_wrap_with_default_message=False,
+                ),
+                id="guardrail-vendor-unreachable-400",
+            ),
             pytest.param(
                 GuardrailRaisedException(
                     guardrail_name="fail-closed",
