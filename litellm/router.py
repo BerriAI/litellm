@@ -15039,7 +15039,7 @@ class Router:
                 model,
             )
         )
-        healthy_deployments = filter_tool_protocol_deployments(
+        healthy_deployments = filter_tool_protocol_deployments(  # rebind-ok: progressive narrowing of the candidate list through the router filter pipeline; rebinding is the established pattern in this function
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
@@ -16355,7 +16355,7 @@ class Router:
             self._filter_blocked_deployments(healthy_deployments), routing_kwargs
         )
 
-        healthy_deployments = filter_tool_protocol_deployments(
+        healthy_deployments = filter_tool_protocol_deployments(  # rebind-ok: progressive narrowing of the candidate list through the router filter pipeline; rebinding is the established pattern in this function
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
