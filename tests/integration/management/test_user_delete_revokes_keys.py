@@ -187,6 +187,12 @@ def test_org_admin_can_only_delete_users_inside_their_orgs(
 
         victim_b: Final = scenario.org_member(org_b, "internal_user")
         victim_b_key: Final = scenario.key(user_id=victim_b, models=[model])
+        victim_overlap: Final = scenario.org_member(org_a, "internal_user")
+        gateway.post(
+            "/organization/member_add",
+            {"organization_id": org_b, "member": {"role": "internal_user", "user_id": victim_overlap}},
+        )
+        victim_no_org: Final = scenario.user(user_role="internal_user")
         victim_a: Final = _new_user(gateway)
         gateway.post(
             "/organization/member_add",
@@ -210,6 +216,40 @@ def test_org_admin_can_only_delete_users_inside_their_orgs(
             }
         }, refused.text
         assert _user_rows(victim_b)["user"] != []
+
+        refused_overlap: Final = gateway.request(
+            "POST",
+            "/user/delete",
+            {"user_ids": [victim_overlap], "organization_id": org_a},
+            key=admin_key,
+        )
+        assert refused_overlap.status_code == 403, refused_overlap.text
+        assert refused_overlap.json() == {
+            "detail": {
+                "error": (
+                    f"User {victim_overlap} is not within your admin scope. "
+                    "Only PROXY_ADMIN may delete users outside your administered organizations."
+                )
+            }
+        }, refused_overlap.text
+        assert _user_rows(victim_overlap)["user"] != []
+
+        refused_no_org: Final = gateway.request(
+            "POST",
+            "/user/delete",
+            {"user_ids": [victim_no_org], "organization_id": org_a},
+            key=admin_key,
+        )
+        assert refused_no_org.status_code == 403, refused_no_org.text
+        assert refused_no_org.json() == {
+            "detail": {
+                "error": (
+                    f"User {victim_no_org} is not within your admin scope. "
+                    "Only PROXY_ADMIN may delete users outside your administered organizations."
+                )
+            }
+        }, refused_no_org.text
+        assert _user_rows(victim_no_org)["user"] != []
 
         alive: Final = f"still alive {uuid.uuid4().hex}"
         served: Final = _chat(gateway, model, victim_b_key, alive)
