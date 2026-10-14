@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, model_validator
+from pydantic import AwareDatetime, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, model_validator
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
@@ -55,8 +55,8 @@ class AdminIgnore(LiteLLMBaseModel):
 
     source: Literal["admin"] = "admin"
     ignored_by: str
-    ignored_at: datetime
-    ignored_until: datetime | None = Field(
+    ignored_at: AwareDatetime
+    ignored_until: AwareDatetime | None = Field(
         default=None,
         description="When the snooze ends. Null means the warning is ignored until an admin restores it.",
     )
@@ -224,7 +224,7 @@ def deployment_warning_ignore_store() -> DeploymentWarningIgnoreStore | None:
 
     if prisma_client is None:
         return None
-    return DeploymentWarningIgnoreRepository(prisma_client)
+    return DeploymentWarningIgnoreRepository(prisma_client, use_writer=True)
 
 
 def config_audit_logger() -> ConfigAuditLogger:

@@ -1718,15 +1718,19 @@ async def no_redis_on_multiple_workers() -> bool:
     warns; when the census is unavailable or shows more than one worker, the
     warning stands.
     """
-    from litellm.proxy.proxy_server import llm_router, prisma_client, redis_usage_cache
+    from litellm.proxy.proxy_server import prisma_client
 
-    if redis_usage_cache is not None:
-        return False
-    if llm_router is not None and llm_router.cache.redis_cache is not None:
+    if _redis_configured():
         return False
     if prisma_client is None:
         return True
     return await count_live_proxy_workers(prisma_client) != 1
+
+
+def _redis_configured() -> bool:
+    from litellm.proxy.proxy_server import llm_router, redis_usage_cache
+
+    return redis_usage_cache is not None or (llm_router is not None and llm_router.cache.redis_cache is not None)
 
 
 def no_redis_warning_disabled_by_env() -> bool:
@@ -1734,7 +1738,7 @@ def no_redis_warning_disabled_by_env() -> bool:
 
 
 async def _show_no_redis_warning() -> bool:
-    if no_redis_warning_disabled_by_env():
+    if _redis_configured() or no_redis_warning_disabled_by_env():
         return False
     return await no_redis_on_multiple_workers()
 
