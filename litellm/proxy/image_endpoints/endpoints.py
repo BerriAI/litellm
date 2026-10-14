@@ -439,9 +439,7 @@ async def image_variation_api(  # noqa: ANN201  # response type mirrors image_ed
     )
 
     form_fields: Final = coerce_numeric_form_fields(
-        parsed_body=cast(
-            "Mapping[str, object]", await read_request_body(request=request)
-        ),
+        parsed_body=cast("Mapping[str, object]", await read_request_body(request=request)),
         numeric_fields=IMAGE_VARIATION_NUMERIC_FORM_FIELDS,
     )
     data: Final = {
@@ -469,9 +467,7 @@ async def image_variation_api(  # noqa: ANN201  # response type mirrors image_ed
             llm_router=llm_router,
             general_settings=cast("dict[str, object]", general_settings),
             proxy_config=proxy_config,
-            select_data_generator=cast(
-                "Callable[..., object] | None", select_data_generator
-            ),
+            select_data_generator=cast("Callable[..., object] | None", select_data_generator),
             model=model,
             user_model=cast("str | None", user_model),
             user_temperature=cast("float | None", user_temperature),
