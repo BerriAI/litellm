@@ -9459,6 +9459,7 @@ def test_vertex_ai_streaming_response_id():
             model="gemini-pro",
             messages=[],
             logging_obj=logging_obj,
+            timeout=None,
         )
         iterator = iter(iterator)
         first_chunk = next(iterator)
