@@ -67,7 +67,7 @@ from litellm.types.llms.openai import (
     OpenAIFilesPurpose,
     PathLike,
 )
-from litellm.types.llms.vertex_ai import GcsBucketResponse, GeminiEmbeddingInput
+from litellm.types.llms.vertex_ai import GcsBucketResponse, GeminiEmbeddingElement, GeminiEmbeddingInput
 from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -555,18 +555,27 @@ def _is_responses_batch_entry(openai_entry: Mapping[str, object]) -> bool:
     return path == "responses" or path.endswith("/responses")
 
 
+def _own_embedding_input(
+    element: GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement],
+) -> GeminiEmbeddingInput:
+    if isinstance(element, (str, list)):
+        return element
+    file_block_alone: Final[list[GeminiEmbeddingElement]] = [element]
+    return file_block_alone
+
+
 def _openai_embedding_input_elements(
     embedding_input: GeminiEmbeddingInput,
-) -> tuple[str | list[str], ...]:
+) -> tuple[GeminiEmbeddingInput, ...]:
     """
     Split an OpenAI `input` into the elements that each get their own embedding.
 
-    A string is one embedding, a flat array is one embedding per element, and a nested
-    array is one combined embedding per inner array, matching the online
-    `batchEmbedContents` path.
+    A string or a file content block is one embedding, a flat array is one embedding
+    per element, and a nested array is one combined embedding per inner array,
+    matching the online `batchEmbedContents` path.
     """
     if isinstance(embedding_input, list):
-        return tuple(embedding_input)
+        return tuple(_own_embedding_input(element) for element in embedding_input)
     return (embedding_input,)
 
 
@@ -663,7 +672,7 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
-    map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
+    map_openai_to_vertex_params: Callable[[dict[str, object]], dict[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.

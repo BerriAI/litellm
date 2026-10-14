@@ -8,13 +8,13 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain, islice
-from types import MappingProxyType
+from types import EllipsisType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 import anyio
 from anyio import to_process
 from anyio.lowlevel import RunVar
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, SecretStr, ValidationError
 from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
@@ -102,7 +102,9 @@ def _validate_tool_arguments(schema: Mapping[str, JsonValue], arguments: Mapping
 
 
 async def _tool_argument_validation_error(
-    schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]
+    schema: Mapping[str, JsonValue],
+    arguments: Mapping[str, JsonValue],
+    timeout_seconds: float = _VALIDATION_TIMEOUT_SECONDS,
 ) -> str | None:
     limit_error: Final = _validation_limit_error(schema, arguments)
     if limit_error is not None:
@@ -112,7 +114,7 @@ async def _tool_argument_validation_error(
     if existing is None:
         _SCHEMA_VALIDATION_LIMITER.set(limiter)
     try:
-        with anyio.fail_after(_VALIDATION_TIMEOUT_SECONDS):
+        with anyio.fail_after(timeout_seconds):
             return await to_process.run_sync(
                 _validate_tool_arguments, schema, arguments, cancellable=True, limiter=limiter
             )
@@ -588,6 +590,7 @@ async def handle_mcp_proxy_tool(
     oauth2_headers: dict[str, str] | None = None,  # mutable-ok: preserve forwarded headers
     raw_headers: dict[str, str] | None = None,  # mutable-ok: preserve request headers
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
+    incoming_bearer_token: SecretStr | None | EllipsisType = ...,
 ) -> CallToolResult:
     from fastapi import HTTPException
 
@@ -662,6 +665,7 @@ async def handle_mcp_proxy_tool(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
         litellm_logging_obj=litellm_logging_obj,
+        incoming_bearer_token=incoming_bearer_token,
     )
 
 
@@ -678,6 +682,7 @@ async def handle_mcp_tool_call(
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
     requested_server_id: str | None = None,
     guardrail_context: Mapping[str, object] | None = None,
+    incoming_bearer_token: SecretStr | None | EllipsisType = ...,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.operations import (
         _get_allowed_mcp_servers,
@@ -719,5 +724,6 @@ async def handle_mcp_tool_call(
         litellm_logging_obj=litellm_logging_obj,
         requested_server_id=requested_server_id,
         guardrail_context=guardrail_context,
+        incoming_bearer_token=incoming_bearer_token,
     )
     return complete_call_tool_result(result, WireCompat.LEGACY)
