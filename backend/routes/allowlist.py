@@ -42,6 +42,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/model/deprecations",
     "/v2/model/",
     "/model_group",
+    "/virtual_model",
     "/model_access_group/",
     "/model_hub/",
     "/v1/access_group",

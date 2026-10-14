@@ -641,15 +641,34 @@ class AnthropicMessagesBody(BaseModel):
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
-class ResponsesStreamBody(BaseModel):
-    """POST /v1/responses body in the subset the spend tests stream with.
-    `input` stays a plain string: the tests only drive single-turn prompts."""
+class ResponsesBody(BaseModel):
+    """POST /v1/responses body for single-turn prompts."""
 
     model: str
     input: str
-    stream: bool = True
+    stream: bool = False
     max_output_tokens: int | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class ResponsesStreamBody(ResponsesBody):
+    stream: bool = True
+
+
+class ResponsesContentItem(BaseModel):
+    type: str
+    text: str | None = None
+
+
+class ResponsesOutputItem(BaseModel):
+    type: str
+    content: list[ResponsesContentItem] = []
+
+
+class ResponsesOutput(BaseModel):
+    id: str | None = None
+    object: str = "response"
+    output: list[ResponsesOutputItem] = []
 
 
 class CountTokensBody(BaseModel):
@@ -825,8 +844,22 @@ class EmbedBody(BaseModel):
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
+class EmbeddingData(BaseModel):
+    object: str = "embedding"
+    index: int
+    embedding: list[float]
+
+
+class EmbedUsage(BaseModel):
+    prompt_tokens: int
+    total_tokens: int
+
+
 class EmbedResponse(BaseModel):
+    object: str = "list"
     model: str | None = None
+    data: list[EmbeddingData] = []
+    usage: EmbedUsage | None = None
 
 
 # ---------- videos ----------
@@ -1313,6 +1346,65 @@ class GuardrailCreateResponse(BaseModel):
 
 class FileEntry(BaseModel):
     id: str
+
+
+# ---------- virtual models ----------
+
+
+class VirtualModelMemberRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_id: str
+    priority: int
+    model_name: str | None = None
+
+
+class VirtualModelCreateBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    virtual_model_name: str
+    members: tuple[VirtualModelMemberRequest, ...]
+    description: str | None = None
+    routing_strategy: str | None = None
+    num_retries: int | None = None
+    timeout: int | None = None
+    allowed_fails: int | None = None
+    cooldown_time: int | None = None
+    team_id: str | None = None
+
+
+class VirtualModelMemberRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_id: str
+    priority: int = 1
+
+
+class VirtualModelPatchBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    virtual_model_name: str | None = None
+    description: str | None = None
+    add_members: tuple[VirtualModelMemberRequest, ...] | None = None
+    remove_members: tuple[str, ...] | None = None
+    team_id: str | None = None
+
+
+class VirtualModelRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    virtual_model_id: str
+    virtual_model_name: str
+    description: str | None = None
+    members: tuple[VirtualModelMemberRow, ...]
+    routing_strategy: str
+    live_member_count: int
+    team_id: str | None = None
+    created_by: str | None = None
+
+
+class VirtualModelListResponse(RootModel[tuple[VirtualModelRow, ...]]):
+    pass
 
 
 class FileListResponse(BaseModel):

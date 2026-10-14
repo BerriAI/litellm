@@ -5,8 +5,6 @@ import json
 import logging
 import os
 import re
-import socket
-import subprocess
 import time
 import types
 from datetime import datetime, timedelta, timezone
@@ -15,7 +13,6 @@ from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open, patch
 
-import click
 import fastapi.routing
 import httpx
 import pytest
@@ -29,9 +26,9 @@ import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import RedisCache
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -1681,7 +1678,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     with open(config_path, "w") as f:
         yaml.dump(test_config, f)
 
-    print(f"SET ENV VARIABLE - CONFIG_FILE_PATH, str(config_path): {str(config_path)}")
+    print(f"SET ENV VARIABLE - CONFIG_FILE_PATH, str(config_path): {config_path!s}")
     # Second setting of CONFIG_FILE_PATH to a different value
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
     print(f"config_path: {config_path}")
@@ -1700,7 +1697,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         yaml.dump(empty_config, f)
 
     monkeypatch.setenv("LITELLM_MASTER_KEY", test_env_master_key)
-    print("test_env_master_key: {}".format(test_env_master_key))
+    print(f"test_env_master_key: {test_env_master_key}")
     async with proxy_startup_event(app):
         from litellm.proxy.proxy_server import master_key
 
@@ -1804,7 +1801,9 @@ async def test_proxy_startup_refuses_fips_mode_when_the_config_disables_tls_veri
 
     config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     config_path.write_text(
-        yaml.dump({"general_settings": {"master_key": "sk-a-safe-master-key"}, "litellm_settings": {"ssl_verify": False}})
+        yaml.dump(
+            {"general_settings": {"master_key": "sk-a-safe-master-key"}, "litellm_settings": {"ssl_verify": False}}
+        )
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.openssl_enforces_fips", lambda: True)
@@ -1890,9 +1889,7 @@ class _DatabaseWithOneStoredCredential:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)]
-)
+@pytest.mark.parametrize("encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)])
 async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values_under_the_unsafe_key(
     monkeypatch, tmp_path, encrypted_with, asks_to_migrate
 ):
@@ -1975,9 +1972,7 @@ async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monke
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
 
-    config_path, announced = _boot_with_general_settings(
-        monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY}
-    )
+    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY})
 
     with pytest.raises(UnsafeMasterKeyError):
         async with proxy_startup_event(FastAPI()):
@@ -2062,7 +2057,7 @@ def test_team_info_masking():
             all_teams_config=[team1_info],
         )
 
-    print("Got exception: {}".format(exc_info.value))
+    print(f"Got exception: {exc_info.value}")
     assert "secret-test-key" not in str(exc_info.value)
     assert "public-test-key" not in str(exc_info.value)
 
@@ -2074,7 +2069,6 @@ async def test_get_all_team_models():
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from litellm.proxy._types import LiteLLM_TeamTable
     from litellm.proxy.proxy_server import get_all_team_models
 
     # Mock team data
@@ -4038,7 +4032,7 @@ async def test_load_config_warns_per_worker_login_counters_without_general_setti
     Redis must hear that its counters are per worker even when the config has no general_settings."""
     import logging
 
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy.auth.login_throttle import warn_login_counters_are_per_worker
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4194,7 +4188,6 @@ async def test_load_environment_variables_blocks_dangerous_keys():
     Test that _load_environment_variables rejects dangerous env var keys
     like PATH, LD_PRELOAD, PYTHONPATH, etc.
     """
-    import logging
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4276,7 +4269,7 @@ async def test_write_config_to_file(monkeypatch):
     """
     Do not write config to file if store_model_in_db is True
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4324,7 +4317,7 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
     """
     Test that config IS written to file when store_model_in_db is False
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -4421,7 +4414,7 @@ async def test_async_data_generator_midstream_error():
         try:
             async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
                 yielded_data.append(data)
-        except Exception as e:
+        except Exception:
             # If there's an exception, that's also part of what we want to test
             pass
 
@@ -4490,7 +4483,6 @@ async def test_chat_completion_result_no_nested_none_values():
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from fastapi import Request, Response
-    from pydantic import BaseModel
 
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
@@ -5557,7 +5549,7 @@ async def test_add_router_settings_from_db_config_merge_logic():
     This tests how router settings from config file and database are combined,
     including scenarios where nested dictionaries should be properly merged.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -6291,7 +6283,6 @@ async def test_tag_cache_update_called():
     Test that update_cache updates tag cache when tags are provided.
     """
     from litellm.caching.caching import DualCache
-    from litellm.proxy.proxy_server import user_api_key_cache
 
     cache = DualCache()
 
@@ -6345,7 +6336,6 @@ async def test_tag_cache_update_multiple_tags():
     Test that multiple tags are updated in cache.
     """
     from litellm.caching.caching import DualCache
-    from litellm.proxy.proxy_server import user_api_key_cache
 
     cache = DualCache()
 
@@ -6384,7 +6374,9 @@ async def test_tag_cache_update_multiple_tags():
 
             assert await asyncio.wait_for(set_cache_called.wait(), timeout=5)
 
-            mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False)
+            mock_get_cache.assert_awaited_once_with(
+                keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False
+            )
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -6508,7 +6500,7 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
     from litellm.caching.caching import DualCache
 
     admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
-    global_key = "{}:spend".format(admin_name)
+    global_key = f"{admin_name}:spend"
 
     def fake_get(key):
         if key == "user-lit":
@@ -6635,7 +6627,7 @@ async def test_init_sso_settings_in_db_error_handling():
     """
     Test that _init_sso_settings_in_db handles database errors gracefully.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -6765,7 +6757,6 @@ async def test_init_hashicorp_vault_config_override_retries_on_transport_error()
         invocations.append(None)
         if len(invocations) == 1:
             raise prisma.errors.ClientNotConnectedError()
-        return None  # No config in DB → function returns early after retry.
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_configoverrides.find_unique = AsyncMock(side_effect=_flaky_find_unique)
@@ -6914,9 +6905,7 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     routes_to_remove = []
     for route in app.routes:
         if hasattr(route, "path") and route.path == "/":
-            if hasattr(route, "methods") and "GET" in route.methods:
-                routes_to_remove.append(route)
-            elif not hasattr(route, "methods"):  # Catch-all routes
+            if hasattr(route, "methods") and "GET" in route.methods or not hasattr(route, "methods"):
                 routes_to_remove.append(route)
 
     for route in routes_to_remove:
@@ -8338,10 +8327,18 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
     request.headers = {}
     request.query_params = {}
 
-    settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
-    yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
-    initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch("litellm.proxy.proxy_server.master_key", MASTER_KEY)  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    settings: Final = patch(
+        "litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]}
+    )  # test-quality-ok: the method reads this module global; no injection seam
+    yaml_endpoints: Final = patch(
+        "litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint]
+    )  # test-quality-ok: module global holding the YAML endpoints the fix merges in
+    initialize: Final = patch(
+        "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
+    )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
+    master_key: Final = patch(
+        "litellm.proxy.proxy_server.master_key", MASTER_KEY
+    )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
@@ -9541,8 +9538,8 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     from the authoritative DB and adds this request's settled cost, which the
     async spend flush has not written yet, so budget gating continues."""
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import increment_spend_counters
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
+    from litellm.proxy.proxy_server import increment_spend_counters
 
     counter_cache = DualCache()
     budget_reservation = {
@@ -9892,7 +9889,7 @@ async def test_reseed_locks_dict_is_bounded():
     long-lived deployments with high counter-key churn. Inserting more
     than the cap evicts the oldest entries.
     """
-    import litellm.constants as constants
+    from litellm import constants
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     orig_locks = SpendCounterReseed._locks.copy()
@@ -12505,8 +12502,8 @@ def _config_field_info_client(monkeypatch, user_role):
     from fastapi.testclient import TestClient
 
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy.proxy_server import app
 
     db_record = types.SimpleNamespace(
@@ -13893,11 +13890,11 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
 def _window_spend_enqueue_env(cached_objects: dict):
     """Point increment_spend_counters at throwaway caches and a real
     WindowSpendUpdateQueue, and hand back the queue to inspect."""
+    import litellm.proxy.proxy_server as ps
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
         WindowSpendUpdateQueue,
     )
-    import litellm.proxy.proxy_server as ps
 
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_get_cache = AsyncMock(side_effect=lambda key, **_: cached_objects.get(key))
@@ -13976,8 +13973,8 @@ async def test_team_window_spend_row_is_enqueued():
 async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved():
     """A reservation only pre-charged the cache counter with an estimate; the
     row still owes the actual cost, so the enqueue must not be skipped."""
-    from litellm.proxy.proxy_server import increment_spend_counters
     import litellm.proxy.spend_tracking.budget_reservation as br
+    from litellm.proxy.proxy_server import increment_spend_counters
 
     reset_at = datetime.now(timezone.utc) + timedelta(days=10)
     key_obj = MagicMock()
@@ -15359,9 +15356,8 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
 
 
 async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
-    from litellm.rust_bridge._native import Tokenizer
-
     from litellm import Router
+    from litellm.rust_bridge._native import Tokenizer
     from tests.unit.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
 
     claude_tokenizer: Final = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
@@ -15400,9 +15396,8 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
 
 
 async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
-    from litellm.rust_bridge._native import Tokenizer
-
     from litellm import Router
+    from litellm.rust_bridge._native import Tokenizer
     from litellm.types.router import DeploymentTypedDict
 
     claude_tokenizer: Final[Tokenizer] = litellm.utils.select_tokenizer("claude-fable-5")["tokenizer"]
@@ -15779,3 +15774,168 @@ async def test_update_cache_reads_and_writes_declare_the_auth_objects_key_family
     assert seen, "update_cache must touch the cache for a priced user request"
     assert {target for _, target in seen} == {"auth_objects"}
     assert current_service_target() is None
+
+
+@pytest.mark.asyncio
+async def test_virtual_model_reconcile_loads_state_from_db():
+    """
+    After reconcile, the router's virtual model state must reflect DB rows:
+    names prefixed, priorities mapped, tuning fields mapped.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.constants import VIRTUAL_MODEL_PREFIX
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    member_row_1 = SimpleNamespace(
+        virtual_model_id="vm-1",
+        model_id="model-a",
+        priority=1,
+    )
+    member_row_2 = SimpleNamespace(
+        virtual_model_id="vm-1",
+        model_id="model-b",
+        priority=2,
+    )
+    virtual_model_row = SimpleNamespace(
+        virtual_model_id="vm-1",
+        virtual_model_name="test-vm",
+        description="test",
+        routing_strategy="ordered",
+        num_retries=2,
+        timeout=30,
+        stream_timeout=60,
+        allowed_fails=5,
+        cooldown_time=120,
+        members=[member_row_1, member_row_2],
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = SimpleNamespace(
+        litellm_virtualmodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[virtual_model_row]))
+    )
+
+    proxy_config = ProxyConfig()
+    virtual_models = await proxy_config.get_virtual_models_from_db(prisma_client=mock_prisma)
+
+    assert virtual_models is not None
+    assert len(virtual_models) == 1
+
+    router_name, state = virtual_models[0]
+    assert router_name == f"{VIRTUAL_MODEL_PREFIX}test-vm"
+    assert state.members == {"model-a": 1, "model-b": 2}
+    assert state.routing_strategy == "ordered"
+    assert state.num_retries == 2
+    assert state.timeout == 30
+    assert state.stream_timeout == 60
+    assert state.allowed_fails == 5
+    assert state.cooldown_time == 120
+
+
+@pytest.mark.asyncio
+async def test_virtual_model_reconcile_failed_read_leaves_prior_state():
+    """
+    When get_virtual_models_from_db returns None (transient DB failure),
+    add_deployment_locked must leave prior virtual state intact and the read was reached.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm import Router
+    from litellm.constants import VIRTUAL_MODEL_PREFIX
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.router import VirtualModelRouterState
+
+    router = Router(model_list=[])
+    vm_state = VirtualModelRouterState(
+        members={"model-a": 1, "model-b": 2},
+        routing_strategy="ordered",
+    )
+    router.set_virtual_models({f"{VIRTUAL_MODEL_PREFIX}existing-vm": vm_state})
+
+    mock_prisma = MagicMock()
+    litellm_config_table = MagicMock()
+    litellm_config_table.find_many = AsyncMock(return_value=[])
+    litellm_config_table.find_first = AsyncMock(return_value=None)
+
+    litellm_proxymodeltable = MagicMock()
+    litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    litellm_credentialstable = MagicMock()
+    litellm_credentialstable.find_many = AsyncMock(return_value=[])
+
+    litellm_virtualmodeltable = MagicMock()
+    litellm_virtualmodeltable.find_many = AsyncMock(side_effect=RuntimeError("DB connection lost"))
+
+    mock_prisma.db = SimpleNamespace(
+        litellm_config=litellm_config_table,
+        litellm_proxymodeltable=litellm_proxymodeltable,
+        litellm_credentialstable=litellm_credentialstable,
+        litellm_virtualmodeltable=litellm_virtualmodeltable,
+    )
+    mock_prisma.get_generic_data = AsyncMock(return_value=None)
+
+    proxy_config = ProxyConfig()
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch.object(proxy_config, "_init_non_llm_objects_in_db", AsyncMock()),
+    ):
+        await proxy_config.add_deployment_locked(
+            prisma_client=mock_prisma,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert router.virtual_model_members == {f"{VIRTUAL_MODEL_PREFIX}existing-vm": {"model-a": 1, "model-b": 2}}
+    litellm_virtualmodeltable.find_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_virtual_model_reconcile_no_prior_state_failed_read():
+    """
+    Router with no prior virtual state + failed virtual read stays empty and the read was reached.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm import Router
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    router = Router(model_list=[])
+
+    mock_prisma = MagicMock()
+    litellm_config_table = MagicMock()
+    litellm_config_table.find_many = AsyncMock(return_value=[])
+    litellm_config_table.find_first = AsyncMock(return_value=None)
+
+    litellm_proxymodeltable = MagicMock()
+    litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    litellm_credentialstable = MagicMock()
+    litellm_credentialstable.find_many = AsyncMock(return_value=[])
+
+    litellm_virtualmodeltable = MagicMock()
+    litellm_virtualmodeltable.find_many = AsyncMock(side_effect=RuntimeError("DB connection lost"))
+
+    mock_prisma.db = SimpleNamespace(
+        litellm_config=litellm_config_table,
+        litellm_proxymodeltable=litellm_proxymodeltable,
+        litellm_credentialstable=litellm_credentialstable,
+        litellm_virtualmodeltable=litellm_virtualmodeltable,
+    )
+    mock_prisma.get_generic_data = AsyncMock(return_value=None)
+
+    proxy_config = ProxyConfig()
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch.object(proxy_config, "_init_non_llm_objects_in_db", AsyncMock()),
+    ):
+        await proxy_config.add_deployment_locked(
+            prisma_client=mock_prisma,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert router.virtual_model_members == {}
+    litellm_virtualmodeltable.find_many.assert_awaited_once()

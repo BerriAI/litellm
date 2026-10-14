@@ -2449,7 +2449,7 @@ async def add_litellm_data_to_request(
 
     ### KEY-LEVEL Controls
     key_metadata: Final = user_api_key_dict.metadata
-    data = LiteLLMProxyRequestSetup.add_key_level_controls(
+    LiteLLMProxyRequestSetup.add_key_level_controls(
         key_metadata=key_metadata,
         data=data,
         _metadata_variable_name=_metadata_variable_name,

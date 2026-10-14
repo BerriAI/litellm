@@ -48,6 +48,8 @@ _EXPECTED_CONFIG_SYNCED_TABLE_NAMES = frozenset(
         "litellm_searchtoolstable",
         "litellm_ssoconfig",
         "litellm_uisettings",
+        "litellm_virtualmodelmembertable",
+        "litellm_virtualmodeltable",
     }
 )
 

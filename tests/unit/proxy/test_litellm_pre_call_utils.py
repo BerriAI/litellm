@@ -1270,6 +1270,59 @@ async def test_key_metadata_enable_prompt_caching_promoted_to_request_root(key_v
 
 
 @pytest.mark.asyncio
+async def test_key_level_controls_apply_to_original_request_data():
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    original_data = {
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {},
+    }
+
+    key_metadata = {
+        "cache": {"ttl": 300},
+        "tags": ["tag1", "tag2"],
+        "disable_global_guardrails": True,
+        "spend_logs_metadata": {"project": "test-project"},
+        "disable_fallbacks": True,
+        "enable_prompt_caching": True,
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata=key_metadata,
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=original_data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated is original_data
+
+    assert updated["cache"]["ttl"] == 300
+    assert updated["metadata"]["tags"] == ["tag1", "tag2"]
+    assert updated["metadata"]["disable_global_guardrails"] is True
+    assert updated["metadata"]["spend_logs_metadata"]["project"] == "test-project"
+    assert updated["disable_fallbacks"] is True
+    assert updated["enable_prompt_caching"] is True
+    assert updated["metadata"]["user_api_key_auth_metadata"]["disable_fallbacks"] is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "control_field",
     [

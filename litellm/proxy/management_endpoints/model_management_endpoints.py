@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME, VIRTUAL_MODEL_PREFIX
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -389,6 +389,16 @@ def _reject_non_admin_blocked_flag_on_create(
             type=ProxyErrorTypes.auth_error.value,
             code=status.HTTP_403_FORBIDDEN,
             param="blocked",
+        )
+
+
+def _raise_if_virtual_model_prefix_on_model_name(model_name: str) -> None:
+    if model_name.startswith(VIRTUAL_MODEL_PREFIX):
+        raise ProxyException(
+            message=f"model_name cannot start with reserved prefix '{VIRTUAL_MODEL_PREFIX}'. This prefix is reserved for virtual models.",
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="model_name",
         )
 
 
@@ -1263,6 +1273,9 @@ async def patch_model(
                 param="blocked",
             )
 
+        if patch_data.model_name is not None:
+            _raise_if_virtual_model_prefix_on_model_name(patch_data.model_name)
+
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=patch_data.litellm_params,
             user_api_key_dict=user_api_key_dict,
@@ -1903,7 +1916,7 @@ async def _get_team_public_model_names(
         model_info = model_info_as_mapping(row.model_info)
         if model_info is not None:
             public_name = model_info.get("team_public_model_name")
-            if public_name:
+            if isinstance(public_name, str):
                 public_names.add(public_name)
     return public_names
 
@@ -2565,6 +2578,8 @@ async def add_new_model(
 
         _reject_non_admin_blocked_flag_on_create(model_params.blocked, user_api_key_dict)
 
+        _raise_if_virtual_model_prefix_on_model_name(model_params.model_name)
+
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=model_params.litellm_params,
             user_api_key_dict=user_api_key_dict,
@@ -2784,6 +2799,10 @@ async def update_model(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
         )
+
+        if model_params.model_name is not None:
+            _raise_if_virtual_model_prefix_on_model_name(model_params.model_name)
+
         effective_params: Final = _effective_complexity_router_params(
             model_params.litellm_params, deployment.litellm_params
         )

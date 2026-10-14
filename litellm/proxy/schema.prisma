@@ -62,6 +62,35 @@ model LiteLLM_ProxyModelTable {
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
+  virtual_model_memberships LiteLLM_VirtualModelMemberTable[]
+}
+
+model LiteLLM_VirtualModelTable {
+  virtual_model_id   String   @id @default(uuid())
+  virtual_model_name String   @unique
+  description        String?
+  routing_strategy   String   @default("ordered")
+  num_retries        Int?
+  timeout            Int?
+  stream_timeout     Int?
+  allowed_fails      Int?
+  cooldown_time      Int?
+  team_id            String?
+  created_at         DateTime @default(now()) @map("created_at")
+  created_by         String
+  updated_at         DateTime @default(now()) @updatedAt @map("updated_at")
+  updated_by         String
+  members            LiteLLM_VirtualModelMemberTable[]
+}
+
+model LiteLLM_VirtualModelMemberTable {
+  virtual_model_id String
+  model_id         String
+  priority         Int @default(1)
+  virtual_model    LiteLLM_VirtualModelTable  @relation(fields: [virtual_model_id], references: [virtual_model_id], onDelete: Cascade)
+  model            LiteLLM_ProxyModelTable    @relation(fields: [model_id], references: [model_id], onDelete: Cascade)
+  @@id([virtual_model_id, model_id])
+  @@index([model_id])
 }
 
 

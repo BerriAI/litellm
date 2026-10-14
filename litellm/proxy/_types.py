@@ -204,6 +204,7 @@ class LitellmTableNames(str, enum.Enum):
     SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
     UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
     AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
+    VIRTUAL_MODEL_TABLE_NAME = "LiteLLM_VirtualModelTable"
 
 
 from litellm.types.integrations.slack_alerting import (
@@ -801,6 +802,11 @@ class LiteLLMRoutes(enum.Enum):
             # Create/update/delete and test_connection stay admin-only.
             "/search_tools/list",
             "/search_tools/ui/available_providers",
+            # Virtual models pass the route gate for internal users, the same
+            # way key_management_routes does; each handler then enforces
+            # owner/team-admin/proxy-admin authz like /key/* endpoints.
+            "/virtual_model",
+            "/virtual_model/{virtual_model_id}",
         ]
         + spend_tracking_routes
         + key_management_routes

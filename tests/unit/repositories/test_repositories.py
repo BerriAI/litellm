@@ -2269,6 +2269,7 @@ class TestPrismaTableRepository:
             "litellm_searchtoolstable",
             "litellm_ssoconfig",
             "litellm_uisettings",
+            "litellm_virtualmodeltable",
         }
     )
 

@@ -71,6 +71,7 @@ from litellm.constants import (
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    VIRTUAL_MODEL_ORDERED_STRATEGY,
 )
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
@@ -327,6 +328,8 @@ from litellm.types.router import (
     RoutingStrategy,
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
+    VirtualModelRouterState,
+    VirtualModelsAggregate,
     holds_secret_pointer,
 )
 from litellm.types.services import ServiceTypes
@@ -901,7 +904,6 @@ class Router:
     def _routing_groups(self, value: dict[str, RoutingGroup]) -> None:
         self.routing_groups = value
 
-    model_names: set = set()
     cache_responses: bool | None = False
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
     tenacity = None
@@ -1151,6 +1153,14 @@ class Router:
         # Maps (team_id, team_public_model_name) -> list of indices in model_list
         self.team_model_to_deployment_indices: dict[tuple[str, str], list[int]] = {}
         self.team_public_model_names: frozenset[str] = frozenset()
+
+        self._virtual_models: VirtualModelsAggregate = VirtualModelsAggregate(
+            members=MappingProxyType({}),
+            configs=MappingProxyType({}),
+            names=frozenset(),
+            selectors=MappingProxyType({}),
+        )
+        self._deployment_model_names: set[str] = set()  # mutable-ok: mutated by deployment additions/removals
 
         # Initialize cache attributes that ``_invalidate_model_group_info_cache``
         # and ``_invalidate_access_groups_cache`` touch *before* the first
@@ -1781,6 +1791,35 @@ class Router:
         routable_siblings: Final = self._filter_blocked_deployments([self.model_list[idx] for idx in sibling_indices])
         return len(routable_siblings) > 1
 
+    def virtual_model_has_alternatives(self, deployment_id: str, requested_model_group: str | None = None) -> bool:
+        """
+        True when `deployment_id` is a member of a multi-member virtual model AND
+        the requested model group is that virtual model name.
+
+        A member of a multi-member virtual model counts as having alternatives
+        only when called through the virtual model name, so a 429 benches it
+        per the normal cooldown rules. When called directly by its own
+        single-deployment model_name, the conservative guard is preserved.
+        """
+        if requested_model_group is None:
+            return False
+        if requested_model_group not in self._virtual_model_names:
+            return False
+        members: Final = self.virtual_model_members.get(requested_model_group)
+        if members is None:
+            return False
+        return deployment_id in members and len(members) > 1
+
+    def deployment_in_multi_member_virtual_model(self, deployment_id: str) -> bool:
+        """
+        True when `deployment_id` is a member of any multi-member virtual model,
+        regardless of which name the current request used.
+        """
+        for members in self.virtual_model_members.values():
+            if deployment_id in members and len(members) > 1:
+                return True
+        return False
+
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 
     def _get_request_routing_strategy_override(self, request_kwargs: dict | None) -> str | None:
@@ -1920,6 +1959,17 @@ class Router:
             return override, override_selector
 
         resolved_model: Final = self.get_model_from_alias(model=model) or model
+
+        aggregate: Final = self._virtual_models
+        if resolved_model in aggregate.names:
+            vm_config: Final = aggregate.configs.get(resolved_model)
+            if vm_config is not None:
+                vm_strategy: Final = self._normalize_strategy(vm_config.routing_strategy)
+                if vm_strategy != VIRTUAL_MODEL_ORDERED_STRATEGY:
+                    vm_selector: Final = aggregate.selectors.get(resolved_model, {}).get(vm_strategy or "")
+                    verbose_router_logger.debug("routing_group=virtual_model strategy=%s", vm_strategy)
+                    return vm_strategy, vm_selector
+
         group_name: Final = (
             resolved_model
             if self.get_routing_group(resolved_model) is not None
@@ -7707,6 +7757,11 @@ class Router:
             combined_fallbacks: Final = order_fallback_entries + (external_fallback_group or [])
 
             if combined_fallbacks:
+                _walk_skipped: Final = _as_retry_skipped_deployment_ids(
+                    getattr(e, "retry_walk_skipped_deployment_ids", None)
+                )
+                if _walk_skipped and order_model_group in self._virtual_model_names:
+                    input_kwargs["_retry_skipped_deployment_ids"] = _walk_skipped
                 input_kwargs.update(
                     {
                         "fallback_model_group": combined_fallbacks,
@@ -8007,20 +8062,57 @@ class Router:
             )
 
     @staticmethod
-    def _deployment_ids_to_skip_on_retry(exception: Exception, already_skipped: object) -> tuple[str, ...]:
+    def _deployment_ids_to_skip_on_retry(
+        exception: Exception,
+        already_skipped: object,
+        model_group: str | None = None,
+        healthy_deployments: Sequence[Mapping[str, object]] | None = None,
+        virtual_model_names: frozenset[str] = frozenset(),
+        alias_resolver: Callable[[str], str | None] | None = None,
+    ) -> tuple[str, ...]:
+        def _extract_deployment_ids(deployments: Sequence[Mapping[str, object]]) -> frozenset[str]:
+            def _iter_ids() -> Iterator[str]:
+                for dep in deployments:
+                    model_info = dep.get("model_info")
+                    if isinstance(model_info, dict):
+                        id_val = model_info.get("id")  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # model_info is Mapping[str, object]; dict values are unknown
+                        if isinstance(id_val, str):
+                            yield id_val
+                    else:
+                        model_id = dep.get("model_id")
+                        if isinstance(model_id, str):
+                            yield model_id
+
+            return frozenset(_iter_ids())
+
         failed_deployment_id: Final[str | None] = getattr(exception, "retry_skip_deployment_id", None) or getattr(
             exception, "failed_deployment_id", None
         )
         status_code: Final = getattr(exception, "status_code", None)
         if not failed_deployment_id or not isinstance(status_code, int):
             return ()
-        if litellm.should_retry(status_code):
+
+        resolved_model_group: Final = (
+            (alias_resolver(model_group) or model_group) if alias_resolver and model_group else model_group
+        )
+        is_virtual_model: Final = resolved_model_group is not None and resolved_model_group in virtual_model_names
+
+        if litellm.should_retry(status_code) and not is_virtual_model:
             return ()
+
         already_skipped_ids: Final = _as_retry_skipped_deployment_ids(already_skipped)
         skipped: Final = tuple(sorted(frozenset((*already_skipped_ids, failed_deployment_id))))
-        verbose_router_logger.debug(
-            "Retry skips deployments that already answered %s to this request: %s", status_code, skipped
-        )
+
+        if is_virtual_model and healthy_deployments is not None:
+            healthy_ids: Final = _extract_deployment_ids(healthy_deployments)
+            remaining: Final = healthy_ids - frozenset(skipped)
+            if not remaining and not already_skipped_ids:
+                verbose_router_logger.debug(
+                    "Skip set would empty virtual model candidates, resetting for single-member retry"
+                )
+                return ()
+
+        verbose_router_logger.debug("Retry skips %d deployment(s) after status %s", len(skipped), status_code)
         return skipped
 
     @tracer.wrap()
@@ -8123,6 +8215,10 @@ class Router:
                 first_skipped_ids: Final = self._deployment_ids_to_skip_on_retry(
                     exception=original_exception,
                     already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
+                    model_group=model_group,  # pyright: ignore[reportUnknownArgumentType]  # model_group is unknown from untyped kwargs
+                    healthy_deployments=_healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # _healthy_deployments is unknown from untyped legacy code
+                    virtual_model_names=self._virtual_model_names,
+                    alias_resolver=self.get_model_from_alias,
                 )
                 if first_skipped_ids:
                     kwargs["_retry_skipped_deployment_ids"] = first_skipped_ids  # rebind-ok: the next attempt reads it
@@ -8198,6 +8294,10 @@ class Router:
                     skipped_ids = self._deployment_ids_to_skip_on_retry(
                         exception=e,
                         already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
+                        model_group=model_group,  # pyright: ignore[reportUnknownArgumentType]  # model_group is unknown from untyped kwargs
+                        healthy_deployments=_healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # _healthy_deployments is unknown from untyped legacy code
+                        virtual_model_names=self._virtual_model_names,
+                        alias_resolver=self.get_model_from_alias,
                     )
                     if skipped_ids:
                         kwargs["_retry_skipped_deployment_ids"] = skipped_ids  # rebind-ok: the next attempt reads it
@@ -8219,6 +8319,10 @@ class Router:
                 # will always be set (never None) when we reach this point.
                 actual_retries_attempted: Final = current_attempt + 1 if current_attempt is not None else num_retries
                 setattr(original_exception, "num_retries", actual_retries_attempted)
+
+            _accumulated_skip: Final = _as_retry_skipped_deployment_ids(kwargs.get("_retry_skipped_deployment_ids"))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # kwargs is untyped legacy
+            if _accumulated_skip:
+                original_exception.retry_walk_skipped_deployment_ids = _accumulated_skip  # pyright: ignore[reportAttributeAccessIssue]  # dynamic stamp, read by the order-fallback escalation branch
 
             raise original_exception
 
@@ -8663,21 +8767,28 @@ class Router:
                 _model_info if isinstance(_model_info, dict) else None, litellm_params, key="cooldown_time"
             )
 
-            header_cooldown = None
-            if exception_headers is not None:
-                header_cooldown = litellm.utils._get_retry_after_from_exception_header(
-                    response_headers=exception_headers
+            def _get_header_cooldown(headers: object | None) -> float | None:
+                if headers is None:
+                    return None
+                return litellm.utils._get_retry_after_from_exception_header(response_headers=headers)  # pyright: ignore[reportPrivateUsage,reportArgumentType]  # private helper; headers arrives as object from untyped kwargs
+
+            header_cooldown: Final = _get_header_cooldown(exception_headers)
+            requested_model_group: Final = (  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # model_group is unknown from untyped kwargs; get returns Unknown on Mapping[str, object]
+                get_litellm_metadata_from_kwargs(
+                    cast("dict[str, object]", kwargs)  # cast-ok: untyped kwargs dict
                 )
+                or {}
+            ).get("model_group")
+
             ##############################################
             # Logic to determine cooldown time
-            # 1. Check if a cooldown time is set in the deployment config
-            # 2. Check if a cooldown time is set in the response header
-            # 3. If no cooldown time is set, use the router default cooldown time
+            # Precedence: deployment config > Retry-After header > router default
             ##############################################
+            _time_to_cooldown: float
             if deployment_cooldown is not None and deployment_cooldown >= 0:
                 _time_to_cooldown = deployment_cooldown
             elif header_cooldown is not None and header_cooldown >= 0:
-                _time_to_cooldown = header_cooldown
+                _time_to_cooldown = header_cooldown  # rebind-ok: computed via conditional chain
             else:
                 _time_to_cooldown = self.cooldown_time
 
@@ -8695,12 +8806,7 @@ class Router:
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
-                    requested_model_group=(
-                        get_litellm_metadata_from_kwargs(
-                            cast("dict[str, object]", kwargs)  # cast-ok: untyped kwargs dict
-                        )
-                        or {}
-                    ).get("model_group"),
+                    requested_model_group=requested_model_group,  # pyright: ignore[reportUnknownArgumentType]  # requested_model_group is unknown from untyped kwargs
                     request_kwargs=cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
                 )  # setting deployment_id in cooldown deployments
 
@@ -9997,7 +10103,7 @@ class Router:
                 )
 
         verbose_router_logger.debug("\nInitialized Model List %s", self.get_model_names())
-        self.model_names = {m["model_name"] for m in model_list}
+        self._deployment_model_names = {m["model_name"] for m in model_list}  # pyright: ignore[reportUnknownVariableType]  # model_list rows arrive as untyped DeploymentTypedDict
 
         # Note: model_name_to_deployment_indices is already built incrementally
         # by _create_deployment -> _add_model_to_list_and_index_map
@@ -10211,7 +10317,7 @@ class Router:
 
         # add to model names
         self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)
-        self.model_names.add(deployment.model_name)
+        self._deployment_model_names.add(deployment.model_name)
         self._sync_deployment_budget_config(deployment=deployment)
         return deployment
 
@@ -10252,7 +10358,7 @@ class Router:
                 self.model_name_to_deployment_indices[model_name] = updated_indices
             else:
                 del self.model_name_to_deployment_indices[model_name]
-                self.model_names.discard(model_name)
+                self._deployment_model_names.discard(model_name)
 
         # Update team_model_to_deployment_indices
         for key, indices in list(self.team_model_to_deployment_indices.items()):
@@ -10592,6 +10698,78 @@ class Router:
         self._invalidate_model_group_info_cache()
 
     _replay_model_cost_registrations = replay_model_cost_registrations
+
+    def set_virtual_models(self, virtual_models: Mapping[str, VirtualModelRouterState]) -> None:
+        """
+        Atomically replace the router's virtual model state.
+
+        Parameters:
+        - virtual_models: Mapping from router-facing name ("virtual_model/<name>") to state
+        """
+        members: Final = MappingProxyType(
+            {name: MappingProxyType(dict(state.members)) for name, state in virtual_models.items()}
+        )
+        configs: Final = MappingProxyType(dict(virtual_models))
+        names: Final = frozenset(virtual_models.keys())
+
+        previous_selectors: Final[Mapping[str, Mapping[str, RouterStrategySelector]]] = getattr(
+            self, "_virtual_model_selectors", {}
+        )
+
+        def _flatten_selectors(
+            selectors_by_name: Mapping[str, Mapping[str, RouterStrategySelector]],
+        ) -> tuple[RouterStrategySelector, ...]:
+            return tuple(
+                sel for selectors in selectors_by_name.values() for sel in selectors.values()
+            )  # comprehension-ok: flattening nested structure
+
+        self._unregister_router_selectors(_flatten_selectors(previous_selectors))
+
+        def _build_vm_selectors(
+            vm_states: Mapping[str, VirtualModelRouterState],
+        ) -> Mapping[str, Mapping[str, RouterStrategySelector]]:
+            selectors: Final[dict[str, dict[str, RouterStrategySelector]]] = {}  # mutable-ok: per-entry side effect
+            for name, state in vm_states.items():
+                if state.routing_strategy != VIRTUAL_MODEL_ORDERED_STRATEGY:
+                    selector = self._build_strategy_selector(  # pyright: ignore[reportUnknownMemberType]  # _build_strategy_selector is untyped legacy
+                        strategy=state.routing_strategy,
+                        routing_strategy_args={},
+                        register_callbacks=False,
+                    )
+                    if selector is not None:
+                        selectors[name] = {self._normalize_strategy(state.routing_strategy) or "": selector}
+                        self._register_router_selector(selector)
+            return MappingProxyType(selectors)
+
+        new_selectors: Final = _build_vm_selectors(virtual_models)
+
+        self._virtual_models = VirtualModelsAggregate(
+            members=members,
+            configs=configs,
+            names=names,
+            selectors=new_selectors,
+        )
+        self._invalidate_model_group_info_cache()
+
+    @property
+    def virtual_model_members(self) -> Mapping[str, Mapping[str, int]]:
+        return self._virtual_models.members
+
+    @property
+    def virtual_model_configs(self) -> Mapping[str, VirtualModelRouterState]:
+        return self._virtual_models.configs
+
+    @property
+    def _virtual_model_names(self) -> frozenset[str]:
+        return self._virtual_models.names
+
+    @property
+    def _virtual_model_selectors(self) -> Mapping[str, Mapping[str, RouterStrategySelector]]:
+        return self._virtual_models.selectors
+
+    @property
+    def model_names(self) -> set[str]:  # mutable-ok: union of mutable _deployment_model_names with immutable frozenset
+        return self._deployment_model_names | self._virtual_model_names
 
     def delete_deployment(self, id: str) -> Deployment | None:
         """
@@ -12114,6 +12292,66 @@ class Router:
         # No match: deployment is for a different team or doesn't match the requested model
         return False
 
+    def _get_virtual_model_deployments(
+        self,
+        model_name: str,
+        model_alias: str | None,
+        team_id: str | None,
+        aggregate: VirtualModelsAggregate,
+    ) -> list[DeploymentTypedDict]:  # mutable-ok: returns list of TypedDict for Router consumption
+        """Resolve a virtual model name to its member deployments."""
+        config: Final = aggregate.configs.get(model_name)
+        members: Final = aggregate.members.get(model_name)
+        if config is None or members is None:
+            return []
+
+        requested_name: Final = model_alias if model_alias is not None else model_name
+        is_ordered_strategy: Final = config.routing_strategy == VIRTUAL_MODEL_ORDERED_STRATEGY
+
+        def _resolve_member(member_id: str, priority: int) -> DeploymentTypedDict | None:
+            if member_id not in self.model_id_to_deployment_index_map:
+                return None
+            idx: Final = self.model_id_to_deployment_index_map[member_id]
+            deployment: Final = self.model_list[idx]  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # self.model_list is list[Unknown] from untyped legacy
+            if not self.should_include_deployment(  # pyright: ignore[reportUnknownMemberType]  # should_include_deployment is untyped legacy
+                model_name=deployment["model_name"],
+                model=deployment,
+                team_id=team_id,  # pyright: ignore[reportUnknownArgumentType]  # deployment is unknown from untyped model_list
+            ):
+                return None
+
+            params_copy: Final = {  # pyright: ignore[reportUnknownVariableType]  # deployment["litellm_params"] is unknown from untyped model_list
+                **deployment["litellm_params"],
+                **({"order": priority} if is_ordered_strategy else {}),
+                **({"timeout": config.timeout} if config.timeout is not None else {}),
+                **({"stream_timeout": config.stream_timeout} if config.stream_timeout is not None else {}),
+                **({"num_retries": config.num_retries} if config.num_retries is not None else {}),
+                **({"client_side_timeout": True} if config.timeout is not None else {}),
+            }
+
+            return {  # pyright: ignore[reportReturnType,reportUnknownVariableType]  # returning dict with unknown keys/values from untyped model_list
+                **self._as_routing_group_row(deployment),
+                "model_name": requested_name,
+                "litellm_params": params_copy,
+            }
+
+        resolved: Final = tuple(
+            result
+            for member_id, priority in members.items()
+            if (result := _resolve_member(member_id, priority)) is not None
+        )
+
+        return list(resolved)
+
+    @staticmethod
+    def _with_model_alias(model: DeploymentTypedDict, model_alias: str | None) -> DeploymentTypedDict:
+        if model_alias is None:
+            return model
+        # Shallow copy is enough: only the top-level model_name is modified
+        alias_model: Final = model.copy()
+        alias_model["model_name"] = model_alias
+        return alias_model
+
     def get_all_deployments(
         self,
         model_name: str,
@@ -12135,6 +12373,10 @@ class Router:
         name (for example, `model_name_<team_id>_<uuid>`), this method falls back
         to the standard model-name index / scan path.
         """
+        aggregate: Final = self._virtual_models
+        if model_name in aggregate.names:
+            return self._get_virtual_model_deployments(model_name, model_alias, team_id, aggregate)
+
         returned_models: Final[list[DeploymentTypedDict]] = []
 
         # O(1) lookup in team_model index when team_id is provided
@@ -12147,12 +12389,7 @@ class Router:
                     model = self.model_list[idx]
                     if not self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
                         continue
-                    if model_alias is not None:
-                        alias_model = model.copy()
-                        alias_model["model_name"] = model_alias
-                        returned_models.append(alias_model)
-                    else:
-                        returned_models.append(model)
+                    returned_models.append(self._with_model_alias(model, model_alias))
                 if returned_models:
                     return returned_models
 
@@ -12164,27 +12401,14 @@ class Router:
             for idx in indices:
                 model = self.model_list[idx]
                 if self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
-                    if model_alias is not None:
-                        # Optimized: Use shallow copy since we only modify top-level model_name
-                        # This is much faster than deepcopy for nested dict structures
-                        alias_model = model.copy()
-                        alias_model["model_name"] = model_alias
-                        returned_models.append(alias_model)
-                    else:
-                        returned_models.append(model)
+                    returned_models.append(self._with_model_alias(model, model_alias))
         elif team_id is not None:
             # Fallback: if team_id is provided and model_name not in index,
             # check if model_name matches any team_public_model_name
             # O(n) scan but only when team_id lookup fails
             for idx, model in enumerate(self.model_list):
                 if self.should_include_deployment(model_name=model_name, model=model, team_id=team_id):
-                    if model_alias is not None:
-                        # Optimized: Use shallow copy since we only modify top-level model_name
-                        alias_model = model.copy()
-                        alias_model["model_name"] = model_alias
-                        returned_models.append(alias_model)
-                    else:
-                        returned_models.append(model)
+                    returned_models.append(self._with_model_alias(model, model_alias))
 
         return returned_models
 
@@ -12208,6 +12432,8 @@ class Router:
                     model_names.append(team_model_name)
             else:
                 model_names.append(deployment.get("model_name", ""))
+
+        model_names.extend(self._virtual_model_names)  # pyright: ignore[reportUnknownMemberType]  # model_names is list[Unknown] from untyped legacy
 
         return model_names
 
@@ -13621,33 +13847,56 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            cast(list[dict], healthy_deployments), target_order=_target_order
-        )
-
-        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
-        ## this request via weighted-failover. Always honored, regardless of the
-        ## router-level flag, so a stale exclusion key on kwargs cannot escape.
         _excluded_deployment_ids: Final = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
-        healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
-            cast(list[dict], healthy_deployments),
-            excluded_deployment_ids=_excluded_deployment_ids,
-        )
-
-        ## RETRY SKIP ## -> drop deployments that already refused this request with a
-        ## non-retryable status, unless that leaves nothing, so the caller still gets
-        ## the provider's own error instead of a no-deployments error.
         _retry_skipped_deployment_ids: Final = _as_retry_skipped_deployment_ids(
             request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
         )
-        healthy_deployments = (
-            litellm.utils.get_excluded_filtered_deployments(
-                healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
-            )
-            or healthy_deployments
+
+        _healthy_list: Final = (
+            [healthy_deployments]
+            if isinstance(healthy_deployments, Mapping)
+            else list(healthy_deployments)
+            if isinstance(healthy_deployments, tuple)
+            else healthy_deployments
         )
+
+        is_virtual: Final = model in self._virtual_model_names
+        if is_virtual:
+            # Virtual models apply exclusions before order filtering so a failed
+            # priority-1 member cannot starve healthy lower-priority members.
+            healthy_deployments = litellm.utils.get_excluded_filtered_deployments(  # rebind-ok: virtual-model exclusion-before-order filter chain
+                _healthy_list,
+                excluded_deployment_ids=_excluded_deployment_ids,
+            )
+            if _retry_skipped_deployment_ids:
+                healthy_deployments = litellm.utils.get_excluded_filtered_deployments(  # rebind-ok: virtual-model exclusion-before-order filter chain  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # get_excluded_filtered_deployments is untyped legacy
+                    healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
+                )
+            healthy_deployments = litellm.utils.get_order_filtered_deployments(  # rebind-ok: virtual-model exclusion-before-order filter chain
+                healthy_deployments, target_order=_target_order
+            )
+        else:
+            ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
+            healthy_deployments = litellm.utils.get_order_filtered_deployments(
+                _healthy_list, target_order=_target_order
+            )
+            ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
+            ## this request via weighted-failover. Always honored, regardless of the
+            ## router-level flag, so a stale exclusion key on kwargs cannot escape.
+            healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
+                healthy_deployments,
+                excluded_deployment_ids=_excluded_deployment_ids,
+            )
+            ## RETRY SKIP ## -> drop deployments that already refused this request with a
+            ## non-retryable status, unless that leaves nothing, so the caller still gets
+            ## the provider's own error instead of a no-deployments error.
+            healthy_deployments = (  # rebind-ok: conditional exclusion chain  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # get_excluded_filtered_deployments returns unknown
+                litellm.utils.get_excluded_filtered_deployments(  # pyright: ignore[reportUnknownMemberType]  # get_excluded_filtered_deployments is untyped legacy
+                    healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
+                )
+                or healthy_deployments
+            )
 
         if len(healthy_deployments) == 0:
             exception: Final = await async_raise_no_deployment_exception(
@@ -14804,31 +15053,49 @@ class Router:
                 request_kwargs=request_kwargs,
             )
 
-        ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        healthy_deployments = litellm.utils.get_order_filtered_deployments(
-            healthy_deployments, target_order=_target_order
-        )
-
-        ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
-        ## this request via weighted-failover. See async counterpart in
-        ## async_get_healthy_deployments for details.
         _excluded_deployment_ids: Final = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
-        healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
-            healthy_deployments,
-            excluded_deployment_ids=_excluded_deployment_ids,
-        )
-
-        ## RETRY SKIP ## -> see async counterpart in async_get_healthy_deployments.
         _retry_skipped_deployment_ids: Final = _as_retry_skipped_deployment_ids(
             request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
         )
-        healthy_deployments = (
-            litellm.utils.get_excluded_filtered_deployments(
-                healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
+
+        is_virtual: Final = model in self._virtual_model_names
+        if is_virtual:
+            # See the async counterpart in async_get_healthy_deployments.
+            healthy_deployments = litellm.utils.get_excluded_filtered_deployments(  # rebind-ok: virtual-model exclusion-before-order filter chain
+                healthy_deployments,
+                excluded_deployment_ids=_excluded_deployment_ids,
             )
-            or healthy_deployments
-        )
+            if _retry_skipped_deployment_ids:
+                healthy_deployments = litellm.utils.get_excluded_filtered_deployments(  # rebind-ok: virtual-model exclusion-before-order filter chain  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # get_excluded_filtered_deployments is untyped legacy
+                    healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
+                )
+            # Pin to the legacy chain's bare-element contract: an annotated
+            # list[dict[str, object]] here would leak `object` into the inferred
+            # return of this unannotated function and break legacy consumers.
+            _virtual_ordered: Final[list[dict]] = (  # mutable-ok: legacy bare-element contract, see note above
+                litellm.utils.get_order_filtered_deployments(healthy_deployments, target_order=_target_order)
+            )
+            healthy_deployments = _virtual_ordered  # rebind-ok: virtual-model exclusion-before-order filter chain
+        else:
+            ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
+            healthy_deployments = litellm.utils.get_order_filtered_deployments(
+                healthy_deployments, target_order=_target_order
+            )
+            ## WEIGHTED FAILOVER EXCLUSION ## -> drop deployments already tried in
+            ## this request via weighted-failover. See async counterpart in
+            ## async_get_healthy_deployments for details.
+            healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
+                healthy_deployments,
+                excluded_deployment_ids=_excluded_deployment_ids,
+            )
+            ## RETRY SKIP ## -> see async counterpart in async_get_healthy_deployments.
+            healthy_deployments = (  # rebind-ok: conditional exclusion chain  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # get_excluded_filtered_deployments returns unknown
+                litellm.utils.get_excluded_filtered_deployments(  # pyright: ignore[reportUnknownMemberType]  # get_excluded_filtered_deployments is untyped legacy
+                    healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
+                )
+                or healthy_deployments
+            )
 
         if len(healthy_deployments) == 0:
             model_ids = self.get_model_ids(model_name=model)
