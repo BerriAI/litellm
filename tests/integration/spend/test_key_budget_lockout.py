@@ -6,6 +6,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
+from openai.types.chat import ChatCompletionChunk
 from pydantic import JsonValue
 
 
@@ -210,3 +211,56 @@ def test_lowering_a_tier_budget_below_spend_blocks_the_key(gateway: Gateway) -> 
         assert object_value(denied.json()["error"])["type"] == "budget_exceeded", denied.text
         assert "Max budget: 0.01" in denied.text, denied.text
         assert upstream.get("/__observations").json()["requests"] == []
+
+
+@pytest.mark.timeout(149)
+def test_key_linked_to_a_tier_by_update_is_refused_once_streamed_spend_exhausts_it(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        budget_id: Final = scenario.budget(budget_id=f"tier-{uuid.uuid4().hex}", max_budget=0.06, budget_duration="30d")
+        key: Final = scenario.key(models=[model])
+        gateway.post("/key/update", {"key": key, "budget_id": budget_id})
+        info: Final = object_value(gateway.get("/key/info", {"key": key})["info"])
+        assert info["budget_id"] == budget_id, info
+
+        content: Final = f"tier streamed {uuid.uuid4().hex}"
+        body: Final = {
+            "model": model,
+            "max_tokens": 20,
+            "messages": [{"role": "user", "content": content}],
+            "stream": True,
+        }
+        _observed(upstream)
+        served: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert served.status_code == 200, served.text
+        events: Final = tuple(
+            line.removeprefix("data: ") for line in served.text.splitlines() if line.startswith("data: ")
+        )
+        assert events[-1] == "[DONE]", served.text
+        chunks: Final = tuple(ChatCompletionChunk.model_validate_json(event) for event in events[:-1])
+        assert {chunk.object for chunk in chunks} == {"chat.completion.chunk"}, served.text
+        assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices), served.text
+        observations: Final = _observed(upstream)
+        assert len(observations) == 1, observations
+        upstream_body: Final = object_value(object_value(observations[0])["body"])
+        assert upstream_body["stream"] is True, observations
+
+        denied: Final = eventually(
+            lambda: gateway.request("POST", "/v1/chat/completions", body, key=key),
+            lambda response: (
+                response.status_code == 422 and object_value(response.json()["error"])["type"] == "budget_exceeded"
+            ),
+            seconds=125,
+        )
+        assert denied.status_code == 422, denied.text
+        assert object_value(denied.json()["error"])["type"] == "budget_exceeded", denied.text
+        assert "Max budget: 0.06" in denied.text, denied.text
+        _observed(upstream)
+        fresh_denied: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert fresh_denied.status_code == 422, fresh_denied.text
+        assert object_value(fresh_denied.json()["error"])["type"] == "budget_exceeded", fresh_denied.text
+        assert "Max budget: 0.06" in fresh_denied.text, fresh_denied.text
+        assert _observed(upstream) == []
