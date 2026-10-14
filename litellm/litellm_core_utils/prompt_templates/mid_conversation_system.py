@@ -343,33 +343,6 @@ def _unresolved_tool_search_ids(message: object) -> tuple[str, ...]:
     )
 
 
-def _is_client_tool_call(tool_call: object) -> bool:
-    tool_id: Final = message_field(tool_call, "id")
-    return isinstance(tool_id, str) and not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
-
-
-def _tool_search_ids_beside_client_calls(message: object) -> tuple[str, ...]:
-    tool_calls: Final = parts_of(message_field(message, "tool_calls"))
-    return _unresolved_tool_search_ids(message) if any(map(_is_client_tool_call, tool_calls)) else ()
-
-
-def tool_search_ids_dropped_with_their_answers(messages: Iterable[object]) -> frozenset[str]:
-    """Tool search uses ``anthropic_messages_pt`` leaves out together with the caller's answer to them.
-
-    The search already ran on Anthropic's side, so a caller's ``tool`` message for it
-    is never the real result. Dropping the pair is safe only beside a client tool call,
-    whose result keeps a user turn after the assistant turn: Claude rejects a
-    conversation that ends on an assistant turn.
-    """
-    return frozenset(
-        chain.from_iterable(
-            _tool_search_ids_beside_client_calls(message)
-            for message in messages
-            if message_field(message, "role") == "assistant"
-        )
-    )
-
-
 def _tool_calls_render(messages: Sequence[object], index: int) -> bool:
     tool_calls: Final = parts_of(message_field(messages[index], "tool_calls"))
     search_ids: Final = _unresolved_tool_search_ids(messages[index])

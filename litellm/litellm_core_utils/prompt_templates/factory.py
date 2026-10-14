@@ -25,7 +25,6 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     anthropic_system_messages,
     find_anthropic_server_tool_result,
     is_anthropic_tool_search_use,
-    tool_search_ids_dropped_with_their_answers,
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
@@ -2475,7 +2474,6 @@ def anthropic_messages_pt(
     is_bedrock_invoke = model.lower().startswith("invoke/")
     is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
     force_base64 = is_bedrock_invoke or is_vertex_ai
-    dropped_tool_search_ids: Final = tool_search_ids_dropped_with_their_answers(messages)
 
     msg_i = 0
     while msg_i < len(messages):
@@ -2576,9 +2574,7 @@ def anthropic_messages_pt(
 
                     user_content.append(_anthropic_content_text_element)
 
-            elif (
-                user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function"
-            ) and user_message_types_block.get("tool_call_id") not in dropped_tool_search_ids:
+            elif user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function":
                 # OpenAI's tool message content will always be a string
                 user_content.append(
                     convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
@@ -2593,7 +2589,7 @@ def anthropic_messages_pt(
         unique_tool_ids: set[str] = set()
 
         assistant_content: list[AnthropicMessagesAssistantMessageValues] = []
-        answered_tool_ids = answered_tool_call_ids(messages, msg_i) - dropped_tool_search_ids
+        answered_tool_ids = answered_tool_call_ids(messages, msg_i)
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
             assistant_content_block: ChatCompletionAssistantMessage = messages[msg_i]
