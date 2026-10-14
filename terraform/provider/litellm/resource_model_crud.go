@@ -166,74 +166,27 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		litellmParams["thinking"] = thinking
 	}
 
-	// Add additional parameters if provided
 	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
 		var dropParams []string
 
 		for key, value := range additionalParams.(map[string]interface{}) {
-			// Convert string values to appropriate types where possible
-			if strValue, ok := value.(string); ok {
-				// Check if it's JSON (starts with [ or {)
-				trimmedValue := strings.TrimSpace(strValue)
-				if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
-					var parsedValue interface{}
-					if err := json.Unmarshal([]byte(strValue), &parsedValue); err == nil {
-						// Successfully parsed JSON
-						if key == "additional_drop_params" {
-							// Handle drop params specially
-							if dropList, ok := parsedValue.([]interface{}); ok {
-								for _, item := range dropList {
-									if paramStr, ok := item.(string); ok {
-										dropParams = append(dropParams, paramStr)
-									}
-								}
-							}
-							continue // Don't add to litellmParams
-						} else {
-							litellmParams[key] = parsedValue
-						}
-					} else {
-						// Not valid JSON, apply existing conversion logic
-						if strValue == "true" {
-							litellmParams[key] = true
-						} else if strValue == "false" {
-							litellmParams[key] = false
-						} else {
-							// Try to convert numeric strings
-							if intValue, err := strconv.Atoi(strValue); err == nil {
-								litellmParams[key] = intValue
-							} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-								litellmParams[key] = floatValue
-							} else {
-								// Keep as string
-								litellmParams[key] = strValue
-							}
+			parsed := parseAdditionalValue(value)
+			if key == "additional_drop_params" {
+				switch params := parsed.(type) {
+				case []interface{}:
+					for _, item := range params {
+						if param, ok := item.(string); ok {
+							dropParams = append(dropParams, param)
 						}
 					}
-				} else {
-					// Apply existing conversion logic for non-JSON strings
-					if strValue == "true" {
-						litellmParams[key] = true
-					} else if strValue == "false" {
-						litellmParams[key] = false
-					} else {
-						// Try to convert numeric strings
-						if intValue, err := strconv.Atoi(strValue); err == nil {
-							litellmParams[key] = intValue
-						} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-							litellmParams[key] = floatValue
-						} else {
-							// Keep as string
-							litellmParams[key] = strValue
-						}
-					}
+					continue
+				case map[string]interface{}:
+					continue
 				}
-			} else {
-				litellmParams[key] = value
 			}
+			litellmParams[key] = parsed
 		}
 
-		// Apply drop params at the end
 		for _, paramToDrop := range dropParams {
 			delete(litellmParams, paramToDrop)
 		}
@@ -244,19 +197,28 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		litellmParams["litellm_credential_name"] = credentialName
 	}
 
+	modelInfo := map[string]interface{}{
+		"id":         modelID,
+		"db_model":   true,
+		"base_model": pricingBaseModel,
+		"tier":       d.Get("tier").(string),
+		"mode":       d.Get("mode").(string),
+	}
+	if teamID := d.Get("team_id").(string); teamID != "" {
+		modelInfo["team_id"] = teamID
+	}
+	if displayName := d.Get("display_name").(string); displayName != "" {
+		modelInfo["display_name"] = displayName
+	}
+	for key, value := range additionalModelInfo(d) {
+		modelInfo[key] = value
+	}
+
 	modelReq := ModelRequest{
 		ModelName:     d.Get("model_name").(string),
 		LiteLLMParams: litellmParams,
-		ModelInfo: ModelInfo{
-			ID:          modelID,
-			DBModel:     true,
-			BaseModel:   pricingBaseModel,
-			Tier:        d.Get("tier").(string),
-			Mode:        d.Get("mode").(string),
-			TeamID:      d.Get("team_id").(string),
-			DisplayName: d.Get("display_name").(string),
-		},
-		Additional: make(map[string]interface{}),
+		ModelInfo:     modelInfo,
+		Additional:    make(map[string]interface{}),
 	}
 
 	endpoint := endpointModelNew
@@ -278,9 +240,9 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		return fmt.Errorf("failed to %s model: %w", map[bool]string{true: "update", false: "create"}[isUpdate], err)
 	}
 
-	if isUpdate && d.HasChange("display_name") {
-		if err := patchModelDisplayName(client, modelID, d.Get("display_name").(string)); err != nil {
-			return fmt.Errorf("failed to update model display_name: %w", err)
+	if isUpdate {
+		if err := patchChangedModelInfo(client, d, modelID); err != nil {
+			return fmt.Errorf("failed to update model_info: %w", err)
 		}
 	}
 
@@ -291,11 +253,57 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	return retryModelRead(d, m, 5)
 }
 
+func parseAdditionalValue(value interface{}) interface{} {
+	raw, ok := value.(string)
+	if !ok {
+		return value
+	}
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+			return parsed
+		}
+	}
+	switch raw {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	if intValue, err := strconv.Atoi(raw); err == nil {
+		return intValue
+	}
+	if floatValue, err := strconv.ParseFloat(raw, 64); err == nil {
+		return floatValue
+	}
+	return raw
+}
+
+func additionalModelInfo(d *schema.ResourceData) map[string]interface{} {
+	entries := d.Get("additional_model_info").(map[string]interface{})
+	parsed := make(map[string]interface{}, len(entries))
+	for key, value := range entries {
+		parsed[key] = parseAdditionalValue(value)
+	}
+	return parsed
+}
+
 // /model/update only merges litellm_params, so model_info changes go through the PATCH endpoint.
-func patchModelDisplayName(client *Client, modelID, displayName string) error {
-	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(modelID)), ModelInfoPatch{
-		ModelInfo: ModelInfoPatchFields{ID: modelID, DisplayName: displayName},
-	})
+func patchChangedModelInfo(client *Client, d *schema.ResourceData, modelID string) error {
+	fields := map[string]interface{}{"id": modelID}
+	if d.HasChange("display_name") {
+		fields["display_name"] = d.Get("display_name").(string)
+	}
+	if d.HasChange("additional_model_info") {
+		for key, value := range additionalModelInfo(d) {
+			fields[key] = value
+		}
+	}
+	if len(fields) == 1 {
+		return nil
+	}
+	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelPatch, url.PathEscape(modelID)), ModelInfoPatch{ModelInfo: fields})
 	if err != nil {
 		return err
 	}

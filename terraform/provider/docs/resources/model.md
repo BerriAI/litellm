@@ -209,6 +209,25 @@ The following arguments are supported:
   }
   ```
 
+* `additional_model_info` - (Optional) map(string). Extra fields merged into the model's `model_info`, for fields that have no dedicated argument, such as `max_input_tokens` or `bedrock_converse_supports_strict_tools`. Values are converted with the same rules as `additional_litellm_params`. A change is sent through `/model/{id}/update`, because `/model/update` ignores `model_info`.
+  * Keys that have their own argument or are set by the provider (`id`, `db_model`, `base_model`, `tier`, `mode`, `team_id`, `display_name`) are rejected.
+  * Removing an entry does not clear it on the proxy, because the update is merged into the stored `model_info`. Set the value you want instead.
+  * The proxy is not read back for these entries, so a change made outside Terraform does not show up as drift.
+
+  ```hcl
+  resource "litellm_model" "sonnet_bedrock" {
+    model_name          = "claude-sonnet"
+    custom_llm_provider = "bedrock"
+    base_model          = "converse/us.anthropic.claude-sonnet-5-5"
+    aws_region_name     = "us-west-2"
+
+    additional_model_info = {
+      "bedrock_converse_supports_strict_tools" = "false"    # becomes boolean false
+      "max_input_tokens"                       = "1000000"  # becomes integer 1000000
+    }
+  }
+  ```
+
 ### AWS-specific Configuration
 
 * `aws_access_key_id` - (Optional) string (Sensitive). AWS access key ID for AWS-based models.

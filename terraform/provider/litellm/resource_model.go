@@ -1,9 +1,30 @@
 package litellm
 
 import (
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
+
+var modelInfoKeysWithArguments = map[string]struct{}{
+	"id":           {},
+	"db_model":     {},
+	"base_model":   {},
+	"tier":         {},
+	"mode":         {},
+	"team_id":      {},
+	"display_name": {},
+}
+
+func validateAdditionalModelInfo(value interface{}, _ cty.Path) diag.Diagnostics {
+	for key := range value.(map[string]interface{}) {
+		if _, owned := modelInfoKeysWithArguments[key]; owned {
+			return diag.Errorf("additional_model_info cannot set %q, it is set by the provider or by its own argument", key)
+		}
+	}
+	return nil
+}
 
 func resourceLiteLLMModel() *schema.Resource {
 	return &schema.Resource{
@@ -187,6 +208,15 @@ func resourceLiteLLMModel() *schema.Resource {
 					Type: schema.TypeString,
 				},
 				Description: "Additional parameters to pass to litellm_params beyond the standard ones",
+			},
+			"additional_model_info": {
+				Type:     schema.TypeMap,
+				Optional: true,
+				Elem: &schema.Schema{
+					Type: schema.TypeString,
+				},
+				ValidateDiagFunc: validateAdditionalModelInfo,
+				Description:      "Additional fields to set in model_info beyond the standard ones, such as max_input_tokens or bedrock_converse_supports_strict_tools",
 			},
 		},
 	}
