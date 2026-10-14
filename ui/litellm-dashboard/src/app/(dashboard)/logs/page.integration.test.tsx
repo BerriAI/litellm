@@ -17,7 +17,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: useOrganizationsMock,
 }));
 
-vi.mock("@/components/view_logs/RequestLogsPanel", () => ({
+vi.mock("@/components/logs/request/RequestLogsPanel", () => ({
   default: function RequestLogsPanelMock() {
     return <div data-testid="request-logs-panel" />;
   },

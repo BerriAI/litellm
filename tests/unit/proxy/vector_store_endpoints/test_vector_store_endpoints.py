@@ -1841,7 +1841,7 @@ async def test_vector_store_synchronization_across_instances():
 
     # Step 3: Test that Instance 2 can list vector stores from database
     # (Simulate what happens in list_vector_stores endpoint - using DB as source of truth)
-    vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
+    vector_stores_from_db = await VectorStoreRegistry.get_vector_stores_from_db(
         prisma_client=mock_prisma_client
     )
 
@@ -1902,7 +1902,7 @@ async def test_vector_store_synchronization_across_instances():
     # Step 5: Instance 2 should NOT show it in the list (database is source of truth)
     # The list endpoint logic should clean up stale cache entries
     vector_stores_from_db_after_delete = (
-        await VectorStoreRegistry._get_vector_stores_from_db(
+        await VectorStoreRegistry.get_vector_stores_from_db(
             prisma_client=mock_prisma_client
         )
     )
@@ -2054,7 +2054,7 @@ async def test_vector_store_update_and_list_synchronization():
     instance_1_registry.add_vector_store_to_registry(vector_store=test_vector_store)
 
     # Step 2: Instance 2 fetches and caches the vector store
-    vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
+    vector_stores_from_db = await VectorStoreRegistry.get_vector_stores_from_db(
         prisma_client=mock_prisma_client
     )
     for vs in vector_stores_from_db:
@@ -2106,7 +2106,7 @@ async def test_vector_store_update_and_list_synchronization():
     # Step 4: Instance 2 calls list endpoint (which should sync with database)
     # This simulates what list_vector_stores endpoint does
     vector_stores_from_db_after_update = (
-        await VectorStoreRegistry._get_vector_stores_from_db(
+        await VectorStoreRegistry.get_vector_stores_from_db(
             prisma_client=mock_prisma_client
         )
     )

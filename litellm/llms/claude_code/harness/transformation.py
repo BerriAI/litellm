@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import ConfigDict, TypeAdapter
+
 from litellm.harness.errors import HarnessError, OptionsMismatch
 from litellm.harness.options import ClaudeCodeOptions
 from litellm.harness.types import (
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
 
 CLAUDE_BINARY: Final = "claude"
 SYNTHETIC_MODEL: Final = "<synthetic>"
+_BLOCK: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(hide_input_in_errors=True))
 
 BASE_COMMAND: Final = ("-p", "--output-format", "stream-json", "--verbose", "--input-format", "text")
 
@@ -129,7 +132,7 @@ class ClaudeCodeStreamState:
     result_text: str | None = None
     is_error: bool = False
     errors: Sequence[str] = ()
-    structured_output: Any | None = None
+    structured_output: object = None
 
     @property
     def final_text(self) -> str:
@@ -157,7 +160,7 @@ def _stringify_block(block: object) -> str:
     return json.dumps(block, ensure_ascii=False)
 
 
-def _message_blocks(event: Mapping[str, Any]) -> Sequence[Any]:
+def _message_blocks(event: Mapping[str, object]) -> Sequence[object]:
     message: Final = event.get("message")
     content: Final = message.get("content") if isinstance(message, Mapping) else None
     if isinstance(content, str):
@@ -187,7 +190,7 @@ def _assistant_block_events(block: Mapping[str, Any], state: ClaudeCodeStreamSta
     return ()
 
 
-def _assistant_events(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
+def _assistant_events(event: Mapping[str, object], state: ClaudeCodeStreamState) -> Sequence[Event]:
     if event.get("parent_tool_use_id"):
         return event_list()  # subagent traffic
     message: Final = event.get("message")
@@ -201,7 +204,7 @@ def _is_tool_result(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") == "tool_result"
 
 
-def _user_events(event: Mapping[str, Any]) -> Sequence[Event]:
+def _user_events(event: Mapping[str, object]) -> Sequence[Event]:
     if event.get("parent_tool_use_id"):
         return event_list()
     return event_list(
@@ -211,13 +214,12 @@ def _user_events(event: Mapping[str, Any]) -> Sequence[Event]:
                 output=stringify_tool_output(block.get("content")),
                 is_error=bool(block.get("is_error", False)),
             )
-            for block in _message_blocks(event)
-            if _is_tool_result(block)
+            for block in map(_BLOCK.validate_python, filter(_is_tool_result, _message_blocks(event)))
         )
     )
 
 
-def _system_events(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
+def _system_events(event: Mapping[str, object], state: ClaudeCodeStreamState) -> Sequence[Event]:
     subtype = event.get("subtype")
     if subtype == "init" and event.get("session_id"):
         state.session_id = str(event["session_id"])
@@ -253,7 +255,7 @@ def turn_error_message(state: ClaudeCodeStreamState, exit_code: int, stderr_tail
     return f"{message}\nstderr:\n{tail}" if tail else message
 
 
-def build_system_prompt(instructions: str | None, output_schema: Mapping[str, Any] | None) -> str | None:
+def build_system_prompt(instructions: str | None, output_schema: Mapping[str, object] | None) -> str | None:
     schema_part: Final = (
         STRUCTURED_OUTPUT_INSTRUCTION.format(schema=json.dumps(output_schema)) if output_schema is not None else None
     )
@@ -355,7 +357,7 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
     def create_stream_state(self) -> ClaudeCodeStreamState:
         return ClaudeCodeStreamState()
 
-    def transform_stream_line(self, line: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
+    def transform_stream_line(self, line: Mapping[str, object], state: ClaudeCodeStreamState) -> Sequence[Event]:
         kind = line.get("type")
         if kind == "assistant":
             return _assistant_events(line, state)

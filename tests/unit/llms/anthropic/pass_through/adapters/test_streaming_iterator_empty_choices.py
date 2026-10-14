@@ -19,9 +19,7 @@ from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Us
 
 
 def _text_chunk(text: str) -> ModelResponseStream:
-    return ModelResponseStream(
-        choices=[StreamingChoices(index=0, delta=Delta(content=text), finish_reason=None)]
-    )
+    return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=text), finish_reason=None)])
 
 
 def _finish_chunk() -> ModelResponseStream:
@@ -61,9 +59,7 @@ def test_leading_metadata_chunk_without_choices_does_not_kill_stream():
     wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="mock-model")
     events = list(wrapper)
 
-    text = "".join(
-        event["delta"]["text"] for event in events if event.get("type") == "content_block_delta"
-    )
+    text = "".join(event["delta"]["text"] for event in events if event.get("type") == "content_block_delta")
     assert text == "Hello there"
     assert events[-1]["type"] == "message_stop"
 

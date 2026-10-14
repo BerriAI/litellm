@@ -5,6 +5,30 @@ on:
     branches:
       - main
       - "litellm_**"
+    paths:
+      - "**/pyproject.toml"
+      - "uv.lock"
+      - "uv.toml"
+      - ".python-version"
+      - "rust-toolchain.toml"
+      - "litellm-rust/**"
+      - "litellm/__init__.py"
+      - "litellm/_version.py"
+      - "litellm/_lazy_imports_registry.py"
+      - "scripts/build_core_distribution.py"
+      - "litellm/proxy/proxy_server.py"
+      - "litellm/**/*mcp*"
+      - "litellm/**/*mcp*/**"
+      - "litellm/integrations/arize/**"
+      - "scripts/check_mcp_sdk_install.py"
+      - "tests/base_sdk_tests/**"
+      - ".github/workflows/test-mcp-dependency-resolution.yml"
+      - ".github/actions/detect-changes/**"
+      - ".github/actions/setup-uv-with-retries/**"
+      - ".github/actions/cache-cargo-build/**"
+      - ".github/scripts/detect_changes.sh"
+      - ".github/scripts/uv_sync_with_retries.sh"
+      - ".circleci/scripts/classify_changes.sh"
 
 permissions:
   contents: read
@@ -65,6 +89,7 @@ jobs:
             uv pip check --python ".venv-$extra"
             if [ "$extra" = core ]; then
               checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
             else
               checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
@@ -94,3 +119,63 @@ jobs:
             fi
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "${checker[@]}")
           done
+
+  core-distribution:
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+      - uses: ./.github/actions/cache-cargo-build
+      - name: Build the core wheel and source distribution
+        run: >-
+          uv run --no-project --with coverage==7.14.0 python -m coverage run --rcfile=/dev/null
+          --branch --include="*/scripts/build_core_distribution.py"
+          scripts/build_core_distribution.py --out-dir dist/core
+      - name: Verify metadata, resources, and independent source rebuild
+        env:
+          CORE_DISTRIBUTION_DIR: ${{ github.workspace }}/dist/core
+        run: >-
+          uv run --no-project --with pytest==9.0.3 --with pytest-cov==5.0.0 --with coverage==7.14.0 --with 'tomli==2.4.1; python_version < "3.11"'
+          python -m pytest tests/base_sdk_tests/test_core_distribution.py -v
+          --cov-config=/dev/null --cov=scripts.build_core_distribution --cov-branch --cov-append --cov-report=
+      - name: Verify isolated core installations
+        run: |
+          wheel=$(realpath dist/core/litellm_core-*.whl)
+          for resolution in highest lowest-direct; do
+            uv venv --python ${{ matrix.python-version }} ".venv-core-$resolution"
+            uv pip install --python ".venv-core-$resolution" --resolution "$resolution" "$wheel"
+            uv pip check --python ".venv-core-$resolution"
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-$resolution/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py" --profile core)
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-$resolution/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
+          done
+          uv pip install --python .venv-core-highest coverage==7.14.0
+          .venv-core-highest/bin/python -I -m coverage run --rcfile=/dev/null --append --branch --include="*/tests/base_sdk_tests/check_base_sdk_install.py" tests/base_sdk_tests/check_base_sdk_install.py --profile core
+          uv pip install --python .venv-core-highest boto3 tokenizers huggingface-hub
+          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-highest/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py" --profile dependencies)
+          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-highest/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
+          uv run --no-project --with coverage==7.14.0 python -m coverage xml --rcfile=/dev/null -o coverage-core.xml
+      - name: Upload core packaging coverage
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          use_oidc: true
+          files: coverage-core.xml
+          flags: core-packaging
+          fail_ci_if_error: false

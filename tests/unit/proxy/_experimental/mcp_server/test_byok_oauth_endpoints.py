@@ -16,7 +16,7 @@ import json
 import re
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -655,7 +655,10 @@ async def test_execute_byok_tool_missing_credential_advertises_api_key_flow(monk
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com/proxy")
     mcp_operations.byok_credential_cache.flush_cache()
     server = MCPServer(server_id="byok-discovery", name="byok-discovery", transport=MCPTransport.http, is_byok=True)
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _kind: False)
     prisma = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     with pytest.raises(HTTPException) as exc_info:
@@ -1943,3 +1946,48 @@ def test_parse_trusted_redirect_origins_drops_bare_path_entries(monkeypatch):
     )
     # The two malformed entries drop out; only the real host survives.
     assert _parse_trusted_redirect_origins() == ["app.example.com"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("valid", "alice"),
+        ("wrong_user", None),
+        ("expired", None),
+        ("blocked", None),
+        ("missing_key", None),
+        ("tampered", None),
+        ("invalid_expiry", None),
+    ],
+)
+async def test_authenticated_browser_identity_checks_embedded_session(
+    monkeypatch: pytest.MonkeyPatch, case: str, expected: str | None
+) -> None:
+    from datetime import datetime, timezone
+    import jwt
+    from starlette.requests import Request
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import get_authenticated_browser_user_id
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_bearer_token
+    from litellm.proxy.auth.auth_checks import LITELLM_SESSION_TOKEN_PREFIX
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "local-test-encryption-key")
+    monkeypatch.setattr(proxy_server, "master_key", "local-test-cookie-signing-key-32-bytes")
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    session: Final = UserAPIKeyAuth(
+        user_id="bob" if case == "wrong_user" else "alice",
+        blocked=case == "blocked",
+        expires="invalid"
+        if case == "invalid_expiry"
+        else datetime(2000 if case == "expired" else 2099, 1, 1, tzinfo=timezone.utc),
+        is_session_token=True,
+    )
+    key: Final = encrypt_bearer_token(session.model_dump_json(exclude_none=True), LITELLM_SESSION_TOKEN_PREFIX)
+    cookie: Final = jwt.encode(
+        {"user_id": "alice", "key": None if case == "missing_key" else key, "login_method": "sso", "exp": 9999999999},
+        "different-key-at-least-32-bytes-long" if case == "tampered" else "local-test-cookie-signing-key-32-bytes",
+        algorithm="HS256",
+    )
+    request: Final = Request({"type": "http", "headers": [(b"cookie", ("token=" + cookie).encode())]})
+    assert await get_authenticated_browser_user_id(request) == expected

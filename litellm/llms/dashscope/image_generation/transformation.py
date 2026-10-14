@@ -23,9 +23,11 @@ Response format:
 }
 """
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -44,6 +46,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 
@@ -192,9 +197,10 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
         # DashScope can return API-level errors in a 200 response body.
         # Example: {"code": "InvalidParameter", "message": "Size not supported"}
-        if "code" in response_data and "output" not in response_data:
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        if "code" in response_object and "output" not in response_object:
             raise self.get_error_class(
-                error_message=str(response_data.get("message", response_data)),
+                error_message=str(response_object.get("message", response_object)),
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -202,9 +208,11 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
-        choices: Final = response_data.get("output", {}).get("choices", [])
+        output: Final = _JSON_OBJECT.validate_python(response_object.get("output", {}))
+        choices: Final = _JSON_OBJECTS.validate_python(output.get("choices", []))
         for choice in choices:
-            content_list = choice.get("message", {}).get("content", [])
+            message = _JSON_OBJECT.validate_python(choice.get("message", {}))
+            content_list = _JSON_OBJECTS.validate_python(message.get("content", []))
             for content_item in content_list:
                 image_url = content_item.get("image")
                 if image_url:

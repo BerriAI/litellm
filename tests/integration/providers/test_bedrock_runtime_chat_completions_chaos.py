@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import binascii
@@ -5,7 +7,6 @@ import itertools
 import multiprocessing
 import os
 import re
-import signal
 import socket
 import threading
 import uuid
@@ -27,7 +28,7 @@ import yaml
 from integration._support.bedrock_runtime_peer import MARKER, marker_of, respond, serve_peer
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process
+from integration._support.process import kill_stray_process, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -214,7 +215,7 @@ async def _burst_killing_the_peer_once_it_answered(
         await asyncio.to_thread(eventually, lambda: peer.received.value, lambda count: count == len(calls), 60)
         first: Final = [await finished for finished in itertools.islice(asyncio.as_completed(tasks), answered)]
         assert all(item.status == 200 for item in first), [(item.call.marker, item.status) for item in first]
-        peer.process.kill()
+        kill_stray_process(peer.process.pid)
         peer.process.join(timeout=10)
         return tuple(await asyncio.gather(*tasks))
 
@@ -252,7 +253,8 @@ def _child_peer(port: int, answer_first: int) -> Iterator[_ChildPeer]:
         eventually(lambda: _accepts_connections(port), bool, seconds=30)
         yield _ChildPeer(process=process, received=received, url=f"http://127.0.0.1:{port}")
     finally:
-        process.kill()
+        if process.is_alive():
+            kill_stray_process(process.pid)
         process.join(timeout=10)
         assert not process.is_alive(), "Owned peer survived cleanup"
 
@@ -426,15 +428,15 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving(gateway: Gate
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered_with_its_own_marker(item)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_answered_with_its_own_marker(item)
             follow_up: Final = _Call(endpoint="chat", stream=False, marker=uuid.uuid4().hex)
             (answered,) = await _burst(str(candidate.client.base_url), candidate.key, _CONFIG_MODEL, (follow_up,))
             _assert_answered_with_its_own_marker(answered)
