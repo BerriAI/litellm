@@ -53,7 +53,8 @@ class Signer(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class HttpxObjectStore:
-    """Holds the handler, not its client: the shared cache may close and replace the client between batches."""
+    """Holds the handler, not its client: the shared cache may close and replace the client between batches. Never
+    follows a redirect, a sink URL that bounces to plain http would otherwise carry the credential and the records there."""
 
     handler: AsyncHTTPHandler
 
