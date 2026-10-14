@@ -69,6 +69,23 @@ def test_fallback_model_names_empty_or_none():
     assert _fallback_model_names("not a list") == []
 
 
+@pytest.mark.parametrize("fallback_field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+@pytest.mark.parametrize("surface", ["top_level", "router_settings_override"])
+def test_string_valued_rule_extracts_the_same_target_as_its_one_item_list(fallback_field, surface):
+    def body(rule_value):
+        field = {fallback_field: [{"gpt-3.5-turbo": rule_value}]}
+        return field if surface == "top_level" else {"router_settings_override": field}
+
+    def names(rule_value):
+        return [
+            name
+            for target in iter_request_fallback_targets(body(rule_value))
+            if (name := fallback_target_model_name(target)) is not None
+        ]
+
+    assert names("gpt-4") == names(["gpt-4"]) == ["gpt-4"]
+
+
 # ── _enforce_key_and_fallback_model_access ────────────────────────────────────
 
 
@@ -300,6 +317,43 @@ async def test_model_less_fallback_dict_is_skipped_never_passed_as_none():
 
     assert None not in seen
     assert seen == ["gpt-3.5-turbo", "real-fallback", "string-fallback"]
+
+
+@pytest.mark.asyncio
+async def test_string_valued_rule_target_is_checked_against_the_key_allowlist():
+    """A rule whose value is a bare string (``{primary: "fallback"}``) names one fallback target, and the
+    router routes to it, so the key allowlist check must see it exactly like ``{primary: ["fallback"]}``."""
+    valid_token = _key_with_models(["gpt-3.5-turbo"])
+    request_data = {
+        "model": "gpt-3.5-turbo",
+        "fallbacks": [{"gpt-3.5-turbo": "string-smuggled-model"}],
+    }
+
+    seen: List[str] = []
+
+    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
+        seen.append(model)
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            side_effect=fake_can_key_call_model,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
+            new=AsyncMock(),
+        ),
+    ):
+        await enforce_key_and_fallback_model_access(
+            valid_token=valid_token,
+            request_data=request_data,
+            route="/v1/chat/completions",
+            request=None,
+            llm_model_list=None,
+            llm_router=None,
+        )
+
+    assert seen == ["gpt-3.5-turbo", "string-smuggled-model"]
 
 
 @pytest.mark.asyncio

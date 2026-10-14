@@ -1,5 +1,7 @@
-import pytest
+from typing import Final
 from unittest.mock import Mock, patch
+
+import pytest
 
 
 def _rendered_log_message(call):
@@ -96,6 +98,24 @@ def test_general_fallback_type():
         mock_get_fallback.assert_called_once_with(
             fallbacks=fallbacks_config, model_group="claude-4-sonnet"
         )
+
+
+@pytest.mark.parametrize(
+    ("fallback_type", "router_attribute"),
+    [
+        ("general", "fallbacks"),
+        ("context_window", "context_window_fallbacks"),
+        ("content_policy", "content_policy_fallbacks"),
+    ],
+)
+def test_a_string_valued_rule_reads_back_as_a_one_item_list(fallback_type: str, router_attribute: str):
+    from litellm.proxy.auth.model_checks import get_all_fallbacks
+
+    router: Final = create_mock_router(**{router_attribute: [{"gpt-5.4-mini": "gpt-5.4-nano"}]})
+
+    result: Final = get_all_fallbacks("gpt-5.4-mini", llm_router=router, fallback_type=fallback_type)
+
+    assert result == ["gpt-5.4-nano"]
 
 
 def test_context_window_fallback_type():

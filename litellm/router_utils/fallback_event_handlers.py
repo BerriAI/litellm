@@ -513,14 +513,14 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
     return tuple(dict.fromkeys(group for group in ordered if group))
 
 
-def _resolved_a_specific_chain(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
-    result: tuple[list[str] | None, int | None],  # mutable-ok: mirrors get_fallback_model_group's contract
-) -> bool:
-    resolved, generic_idx = result
-    if resolved is None:
-        return False
-    return generic_idx is None or resolved is not fallbacks[generic_idx]["*"]
+def _is_catch_all_rule(rule: object) -> bool:
+    return isinstance(rule, Mapping) and "*" in rule
+
+
+def _without_catch_all_rules(
+    fallbacks: Sequence[object],
+) -> list[object]:  # mutable-ok: mirrors get_fallback_model_group's contract
+    return [rule for rule in fallbacks if not _is_catch_all_rule(rule)]
 
 
 def get_fallback_model_group_for_lookup_groups(
@@ -531,11 +531,27 @@ def get_fallback_model_group_for_lookup_groups(
     First lookup group with a specifically-keyed chain wins; the generic "*" chain applies
     only after every group missed, so a catch-all cannot shadow a later group's own chain.
     """
+    specific_rules: Final = _without_catch_all_rules(fallbacks)
     results: Final = tuple(get_fallback_model_group(fallbacks=fallbacks, model_group=group) for group in lookup_groups)
-    specific: Final = next((result for result in results if _resolved_a_specific_chain(fallbacks, result)), None)
+    specific: Final = next(
+        (
+            result
+            for group, result in zip(lookup_groups, results)
+            if get_fallback_model_group(fallbacks=specific_rules, model_group=group)[0] is not None
+        ),
+        None,
+    )
     if specific is not None:
         return specific
     return next((result for result in results if result[0] is not None), (None, None))
+
+
+def _as_fallback_chain(
+    rule_value: list[str] | str | None,  # mutable-ok: mirrors get_fallback_model_group's contract
+) -> list[str] | None:  # mutable-ok: mirrors get_fallback_model_group's contract
+    if isinstance(rule_value, str):
+        return [rule_value]
+    return rule_value
 
 
 def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
@@ -577,7 +593,7 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
         elif generic_fallback_idx is not None:
             fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 
-    return fallback_model_group, generic_fallback_idx
+    return _as_fallback_chain(fallback_model_group), generic_fallback_idx  # pyright: ignore[reportUnknownArgumentType]  # the chain is read from the untyped fallbacks list
 
 
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
