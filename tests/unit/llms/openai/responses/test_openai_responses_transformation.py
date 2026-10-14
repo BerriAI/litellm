@@ -87,6 +87,14 @@ _CLAUDE_SEARCH_CALL: Final = {
 }
 
 
+_BM25_TOOL: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+_DEFERRED_WEATHER: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
+
+
+def _undeferred(tool: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in tool.items() if key != "defer_loading"}
+
+
 def _openai_model(supports_tool_search: bool) -> str:
     return next(
         name
@@ -329,41 +337,62 @@ class TestOpenAIResponsesAPIConfig:
         assert result["tools"] == tools
         assert result["input"] == history
 
+    def _transform_tools(self, model: str, tools: list[dict[str, object]], drop_params: bool) -> object:
+        return self.config.transform_responses_api_request(
+            model=model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1", drop_params=drop_params),
+            headers={},
+        )["tools"]
+
+    def test_drop_params_drops_tool_search_for_a_model_that_cannot_run_it(self) -> None:
+        eager: Final = {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}}
+        namespace: Final = {
+            "type": "namespace",
+            "name": "finance",
+            "description": "Finance tools",
+            "tools": [{**_DEFERRED_WEATHER, "name": "get_quote"}],
+        }
+
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=False), [_BM25_TOOL, _DEFERRED_WEATHER, eager, namespace], True
+        )
+
+        assert tools == [
+            _undeferred(_DEFERRED_WEATHER),
+            eager,
+            {**namespace, "tools": [_undeferred({**_DEFERRED_WEATHER, "name": "get_quote"})]},
+        ]
+
+    def test_drop_params_drops_tool_search_when_no_tool_is_deferred(self) -> None:
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=True), [_BM25_TOOL, _undeferred(_DEFERRED_WEATHER)], True
+        )
+
+        assert tools == [_undeferred(_DEFERRED_WEATHER)]
+
+    def test_drop_params_keeps_a_callers_own_tool_search_unchanged(self) -> None:
+        own_search: Final = [{"type": "tool_search"}, _DEFERRED_WEATHER]
+
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=False), own_search, True)
+
+        assert tools == own_search
+
     @pytest.mark.parametrize(
-        "search_tool",
+        "deferred",
         [
-            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
-            {"type": "tool_search", "execution": "server"},
+            pytest.param(_DEFERRED_WEATHER, id="function"),
+            pytest.param(
+                {"type": "namespace", "name": "weather", "description": "Weather", "tools": [_DEFERRED_WEATHER]},
+                id="namespace-member",
+            ),
         ],
     )
-    def test_drop_params_drops_tool_search_for_a_model_that_cannot_run_it(self, search_tool: dict[str, str]) -> None:
-        deferred: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
-        eager: Final = {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}}
+    def test_drop_params_keeps_tool_search_for_a_model_that_runs_it(self, deferred: dict[str, object]) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=True), [_BM25_TOOL, deferred], True)
 
-        result: Final = self.config.transform_responses_api_request(
-            model=_openai_model(supports_tool_search=False),
-            input="Find a tool",
-            response_api_optional_request_params={"tools": [search_tool, deferred, eager]},
-            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1", drop_params=True),
-            headers={},
-        )
-
-        assert result["tools"] == [{key: value for key, value in deferred.items() if key != "defer_loading"}, eager]
-
-    def test_drop_params_keeps_tool_search_for_a_model_that_runs_it(self) -> None:
-        deferred: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
-
-        result: Final = self.config.transform_responses_api_request(
-            model=_openai_model(supports_tool_search=True),
-            input="Find a tool",
-            response_api_optional_request_params={
-                "tools": [{"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}, deferred]
-            },
-            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1", drop_params=True),
-            headers={},
-        )
-
-        assert result["tools"] == [{"type": "tool_search", "execution": "server"}, deferred]
+        assert tools == [{"type": "tool_search", "execution": "server"}, deferred]
 
     def test_transform_drops_claude_search_calls_openai_cannot_answer_from_history(self) -> None:
         answered_search_call: Final = {

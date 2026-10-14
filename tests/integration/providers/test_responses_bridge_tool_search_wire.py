@@ -3,8 +3,8 @@ import itertools
 import json
 import os
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from types import EllipsisType, MappingProxyType
 from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote
@@ -18,8 +18,10 @@ from anthropic.types.beta import BetaToolUnionParam
 from integration._support import claude_code as cc
 from integration._support import responses_vendor as rv
 from integration._support.anthropic_thinking import BEDROCK_MODEL, EVENT_STREAM, MODEL, Event, aws_chunks, sse_chunks
-from integration._support.client import Gateway, Scenario, eventually, object_value
+from integration._support.aws_control_plane import ControlPlane, ControlPlaneRequest, Responder, control_plane
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers.test_bedrock_auth_wire import RESPONSE as CONVERSE_RESPONSE
@@ -30,6 +32,8 @@ from redis import Redis
 _CLAUDE: Final = cc.OPUS
 _CLAUDE_WITHOUT_TOOL_SEARCH: Final = "claude-scripted-unlisted"
 _GEMINI: Final = "gemini-2.5-flash"
+_OPENAI_HOST: Final = "api.openai.com"
+_OPENAI_API_BASE: Final = f"https://{_OPENAI_HOST}/v1"
 _BM25_TOOL_TYPE: Final = "tool_search_tool_bm25_20251119"
 _BM25_TOOL_NAME: Final = "tool_search_tool_bm25"
 _REGEX_TOOL_TYPE: Final = "tool_search_tool_regex_20251119"
@@ -588,8 +592,36 @@ def _deployment(scenario: Scenario, provider: Provider, wire_url: str, upstream_
             )
 
 
-def _assert_openai_tool_search_wire(request: Request, body: Mapping[str, JsonValue], stream: bool) -> None:
-    assert request.method == "POST" and request.target == "/responses", request.target
+@pytest.fixture(scope="module")
+def openai_api(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ControlPlane]:
+    with control_plane(tmp_path_factory.mktemp("openai_api"), (_OPENAI_HOST,)) as plane:
+        yield plane
+
+
+@pytest.fixture(scope="module")
+def openai_gateway(openai_api: ControlPlane, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with (
+        gateway_from_environment() as parent,
+        owned_proxy(parent, tmp_path_factory.mktemp("openai_gateway"), openai_api.environment()) as owned,
+    ):
+        yield owned
+
+
+def _answered_as_openai_api(respond: Callable[[Request], Reply]) -> Responder:
+    def answer(request: ControlPlaneRequest) -> Reply:
+        reply: Final = respond(Request(request.method, request.target, request.headers, request.body))
+        return reply if reply.chunks is None else replace(reply, body=b"".join(reply.chunks), chunks=None)
+
+    return answer
+
+
+def _openai_api_requests(openai_api: ControlPlane, key: str) -> list[ControlPlaneRequest]:
+    return [request for request in openai_api.drain() if request.credential == key and request.method == "POST"]
+
+
+def _assert_openai_tool_search_wire(request: ControlPlaneRequest, stream: bool) -> None:
+    body: Final = _JSON_OBJECT.validate_json(request.body)
+    assert (request.host, request.method, request.path) == (_OPENAI_HOST, "POST", "/v1/responses"), request
     assert body["model"] == "gpt-5.5", body
     assert body["stream"] is stream, body
     assert body["tools"] == [
@@ -600,51 +632,48 @@ def _assert_openai_tool_search_wire(request: Request, body: Mapping[str, JsonVal
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
-def test_anthropic_tool_search_reaches_openai_responses_as_server_tool_search(gateway: Gateway, stream: bool) -> None:
+def test_anthropic_tool_search_reaches_openai_responses_as_server_tool_search(
+    openai_gateway: Gateway, openai_api: ControlPlane, stream: bool
+) -> None:
     marker: Final = uuid.uuid4().hex
-
-    def respond(request: Request) -> Reply:
-        if request.method != "POST":
-            return Reply(body=b'{"object":"list","data":[]}')
-        body: Final = _JSON_OBJECT.validate_json(request.body)
-        _assert_openai_tool_search_wire(request, body, stream)
-        return rv.ResponsesVendor().respond(request)
-
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model="openai/responses/gpt-5.5", api_base=wire.url, api_key="synthetic-openai-key"
-        )
-        tools: Final = (_bm25_tool(), _function_tool(), _stock_function_tool())
-        response: Final = _raw(gateway, "/v1/responses", {**_responses_body(model, marker, tools, stream), **_CACHE_BUST})
-
-        assert response.status_code == 200, response.text
-        received: Final = [request for request in wire.drain() if request.method == "POST"]
-        assert len(received) == 1, [(request.method, request.target) for request in received]
-        _assert_openai_tool_search_wire(received[0], _JSON_OBJECT.validate_json(received[0].body), stream)
-
-
-def test_router_fallback_maps_anthropic_tool_search_for_openai_responses(gateway: Gateway) -> None:
-    marker: Final = uuid.uuid4().hex
-
-    def respond(request: Request) -> Reply:
-        if request.method != "POST":
-            return Reply(body=b'{"object":"list","data":[]}')
-        if request.target == "/v1/messages":
-            return _anthropic_error(500, "scripted Claude failure")
-        body: Final = _JSON_OBJECT.validate_json(request.body)
-        _assert_openai_tool_search_wire(request, body, False)
-        return rv.ResponsesVendor().respond(request)
-
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        claude: Final = scenario.model(
-            model=f"anthropic/{_CLAUDE}", api_base=wire.url, api_key="synthetic-invalid-key"
-        )
-        openai_model: Final = scenario.model(
-            model="openai/responses/gpt-5.5", api_base=wire.url, api_key="synthetic-openai-key"
-        )
+    key: Final = f"synthetic-openai-key-{marker}"
+    with (
+        openai_gateway.scenario() as scenario,
+        openai_api.answering(key, _answered_as_openai_api(rv.ResponsesVendor().respond)),
+    ):
+        model: Final = scenario.model(model="openai/responses/gpt-5.5", api_base=_OPENAI_API_BASE, api_key=key)
         tools: Final = (_bm25_tool(), _function_tool(), _stock_function_tool())
         response: Final = _raw(
-            gateway,
+            openai_gateway, "/v1/responses", {**_responses_body(model, marker, tools, stream), **_CACHE_BUST}
+        )
+
+        assert response.status_code == 200, response.text
+        received: Final = _openai_api_requests(openai_api, key)
+        assert len(received) == 1, received
+        _assert_openai_tool_search_wire(received[0], stream)
+
+
+def test_router_fallback_maps_anthropic_tool_search_for_openai_responses(
+    openai_gateway: Gateway, openai_api: ControlPlane
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    key: Final = f"synthetic-openai-key-{marker}"
+
+    def respond(request: Request) -> Reply:
+        if request.method != "POST":
+            return Reply(body=b'{"object":"list","data":[]}')
+        return _anthropic_error(500, "scripted Claude failure")
+
+    with (
+        wire_server(respond) as wire,
+        openai_gateway.scenario() as scenario,
+        openai_api.answering(key, _answered_as_openai_api(rv.ResponsesVendor().respond)),
+    ):
+        claude: Final = scenario.model(model=f"anthropic/{_CLAUDE}", api_base=wire.url, api_key="synthetic-invalid-key")
+        openai_model: Final = scenario.model(model="openai/responses/gpt-5.5", api_base=_OPENAI_API_BASE, api_key=key)
+        tools: Final = (_bm25_tool(), _function_tool(), _stock_function_tool())
+        response: Final = _raw(
+            openai_gateway,
             "/v1/responses",
             {
                 **_responses_body(claude, marker, tools, False),
@@ -655,10 +684,11 @@ def test_router_fallback_maps_anthropic_tool_search_for_openai_responses(gateway
 
         assert response.status_code == 200, response.text
         assert response.headers["x-litellm-attempted-fallbacks"] == "1", response.headers
-        received: Final = [request for request in wire.drain() if request.method == "POST"]
-        assert len(received) == 2, [(request.method, request.target) for request in received]
-        assert received[0].target == "/v1/messages", received[0].target
-        _assert_openai_tool_search_wire(received[1], _JSON_OBJECT.validate_json(received[1].body), False)
+        claude_requests: Final = [request.target for request in wire.drain() if request.method == "POST"]
+        assert claude_requests == ["/v1/messages"], claude_requests
+        received: Final = _openai_api_requests(openai_api, key)
+        assert len(received) == 1, received
+        _assert_openai_tool_search_wire(received[0], False)
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])

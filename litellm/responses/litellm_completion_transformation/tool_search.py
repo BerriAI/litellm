@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
-from typing import Final, Literal, TypeAlias, cast
+from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
@@ -102,20 +102,10 @@ def _is_tool_search_tool(tool: object) -> bool:
     return is_anthropic_tool_search_chat_tool(tool) or _is_openai_tool_search_tool(tool)
 
 
-def _without_defer_loading(tool: ALL_RESPONSES_API_TOOL_PARAMS) -> ALL_RESPONSES_API_TOOL_PARAMS:
-    if "defer_loading" not in tool:
-        return tool
-    return cast(  # cast-ok: a TypedDict minus one key has no typed construction, and only its deferral changes
-        ALL_RESPONSES_API_TOOL_PARAMS, {key: value for key, value in tool.items() if key != "defer_loading"}
-    )
-
-
 def tools_without_tool_search(
-    tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
-) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
-    if tools is None or not any(_is_tool_search_tool(tool) for tool in tools):
-        return tools
-    return tuple(_without_defer_loading(tool) for tool in tools if not _is_tool_search_tool(tool))
+    tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS],
+) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
+    return tuple(tool for tool in tools if not _is_tool_search_tool(tool))
 
 
 class _FunctionCallItemFields(LiteLLMBaseModel):

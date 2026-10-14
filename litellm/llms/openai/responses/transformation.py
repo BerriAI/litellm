@@ -30,6 +30,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import TOO
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.responses.litellm_completion_transformation.tool_search import (
     input_without_unanswered_anthropic_tool_search_calls,
+    is_anthropic_tool_search_chat_tool,
     tools_with_anthropic_tool_search_mapped,
     tools_without_tool_search,
 )
@@ -83,6 +84,40 @@ class _DropParamsSetting(BaseModel):
 def _drops_params(litellm_params: GenericLiteLLMParams) -> bool:
     setting: Final = _DropParamsSetting.model_validate(litellm_params)
     return litellm.drop_params is True or normalize_drop_params(setting.drop_params) is True
+
+
+class _ToolDeferral(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    type: str = ""
+    defer_loading: object = None
+    tools: tuple[Mapping[str, object], ...] = ()
+
+    @property
+    def is_namespace(self) -> bool:
+        return self.type == "namespace"
+
+    @property
+    def defers(self) -> bool:
+        members_defer: Final = self.is_namespace and any(member.get("defer_loading") is True for member in self.tools)
+        return self.defer_loading is True or members_defer
+
+
+def _defer_loading_removed(fields: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in fields.items() if key != "defer_loading"}
+
+
+def _without_defer_loading(tool: ALL_RESPONSES_API_TOOL_PARAMS) -> ALL_RESPONSES_API_TOOL_PARAMS:
+    deferral: Final = _ToolDeferral.model_validate(tool)
+    if not deferral.defers:
+        return tool
+    undeferred: Final = _defer_loading_removed(tool)
+    members: Final = (
+        {"tools": [_defer_loading_removed(member) for member in deferral.tools]} if deferral.is_namespace else {}
+    )
+    return cast(  # cast-ok: a TypedDict minus its deferral keys has no typed construction, and nothing else changes
+        ALL_RESPONSES_API_TOOL_PARAMS, {**undeferred, **members}
+    )
 
 
 def _provider_name(provider: LlmProviders | str) -> str:
@@ -448,18 +483,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _tools_for_openai_tool_search(
         model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None, litellm_params: GenericLiteLLMParams
     ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
-        if not _drops_params(litellm_params) or litellm.supports_tool_search(
-            model=model, custom_llm_provider=LlmProviders.OPENAI.value
-        ):
+        if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+            return tools
+        searchable: Final = any(_ToolDeferral.model_validate(tool).defers for tool in tools) and (
+            litellm.supports_tool_search(model=model, custom_llm_provider=LlmProviders.OPENAI.value)
+        )
+        if searchable or not _drops_params(litellm_params):
             return tools_with_anthropic_tool_search_mapped(tools)
-        unsearched_tools: Final = tools_without_tool_search(tools)
-        if unsearched_tools is not tools:
-            verbose_logger.warning(
-                "Dropping tool search under drop_params: OpenAI model '%s' cannot run it, so deferred tools load "
-                "up front.",
-                model,
-            )
-        return unsearched_tools
+        verbose_logger.warning(
+            "Dropping tool search under drop_params: OpenAI model '%s' cannot run it or no tool is deferred, so every "
+            "tool loads up front.",
+            model,
+        )
+        return tuple(_without_defer_loading(tool) for tool in tools_without_tool_search(tools))
 
     def _reads_prompt_cache_breakpoints(
         self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object
