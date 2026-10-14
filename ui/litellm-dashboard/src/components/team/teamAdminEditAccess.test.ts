@@ -19,6 +19,7 @@ describe("teamAdminFieldLabel", () => {
     ["team_member_budget_duration", "Member Default Budget Duration"],
     ["team_member_tpm_limit", "Member Default TPM Limit"],
     ["team_member_rpm_limit", "Member Default RPM Limit"],
+    ["create_member_keys", "Create keys for team members"],
   ])("names %s the way the team settings form does", (field, label) => {
     expect(teamAdminFieldLabel(field)).toBe(label);
   });

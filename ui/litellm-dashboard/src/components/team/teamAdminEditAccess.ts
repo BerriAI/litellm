@@ -5,6 +5,8 @@ export const TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING = "team_admin_editable_team
 
 export const TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION = "raise_max_budget";
 
+export const TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION = "create_member_keys";
+
 export const TEAM_ADMIN_EDITING_DISABLED_TITLE = "Team admins cannot edit team settings on this proxy";
 export const TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION =
   "Ask a proxy admin to enable fields under Settings > UI > Team admin editable fields.";
@@ -77,6 +79,7 @@ const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([
   [TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION, "Raise the team's max budget"],
   ["projects", "Create and update projects"],
   ["member_key_budgets", "Update budgets on team members' keys"],
+  [TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION, "Create keys for team members"],
 ]);
 
 export const teamAdminFieldLabel = (field: string): string => TEAM_ADMIN_FIELD_LABELS.get(field) ?? field;
