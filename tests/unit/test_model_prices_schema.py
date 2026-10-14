@@ -386,6 +386,24 @@ def test_azure_gpt_6_1_sol_data_zone_rows_price_requests_at_the_regional_premium
     assert total_cost(f"azure/{region}/gpt-6.1-sol") == pytest.approx(global_cost * premium)
 
 
+AZURE_GPT_6_1_SOL_ROWS: Final = (
+    "azure/gpt-6.1-sol",
+    "azure/gpt-6.1-sol-2026-09-29",
+    "azure/us/gpt-6.1-sol",
+    "azure/eu/gpt-6.1-sol",
+    "azure/apac/gpt-6.1-sol",
+    "azure_ai/gpt-6.1-sol",
+)
+
+
+@pytest.mark.parametrize("row", AZURE_GPT_6_1_SOL_ROWS)
+def test_azure_gpt_6_1_sol_rows_accept_the_same_reasoning_efforts_as_the_openai_row(prices: dict, row: str):
+    openai_efforts: Final = resolve_supported_reasoning_efforts(prices["gpt-6.1-sol"], deployment_is_mapped=True)
+    assert openai_efforts
+
+    assert resolve_supported_reasoning_efforts(prices[row], deployment_is_mapped=True) == openai_efforts
+
+
 # https://ai.google.dev/gemini-api/docs/models/deep-research-preview-04-2026
 @pytest.mark.parametrize("model", ["gemini/deep-research-preview-04-2026", "gemini/deep-research-max-preview-04-2026"])
 def test_gemini_deep_research_previews_accept_the_documented_input_window(prices: dict, model: str):
