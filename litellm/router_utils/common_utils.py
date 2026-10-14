@@ -2,7 +2,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast  # noqa: TID251  # Any for basedpyright; cast is validated
 
 from pydantic import TypeAdapter
 
