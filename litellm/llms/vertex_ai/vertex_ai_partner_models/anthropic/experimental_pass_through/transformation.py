@@ -52,6 +52,71 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             project_id=vertex_ai_project,
             custom_llm_provider="vertex_ai",
         )
+        return self._finalize_vertex_anthropic_messages_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_base=api_base,
+            access_token=access_token,
+            project_id=project_id,
+            vertex_ai_project=vertex_ai_project,
+            vertex_ai_location=vertex_ai_location,
+        )
+
+    async def avalidate_anthropic_messages_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        model: str,
+        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        """Async override so /v1/messages does not block the event loop on Google auth.
+
+        AnthropicMessagesConfig.avalidate delegates to a subclass's sync
+        validate when sync is overridden. That would call
+        ``_ensure_access_token`` (blocking ``requests`` / GCE metadata) on the
+        loop thread. Use ``_ensure_access_token_async`` instead, matching the
+        chat/completions Vertex path.
+        """
+        headers = dict(headers)
+        vertex_ai_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params)
+        vertex_ai_location: Final = VertexBase.safe_get_vertex_ai_location(litellm_params)
+
+        vertex_credentials: Final = VertexBase.safe_get_vertex_ai_credentials(litellm_params)
+        access_token, project_id = await self._ensure_access_token_async(
+            credentials=vertex_credentials,
+            project_id=vertex_ai_project,
+            custom_llm_provider="vertex_ai",
+        )
+        return self._finalize_vertex_anthropic_messages_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_base=api_base,
+            access_token=access_token,
+            project_id=project_id,
+            vertex_ai_project=vertex_ai_project,
+            vertex_ai_location=vertex_ai_location,
+        )
+
+    def _finalize_vertex_anthropic_messages_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list[Any],
+        optional_params: dict,
+        api_base: str | None,
+        access_token: str,
+        project_id: str | None,
+        vertex_ai_project: str | None,
+        vertex_ai_location: str | None,
+    ) -> tuple[dict, str | None]:
+        """Shared header/URL building after the access token is resolved."""
         headers["Authorization"] = f"Bearer {access_token}"
 
         api_base = self.get_complete_vertex_url(
