@@ -301,7 +301,7 @@ class DatabricksAgentConfig(BaseConfig):
     def resolve_api_base_and_key(api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
         return (
             _resolved_env_reference(api_base) or get_secret_str("DATABRICKS_API_BASE"),
-            _resolved_env_reference(api_key) or get_secret_str("DATABRICKS_API_KEY"),
+            _resolved_env_reference(api_key),
         )
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: mirrors override contract
@@ -327,7 +327,7 @@ class DatabricksAgentConfig(BaseConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        bearer: Final = api_key or _env_oauth_m2m_token(api_base)
+        bearer: Final = api_key or _env_oauth_m2m_token(api_base) or get_secret_str("DATABRICKS_API_KEY")
         if bearer:
             return {
                 **_without_authorization(headers),

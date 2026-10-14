@@ -26,8 +26,11 @@ from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.types.agents import AgentResponse
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
+_AGENT_LAYERED_KWARGS: Final = ("custom_inputs", "extra_body")
 _CLIENT_TARGET_KWARGS: Final = ("api_base", "base_url")
+_PROXY_HEADER_PREFIX: Final = "x-litellm-"
 
 
 def _agent_extra_headers(agent_kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
@@ -44,7 +47,7 @@ def _client_extra_headers(data: Mapping[str, object], litellm_params: Mapping[st
     if not extra_headers:
         return None
     try:
-        return _HEADERS.validate_python(extra_headers)
+        headers: Final = _HEADERS.validate_python(extra_headers)
     except ValidationError as e:
         if _drop_params_enabled(data, litellm_params):
             return None
@@ -55,6 +58,16 @@ def _client_extra_headers(data: Mapping[str, object], litellm_params: Mapping[st
                 "or set drop_params: true to drop it"
             ),
         ) from e
+    return {name: value for name, value in headers.items() if not name.lower().startswith(_PROXY_HEADER_PREFIX)}
+
+
+def _agent_keys_over_client(client_value: object, agent_value: object) -> object:
+    try:
+        client: Final = _OBJECT_MAPPING.validate_python(client_value)
+        agent: Final = _OBJECT_MAPPING.validate_python(agent_value)
+    except ValidationError:
+        return agent_value
+    return {**client, **{key: _agent_keys_over_client(client.get(key), value) for key, value in agent.items()}}
 
 
 def _with_headers(data: Mapping[str, object], extra_headers: Mapping[str, str] | None) -> Mapping[str, object]:
@@ -77,8 +90,13 @@ def _bridge_request_data(
         dynamic_headers=_client_extra_headers(data, litellm_params),
         static_headers=agent_headers,
     )
+    layered: Final = {
+        key: _agent_keys_over_client(data[key], agent_kwargs[key])
+        for key in _AGENT_LAYERED_KWARGS
+        if key in data and key in agent_kwargs
+    }
     return _with_headers(
-        {**agent_kwargs, **data, **pinned, "model": bridge_model_name(litellm_params)},
+        {**agent_kwargs, **data, **layered, **pinned, "model": bridge_model_name(litellm_params)},
         extra_headers,
     )
 

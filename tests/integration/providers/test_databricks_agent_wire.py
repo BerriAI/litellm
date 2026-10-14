@@ -371,6 +371,47 @@ def test_static_headers_sit_between_client_and_agent_extra_headers_on_chat(gatew
         _assert_invocation(invocations[0], _PAT)
 
 
+def test_chat_never_forwards_client_litellm_identity_headers_to_the_agent(gateway: Gateway) -> None:
+    with _agent(gateway, _Databricks(), model=_ENDPOINT, api_key=_PAT) as (wire, name):
+        response: Final = _chat(
+            gateway,
+            name,
+            extra_headers={"X-LiteLLM-User-Id": "spoofed-user", "x-litellm-team-id": "spoofed-team", "X-Trace": "t-1"},
+        )
+        assert response.status_code == 200, response.text
+        invocations: Final = _calls_to(wire.drain(), _INVOCATIONS)
+        assert len(invocations) == 1, invocations
+        headers: Final = invocations[0].headers
+        assert "x-litellm-user-id" not in headers and "x-litellm-team-id" not in headers, headers
+        assert headers["x-trace"] == "t-1"
+        _assert_invocation(invocations[0], _PAT)
+
+
+def test_the_agent_custom_inputs_and_extra_body_keys_win_over_the_callers_on_chat(gateway: Gateway) -> None:
+    with _agent(
+        gateway,
+        _Databricks(),
+        model=_ENDPOINT,
+        api_key=_PAT,
+        custom_inputs={"tenant": "owner"},
+        extra_body={"metadata": {"tenant": "owner"}},
+    ) as (wire, name):
+        response: Final = _chat(
+            gateway,
+            name,
+            custom_inputs={"tenant": "caller", "session": "s-1"},
+            extra_body={"metadata": {"tenant": "caller", "turn": "2"}},
+        )
+        assert response.status_code == 200, response.text
+        invocations: Final = _calls_to(wire.drain(), _INVOCATIONS)
+        assert len(invocations) == 1, invocations
+        assert _body(invocations[0]) == {
+            "input": [{"role": "user", "content": _PROMPT}],
+            "custom_inputs": {"tenant": "owner", "session": "s-1"},
+            "metadata": {"tenant": "owner", "turn": "2"},
+        }
+
+
 @pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop-params"))
 def test_a2a_message_metadata_reaches_the_agent_only_as_string_values(gateway: Gateway, drop_params: bool) -> None:
     params: Final[dict[str, JsonValue]] = {"drop_params": True} if drop_params else {}
@@ -904,7 +945,7 @@ def test_a_killed_worker_leaves_the_sibling_serving_the_databricks_agent(gateway
 
 
 @pytest.mark.timeout(_OWNED_PROXY_BUDGET)
-def test_the_env_service_principal_mints_once_and_env_references_resolve_on_an_api_created_agent(
+def test_the_env_service_principal_mints_once_over_an_env_pat_and_env_references_resolve_on_an_api_created_agent(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with wire_server(_Databricks()) as wire:
@@ -912,6 +953,7 @@ def test_the_env_service_principal_mints_once_and_env_references_resolve_on_an_a
             "DATABRICKS_CLIENT_ID": _CLIENT_ID,
             "DATABRICKS_CLIENT_SECRET": _CLIENT_SECRET,
             "DATABRICKS_HOST": wire.url,
+            "DATABRICKS_API_KEY": "env-pat",
             "DBX_AGENT_HOST": wire.url,
             "DBX_AGENT_PAT": _PAT,
         }

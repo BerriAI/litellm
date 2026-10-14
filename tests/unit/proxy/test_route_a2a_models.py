@@ -280,13 +280,14 @@ async def test_route_a2a_bridge_agent_merges_client_static_and_agent_extra_heade
     data = {
         "model": "a2a/dbx-agent",
         "messages": [{"role": "user", "content": "ping"}],
-        "extra_headers": {"X-Trace": "trace-1", "X-Shared": "from-client"},
+        "extra_headers": {"X-Trace": "trace-1", "X-Shared": "from-client", "X-LiteLLM-User-Id": "spoofed-user"},
     }
 
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
         await (await route_a2a_agent_request(data=data, route_type="acompletion"))
 
     sent = endpoint.calls.last.request
+    assert "X-LiteLLM-User-Id" not in sent.headers
     assert sent.headers["X-Trace"] == "trace-1"
     assert sent.headers["X-Static"] == "static"
     assert sent.headers["X-Agent"] == "agent"
@@ -331,6 +332,43 @@ async def test_route_a2a_bridge_agent_lets_the_request_win_except_for_the_agent_
     assert (sent["api_base"], sent["api_key"]) == (WORKSPACE, "pat-1")
     assert (sent["custom_inputs"], sent["timeout"]) == ({"tenant": "t-1"}, 30)
     assert sent["model"] == "databricks_agent/my-agent"
+
+
+@respx.mock
+async def test_route_a2a_bridge_agent_keeps_its_custom_inputs_and_extra_body_keys_over_the_callers(
+    httpx_transport: None,
+) -> None:
+    agent = AgentResponse(
+        agent_id="dbx-agent-id",
+        agent_name="dbx-agent",
+        agent_card_params={"url": WORKSPACE},
+        litellm_params={
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": WORKSPACE,
+            "api_key": "pat-1",
+            "custom_inputs": {"tenant": "owner"},
+            "extra_body": {"metadata": {"tenant": "owner"}},
+        },
+    )
+    endpoint = respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    data = {
+        "model": "a2a/dbx-agent",
+        "messages": [{"role": "user", "content": "ping"}],
+        "custom_inputs": {"tenant": "caller", "session": "s-1"},
+        "extra_body": {"metadata": {"tenant": "caller", "turn": "2"}},
+    }
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    assert json.loads(endpoint.calls.last.request.content) == {
+        "input": [{"role": "user", "content": "ping"}],
+        "custom_inputs": {"tenant": "owner", "session": "s-1"},
+        "metadata": {"tenant": "owner", "turn": "2"},
+    }
 
 
 @respx.mock

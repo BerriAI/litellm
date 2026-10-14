@@ -544,12 +544,16 @@ async def test_acompletion_streams_output_text_deltas(httpx_transport: None) -> 
     assert "".join(deltas) == "pong"
 
 
+@pytest.mark.parametrize("env_pat", (None, "pat-env"), ids=("alone", "beside-an-env-pat"))
 @responses.activate
 @respx.mock
 async def test_acompletion_authenticates_with_the_env_service_principal(
-    httpx_transport: None, env_oauth_m2m: None, monkeypatch: pytest.MonkeyPatch
+    httpx_transport: None, env_oauth_m2m: None, monkeypatch: pytest.MonkeyPatch, env_pat: str | None
 ) -> None:
-    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    if env_pat is None:
+        monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("DATABRICKS_API_KEY", env_pat)
     responses.post(TOKEN_URL, json={"access_token": "m2m-token"})
     route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
     response = await litellm.acompletion(
