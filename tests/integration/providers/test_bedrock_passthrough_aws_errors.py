@@ -33,6 +33,7 @@ EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 POST_CALL: Final = "aws-errors-post-call"
 PRE_CALL: Final = "aws-errors-pre-call"
 BEDROCK: Final = "aws-errors-bedrock"
+VENDOR_DOWN: Final = "aws-errors-vendor-down"
 UNGUARDED: Final = "unguarded"
 BLOCKED_WORD: Final = "FORBIDDEN"
 BLOCK_REASON: Final = "synthetic policy says no"
@@ -198,6 +199,8 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                     }
                 ).encode()
             )
+        if request.target.startswith(f"/{VENDOR_DOWN}"):
+            return Reply(status=500, body=b'{"detail":"vendor is down"}')
         texts: Final = [str(text) for text in json.loads(request.body)["texts"]]
         if any(BLOCKED_WORD in text for text in texts):
             return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": BLOCK_REASON}).encode())
@@ -215,6 +218,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             config["guardrails"] = [
                 _generic_guardrail(POST_CALL, "post_call", sink, streaming_buffer_until_moderated=True),
                 _generic_guardrail(PRE_CALL, "pre_call", sink),
+                _generic_guardrail(VENDOR_DOWN, "pre_call", sink),
                 {
                     "guardrail_name": BEDROCK,
                     "litellm_params": {
@@ -255,7 +259,10 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                         errors,
                         {
                             UNGUARDED: scenario.key(),
-                            **{name: scenario.key(guardrails=[name]) for name in (POST_CALL, PRE_CALL, BEDROCK)},
+                            **{
+                                name: scenario.key(guardrails=[name])
+                                for name in (POST_CALL, PRE_CALL, BEDROCK, VENDOR_DOWN)
+                            },
                         },
                     )
 
@@ -328,6 +335,27 @@ def test_boto3_sees_bedrock_throttling_and_retries_it_as_against_bedrock(rig: Ri
     assert error.response["ResponseMetadata"]["HTTPStatusCode"] == 429, error.response
     assert error.response["ResponseMetadata"]["RetryAttempts"] == 2, error.response
     assert rig.provider_calls(marker) == 3
+
+
+@pytest.mark.parametrize(
+    ("guardrail", "model", "status"),
+    (
+        pytest.param(VENDOR_DOWN, ROUTER_MODEL, 500, id="guardrail-vendor-down"),
+        pytest.param(UNGUARDED, "not-a-configured-model", 400, id="unknown-model"),
+    ),
+)
+def test_errors_that_are_not_guardrail_blocks_keep_the_litellm_error(
+    rig: Rig, guardrail: str, model: str, status: int
+) -> None:
+    response: Final = rig.gateway.client.post(
+        f"/bedrock/model/{model}/converse",
+        json={"messages": [{"role": "user", "content": [{"text": f"plain-{uuid.uuid4().hex}"}]}]},
+        headers={"x-litellm-api-key": rig.keys[guardrail]},
+        timeout=case_timeout_seconds(),
+    )
+    assert response.status_code == status, response.text
+    assert "x-amzn-errortype" not in response.headers, dict(response.headers)
+    assert set(response.json()) == {"error"}, response.text
 
 
 def test_other_provider_passthrough_errors_carry_no_aws_error_type(rig: Rig) -> None:
