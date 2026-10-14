@@ -79,8 +79,15 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
             }
         )
 
-    async def find_by_id(self, id_value: str, id_field: str = "user_id") -> LiteLLM_UserTable | None:
-        return await super().find_by_id(id_value, id_field)
+    async def find_by_id(
+        self, id_value: str, id_field: str = "user_id", *, include_organization_memberships: bool = False
+    ) -> LiteLLM_UserTable | None:
+        if not include_organization_memberships:
+            return await super().find_by_id(id_value, id_field)
+        record: Final = await self.table.find_unique(
+            where={id_field: id_value}, include={"organization_memberships": True}
+        )
+        return self._to_model(record)
 
     async def find_by_email(self, user_email: str) -> LiteLLM_UserTable | None:
         """Find a user by email."""

@@ -18,6 +18,7 @@ import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from html import escape
 from types import MappingProxyType
 from typing import (
@@ -89,7 +90,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, forget_missing_user, get_user_object
 from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
     _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_ip_address,
@@ -110,7 +111,10 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
-from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.db.exception_handler import (
+    _exception_chain,  # pyright: ignore[reportPrivateUsage]  # reuse the bounded database exception chain walk
+)
+from litellm.proxy.management_endpoints.internal_user_endpoints import check_if_default_team_set, new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap,
@@ -135,6 +139,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -2749,6 +2754,74 @@ async def insert_sso_user(
     return response
 
 
+def _is_duplicate_user_error(error: BaseException | None) -> bool:
+    return error is not None and any(
+        (isinstance(link, ProxyException) and link.code == str(status.HTTP_409_CONFLICT))
+        or (isinstance(link, HTTPException) and link.status_code == status.HTTP_409_CONFLICT)
+        or is_unique_violation(link)
+        for link in _exception_chain(error)
+    )
+
+
+async def _concurrently_inserted_sso_user(
+    error: Exception,
+    user_defined_values: SSOUserDefinedValues | None,
+    prisma_client: PrismaClient,
+) -> LiteLLM_UserTable | None:
+    if user_defined_values is None or not _is_duplicate_user_error(error):
+        return None
+    user_id: Final = user_defined_values["user_id"]
+    default_parameters: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object]).validate_python(
+        getattr(litellm, "default_internal_user_params", None) or {}
+    )
+    required_organizations: Final = TypeAdapter(tuple[str, ...]).validate_python(
+        ()
+        if user_defined_values["user_role"] == LitellmUserRoles.PROXY_ADMIN
+        else default_parameters.get("organizations") or ()
+    )
+    existing: Final = await UserRepository(prisma_client, use_writer=True).find_by_id(
+        user_id, include_organization_memberships=bool(required_organizations)
+    )
+    if existing is None or existing.sso_user_id != user_id or existing.user_role != user_defined_values["user_role"]:
+        return None
+    default_team_id: Final = TypeAdapter[str | None](str | None).validate_python(
+        default_parameters.get("team_id") if existing.user_role != LitellmUserRoles.PROXY_ADMIN else None
+    )
+    default_teams: Final = check_if_default_team_set()
+    required_teams: Final = (
+        (default_team_id,)
+        if default_team_id is not None
+        else tuple(team if isinstance(team, str) else team.team_id for team in default_teams or ())
+    )
+    if any(team_id not in existing.teams for team_id in required_teams):
+        return None
+    organizations: Final = frozenset(member.organization_id for member in existing.organization_memberships or ())
+    if any(organization_id not in organizations for organization_id in required_organizations):
+        return None
+    forget_missing_user(user_id)
+    return existing
+
+
+@dataclass(frozen=True, slots=True)
+class SSOInsertFailure:
+    error: Exception
+
+
+async def _insert_sso_user_or_adopt_concurrent_insert(
+    insert: Callable[[], Awaitable[NewUserResponse]],
+    user_defined_values: SSOUserDefinedValues | None,
+    prisma_client: PrismaClient,
+) -> NewUserResponse | LiteLLM_UserTable | SSOInsertFailure:
+    try:
+        return await insert()
+    except Exception as error:  # noqa: BLE001  # insert failures remain values for the existing refusal handler
+        concurrent: Final = await _concurrently_inserted_sso_user(error, user_defined_values, prisma_client)
+        if concurrent is None:
+            return SSOInsertFailure(error)
+        verbose_proxy_logger.info("SSO user %s was inserted by a concurrent login, using that row", concurrent.user_id)
+        return concurrent
+
+
 @router.get(
     "/sso/get/ui_settings",
     tags=["experimental"],
@@ -3379,11 +3452,17 @@ class SSOAuthenticationHandler:
                 )
             else:
                 verbose_proxy_logger.info("user not in DB, inserting user into LiteLLM DB")
-                # user not in DB, insert User into LiteLLM DB
-                user_info = await insert_sso_user(
-                    result_openid=result,
+                outcome: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+                    insert=lambda: insert_sso_user(result_openid=result, user_defined_values=user_defined_values),
                     user_defined_values=user_defined_values,
+                    prisma_client=prisma_client,
                 )
+                if isinstance(outcome, SSOInsertFailure):
+                    verbose_proxy_logger.exception(
+                        "Error upserting SSO user into LiteLLM DB: %s", outcome.error, exc_info=outcome.error
+                    )
+                    return user_info
+                return outcome
             return user_info
         except Exception as e:
             verbose_proxy_logger.exception("Error upserting SSO user into LiteLLM DB: %s", e)

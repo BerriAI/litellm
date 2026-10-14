@@ -2,30 +2,39 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
 from fastapi import HTTPException, Request
+from pydantic import JsonValue
 
 import litellm
+import litellm.proxy.auth.auth_checks as auth_checks
 from litellm._uuid import uuid
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
+from litellm.caching.dual_cache import LimitedSizeOrderedDict
+from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, ProxyException, SSOUserDefinedValues
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    SSOInsertFailure,
+    _insert_sso_user_or_adopt_concurrent_insert,
     _setup_team_mappings,
     _sync_user_role_from_jwt_role_map,
     normalize_email,
     process_sso_jwt_access_token,
 )
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
@@ -1179,6 +1188,281 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
     assert new_user_request.user_id == "S-1-5-21-adfs-user"
     assert new_user_request.user_email == "jane.doe@example.com"
     assert new_user_request.user_alias == "Doe, Jane"
+
+
+RACE_SUBJECT: Final = "sso-race-subject"
+RACE_VALUES: Final[SSOUserDefinedValues] = {
+    "models": [],
+    "user_id": RACE_SUBJECT,
+    "user_email": "sso-race-subject@example.com",
+    "max_budget": None,
+    "user_role": "internal_user",
+    "budget_duration": None,
+}
+
+
+class _UniqueViolation(Exception):
+    code: Final = "P2002"
+
+
+def _caused_by(error: ProxyException, cause: Exception) -> ProxyException:
+    try:
+        raise error from cause
+    except ProxyException as wrapped:
+        return wrapped
+
+
+def _writer_with_row(row: Mapping[str, JsonValue] | None) -> MagicMock:
+    prisma: Final = MagicMock()
+    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=row)
+    return prisma
+
+
+def _failing_insert(error: Exception) -> Callable[[], Awaitable[NewUserResponse]]:
+    async def insert() -> NewUserResponse:
+        raise error
+
+    return insert
+
+
+DUPLICATE_ID: Final = ProxyException(
+    message="User with id sso-race-subject already exists", type="bad_request", param="user_id", code=409
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "conflict",
+    (
+        DUPLICATE_ID,
+        HTTPException(status_code=409, detail="User with id already exists"),
+        _caused_by(
+            ProxyException(message="insert failed", type="internal_server_error", param=None, code=500),
+            _UniqueViolation("Unique constraint failed on the fields: (`user_id`)"),
+        ),
+    ),
+    ids=("duplicate-id-409", "http-conflict", "unique-violation"),
+)
+async def test_concurrent_first_sso_login_adopts_the_row_the_winning_login_inserted(conflict: Exception) -> None:
+    prisma: Final = _writer_with_row(
+        {"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT, "user_role": "internal_user"}
+    )
+
+    user: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=RACE_VALUES, prisma_client=prisma, insert=_failing_insert(conflict)
+    )
+
+    assert isinstance(user, LiteLLM_UserTable), user
+    assert (user.user_id, user.sso_user_id, user.user_role) == (RACE_SUBJECT, RACE_SUBJECT, "internal_user")
+    prisma.writer_db.litellm_usertable.find_unique.assert_awaited_once_with(where={"user_id": RACE_SUBJECT})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "row",
+    (
+        None,
+        {"user_id": RACE_SUBJECT, "sso_user_id": "another-sso-subject"},
+        {"user_id": RACE_SUBJECT, "sso_user_id": None},
+    ),
+    ids=("only-the-email-is-taken", "row-bound-to-another-identity", "row-not-bound-to-sso"),
+)
+async def test_concurrent_first_sso_login_refuses_a_conflicting_row_of_another_identity(
+    row: Mapping[str, str | None] | None,
+) -> None:
+    conflict: Final = ProxyException(
+        message="User with email already exists", type="bad_request", param="user_email", code=409
+    )
+    prisma: Final = _writer_with_row(row)
+
+    refused: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=RACE_VALUES, prisma_client=prisma, insert=_failing_insert(conflict)
+    )
+    assert isinstance(refused, SSOInsertFailure) and refused.error is conflict
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_role,persisted_role", (("internal_user", "proxy_admin"), ("proxy_admin", "internal_user"))
+)
+async def test_concurrent_sso_creation_refuses_a_row_with_a_different_effective_role(
+    requested_role: str, persisted_role: str
+) -> None:
+    prisma: Final = _writer_with_row(
+        {"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT, "user_role": persisted_role}
+    )
+    values: Final[SSOUserDefinedValues] = {**RACE_VALUES, "user_role": requested_role}
+    refused: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=values, prisma_client=prisma, insert=_failing_insert(DUPLICATE_ID)
+    )
+    assert isinstance(refused, SSOInsertFailure) and refused.error is DUPLICATE_ID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("memberships", ((), ("first-org",), ("first-org", "second-org")))
+async def test_concurrent_sso_creation_requires_every_configured_organization_membership(
+    memberships: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"organizations": ["first-org", "second-org"]})
+    prisma: Final = _writer_with_row(
+        {
+            "user_id": RACE_SUBJECT,
+            "sso_user_id": RACE_SUBJECT,
+            "user_role": "internal_user",
+            "organization_memberships": [
+                {
+                    "user_id": RACE_SUBJECT,
+                    "organization_id": organization_id,
+                    "created_at": "2000-01-01T00:00:00Z",
+                    "updated_at": "2000-01-01T00:00:00Z",
+                }
+                for organization_id in memberships
+            ],
+        }
+    )
+    outcome: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=RACE_VALUES, prisma_client=prisma, insert=_failing_insert(DUPLICATE_ID)
+    )
+    if len(memberships) < 2:
+        assert isinstance(outcome, SSOInsertFailure) and outcome.error is DUPLICATE_ID
+        return
+    assert isinstance(outcome, LiteLLM_UserTable)
+    assert {member.organization_id for member in outcome.organization_memberships or ()} == set(memberships)
+    prisma.writer_db.litellm_usertable.find_unique.assert_awaited_once_with(
+        where={"user_id": RACE_SUBJECT}, include={"organization_memberships": True}
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sso_creation_refuses_partial_membership_across_multiple_required_teams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"teams": ["joined", "missing"]})
+    prisma: Final = _writer_with_row(
+        {"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT, "user_role": "internal_user", "teams": ["joined"]}
+    )
+    refused: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=RACE_VALUES, prisma_client=prisma, insert=_failing_insert(DUPLICATE_ID)
+    )
+    assert isinstance(refused, SSOInsertFailure) and refused.error is DUPLICATE_ID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "defaults,user_role", ((None, "internal_user"), ({"organizations": ["not-for-admins"]}, "proxy_admin"))
+)
+async def test_public_sso_upsert_recovers_an_actual_duplicate_user_refusal(
+    defaults: Mapping[str, JsonValue] | None, user_role: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    row: Final = {"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT, "user_role": user_role}
+    prisma: Final = _writer_with_row(row)
+    prisma.db.litellm_usertable.find_first = AsyncMock(return_value=LiteLLM_UserTable.model_validate(row))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(litellm, "default_internal_user_params", defaults)
+    values: Final[SSOUserDefinedValues] = {**RACE_VALUES, "user_role": user_role}
+    recovered: Final = await SSOAuthenticationHandler.upsert_sso_user(
+        result=CustomOpenID(id=RACE_SUBJECT, email=RACE_VALUES["user_email"], user_role=user_role, team_ids=[]),
+        user_info=None,
+        user_email=RACE_VALUES["user_email"],
+        user_defined_values=values,
+        prisma_client=prisma,
+    )
+    assert isinstance(recovered, LiteLLM_UserTable)
+    assert (recovered.user_id, recovered.sso_user_id, recovered.user_role) == (
+        RACE_SUBJECT,
+        RACE_SUBJECT,
+        user_role,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "defaults,user_role",
+    (
+        ({"teams": ["default-team"]}, "internal_user"),
+        ({"teams": [{"team_id": "default-team", "max_budget_in_team": 10}]}, "internal_user"),
+        ({"team_id": "default-team", "teams": ["other-team"]}, "internal_user"),
+        ({"team_id": "other-team", "teams": ["default-team"]}, "proxy_admin"),
+    ),
+)
+async def test_concurrent_sso_creation_returns_only_a_row_with_the_configured_memberships(
+    defaults: Mapping[str, JsonValue], user_role: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "default_internal_user_params", defaults)
+    values: Final[SSOUserDefinedValues] = {**RACE_VALUES, "user_role": user_role}
+    pending: Final = _writer_with_row(
+        {"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT, "user_role": user_role, "teams": []}
+    )
+    refused: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=values, prisma_client=pending, insert=_failing_insert(DUPLICATE_ID)
+    )
+    assert isinstance(refused, SSOInsertFailure) and refused.error is DUPLICATE_ID
+    completed: Final = _writer_with_row(
+        {
+            "user_id": RACE_SUBJECT,
+            "sso_user_id": RACE_SUBJECT,
+            "user_role": user_role,
+            "teams": ["default-team"],
+        }
+    )
+    user: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=values, prisma_client=completed, insert=_failing_insert(DUPLICATE_ID)
+    )
+    assert isinstance(user, LiteLLM_UserTable) and user.teams == ["default-team"]
+
+
+@pytest.mark.asyncio
+async def test_recovered_first_login_can_be_authorized_after_an_earlier_missing_user_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(auth_checks, "last_db_access_time", LimitedSizeOrderedDict(max_size=10))
+    prisma: Final = _writer_with_row(
+        {"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT, "user_role": "internal_user"}
+    )
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    cache: Final = UserApiKeyCache()
+    with pytest.raises(UserNotFoundError):
+        await auth_checks.get_user_object(RACE_SUBJECT, prisma, cache, user_id_upsert=False)
+    recovered: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=RACE_VALUES, prisma_client=prisma, insert=_failing_insert(DUPLICATE_ID)
+    )
+    assert isinstance(recovered, LiteLLM_UserTable)
+    prisma.db.litellm_usertable.find_unique.return_value = recovered
+    authorized: Final = await auth_checks.get_user_object(RACE_SUBJECT, prisma, cache, user_id_upsert=False)
+    assert authorized is not None and authorized.user_id == recovered.user_id
+
+
+@pytest.mark.asyncio
+async def test_first_sso_login_preserves_an_unrelated_database_failure_without_readback() -> None:
+    failure: Final = _caused_by(
+        ProxyException(message="insert failed", type="internal_server_error", param=None, code=500),
+        ConnectionError("server closed the connection unexpectedly"),
+    )
+    prisma: Final = _writer_with_row({"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT})
+
+    refused: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=RACE_VALUES, prisma_client=prisma, insert=_failing_insert(failure)
+    )
+    assert isinstance(refused, SSOInsertFailure) and refused.error is failure
+    prisma.writer_db.litellm_usertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_first_sso_login_returns_the_inserted_user_without_readback() -> None:
+    created: Final = NewUserResponse(user_id=RACE_SUBJECT, key="sk-created", teams=None)
+    prisma: Final = _writer_with_row(None)
+
+    async def insert() -> NewUserResponse:
+        return created
+
+    user: Final = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=RACE_VALUES, prisma_client=prisma, insert=insert
+    )
+
+    assert user is created
+    prisma.writer_db.litellm_usertable.find_unique.assert_not_awaited()
 
 
 @pytest.mark.asyncio
