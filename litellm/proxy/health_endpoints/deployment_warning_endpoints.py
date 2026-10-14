@@ -129,6 +129,9 @@ class ConfigAuditLogger(Protocol):
 
 _IGNORES_ADAPTER: Final[TypeAdapter[Mapping[str, AdminIgnore]]] = TypeAdapter(Mapping[str, AdminIgnore])
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_AUDIT_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[DeploymentWarningIgnoreResponse, ...]]] = TypeAdapter(
+    tuple[DeploymentWarningIgnoreResponse, ...]
+)
 
 
 def license_expiry_condition(expiration_date: str | None, now: datetime) -> WarningCondition | None:
@@ -211,8 +214,11 @@ def _resolve_ignore(
     return ignores.get(condition.id)
 
 
-def _ignores_as_json(ignores: Mapping[str, AdminIgnore]) -> JsonValue:
-    return _JSON_VALUE_ADAPTER.validate_json(_IGNORES_ADAPTER.dump_json(dict(ignores)))
+def _ignores_as_audit_entries(ignores: Mapping[str, AdminIgnore]) -> JsonValue:
+    entries: Final = tuple(
+        DeploymentWarningIgnoreResponse(id=warning_id, ignore=ignores[warning_id]) for warning_id in sorted(ignores)
+    )
+    return _JSON_VALUE_ADAPTER.validate_json(_AUDIT_ENTRIES_ADAPTER.dump_json(entries))
 
 
 def utc_now() -> datetime:
@@ -336,8 +342,8 @@ async def update_deployment_warning_ignore(
     await audit_logger(
         param_name=DEPLOYMENT_WARNING_IGNORES_ROW_ID,
         action="updated",
-        before_value=_ignores_as_json(before),
-        after_value=_ignores_as_json(after),
+        before_value=_ignores_as_audit_entries(before),
+        after_value=_ignores_as_audit_entries(after),
         user_api_key_dict=user_api_key_dict,
         table_name=LitellmTableNames.UI_SETTINGS_TABLE_NAME,
     )

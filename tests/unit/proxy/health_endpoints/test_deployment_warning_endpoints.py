@@ -25,6 +25,9 @@ from litellm.proxy.health_endpoints.deployment_warning_endpoints import (
     router,
     utc_now,
 )
+from litellm.proxy.proxy_server import (
+    _dump_redacted_config,  # pyright: ignore[reportPrivateUsage]  # the exact redaction every config audit row goes through
+)
 from litellm.repositories.deployment_warning_ignore_repository import DEPLOYMENT_WARNING_IGNORES_ROW_ID
 
 T0: Final = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
@@ -245,7 +248,9 @@ class TestDeploymentWarningIgnoreStore:
         fresh = {"detailed_debug": {"ignored_by": "a", "ignored_at": "2026-10-14T12:00:00Z"}}
         monkeypatch.setattr(
             "litellm.proxy.proxy_server.prisma_client",
-            SimpleNamespace(db=ui_settings_table(None), writer_db=ui_settings_table(SimpleNamespace(ui_settings=fresh))),
+            SimpleNamespace(
+                db=ui_settings_table(None), writer_db=ui_settings_table(SimpleNamespace(ui_settings=fresh))
+            ),
         )
         store = deployment_warning_ignore_store()
         assert store is not None
@@ -379,17 +384,20 @@ class TestUpdateDeploymentWarningIgnore:
         assert len(harness.audit.calls) == 2
         ignore_call, restore_call = harness.audit.calls
         assert ignore_call["table_name"] == LitellmTableNames.UI_SETTINGS_TABLE_NAME
-        assert ignore_call["before_value"] == {}
-        assert ignore_call["after_value"] == {
-            "detailed_debug": {
-                "source": "admin",
-                "ignored_by": "admin-user",
-                "ignored_at": "2026-10-14T12:00:00Z",
-                "ignored_until": None,
+        assert ignore_call["before_value"] == []
+        assert ignore_call["after_value"] == [
+            {
+                "id": "detailed_debug",
+                "ignore": {
+                    "source": "admin",
+                    "ignored_by": "admin-user",
+                    "ignored_at": "2026-10-14T12:00:00Z",
+                    "ignored_until": None,
+                },
             }
-        }
+        ]
         assert restore_call["before_value"] == ignore_call["after_value"]
-        assert restore_call["after_value"] == {}
+        assert restore_call["after_value"] == []
         assert {call["param_name"] for call in harness.audit.calls} == {DEPLOYMENT_WARNING_IGNORES_ROW_ID}
         assert {call["action"] for call in harness.audit.calls} == {"updated"}
 
@@ -403,7 +411,26 @@ class TestUpdateDeploymentWarningIgnore:
         harness.clock[0] = T0 + timedelta(minutes=5)
         harness.client.patch("/health/deployment_warnings/env_credential_login", json={"ignored": True})
 
-        assert list(harness.audit.calls[-1]["after_value"]) == ["env_credential_login"]
+        assert [entry["id"] for entry in harness.audit.calls[-1]["after_value"]] == ["env_credential_login"]
+
+    def test_audit_entry_survives_secret_redaction(self, harness):
+        harness.client.patch(
+            "/health/deployment_warnings/env_credential_login", json={"ignored": True, "snooze_seconds": 3600}
+        )
+
+        stored = json.loads(_dump_redacted_config(harness.audit.calls[-1]["after_value"]))
+
+        assert stored == [
+            {
+                "id": "env_credential_login",
+                "ignore": {
+                    "source": "admin",
+                    "ignored_by": "admin-user",
+                    "ignored_at": "2026-10-14T12:00:00Z",
+                    "ignored_until": "2026-10-14T13:00:00Z",
+                },
+            }
+        ]
 
     @pytest.mark.parametrize("snooze_seconds", [0, -1, THIRTY_DAYS + 1])
     def test_snooze_outside_thirty_days_is_rejected(self, harness, snooze_seconds):
