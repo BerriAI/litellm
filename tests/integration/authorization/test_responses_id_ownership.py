@@ -16,6 +16,7 @@ from integration._support.process import owned_proxy
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
+from openai.types.responses import ResponseInputParam
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _MODEL: Final = "gpt-5"
@@ -257,11 +258,10 @@ def test_compact_previous_response_id_is_scoped_to_the_issuing_user_and_team(
     gateway: Gateway,
     prefix: str,
 ) -> None:
-    pytest.skip(
-        "BUG: POST /v1/responses/compact does not check previous_response_id ownership; "
-        "another team's id and unmanaged ids reach the provider"
-    )
     raw_id: Final = f"resp_compact_owned_{uuid.uuid4().hex}"
+    compact_input: Final[ResponseInputParam] = [
+        {"role": "user", "content": [{"type": "input_text", "text": "compact the owned response"}]}
+    ]
 
     def respond(request: Request) -> Reply:
         if request.method == "GET" and request.target == "/v1/models":
@@ -316,6 +316,17 @@ def test_compact_previous_response_id_is_scoped_to_the_issuing_user_and_team(
             _UNMANAGED_DETAIL,
         )
         assert _contract_requests(wire) == ()
+
+        client_a.responses.compact(model=model, previous_response_id=client_id, input=compact_input)
+        compacted_requests: Final = _contract_requests(wire)
+        assert [(request.method, request.target) for request in compacted_requests] == [
+            ("POST", "/v1/responses/compact")
+        ], compacted_requests
+        assert _JSON_OBJECT.validate_json(compacted_requests[0].body) == {
+            "model": _MODEL,
+            "input": compact_input,
+            "previous_response_id": raw_id,
+        }, compacted_requests[0].body
 
 
 def test_allow_unmanaged_response_ids_forward_the_vendor_id_on_create(
