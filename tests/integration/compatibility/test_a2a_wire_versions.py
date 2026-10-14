@@ -873,8 +873,19 @@ def test_a2a_task_methods_pass_through_verbatim_and_push_callbacks_are_validated
 
         public: Final = {"taskId": "t1", "pushNotificationConfig": {"url": "https://1.1.1.1/callback"}}
         accepted: Final = call("tasks/pushNotificationConfig/set", public)
-        assert accepted.status_code == 200, accepted.text
-        assert accepted.json()["result"]["status"] == {"state": "tasks/pushNotificationConfig/set"}, accepted.text
+        assert (accepted.status_code, accepted.json()) == (
+            200,
+            {
+                "jsonrpc": "2.0",
+                "id": marker + "tasks/pushNotificationConfig/set",
+                "result": {
+                    "kind": "task",
+                    "id": "t1",
+                    "contextId": "c1",
+                    "status": {"state": "tasks/pushNotificationConfig/set"},
+                },
+            },
+        ), accepted.text
         assert tuple(json.loads(item.body)["params"] for item in wire.drain() if item.method == "POST") == (public,)
 
         extended: Final = call("agent/getAuthenticatedExtendedCard", {})
