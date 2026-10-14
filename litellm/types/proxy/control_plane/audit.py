@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Literal, TypeAlias
 
@@ -27,3 +28,11 @@ class AuditListResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     items: tuple[AuditEventResponse, ...]
+
+
+class OcsfAuditListResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    items: tuple[Mapping[str, object], ...]
+    chain_valid: bool
+    sequence_gaps: int

@@ -3,9 +3,11 @@ from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from pydantic import SecretStr
 
 from litellm.proxy.control_plane.app import LicenseRequired, create_app
+from litellm.proxy.control_plane.audit.pipeline import Batch, Delivered, DeliveryResult
 from litellm.proxy.control_plane.auth.jwt import SessionTokenCodec
 from litellm.proxy.control_plane.auth.rbac import VIEWER_ROLE, build_principal
 from litellm.proxy.control_plane.container import InvalidRolePolicy, build_container
@@ -22,6 +24,24 @@ class Licensed:
 class Unlicensed:
     def is_premium(self) -> bool:
         return False
+
+
+class BrokenCloseSink:
+    name: Final = "broken"
+
+    async def deliver(self, batch: Batch) -> DeliveryResult:
+        return Delivered(len(batch))
+
+    async def close(self) -> None:
+        raise RuntimeError("sink refused to close")
+
+
+class ShutdownCounter(SpanProcessor):  # mutable-ok: counts provider shutdowns for assertions
+    def __init__(self) -> None:
+        self.shutdowns = 0
+
+    def shutdown(self) -> None:
+        self.shutdowns += 1
 
 
 def _settings(**overrides: object) -> ControlPlaneSettings:
@@ -132,3 +152,14 @@ def test_a_role_granting_an_unknown_scope_fails_startup() -> None:
 def test_a_role_inheriting_an_unknown_role_fails_startup() -> None:
     with pytest.raises(InvalidRolePolicy, match="inherits unknown role 'ghost'"):
         build_container(_settings(roles={"x": {"inherits": ["ghost"]}}))
+
+
+def test_tracing_is_shut_down_even_when_an_audit_sink_fails_to_close() -> None:
+    counter = ShutdownCounter()
+    provider = TracerProvider()
+    provider.add_span_processor(counter)
+    container = build_container(_settings(), tracer_provider=provider, audit_sinks=(BrokenCloseSink(),))
+    with pytest.raises(RuntimeError, match="sink refused to close"):
+        with TestClient(create_app(container, Licensed())):
+            pass
+    assert counter.shutdowns == 1

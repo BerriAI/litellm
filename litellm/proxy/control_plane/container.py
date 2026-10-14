@@ -4,6 +4,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
+from importlib.metadata import PackageNotFoundError, version
 from types import MappingProxyType
 from typing import Final
 
@@ -15,6 +16,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # params is an untyped dict upstream
 )
 from litellm.proxy.control_plane.audit.log import AuditLog, build_audit_log
+from litellm.proxy.control_plane.audit.ocsf import Product
+from litellm.proxy.control_plane.audit.pipeline import AuditPipeline, AuditSink, build_pipeline
+from litellm.proxy.control_plane.audit.sinks import LogSink, OtlpLogSink
 from litellm.proxy.control_plane.auth.jwt import JwksKeyLookup, SessionTokenCodec, TokenVerifier, build_token_verifier
 from litellm.proxy.control_plane.auth.login import LoginService, LoginThrottle
 from litellm.proxy.control_plane.auth.rbac import (
@@ -27,7 +31,7 @@ from litellm.proxy.control_plane.auth.rbac import (
     parse_role_definition,
 )
 from litellm.proxy.control_plane.common.fanout import Fanout
-from litellm.proxy.control_plane.common.tracing import Telemetry, build_telemetry
+from litellm.proxy.control_plane.common.tracing import Telemetry, build_log_exporter, build_resource, build_telemetry
 from litellm.proxy.control_plane.dataplanes.client import DataplaneClient, HttpTransport, RetryPolicy
 from litellm.proxy.control_plane.dataplanes.credentials import TokenExchanger, http_token_exchanger
 from litellm.proxy.control_plane.dataplanes.registry import DataplaneRegistry, build_registry
@@ -108,12 +112,33 @@ def _shared_http_client(settings: ControlPlaneSettings) -> HttpTransport:
     return HandlerTransport(_shared_http_handler(settings))
 
 
+def _sink(kind: str, settings: ControlPlaneSettings) -> AuditSink:
+    match kind:
+        case "otlp":
+            return OtlpLogSink(build_log_exporter(settings), build_resource(settings))
+        case _:
+            return LogSink()
+
+
+def build_audit_pipeline(settings: ControlPlaneSettings, sinks: tuple[AuditSink, ...] | None = None) -> AuditPipeline:
+    chosen: Final = sinks if sinks is not None else tuple(_sink(kind, settings) for kind in settings.audit_sinks)
+    return build_pipeline(chosen, settings.audit_queue_size, settings.audit_batch_size, settings.audit_strict)
+
+
+def litellm_product() -> Product:
+    try:
+        return Product(version=version("litellm"))
+    except PackageNotFoundError:
+        return Product(version="unknown")
+
+
 def build_container(
     settings: ControlPlaneSettings,
     jwks: JwksKeyLookup | None = None,
     transport: HttpTransport | None = None,
     exchanger: TokenExchanger | None = None,
     tracer_provider: TracerProvider | None = None,
+    audit_sinks: tuple[AuditSink, ...] | None = None,
 ) -> Container:
     master_key: Final = settings.master_key.get_secret_value()
     policy: Final = build_role_policy(settings)
@@ -152,6 +177,8 @@ def build_container(
             tracing=telemetry.recorder,
         ),
         fanout=Fanout(concurrency=settings.fanout_concurrency),
-        audit_log=build_audit_log(settings.audit_capacity),
+        audit_log=build_audit_log(
+            settings.audit_capacity, pipeline=build_audit_pipeline(settings, audit_sinks), product=litellm_product()
+        ),
         telemetry=telemetry,
     )

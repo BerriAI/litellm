@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, model_validator
@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.oauth_token_exchange import TokenExchangeProfile
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
 DEFAULT_SESSION_TTL_SECONDS: Final = 12 * 60 * 60
+AuditSinkKind: TypeAlias = Literal["log", "otlp"]
 DEFAULT_DATAPLANE_TIMEOUT_SECONDS: Final = 10.0
 
 
@@ -112,6 +113,10 @@ class ControlPlaneSettings(BaseSettings):
     otel_enabled: bool | None = None
     otel_service_name: str = "litellm-control-plane"
     otel_identity_attributes: bool = True
+    audit_sinks: tuple[AuditSinkKind, ...] = ("log",)
+    audit_queue_size: int = 10_000
+    audit_batch_size: int = 100
+    audit_strict: bool = False
 
     @property
     def oidc(self) -> OidcSettings | None:

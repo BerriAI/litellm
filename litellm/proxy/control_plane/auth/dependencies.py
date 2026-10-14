@@ -2,10 +2,13 @@
 
 from typing import Annotated, Final
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, SecurityScopes
 from starlette.concurrency import run_in_threadpool
 
+from litellm.proxy.control_plane.audit.dependencies import get_audit_log
+from litellm.proxy.control_plane.audit.event import CONTROL_PLANE_ID
+from litellm.proxy.control_plane.audit.log import AuditLog
 from litellm.proxy.control_plane.auth.jwt import Rejected, TokenVerifier
 from litellm.proxy.control_plane.auth.rbac import Principal, Scope
 from litellm.proxy.control_plane.common.exceptions import ControlPlaneException, forbidden, unauthorized
@@ -23,26 +26,47 @@ def get_telemetry() -> Telemetry:
     return UNTRACED
 
 
+ANONYMOUS: Final = "anonymous"
+
+
 async def get_principal(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     verifier: Annotated[TokenVerifier, Depends(get_token_verifier)],
     telemetry: Annotated[Telemetry, Depends(get_telemetry)],
+    audit: Annotated[AuditLog, Depends(get_audit_log)],
 ) -> Principal:
     if credentials is None:
         raise ControlPlaneException(unauthorized("Missing bearer credentials."))
     verified: Final = await run_in_threadpool(verifier.verify, credentials.credentials)
     if isinstance(verified, Rejected):
+        audit.record(
+            ANONYMOUS, None, CONTROL_PLANE_ID, request.method, request.url.path, "denied", 401, detail=verified.reason
+        )
         raise ControlPlaneException(unauthorized(verified.reason))
     annotate_principal(verified, telemetry.identity_attributes)
     return verified
 
 
 async def require_scopes(
+    request: Request,
     security_scopes: SecurityScopes,
     principal: Annotated[Principal, Depends(get_principal)],
+    audit: Annotated[AuditLog, Depends(get_audit_log)],
 ) -> Principal:
     required: Final = frozenset(Scope(scope) for scope in security_scopes.scopes)
     missing: Final = principal.missing_scopes(required)
     if missing:
+        detail: Final = f"missing scope: {', '.join(sorted(scope.value for scope in missing))}"
+        audit.record(
+            principal.subject,
+            principal.email,
+            CONTROL_PLANE_ID,
+            request.method,
+            request.url.path,
+            "denied",
+            403,
+            detail=detail,
+        )
         raise ControlPlaneException(forbidden(f"Missing scope: {', '.join(sorted(scope.value for scope in missing))}."))
     return principal
