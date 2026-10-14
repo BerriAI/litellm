@@ -561,7 +561,9 @@ SINGAPORE_HOST = "https://wan3-singapore.example"
 
 def _proxy_poll_model(router: Router, video_id: str) -> str | None:
     decoded: Final = decode_video_id_with_provider(video_id)
-    requested: Final = router.resolve_model_name_from_model_id(decoded.get("model_id"))
+    requested: Final = router.resolve_model_name_from_model_id(
+        decoded.get("model_id"), decoded.get("custom_llm_provider")
+    )
     served: Final = decoded.get("served_model")
     return router.resolve_served_model_name(requested, served) if requested and served else requested
 
@@ -661,9 +663,10 @@ def test_an_id_naming_a_served_model_its_requested_name_does_not_route_to_is_pol
     )
     edited = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3-beijing", served_model="wan3-singapore")
 
-    router.video_status(model=_proxy_poll_model(router, edited), video_id=edited)
+    polled = router.video_status(model=_proxy_poll_model(router, edited), video_id=edited)
 
     assert [call.request.headers["authorization"] for call in task_get.calls] == ["Bearer cn-key"]
+    assert "served_model" not in decode_video_id_with_provider(polled.id)
 
 
 @pytest.mark.parametrize(

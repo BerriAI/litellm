@@ -568,13 +568,16 @@ def _logged_litellm_params(logging_obj: object) -> Mapping[str, object]:
 
 def _polled_models(logging_obj: object) -> tuple[str | None, str | None]:
     """
-    The proxy routes by the models encoded in the polled id, so they must survive into the returned id.
+    The proxy routes by the models encoded in the polled id, so they must survive into the returned id. The served
+    group survives only when the router sent this poll to it, so an edited id cannot write any name it likes back.
     """
     video_id: Final = _logged_litellm_params(logging_obj).get("video_id")
     if not isinstance(video_id, str):
         return None, None
     decoded: Final = decode_video_id_with_provider(video_id)
-    return decoded.get("model_id") or None, decoded.get("served_model")
+    served: Final = decoded.get("served_model")
+    routed: Final = _poll_models(logging_obj)
+    return decoded.get("model_id") or None, served if routed is None or served in routed else None
 
 
 def _poll_models(logging_obj: object) -> tuple[str, str | None] | None:

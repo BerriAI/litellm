@@ -8785,7 +8785,9 @@ class TestPerRequestModelGroupAlias:
 
 class TestVideoServedModelPin:
     """A video id names the group a poll asked for and the group that served the task. The served group may only
-    be pinned when the name left after every alias rewrite routes to it, so an edited id cannot undo a key's alias."""
+    be pinned when the name left after every alias rewrite routes to it, so an edited id cannot undo a key's alias,
+    and only after the pre-call hooks, so a key's rate limits on that name still count the poll, and never over a
+    model a hook picked."""
 
     @staticmethod
     def _router() -> litellm.Router:
@@ -8801,16 +8803,17 @@ class TestVideoServedModelPin:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("key_aliases", "router_settings", "expected"),
+        ("key_aliases", "router_settings", "hook_rewrite", "hooked", "expected"),
         [
-            ({}, None, "restricted"),
-            ({"videos": "allowed"}, None, "allowed"),
-            ({}, {"model_group_alias": {"videos": "allowed"}}, "allowed"),
+            ({}, None, None, "videos", "restricted"),
+            ({"videos": "allowed"}, None, None, "allowed", "allowed"),
+            ({}, {"model_group_alias": {"videos": "allowed"}}, None, "allowed", "allowed"),
+            ({}, None, "allowed", "videos", "allowed"),
         ],
-        ids=["no-alias-pins-the-served-group", "key-alias-wins", "key-or-team-router-alias-wins"],
+        ids=["no-alias-pins-the-served-group", "key-alias-wins", "key-or-team-router-alias-wins", "hook-rewrite-wins"],
     )
-    async def test_served_group_is_pinned_only_when_the_aliased_name_routes_to_it(
-        self, monkeypatch, key_aliases, router_settings, expected
+    async def test_served_group_is_pinned_after_the_hooks_only_when_the_aliased_name_routes_to_it(
+        self, monkeypatch, key_aliases, router_settings, hook_rewrite, hooked, expected
     ):
         processing_obj = ProxyBaseLLMRequestProcessing(
             data={"model": "videos", "video_id": "video_abc"}, served_model="restricted"
@@ -8821,11 +8824,12 @@ class TestVideoServedModelPin:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
-            return copy.deepcopy(data)
+        async def pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+            hooked_data = copy.deepcopy(data)
+            return hooked_data if hook_rewrite is None else {**hooked_data, "model": hook_rewrite}
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=passthrough_pre_call_hook)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
         monkeypatch.setattr(
             litellm.proxy.common_request_processing,
             "add_litellm_data_to_request",
@@ -8845,6 +8849,7 @@ class TestVideoServedModelPin:
             llm_router=self._router(),
         )
 
+        assert mock_proxy_logging_obj.pre_call_hook.call_args.kwargs["data"]["model"] == hooked
         assert returned_data["model"] == expected
 
 

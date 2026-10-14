@@ -2265,8 +2265,6 @@ class ProxyBaseLLMRequestProcessing:
                     self.data["model"] = alias_target
 
         aliased_model: Final = self.data.get("model")
-        if self.served_model is not None and llm_router is not None and isinstance(aliased_model, str):
-            self.data["model"] = llm_router.resolve_served_model_name(aliased_model, self.served_model)
 
         litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
         self.data["litellm_call_id"] = litellm_call_id
@@ -2365,6 +2363,14 @@ class ProxyBaseLLMRequestProcessing:
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
+
+        if (
+            self.served_model is not None
+            and llm_router is not None
+            and isinstance(aliased_model, str)
+            and self.data.get("model") == aliased_model
+        ):
+            self.data["model"] = llm_router.resolve_served_model_name(aliased_model, self.served_model)
 
         return self.data, logging_obj
 

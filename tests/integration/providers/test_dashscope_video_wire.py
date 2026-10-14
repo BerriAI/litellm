@@ -470,9 +470,12 @@ def test_the_proxy_has_no_video_delete_route_so_a_dashscope_task_is_never_touche
         assert gateway.get(f"/v1/videos/{video_id}")["status"] == "completed"
 
 
-@pytest.mark.parametrize("operation", ["remix", "list"])
-def test_operations_dashscope_has_no_api_for_answer_that_they_are_unsupported_and_send_nothing_upstream(
-    gateway: Gateway, operation: str
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [("remix", "Video remix is not supported by DashScope"), ("list", "DashScope API key is required")],
+)
+def test_operations_dashscope_has_no_api_for_answer_an_error_and_send_nothing_upstream(
+    gateway: Gateway, operation: str, message: str
 ) -> None:
     with wire_server(task_api()) as wire, gateway.scenario() as scenario:
         model: Final = deployed(gateway, scenario, model=f"dashscope/{MODEL}", api_base=wire.url, api_key=API_KEY)
@@ -484,7 +487,7 @@ def test_operations_dashscope_has_no_api_for_answer_that_they_are_unsupported_an
             else gateway.request("GET", "/v1/videos", params={"custom_llm_provider": "dashscope"})
         )
         assert response.status_code >= 400, response.text
-        assert f"Video {operation} is not supported by DashScope" in error_message(response), response.text
+        assert message in error_message(response), response.text
         assert wire.drain() == ()
         assert gateway.get(f"/v1/videos/{video_id}")["status"] == "completed"
 

@@ -12001,7 +12001,9 @@ class Router:
         """
         return candidate_id in self.model_id_to_deployment_index_map
 
-    def resolve_model_name_from_model_id(self, model_id: str | None) -> str | None:
+    def resolve_model_name_from_model_id(
+        self, model_id: str | None, custom_llm_provider: str | None = None
+    ) -> str | None:
         """
         Resolve model_name from model_id.
 
@@ -12011,12 +12013,14 @@ class Router:
         Strategy:
         1. First, check if model_id directly matches a model_name or deployment ID
         2. If not, search through router's model_list to find a match by litellm_params.model
-        3. If not, keep model_id when the router routes that name itself (an alias, a routing group, or a wildcard)
+        3. If not, keep model_id when the router routes that name itself (an alias, a routing group, or a wildcard
+           whose deployment serves `custom_llm_provider`)
         4. Return the model_name if found, None otherwise
 
         Args:
             model_id: The model_id extracted from decoded video_id
                      (could be model_name or litellm_params.model value)
+            custom_llm_provider: The provider extracted from the same id
 
         Returns:
             model_name if found, None otherwise. If None, the request will fall through
@@ -12056,7 +12060,11 @@ class Router:
                 if model_name:
                     return model_name
 
-        return model_id if self.is_recognized_model(model_id) or self.pattern_router.route(model_id) else None
+        if self.is_recognized_model(model_id):
+            return model_id
+        if custom_llm_provider is not None and self.pattern_router.routes_to_provider(model_id, custom_llm_provider):
+            return model_id
+        return None
 
     def resolve_served_model_name(self, model_name: str, served_model: str) -> str:
         """
