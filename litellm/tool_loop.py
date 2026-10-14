@@ -1,7 +1,7 @@
 """Client-side tool-calling loop helpers for litellm.completion."""
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import TypeAlias, cast
+from typing import Final, TypeAlias, cast
 
 from typing_extensions import TypedDict, Unpack
 
@@ -46,19 +46,24 @@ def _expect_model_response(response: object) -> ModelResponse:
 
 
 def _assistant_tool_call(tool_call: ChatCompletionMessageToolCall) -> ChatCompletionAssistantToolCall:
-    return ChatCompletionAssistantToolCall(
-        id=tool_call.id,
-        type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name=tool_call.function.name, arguments=tool_call.function.arguments
-        ),
+    provider_fields: Final[object] = getattr(tool_call, "provider_specific_fields", None)
+    return cast(  # cast-ok: dict literal with provider_specific_fields spread in only when set
+        "ChatCompletionAssistantToolCall",
+        {
+            "id": tool_call.id,
+            "type": "function",
+            "function": ChatCompletionToolCallFunctionChunk(
+                name=tool_call.function.name, arguments=tool_call.function.arguments
+            ),
+            **({"provider_specific_fields": provider_fields} if provider_fields else {}),
+        },
     )
 
 
 def _assistant_message(
     message: Message, tool_calls: tuple[ChatCompletionMessageToolCall, ...]
 ) -> ChatCompletionAssistantMessage:
-    return cast(  # cast-ok: dict literal with thinking_blocks and reasoning_items spread in only when set
+    return cast(  # cast-ok: dict literal with the optional message fields spread in only when set
         "ChatCompletionAssistantMessage",
         {
             "role": "assistant",
@@ -69,6 +74,7 @@ def _assistant_message(
                 for key, value in (
                     ("thinking_blocks", getattr(message, "thinking_blocks", None)),
                     ("reasoning_items", getattr(message, "reasoning_items", None)),
+                    ("provider_specific_fields", getattr(message, "provider_specific_fields", None)),
                 )
                 if value is not None
             },

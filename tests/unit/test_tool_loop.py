@@ -360,6 +360,66 @@ def test_responses_bridge_replays_reasoning_items_across_rounds(respx_mock: resp
     assert reasoning_index < function_call_index, f"reasoning item must precede function_call: {item_types}"
 
 
+def test_responses_bridge_replays_tool_search_items_across_rounds(respx_mock: respx.MockRouter) -> None:
+    round_one: Final = _responses_payload(
+        "resp_1",
+        [
+            {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc_1"},
+            {"type": "tool_search_call", "id": "tsc_1", "execution": "server", "arguments": {"paths": ["weather"]}},
+            {
+                "type": "tool_search_output",
+                "id": "tso_1",
+                "execution": "server",
+                "tools": [{"type": "namespace", "name": "weather", "tools": [{"type": "function", "name": "get_weather"}]}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "namespace": "weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+        ],
+    )
+    round_two: Final = _responses_payload(
+        "resp_2",
+        [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Paris is 72F", "annotations": []}],
+            }
+        ],
+    )
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)]
+    )
+
+    litellm.run_tool_loop(
+        model="openai/responses/gpt-5.5",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=({"type": "tool_search"}, *WEATHER_TOOLS),
+        execute_tool=_tool_result,
+        api_key="sk-test",
+    )
+
+    second_input: Final = _request_bodies(respx_mock)[1]["input"]
+    replayed: Final = [
+        (item["type"], item.get("id"), item.get("namespace")) for item in second_input if item["type"] != "message"
+    ]
+    assert replayed == [
+        ("reasoning", "rs_1", None),
+        ("tool_search_call", "tsc_1", None),
+        ("tool_search_output", "tso_1", None),
+        ("function_call", None, "weather"),
+        ("function_call_output", None, None),
+    ]
+
+
 async def test_arun_tool_loop_two_rounds(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
