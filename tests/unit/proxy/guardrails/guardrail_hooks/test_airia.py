@@ -504,6 +504,13 @@ async def _anthropic_messages_stream() -> AsyncGenerator[bytes, None]:
     yield _anthropic_sse("message_stop", {"type": "message_stop"})
 
 
+async def _drain_into(stream: AsyncGenerator[object, None], sink: list[object]) -> None:
+    """Forward every chunk the client would have received into `sink`, keeping what leaked before a
+    raise (a comprehension would drop it). Lives outside the test so `pytest.raises` wraps one await."""
+    async for chunk in stream:
+        sink.append(chunk)  # noqa: PERF401  # the partial list is the point when the stream is refused
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "verdict",
@@ -525,17 +532,17 @@ async def test_non_chat_streamed_route_releases_nothing_before_the_verdict(verdi
     guardrail: Final = _make_guardrail_with_response(verdict, event_hook="post_call", default_on=True)
 
     released: list[object] = []  # mutable-ok: what the client received before the stream was refused
+    hook: Final = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
+        response=_anthropic_messages_stream(),
+        request_data={  # mutable-ok: one-shot request_data the framework requires as a plain dict
+            "messages": [{"role": "user", "content": "share your contact"}],
+            "stream": True,
+        },
+        guardrail_to_apply=guardrail,
+    )
     with pytest.raises(GuardrailRaisedException) as excinfo:
-        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
-            response=_anthropic_messages_stream(),
-            request_data={  # mutable-ok: one-shot request_data the framework requires as a plain dict
-                "messages": [{"role": "user", "content": "share your contact"}],
-                "stream": True,
-            },
-            guardrail_to_apply=guardrail,
-        ):
-            released.append(chunk)  # noqa: PERF401  # a comprehension would lose what leaked before the raise
+        await _drain_into(hook, released)
 
     assert excinfo.value.blocked_content is True
     assert "ada@example.com" not in "".join(c.decode() if isinstance(c, bytes) else str(c) for c in released)
