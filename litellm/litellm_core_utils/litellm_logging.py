@@ -5299,7 +5299,6 @@ def init_custom_logger_compatible_class_at_startup(
     internal_usage_cache: DualCache | None,
     llm_router: object,
 ) -> CustomLogger | None:
-    """A configured callback whose SDK cannot be imported fails startup; other construction errors stay non-blocking."""
     try:
         return build_custom_logger_compatible_class(
             callback, internal_usage_cache=internal_usage_cache, llm_router=llm_router

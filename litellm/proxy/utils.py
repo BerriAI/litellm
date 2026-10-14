@@ -1440,20 +1440,21 @@ class ProxyLogging:
         # Track string callbacks and their initialized instances so we can
         # replace them in-place, preventing duplicates (string + instance) in
         # litellm.callbacks which caused double-counting of metrics.
-        string_callbacks_to_replace: Final[dict[int, CustomLogger]] = {}
-
-        for idx, callback in enumerate(litellm.callbacks):
-            if isinstance(callback, str):
-                initialized_callback = (
-                    litellm.litellm_core_utils.litellm_logging.init_custom_logger_compatible_class_at_startup(
-                        callback,
-                        internal_usage_cache=self.internal_usage_cache.dual_cache,
-                        llm_router=llm_router,
-                    )
-                )
-
-                if initialized_callback is not None:
-                    string_callbacks_to_replace[idx] = initialized_callback
+        built_string_callbacks: Final = (
+            (
+                idx,
+                litellm.litellm_core_utils.litellm_logging.init_custom_logger_compatible_class_at_startup(
+                    callback,
+                    internal_usage_cache=self.internal_usage_cache.dual_cache,
+                    llm_router=llm_router,
+                ),
+            )
+            for idx, callback in enumerate(litellm.callbacks)
+            if isinstance(callback, str)
+        )
+        string_callbacks_to_replace: Final = MappingProxyType(
+            {idx: built for idx, built in built_string_callbacks if built is not None}
+        )
 
         # Replace string entries in litellm.callbacks with initialized instances
         for idx, initialized_callback in string_callbacks_to_replace.items():
