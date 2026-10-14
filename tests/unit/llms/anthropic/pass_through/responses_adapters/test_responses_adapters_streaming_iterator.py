@@ -7,7 +7,10 @@ import asyncio
 import json
 import os
 import sys
+from collections.abc import Mapping, Sequence
+from itertools import chain
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -622,3 +625,70 @@ class TestUpstreamFailureEndsStreamWithErrorEvent:
         chunks = _collect(iter(()))
         assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
         assert chunks[1]["error"] == {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE}
+
+
+_CITY_ARGUMENTS: Final = ('{"city": "Paris"}', '{"city": "London"}', '{"city": "Tokyo"}')
+
+
+def _tool_call_events(index: int, arguments: str, *, deltas: bool, done: bool) -> tuple[dict[str, object], ...]:
+    item_id: Final = f"fc_{index}"
+    half: Final = len(arguments) // 2
+    added: Final[dict[str, object]] = {
+        "type": "response.output_item.added",
+        "item": {"type": "function_call", "id": item_id, "call_id": f"call_{index}", "name": "get_weather", "arguments": ""},
+    }
+    argument_deltas: Final = tuple(
+        {"type": "response.function_call_arguments.delta", "item_id": item_id, "delta": part}
+        for part in ((arguments[:half], arguments[half:]) if deltas else ())
+    )
+    arguments_done: Final[tuple[dict[str, object], ...]] = (
+        ({"type": "response.function_call_arguments.done", "item_id": item_id, "arguments": arguments},) if done else ()
+    )
+    item_done: Final[dict[str, object]] = {
+        "type": "response.output_item.done",
+        "item": {"type": "function_call", "id": item_id, "call_id": f"call_{index}", "arguments": arguments},
+    }
+    return (added, *argument_deltas, *arguments_done, item_done)
+
+
+def _partial_json(chunk: Mapping[str, object]) -> str:
+    delta: Final = chunk.get("delta")
+    is_input_delta: Final = isinstance(delta, dict) and delta.get("type") == "input_json_delta"
+    return delta["partial_json"] if is_input_delta else ""
+
+
+def _tool_inputs_by_block(chunks: Sequence[Mapping[str, object]]) -> dict[object, str]:
+    started: Final = tuple(chunk.get("index") for chunk in chunks if chunk["type"] == "content_block_start")
+    return {index: "".join(_partial_json(chunk) for chunk in chunks if chunk.get("index") == index) for index in started}
+
+
+@pytest.mark.parametrize(
+    "deltas_and_done_per_call",
+    [
+        pytest.param(((False, True),) * 3, id="arguments-only-on-done"),
+        pytest.param(((True, True),) * 3, id="deltas-and-done-not-repeated"),
+        pytest.param(((True, True), (False, True), (True, False)), id="mixed-delta-and-done-only"),
+    ],
+)
+def test_parallel_tool_use_blocks_each_carry_their_arguments_once(
+    deltas_and_done_per_call: tuple[tuple[bool, bool], ...],
+):
+    """Regression for #45348: parallel tool calls can carry their arguments only on function_call_arguments.done"""
+    events: Final = tuple(
+        chain.from_iterable(
+            _tool_call_events(i, arguments, deltas=deltas, done=done)
+            for i, (arguments, (deltas, done)) in enumerate(zip(_CITY_ARGUMENTS, deltas_and_done_per_call))
+        )
+    )
+
+    assert _tool_inputs_by_block(_process_all(list(events))) == dict(enumerate(_CITY_ARGUMENTS))
+
+
+def test_done_only_tool_call_streams_its_arguments_before_its_block_stops():
+    chunks: Final = _process_all(list(_tool_call_events(0, _CITY_ARGUMENTS[0], deltas=False, done=True)))
+
+    assert [(chunk["type"], chunk["index"]) for chunk in chunks] == [
+        ("content_block_start", 0),
+        ("content_block_delta", 0),
+        ("content_block_stop", 0),
+    ]
