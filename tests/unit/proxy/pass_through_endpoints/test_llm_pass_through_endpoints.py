@@ -7075,6 +7075,7 @@ class _ManagedObjectStore:
         self.rows: list[SimpleNamespace] = []
         self.litellm_managedobjecttable = SimpleNamespace(
             find_first=AsyncMock(side_effect=self._find_first),
+            count=AsyncMock(side_effect=self._count),
             upsert=AsyncMock(side_effect=self._upsert),
             update=AsyncMock(),
         )
@@ -7086,6 +7087,10 @@ class _ManagedObjectStore:
     async def _find_first(self, where: Mapping[str, str]) -> SimpleNamespace | None:
         ((column, value),) = where.items()
         return next((row for row in self.rows if getattr(row, column) == value), None)
+
+    async def _count(self, where: Mapping[str, Mapping[str, list[str]]]) -> int:
+        ((column, condition),) = where.items()
+        return sum(1 for row in self.rows if getattr(row, column) in condition["in"])
 
     async def _upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, str | None]]) -> None:
         self.rows.append(SimpleNamespace(**data["create"]))

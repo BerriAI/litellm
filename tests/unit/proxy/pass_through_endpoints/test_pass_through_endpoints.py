@@ -3686,7 +3686,10 @@ def _passthrough_object_rows(owner_user_id: str | None) -> SimpleNamespace:
     return SimpleNamespace(
         db=SimpleNamespace(
             litellm_managedobjecttable=SimpleNamespace(
-                find_first=AsyncMock(return_value=row), upsert=AsyncMock(), update=AsyncMock()
+                find_first=AsyncMock(return_value=row),
+                count=AsyncMock(return_value=0 if row is None else 1),
+                upsert=AsyncMock(),
+                update=AsyncMock(),
             )
         )
     )
@@ -3820,7 +3823,7 @@ async def test_managed_pass_through_forwards_ids_it_may_address(
 async def test_managed_pass_through_answers_a_retryable_503_when_it_cannot_check_a_response_id(method, target, body):
     unreachable_database: Final = SimpleNamespace(
         db=SimpleNamespace(
-            litellm_managedobjecttable=SimpleNamespace(find_first=AsyncMock(side_effect=httpx.ConnectError("db down")))
+            litellm_managedobjecttable=SimpleNamespace(count=AsyncMock(side_effect=httpx.ConnectError("db down")))
         )
     )
 

@@ -1716,9 +1716,9 @@ class TestRawProviderIdGuardBudget:
 UNISSUED_RESPONSE_ID = "resp_0000000000000000unissued"
 
 
-def _object_lookup(row: object) -> MagicMock:
+def _issued_count(issued: int) -> MagicMock:
     pc = _prisma_client_passthrough_managed()
-    pc.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=row)
+    pc.db.litellm_managedobjecttable.count = AsyncMock(return_value=issued)
     return pc
 
 
@@ -1736,31 +1736,31 @@ class TestAddressedResponseIdIssuance:
         ],
     )
     async def test_response_id_without_a_passthrough_row_is_unissued(self, path, body):
-        pc = _object_lookup(None)
+        pc = _issued_count(0)
 
         assert await addressed_response_id_issuance(path, body, "openai", pc) == "unissued"
-        pc.db.litellm_managedobjecttable.find_first.assert_awaited_once_with(
-            where={"model_object_id": f"passthrough:openai:{UNISSUED_RESPONSE_ID}"}
+        pc.db.litellm_managedobjecttable.count.assert_awaited_once_with(
+            where={"model_object_id": {"in": [f"passthrough:openai:{UNISSUED_RESPONSE_ID}"]}}
         )
 
     @pytest.mark.asyncio
     async def test_response_id_with_a_passthrough_row_is_issued(self):
-        pc = _object_lookup(_batch_row(encode("azure", "user-1", UNISSUED_RESPONSE_ID)))
+        pc = _issued_count(1)
 
         assert (
             await addressed_response_id_issuance(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "azure", pc)
             == "issued"
         )
-        pc.db.litellm_managedobjecttable.find_first.assert_awaited_once_with(
-            where={"model_object_id": f"passthrough:azure:{UNISSUED_RESPONSE_ID}"}
+        pc.db.litellm_managedobjecttable.count.assert_awaited_once_with(
+            where={"model_object_id": {"in": [f"passthrough:azure:{UNISSUED_RESPONSE_ID}"]}}
         )
 
     @pytest.mark.asyncio
     async def test_any_unissued_id_among_several_is_unissued(self):
         issued_id = "resp_1111111111111111issued"
         pc = _prisma_client_passthrough_managed()
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(
-            side_effect=lambda where: _batch_row("x") if where["model_object_id"].endswith(issued_id) else None
+        pc.db.litellm_managedobjecttable.count = AsyncMock(
+            side_effect=lambda where: sum(key.endswith(issued_id) for key in where["model_object_id"]["in"])
         )
 
         assert (
@@ -1782,15 +1782,15 @@ class TestAddressedResponseIdIssuance:
         ],
     )
     async def test_requests_that_address_no_response_id_skip_the_lookup(self, path, body):
-        pc = _object_lookup(None)
+        pc = _issued_count(0)
 
         assert await addressed_response_id_issuance(path, body, "openai", pc) == "issued"
-        pc.db.litellm_managedobjecttable.find_first.assert_not_awaited()
+        pc.db.litellm_managedobjecttable.count.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_managed_ids_are_left_to_the_managed_id_resolver(self):
         managed_id = new_managed_id("openai", UNISSUED_RESPONSE_ID)
-        pc = _object_lookup(None)
+        pc = _issued_count(0)
 
         assert (
             await addressed_response_id_issuance(
@@ -1798,13 +1798,13 @@ class TestAddressedResponseIdIssuance:
             )
             == "issued"
         )
-        pc.db.litellm_managedobjecttable.find_first.assert_not_awaited()
+        pc.db.litellm_managedobjecttable.count.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("lookup_error", [httpx.ConnectError("db down"), PrismaError("query failed")])
     async def test_failed_lookup_is_unverified_rather_than_issued_or_unissued(self, lookup_error):
         pc = _prisma_client_passthrough_managed()
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(side_effect=lookup_error)
+        pc.db.litellm_managedobjecttable.count = AsyncMock(side_effect=lookup_error)
 
         assert (
             await addressed_response_id_issuance(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", pc)
@@ -1812,24 +1812,12 @@ class TestAddressedResponseIdIssuance:
         )
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(("issued_row", "expected"), [(None, "unissued"), (_batch_row("x"), "unverified")])
-    async def test_a_failed_lookup_beside_another_id_never_hides_an_unissued_one(self, issued_row, expected):
-        failing_id = "resp_2222222222222222failing"
+    async def test_a_path_naming_many_response_ids_costs_one_lookup(self):
+        path = "/v1" + "".join(f"/responses/resp_{n:040d}" for n in range(500))
+        pc = _issued_count(0)
 
-        async def find_first(where):
-            if where["model_object_id"].endswith(failing_id):
-                raise PrismaError("query failed")
-            return issued_row
-
-        pc = _prisma_client_passthrough_managed()
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(side_effect=find_first)
-
-        assert (
-            await addressed_response_id_issuance(
-                f"/v1/responses/{failing_id}", {"previous_response_id": UNISSUED_RESPONSE_ID}, "openai", pc
-            )
-            == expected
-        )
+        assert await addressed_response_id_issuance(path, {}, "openai", pc) == "unissued"
+        pc.db.litellm_managedobjecttable.count.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_without_a_database_the_pass_through_issues_only_raw_ids_so_none_is_refused(self):

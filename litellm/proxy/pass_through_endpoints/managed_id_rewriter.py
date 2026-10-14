@@ -481,36 +481,25 @@ def _addressed_raw_response_ids(path: str, body: Mapping[str, object]) -> frozen
     return path_ids
 
 
-async def _response_id_issuance(raw_id: str, provider: str, prisma_client: PrismaClient) -> ResponseIdIssuance:
-    from prisma.errors import PrismaError
-
-    try:
-        row: Final = await _object_table(prisma_client).find_first(
-            where={"model_object_id": f"passthrough:{provider}:{raw_id}"}
-        )
-    except (PrismaError, *DB_CONNECTION_ERROR_TYPES):
-        verbose_proxy_logger.warning("managed_id_rewriter: response id ownership lookup failed", exc_info=True)
-        return "unverified"
-    return "unissued" if row is None else "issued"
-
-
 async def addressed_response_id_issuance(
     path: str,
     body: Mapping[str, object],
     provider: str,
     prisma_client: PrismaClient | None,
 ) -> ResponseIdIssuance:
+    from prisma.errors import PrismaError
+
     if prisma_client is None:
         return "issued"
-    outcomes: Final = frozenset(
-        [
-            await _response_id_issuance(raw_id, provider, prisma_client)
-            for raw_id in _addressed_raw_response_ids(path, body)
-        ]
-    )
-    if "unissued" in outcomes:
-        return "unissued"
-    return "unverified" if "unverified" in outcomes else "issued"
+    object_ids: Final = sorted(f"passthrough:{provider}:{raw_id}" for raw_id in _addressed_raw_response_ids(path, body))
+    if not object_ids:
+        return "issued"
+    try:
+        issued_count: Final = await _object_table(prisma_client).count(where={"model_object_id": {"in": object_ids}})
+    except (PrismaError, *DB_CONNECTION_ERROR_TYPES):
+        verbose_proxy_logger.warning("managed_id_rewriter: response id ownership lookup failed", exc_info=True)
+        return "unverified"
+    return "issued" if issued_count == len(object_ids) else "unissued"
 
 
 # ---------------------------------------------------------------------------

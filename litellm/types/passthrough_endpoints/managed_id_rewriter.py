@@ -81,6 +81,8 @@ class ManagedObjectTable(ManagedTable[ManagedObjectRow], Protocol):
 
     async def upsert(self, *, where: PrismaWhere, data: Mapping[str, ManagedRowData]) -> ManagedObjectRow: ...
 
+    async def count(self, *, where: PrismaWhere) -> int: ...
+
 
 @runtime_checkable
 class ManagedFileIdReader(Protocol):
