@@ -102,7 +102,9 @@ async def find_many_in(
     if include is None:
         pages: Final = await _each_chunk(field, values, where, lambda chunk: table.find_many(where=chunk), chunk_size)
     else:
-        pages = await _each_chunk(field, values, where, lambda chunk: table.find_many(where=chunk, include=include), chunk_size)
+        pages = await _each_chunk(
+            field, values, where, lambda chunk: table.find_many(where=chunk, include=include), chunk_size
+        )
     return tuple(chain.from_iterable(pages))
 
 
