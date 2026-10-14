@@ -20,7 +20,7 @@ use litellm_host::{
 use crate::PythonHostCalls;
 use crate::caller::{Answer, PythonCaller, Yielded};
 use crate::handle::{Execution, ExecutionBody, ExecutionStep, StepTypes};
-use crate::hooks::{HookStep, PythonCallEvent, PythonCallHooks};
+use crate::hooks::{PythonCallEvent, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
 use crate::{Error, InvokeError, PythonBinding};
 
@@ -91,18 +91,27 @@ impl Observation {
     }
 }
 
-/// What the running call shares with its handle: the binding and hooks the handle
-/// traverses and closes, and the Python values the call retains across a suspension.
-struct Parts<H, L> {
-    binding: H,
+/// Hooks lock their own state around Python work, so the handle can traverse them while a
+/// hook is suspended.
+struct Shared<H, L> {
     hooks: L,
+    parts: Mutex<Parts<H>>,
+}
+
+struct Parts<H> {
+    binding: H,
     arguments: Option<Py<PyDict>>,
     interrupted: Option<Py<PyBaseException>>,
-    selected: Option<Py<PyAny>>,
+    selected: Option<Selected>,
     observation: Observation,
 }
 
-type SharedParts<H, L> = Arc<Mutex<Parts<H, L>>>;
+/// The call's outcome while its terminal hooks run. The body borrows it for the event and
+/// holds no Python reference of its own, so the one reference is the traversed one.
+enum Selected {
+    Response(Arc<Py<PyAny>>),
+    Exception(Arc<Py<PyBaseException>>),
+}
 
 enum Setup<E> {
     Host(PyErr),
@@ -121,7 +130,7 @@ fn classified<H: PythonBinding>(py: Python<'_>, binding: &H, error: ErrorOf<H>) 
     classifier_error
 }
 
-/// The call as one async body. Every hook step and host call is awaited in place on the
+/// The call as one async body. Every hook and host call is awaited in place on the
 /// caller's task; the parts lock is never held across an await.
 struct CallBody<H, M, L>
 where
@@ -129,7 +138,7 @@ where
     M: Machine,
 {
     caller: PythonCaller,
-    parts: SharedParts<H, L>,
+    shared: Arc<Shared<H, L>>,
     native: NativeMachine<M>,
     start: Option<StartMachine<ProtocolOf<H>, M>>,
     streaming: bool,
@@ -142,8 +151,12 @@ where
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
-    fn parts(&self) -> MutexGuard<'_, Parts<H, L>> {
-        self.parts.lock()
+    fn parts(&self) -> MutexGuard<'_, Parts<H>> {
+        self.shared.parts.lock()
+    }
+
+    fn hooks(&self) -> &L {
+        &self.shared.hooks
     }
 
     async fn run(mut self) -> PyResult<Py<PyAny>> {
@@ -159,45 +172,39 @@ where
 
     async fn begin(&mut self) -> Result<(), Setup<ErrorOf<H>>> {
         let started_at = epoch_seconds();
-        let started = {
+        let started = PythonCallEvent::Started {
+            start_time: started_at,
+        };
+        {
             let mut parts = self.parts();
             parts.observation.started_at = started_at;
             parts.observation.observing = true;
-            let event = PythonCallEvent::Started {
-                start_time: started_at,
-            };
-            parts.observation.emit(&event);
-            Python::attach(|py| parts.hooks.on_event(py, event)).map_err(Setup::Host)?
-        };
-        self.settle(started).await.map_err(Setup::Host)?;
+            parts.observation.emit(&started);
+        }
+        self.hooks()
+            .on_event(&self.caller, started)
+            .await
+            .map_err(Setup::Host)?;
         let arguments = self
             .parts()
             .arguments
             .take()
             .ok_or_else(|| Setup::Host(Error::MissingState.into()))?;
-        let prepare = {
+        let prepared = self
+            .hooks()
+            .prepare_arguments(&self.caller, arguments, started_at)
+            .await
+            .map_err(Setup::Host)?;
+        self.hooks()
+            .arguments_prepared(&prepared)
+            .map_err(Setup::Host)?;
+        let decoded = {
             let mut parts = self.parts();
-            Python::attach(|py| parts.hooks.prepare_arguments(py, arguments, started_at))
-                .map_err(Setup::Host)?
+            let decoded = Python::attach(|py| parts.binding.decode_request(py, prepared.bind(py)));
+            parts.arguments = Some(prepared);
+            decoded
         };
-        let prepared = self.settle(prepare).await.map_err(Setup::Host)?;
-        let request = {
-            let mut parts = self.parts();
-            let Parts {
-                binding,
-                hooks,
-                arguments,
-                ..
-            } = &mut *parts;
-            Python::attach(|py| {
-                hooks
-                    .arguments_prepared(py, &prepared)
-                    .map_err(Setup::Host)?;
-                let decoded = binding.decode_request(py, prepared.bind(py));
-                *arguments = Some(prepared);
-                decoded.map_err(Setup::Decode)
-            })?
-        };
+        let request = decoded.map_err(Setup::Decode)?;
         let start = self
             .start
             .take()
@@ -212,22 +219,6 @@ where
         };
         self.native.start(machine);
         Ok(())
-    }
-
-    /// Runs one hook step to its value, handing each awaitable it produces to the caller.
-    async fn settle<T>(&self, step: HookStep<L, T>) -> PyResult<T> {
-        let mut step = step;
-        loop {
-            let (awaitable, resume) = match step {
-                HookStep::Ready(value) => return Ok(value),
-                HookStep::Await(awaitable, resume) => (awaitable, resume),
-            };
-            let answer = self.caller.await_python(awaitable).await;
-            step = {
-                let mut parts = self.parts();
-                Python::attach(|py| resume(&mut parts.hooks, py, answer))?
-            };
-        }
     }
 
     async fn execute(&mut self) -> PyResult<Py<PyAny>> {
@@ -286,11 +277,10 @@ where
                 context,
                 reply,
             }) => {
-                let step = {
-                    let mut parts = self.parts();
-                    Python::attach(|py| parts.hooks.before_provider_request(py, wire, &context))?
-                };
-                let wire = self.settle(step).await?;
+                let wire = self
+                    .hooks()
+                    .before_provider_request(&self.caller, wire, &context)
+                    .await?;
                 reply.send(*wire);
                 Ok(())
             }
@@ -314,26 +304,18 @@ where
                 self.streaming = true;
                 let head = {
                     let mut parts = self.parts();
-                    let Parts { binding, hooks, .. } = &mut *parts;
-                    Python::attach(|py| {
-                        let head = binding.encode_stream_head(py, head)?;
-                        hooks.on_stream_open(py, &head)?;
-                        Ok::<_, PyErr>(head)
-                    })?
+                    Python::attach(|py| parts.binding.encode_stream_head(py, head))?
                 };
+                self.hooks().on_stream_open(&head)?;
                 reply.send(self.caller.open_stream(head).await);
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
                 let chunk = {
                     let mut parts = self.parts();
-                    let Parts { binding, hooks, .. } = &mut *parts;
-                    Python::attach(|py| {
-                        let chunk = binding.encode_chunk(py, chunk)?;
-                        hooks.on_stream_chunk(py, &chunk)?;
-                        Ok::<_, PyErr>(chunk)
-                    })?
+                    Python::attach(|py| parts.binding.encode_chunk(py, chunk))?
                 };
+                self.hooks().on_stream_chunk(&chunk)?;
                 reply.send(self.caller.yield_chunk(chunk).await);
                 Ok(())
             }
@@ -359,12 +341,8 @@ where
     }
 
     async fn notify(&self, event: PythonCallEvent<'_>) -> PyResult<()> {
-        let step = {
-            let mut parts = self.parts();
-            parts.observation.emit(&event);
-            Python::attach(|py| parts.hooks.on_event(py, event))?
-        };
-        self.settle(step).await
+        self.parts().observation.emit(&event);
+        self.hooks().on_event(&self.caller, event).await
     }
 
     async fn completed(
@@ -390,16 +368,12 @@ where
         if self.streaming {
             return self.succeeded(public).await;
         }
-        let transform = {
-            let mut parts = self.parts();
-            let timing = parts.observation.timing();
-            Python::attach(|py| parts.hooks.transform_response(py, public, timing))
-        };
-        let step = match transform {
-            Ok(step) => step,
-            Err(error) => return self.failure(error, FailureOrigin::Host).await,
-        };
-        match self.settle(step).await {
+        let timing = self.parts().observation.timing();
+        match self
+            .hooks()
+            .transform_response(&self.caller, public, timing)
+            .await
+        {
             Ok(response) => self.succeeded(response).await,
             Err(error) => self.failure(error, FailureOrigin::Host).await,
         }
@@ -417,58 +391,60 @@ where
         self.failure(error, FailureOrigin::Call).await
     }
 
-    /// The terminal hooks may suspend. Until they finish, the selected response is held
-    /// only in the traversed parts, so a cycle through it stays collectable.
     async fn succeeded(&mut self, response: Py<PyAny>) -> PyResult<Py<PyAny>> {
-        let step = {
-            let mut parts = self.parts();
-            let timing = parts.observation.timing();
-            let event = PythonCallEvent::Succeeded {
-                timing,
-                response: &response,
-            };
-            parts.observation.retain_terminal(&event);
-            let step = Python::attach(|py| parts.hooks.on_event(py, event))?;
-            parts.selected = Some(response);
-            step
+        let response = Arc::new(response);
+        let timing = self.parts().observation.timing();
+        let event = PythonCallEvent::Succeeded {
+            timing,
+            response: &response,
         };
-        self.settle(step).await?;
-        let mut parts = self.parts();
-        parts.observation.finish();
-        parts
-            .selected
-            .take()
-            .ok_or_else(|| Error::MissingState.into())
+        {
+            let mut parts = self.parts();
+            parts.observation.retain_terminal(&event);
+            parts.selected = Some(Selected::Response(Arc::clone(&response)));
+        }
+        let notified = self.hooks().on_event(&self.caller, event).await;
+        {
+            let mut parts = self.parts();
+            parts.selected = None;
+            notified?;
+            parts.observation.finish();
+        }
+        Arc::into_inner(response).ok_or_else(|| Error::MissingState.into())
     }
 
-    /// As [`Self::succeeded`], with the selected exception held as its value and raised
-    /// again once the hooks finish.
     async fn failure(&mut self, error: PyErr, origin: FailureOrigin) -> PyResult<Py<PyAny>> {
-        let step = {
+        let timing = {
             let mut parts = self.parts();
             parts.observation.ended_at.get_or_insert_with(epoch_seconds);
-            let timing = parts.observation.timing();
-            Python::attach(|py| {
-                if is_cancellation(py, &error) {
-                    return Err(error);
-                }
-                let event = PythonCallEvent::Failed {
-                    timing,
-                    origin,
-                    error: &error,
-                };
-                parts.observation.retain_terminal(&event);
-                let step = parts.hooks.on_event(py, event)?;
-                parts.selected = Some(error.into_value(py).into_any());
-                Ok(step)
-            })?
+            parts.observation.timing()
         };
-        self.settle(step).await?;
-        let mut parts = self.parts();
-        parts.observation.finish();
-        let selected = parts.selected.take().ok_or(Error::MissingState)?;
+        let exception = Python::attach(|py| {
+            if is_cancellation(py, &error) {
+                return Err(error);
+            }
+            Ok(Arc::new(error.into_value(py)))
+        })?;
+        let event = PythonCallEvent::Failed {
+            timing,
+            origin,
+            error: &exception,
+        };
+        {
+            let mut parts = self.parts();
+            parts.observation.retain_terminal(&event);
+            parts.selected = Some(Selected::Exception(Arc::clone(&exception)));
+        }
+        let notified = self.hooks().on_event(&self.caller, event).await;
+        {
+            let mut parts = self.parts();
+            parts.selected = None;
+            notified?;
+            parts.observation.finish();
+        }
+        let exception = Arc::into_inner(exception).ok_or(Error::MissingState)?;
         Err(Python::attach(|py| {
-            PyErr::from_value(selected.into_bound(py))
+            PyErr::from_value(exception.into_bound(py).into_any())
         }))
     }
 }
@@ -480,7 +456,7 @@ where
 {
     body: Mutex<Body>,
     reply: Option<Reply<Answer>>,
-    parts: SharedParts<H, L>,
+    shared: Arc<Shared<H, L>>,
 }
 
 impl<H, L> CallDriver<H, L>
@@ -491,19 +467,20 @@ where
     /// A failure the body raised past its terminal hooks, or a cancellation, is the last
     /// thing the observers hear about the call.
     fn observe_host_failure(&self, error: &PyErr) {
-        let mut parts = self.parts.lock();
+        let mut parts = self.shared.parts.lock();
         if !parts.observation.observing {
             return;
         }
         let timing = parts.observation.timing();
         Python::attach(|py| {
+            let exception = error.value(py).clone().unbind();
             let event = if is_cancellation(py, error) {
                 PythonCallEvent::Cancelled { timing }
             } else {
                 PythonCallEvent::Failed {
                     timing,
                     origin: FailureOrigin::Host,
-                    error,
+                    error: &exception,
                 }
             };
             parts.observation.emit(&event);
@@ -550,14 +527,18 @@ where
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        let Some(parts) = self.parts.try_lock() else {
+        self.shared.hooks.traverse(visit)?;
+        let Some(parts) = self.shared.parts.try_lock() else {
             return Ok(());
         };
         parts.binding.traverse(visit)?;
-        parts.hooks.traverse(visit)?;
         visit.call(&parts.arguments)?;
         visit.call(&parts.interrupted)?;
-        visit.call(&parts.selected)
+        match &parts.selected {
+            Some(Selected::Response(response)) => visit.call(&**response),
+            Some(Selected::Exception(exception)) => visit.call(&**exception),
+            None => Ok(()),
+        }
     }
 }
 
@@ -569,17 +550,22 @@ where
     fn drop(&mut self) {
         self.body.get_mut().cancel();
         self.reply = None;
-        let mut parts = self.parts.lock();
+        let Some(Shared { hooks, parts }) = Arc::get_mut(&mut self.shared) else {
+            return;
+        };
+        let Parts {
+            binding,
+            observation,
+            ..
+        } = parts.get_mut();
         Python::attach(|py| {
-            if parts.observation.observing {
-                let timing = parts.observation.timing();
-                parts
-                    .observation
-                    .emit(&PythonCallEvent::Cancelled { timing });
-                parts.observation.observing = false;
+            if observation.observing {
+                let timing = observation.timing();
+                observation.emit(&PythonCallEvent::Cancelled { timing });
+                observation.observing = false;
             }
-            parts.hooks.close(py);
-            parts.binding.close(py);
+            hooks.close(py);
+            binding.close(py);
         });
     }
 }
@@ -605,27 +591,29 @@ where
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
-    let parts = Arc::new(Mutex::new(Parts {
-        binding,
+    let shared = Arc::new(Shared {
         hooks,
-        arguments: Some(arguments),
-        interrupted: None,
-        selected: None,
-        observation: Observation {
-            observers: options.observers,
-            observing: false,
-            started_at: 0.0,
-            ended_at: None,
-            terminal: None,
-        },
-    }));
+        parts: Mutex::new(Parts {
+            binding,
+            arguments: Some(arguments),
+            interrupted: None,
+            selected: None,
+            observation: Observation {
+                observers: options.observers,
+                observing: false,
+                started_at: 0.0,
+                ended_at: None,
+                terminal: None,
+            },
+        }),
+    });
     let body = Coroutine::new({
-        let parts = Arc::clone(&parts);
+        let shared = Arc::clone(&shared);
         let asynchronous = options.asynchronous;
         move |co| {
             CallBody {
                 caller: PythonCaller::new(co),
-                parts,
+                shared,
                 native: NativeMachine::new(asynchronous),
                 start: Some(Box::new(start)),
                 streaming: false,
@@ -636,7 +624,7 @@ where
     let driver = CallDriver {
         body: Mutex::new(body),
         reply: None,
-        parts,
+        shared,
     };
     Py::new(py, Execution::new(driver, options.steps)).map(Py::into_any)
 }

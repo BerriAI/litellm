@@ -9,7 +9,7 @@ pub(crate) mod responses;
 pub(crate) mod token_counter;
 pub(crate) mod traces;
 
-use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
+use litellm_callbacks_legacy_python::{LegacyHooks, LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{
     CallOptions, HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
@@ -125,7 +125,7 @@ fn call_hooks(
     let arguments = call.arguments(py);
     Ok((
         arguments,
-        LegacyLogging::new(py, operation, call, asynchronous),
+        LegacyHooks::new(LegacyLogging::new(py, operation, call, asynchronous)),
     ))
 }
 
