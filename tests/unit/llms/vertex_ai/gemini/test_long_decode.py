@@ -319,6 +319,89 @@ async def test_unary_long_decode_keeps_every_hops_citations_and_points_them_into
     assert response.vertex_ai_url_context_metadata == [URL_CONTEXT]
 
 
+NO_CITATIONS_OR_URL_CONTEXT: Final = (
+    pytest.param({}, id="missing"),
+    pytest.param({"citationMetadata": None, "urlContextMetadata": None}, id="null"),
+    pytest.param({"citationMetadata": {}, "urlContextMetadata": {}}, id="empty"),
+)
+
+
+def _carrying(body: Mapping[str, object], fields: Mapping[str, object]) -> dict[str, object]:
+    candidates: Final = body["candidates"]
+    assert isinstance(candidates, list)
+    return {**body, "candidates": [{**candidates[0], **fields}, *candidates[1:]]}
+
+
+async def _answer(hops: Sequence[httpx.Response], sent: list[dict[str, object]]):
+    return await litellm.acompletion(
+        model=MODEL,
+        messages=list(MESSAGES),
+        max_tokens=100_000,
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent))),
+    )
+
+
+@pytest.mark.parametrize("fields", NO_CITATIONS_OR_URL_CONTEXT)
+@pytest.mark.parametrize(
+    "bodies, answer", [((HOP_2,), " world"), ((HOP_1, HOP_2), "hello world")], ids=["one_request", "continued"]
+)
+@pytest.mark.asyncio
+async def test_unary_answer_whose_candidates_carry_no_citations_or_url_context_is_returned_whole(
+    bodies: Sequence[Mapping[str, object]], answer: str, fields: Mapping[str, object]
+):
+    sent: Final[list[dict[str, object]]] = []
+
+    response: Final = await _answer(tuple(httpx.Response(200, json=_carrying(body, fields)) for body in bodies), sent)
+
+    assert len(sent) == len(bodies)
+    assert response.choices[0].message.content == answer
+    assert response.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize("fields", NO_CITATIONS_OR_URL_CONTEXT)
+@pytest.mark.asyncio
+async def test_unary_long_decode_keeps_earlier_citations_and_url_context_when_a_follow_up_carries_none(
+    fields: Mapping[str, object],
+):
+    sent: Final[list[dict[str, object]]] = []
+    citation: Final = _citation("hello", "hello")
+    hop_1: Final = _carrying(HOP_1, {"citationMetadata": {"citations": [citation]}, "urlContextMetadata": URL_CONTEXT})
+
+    response: Final = await _answer(
+        (httpx.Response(200, json=hop_1), httpx.Response(200, json=_carrying(HOP_2, fields))), sent
+    )
+
+    assert response.choices[0].message.content == "hello world"
+    assert [item for item in response.vertex_ai_url_context_metadata if item != {}] == [URL_CONTEXT]
+    assert _cited_spans([item for item in response.vertex_ai_citation_metadata if item != {}], "citations") == [
+        citation
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unary_long_decode_counts_a_follow_ups_null_start_index_from_the_start_of_its_text():
+    sent: Final[list[dict[str, object]]] = []
+    span: Final = {"startIndex": None, "endIndex": len(" wo")}
+    hop_2: Final = _carrying(
+        HOP_2,
+        {
+            "groundingMetadata": {
+                "groundingChunks": [{"web": {"uri": "https://example.com/world", "title": "world"}}],
+                "groundingSupports": [{"segment": {**span, "text": " wo"}, "groundingChunkIndices": [0]}],
+            },
+            "citationMetadata": {"citations": [{**span, "uri": "https://example.com/world"}]},
+        },
+    )
+
+    response: Final = await _answer((httpx.Response(200, json=HOP_1), httpx.Response(200, json=hop_2)), sent)
+    answer: Final = response.choices[0].message.content
+
+    assert answer == "hello world"
+    assert [_bytes_at(answer, s) for s in _supported_spans(response.vertex_ai_grounding_metadata)] == [" wo"]
+    assert [_bytes_at(answer, s) for s in _cited_spans(response.vertex_ai_citation_metadata, "citations")] == [" wo"]
+
+
 @pytest.mark.parametrize(
     "max_tokens, expected_requests, expected_token",
     [(None, 1, "dG9rLTE="), (30, 1, "dG9rLTE="), (50, 2, "dG9rLTI=")],
@@ -540,6 +623,26 @@ async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish
     assert chunks[-1].usage.prompt_tokens == 20
     assert chunks[-1].usage.completion_tokens == 50
     assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+@pytest.mark.parametrize("fields", NO_CITATIONS_OR_URL_CONTEXT)
+@pytest.mark.parametrize(
+    "hop_chunks, answer",
+    [(((HOP_2,),), " world"), (((STREAM_FIRST_CHUNK, STREAM_HOP_1_END), (HOP_2,)), "hello world")],
+    ids=["one_request", "continued"],
+)
+@pytest.mark.asyncio
+async def test_streamed_answer_whose_chunks_carry_no_citations_or_url_context_is_returned_whole(
+    hop_chunks: Sequence[Sequence[Mapping[str, object]]], answer: str, fields: Mapping[str, object]
+):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = tuple(_sse(*(_carrying(chunk, fields) for chunk in hop)) for hop in hop_chunks)
+
+    chunks: Final = await _collect_stream(True, hops, sent)
+
+    assert len(sent) == len(hop_chunks)
+    assert _stream_text(chunks) == answer
+    assert _stream_finish_reasons(chunks) == ["stop"]
 
 
 @pytest.mark.parametrize("next_request_fails", [False, True])

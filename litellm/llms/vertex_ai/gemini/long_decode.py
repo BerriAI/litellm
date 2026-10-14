@@ -149,7 +149,7 @@ def _candidate_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
 
 
 def per_hop(metadata: _Metadata | tuple[_Metadata, ...]) -> tuple[_Metadata, ...]:
-    return (metadata,) if isinstance(metadata, Mapping) else metadata
+    return metadata if isinstance(metadata, tuple) else (metadata,)
 
 
 def _candidate_grounding(candidate: Candidates) -> tuple[GroundingMetadata, ...]:
@@ -169,7 +169,7 @@ def _shifted_support(support: GroundingSupport, offset: int) -> GroundingSupport
         return support
     shifted: Final[GroundingSegment] = {
         **segment,
-        "startIndex": segment.get("startIndex", 0) + offset,
+        "startIndex": (segment.get("startIndex") or 0) + offset,
         "endIndex": segment.get("endIndex", 0) + offset,
     }
     return {**support, "segment": shifted}
@@ -189,7 +189,11 @@ def _hop_grounding(candidate: Candidates, offset: int) -> tuple[GroundingMetadat
 
 
 def _shifted_citation(citation: Citation, offset: int) -> Citation:
-    return {**citation, "startIndex": citation.get("startIndex", 0) + offset, "endIndex": citation["endIndex"] + offset}
+    return {
+        **citation,
+        "startIndex": (citation.get("startIndex") or 0) + offset,
+        "endIndex": citation["endIndex"] + offset,
+    }
 
 
 def _shifted_citation_metadata(metadata: CitationMetadata, offset: int) -> CitationMetadata:
@@ -215,7 +219,8 @@ def _hop_citations(candidate: Candidates, offset: int) -> tuple[CitationMetadata
 
 
 def _hop_url_context(candidate: Candidates) -> tuple[UrlContextMetadata, ...]:
-    return per_hop(candidate["urlContextMetadata"]) if "urlContextMetadata" in candidate else ()
+    url_context: Final = candidate.get("urlContextMetadata")
+    return () if url_context is None else per_hop(url_context)
 
 
 def _with_hop_metadata(candidate: Candidates, hop_candidates: Sequence[Candidates]) -> Candidates:
