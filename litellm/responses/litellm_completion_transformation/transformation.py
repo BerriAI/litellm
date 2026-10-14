@@ -45,7 +45,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.common_utils import CACHE_MARK_KEYS
+from litellm.llms.base_llm.base_utils import CACHE_MARK_KEYS
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -97,6 +97,8 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     Function,
+    LlmProviders,
+    LlmProvidersSet,
     Message,
     ModelResponse,
     Usage,
@@ -117,6 +119,13 @@ NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
 NamespaceTool: TypeAlias = Mapping[str, object]
 ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
+_BridgedChatMessage: TypeAlias = (
+    AllMessageValues
+    | GenericChatCompletionMessage
+    | ChatCompletionMessageToolCall
+    | ChatCompletionResponseMessage
+    | Message
+)
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
 _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
@@ -247,6 +256,48 @@ def _tool_output_cache_marks(tool_call_output: Mapping[str, object]) -> Mapping[
     )
     last_part_marks: Final[Mapping[str, object]] = next((marks for marks in reversed(part_marks) if marks), {})
     return {**last_part_marks, **_cache_marks(tool_call_output)}
+
+
+def _chat_route_reads_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None) -> bool:
+    """Only the Claude chat transforms read ``prompt_cache_breakpoint`` (renamed to ``cache_control``). Any other
+    bridged provider never got OpenAI's key from this bridge, and must not start receiving it raw."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.llms.databricks.chat.transformation import DatabricksConfig
+    from litellm.utils import ProviderConfigManager
+
+    if custom_llm_provider is None or custom_llm_provider not in LlmProvidersSet:
+        return False
+    config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders(custom_llm_provider)
+    )
+    if isinstance(config, DatabricksConfig):
+        return "claude" in model
+    return isinstance(config, (AnthropicConfig, AmazonConverseConfig))
+
+
+def _without_prompt_cache_breakpoint(block: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
+
+
+def _part_without_prompt_cache_breakpoint(part: object) -> object:
+    if not isinstance(part, dict):
+        return part
+    return _without_prompt_cache_breakpoint(_STR_KEY_DICT_ADAPTER.validate_python(part))
+
+
+def _message_without_prompt_cache_breakpoints(message: _BridgedChatMessage) -> _BridgedChatMessage:
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(message)
+    content: Final = fields.get("content")
+    parts: Final = _OBJECT_LIST_ADAPTER.validate_python(content) if isinstance(content, list) else None
+    stripped_content: Final[Mapping[str, object]] = (
+        {"content": [_part_without_prompt_cache_breakpoint(part) for part in parts]} if parts is not None else {}
+    )
+    return cast(  # cast-ok: the same message with only prompt_cache_breakpoint keys removed
+        _BridgedChatMessage, {**_without_prompt_cache_breakpoint(fields), **stripped_content}
+    )
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -501,11 +552,16 @@ class LiteLLMCompletionResponsesConfig:
             api_base=kwargs.get("api_base"),
         )
 
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input,
+            responses_api_request=responses_api_request,
+            replay_reasoning=True,
+        )
         litellm_completion_request: dict = {
-            "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=input,
-                responses_api_request=responses_api_request,
-                replay_reasoning=True,
+            "messages": (
+                messages
+                if _chat_route_reads_prompt_cache_breakpoint(model, custom_llm_provider)
+                else [_message_without_prompt_cache_breakpoints(message) for message in messages]
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(

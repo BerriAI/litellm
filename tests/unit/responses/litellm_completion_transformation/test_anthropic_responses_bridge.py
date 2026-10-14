@@ -305,9 +305,7 @@ async def test_previous_response_id_without_instructions_carries_the_latest_ones
 
 
 def _anthropic_sse(*events: Mapping[str, object]) -> bytes:
-    return b"".join(
-        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events
-    )
+    return b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
 
 
 def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(respx_mock: respx.MockRouter) -> None:
@@ -477,6 +475,16 @@ def test_a_responses_cache_mark_reaches_claude_as_cache_control_on_the_same_bloc
     assert _cache_marks(body) == [(label, _EPHEMERAL)]
     assert b"prompt_cache_breakpoint" not in body
     assert b"30m" not in body
+
+
+@pytest.mark.parametrize("mark", (_BREAKPOINT, _CACHE_CONTROL), ids=("prompt_cache_breakpoint", "cache_control"))
+@pytest.mark.parametrize("role", ("developer", "system"))
+def test_an_item_level_mark_on_a_string_instruction_message_caches_the_claude_system_prompt(
+    respx_mock: respx.MockRouter, role: str, mark: Mapping[str, object]
+) -> None:
+    body: Final = _responses_to_claude(respx_mock, [{"role": role, "content": "Rules", **mark}, *_history()[1:2]])
+
+    assert _cache_marks(body) == [("system:text:Rules", _EPHEMERAL)]
 
 
 @pytest.mark.parametrize(

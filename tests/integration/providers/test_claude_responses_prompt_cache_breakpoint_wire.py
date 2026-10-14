@@ -33,7 +33,9 @@ from integration.providers._cache_control_marks_support import (
 from pydantic import JsonValue
 
 Provider = ClaudeRoute
-Site = Literal["developer_part", "user_part", "detail_part", "function_call_output", "string_message"]
+Site = Literal[
+    "developer_part", "developer_string", "user_part", "detail_part", "function_call_output", "string_message"
+]
 MarkKey = Literal["prompt_cache_breakpoint", "cache_control"]
 
 _PROVIDERS: Final[tuple[Provider, ...]] = ("anthropic", "bedrock_converse", "bedrock_invoke", "vertex_ai", "azure_ai")
@@ -80,8 +82,13 @@ def _input(marker: str, marks: Mapping[Site, Mapping[str, JsonValue]]) -> list[J
     def at(site: Site) -> Mapping[str, JsonValue]:
         return marks.get(site, {})
 
+    developer: Final[JsonValue] = (
+        {"role": "developer", "content": SYSTEM, **at("developer_string")}
+        if "developer_string" in marks
+        else {"role": "developer", "content": [{"type": "input_text", "text": SYSTEM, **at("developer_part")}]}
+    )
     return [
-        {"role": "developer", "content": [{"type": "input_text", "text": SYSTEM, **at("developer_part")}]},
+        developer,
         {
             "role": "user",
             "content": [
@@ -128,7 +135,7 @@ def _marked(
 def _expected(provider: Provider, site: Site, marker: str) -> str:
     converse: Final = provider == "bedrock_converse"
     match site:
-        case "developer_part":
+        case "developer_part" | "developer_string":
             return f"system:text:{SYSTEM}" if converse else SYSTEM_LABEL
         case "user_part":
             return ASK_LABEL
@@ -181,7 +188,7 @@ def test_breakpoint_becomes_a_cache_mark_on_the_same_block(gateway: Gateway, pro
     assert _labels(provider, request) == [_expected(provider, site, marker)]
 
 
-@pytest.mark.parametrize("site", ("function_call_output", "string_message"))
+@pytest.mark.parametrize("site", ("developer_string", "function_call_output", "string_message"))
 @pytest.mark.parametrize("key", ("prompt_cache_breakpoint", "cache_control"))
 @pytest.mark.parametrize("provider", ("anthropic", "bedrock_converse"))
 def test_an_item_level_mark_becomes_a_message_level_cache_mark(

@@ -8,14 +8,16 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionDeveloperMessage, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
+
+CACHE_MARK_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 
 
 class BaseTokenCounter(ABC):
@@ -370,13 +372,12 @@ def map_developer_role_to_system_role(
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    new_messages: Final[list[AllMessageValues]] = []
-    for m in messages:
-        if m["role"] == "developer":
-            verbose_logger.debug(
-                "Translating developer role to system role for non-OpenAI providers."
-            )  # ensure user knows what's happening with their input.
-            new_messages.append({"role": "system", "content": m["content"]})
-        else:
-            new_messages.append(m)
-    return new_messages
+    return [_developer_as_system_message(m) if m["role"] == "developer" else m for m in messages]
+
+
+def _developer_as_system_message(message: ChatCompletionDeveloperMessage) -> AllMessageValues:
+    verbose_logger.debug(
+        "Translating developer role to system role for non-OpenAI providers."
+    )  # ensure user knows what's happening with their input.
+    cache_marks: Final = {key: value for key, value in message.items() if key in CACHE_MARK_KEYS}
+    return cast(AllMessageValues, {"role": "system", "content": message["content"], **cache_marks})

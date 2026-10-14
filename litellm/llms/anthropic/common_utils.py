@@ -37,7 +37,7 @@ from litellm.llms.anthropic.wif import (
     get_anthropic_wif_token,
     warn_if_static_credential_shadows_federation,
 )
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
+from litellm.llms.base_llm.base_utils import CACHE_MARK_KEYS, BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
@@ -106,7 +106,6 @@ _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
-CACHE_MARK_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 _CLAUDE_CODE_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
