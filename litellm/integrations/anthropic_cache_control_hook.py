@@ -256,13 +256,6 @@ def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
     return isinstance(tool, dict) and tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
-def _converse_tool_adds_cache_point(tool: object, model: str) -> bool:
-    from litellm.litellm_core_utils.prompt_templates.factory import add_cache_point_tool_block
-
-    mapping: Final = _validated_object_mapping(tool)
-    return mapping is not None and ("cachePoint" in mapping or add_cache_point_tool_block(mapping, model) is not None)
-
-
 def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
 
@@ -525,17 +518,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
     @staticmethod
-    def count_converse_external_cache_breakpoints(optional_params: object, model: str) -> int:
-        params: Final = _validated_object_mapping(optional_params) or {}
-        tools: Final = _as_object_list(params.get("tools")) or []
-        tool_cache_points: Final = sum(1 for tool in tools if _converse_tool_adds_cache_point(tool, model))
-        injection_points: Final = configured_injection_points(params.get("cache_control_injection_points"))
-        injects_tool_cache_point: Final = bool(tools) and any(
-            point.get("location") == "tool_config" for point in injection_points
-        )
-        return tool_cache_points + int(injects_tool_cache_point)
-
-    @staticmethod
     def count_external_cache_breakpoints_on_messages_route(
         tools: Iterable[object] | None, cache_control: object, request_kwargs: object
     ) -> int:
@@ -755,7 +737,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def prompt_cache_breakpoints_as_capped_cache_control(
-        messages: Sequence[AllMessageValues], drop_params: bool, external_breakpoints: int
+        messages: Sequence[AllMessageValues], drop_params: bool, external_breakpoints: Callable[[], int]
     ) -> tuple[AllMessageValues, ...]:
         """``prompt_cache_breakpoints_as_cache_control`` over the whole request, held to the provider's
         breakpoint cap. Under ``drop_params`` the earliest translated marks fill the slots the client's own
@@ -768,11 +750,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return translated
         created: Final = tuple(_created_cache_controls(before, after) for before, after in zip(messages, translated))
         created_marks: Final = sum(sum(flags) for flags in created)
+        if created_marks == 0:
+            return translated
         breakpoints: Final = (
-            AnthropicCacheControlHook.count_request_cache_breakpoints(translated) + external_breakpoints
+            AnthropicCacheControlHook.count_request_cache_breakpoints(translated) + external_breakpoints()
         )
         excess: Final = breakpoints - MAX_CACHE_CONTROL_BLOCKS
-        if created_marks == 0 or excess <= 0:
+        if excess <= 0:
             return translated
         if not drop_params:
             raise UnsupportedParamsError(

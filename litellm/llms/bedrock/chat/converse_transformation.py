@@ -20,7 +20,10 @@ from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
 )
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    configured_injection_points,
+)
 from litellm.litellm_core_utils.core_helpers import (
     filter_exceptions_from_params,
     filter_internal_params,
@@ -1509,17 +1512,34 @@ class AmazonConverseConfig(BaseConfig):
             return ChatCompletionTextObject(type="text", text=text)
         return ChatCompletionTextObject(type="text", text=text, cache_control=cache_control)
 
-    @staticmethod
     def _messages_with_cache_marks(
-        messages: Sequence[AllMessageValues], model: str, drop_params: bool, optional_params: object
+        self,
+        messages: Sequence[AllMessageValues],
+        model: str,
+        drop_params: bool,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> Sequence[AllMessageValues]:
         if not bedrock_model_known_to_accept_cache_points(model):
             return messages
         return AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
             messages,
             drop_params,
-            AnthropicCacheControlHook.count_converse_external_cache_breakpoints(optional_params, model),
+            lambda: self._tool_cache_points_on_the_wire(model, optional_params, litellm_params),
         )
+
+    def _tool_cache_points_on_the_wire(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> int:
+        tools: Final = optional_params.get("tools")
+        bedrock_tools, _ = self._process_tools_and_beta(
+            tools if isinstance(tools, list) else [], model, None, {}, litellm_params
+        )
+        injects_tool_config_point: Final = bool(bedrock_tools) and any(
+            point.get("location") == "tool_config"
+            for point in configured_injection_points(optional_params.get("cache_control_injection_points"))
+        )
+        return sum(1 for tool in bedrock_tools if "cachePoint" in tool) + int(injects_tool_config_point)
 
     def _transform_system_message(
         self, messages: Sequence[AllMessageValues], model: str | None = None
@@ -2041,6 +2061,7 @@ class AmazonConverseConfig(BaseConfig):
                 model,
                 litellm.drop_params or request_drop_params,
                 cast(Mapping[str, object], optional_params),  # cast-ok: untyped provider param bag
+                cast(Mapping[str, object], litellm_params),  # cast-ok: untyped provider param bag
             ),
             model=model,
         )
@@ -2118,6 +2139,7 @@ class AmazonConverseConfig(BaseConfig):
                 model,
                 litellm.drop_params or request_drop_params,
                 cast(Mapping[str, object], optional_params),  # cast-ok: untyped provider param bag
+                cast(Mapping[str, object], litellm_params),  # cast-ok: untyped provider param bag
             ),
             model=model,
         )

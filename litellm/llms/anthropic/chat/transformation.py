@@ -2060,7 +2060,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
                 messages,
                 drop_params,
-                AnthropicCacheControlHook.count_chat_external_cache_breakpoints(optional_params),
+                lambda: AnthropicCacheControlHook.count_chat_external_cache_breakpoints(optional_params),
             )
         )
         anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))

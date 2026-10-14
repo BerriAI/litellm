@@ -9373,6 +9373,53 @@ def test_converse_reserves_the_tool_cache_point_within_the_cap(tool_cache_params
     assert request["toolConfig"]["tools"][-1] == cache_point
 
 
+
+@pytest.mark.parametrize(
+    "unsent_tool_params",
+    [
+        {
+            "tools": [
+                _CONVERSE_CAP_TOOL,
+                {"type": "tool_search_tool_regex_20251119", "name": "find", "cache_control": {"type": "ephemeral"}},
+            ]
+        },
+        {"tools": [_CONVERSE_CAP_TOOL, {"type": "web_search", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "tools": [{"type": "web_search"}],
+            "cache_control_injection_points": [{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        },
+    ],
+    ids=["tool_search_tool", "built_in_tool", "tool_config_point_with_no_tool_sent"],
+)
+def test_converse_leaves_the_cap_to_markers_when_a_marked_tool_is_not_sent(unsent_tool_params: dict[str, object]):
+    request = litellm.AmazonConverseConfig()._transform_request(
+        model="anthropic.claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                    for index in range(4)
+                ],
+            }
+        ],
+        optional_params=copy.deepcopy(unsent_tool_params),
+        litellm_params={},
+    )
+
+    cache_point = {"cachePoint": {"type": "default"}}
+    assert request["messages"][0]["content"] == [
+        {"text": "part 0"},
+        cache_point,
+        {"text": "part 1"},
+        cache_point,
+        {"text": "part 2"},
+        cache_point,
+        {"text": "part 3"},
+        cache_point,
+    ]
+    assert cache_point not in request.get("toolConfig", {}).get("tools", [])
+
 def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_when_flagged(local_model_cost_map):
     from litellm import Router
 
