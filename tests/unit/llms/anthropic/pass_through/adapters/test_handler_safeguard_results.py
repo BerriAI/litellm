@@ -326,6 +326,55 @@ async def test_the_classifier_call_logs_under_the_parent_requests_message_redact
     assert ("install the deps" not in json.dumps(logs.logged[0]["messages"])) is redacted
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "disable_header, logged",
+    [("classifier_logs", False), ("Langfuse, CLASSIFIER_LOGS", False), ("langfuse", True)],
+    ids=["header-disables-the-callback", "header-lists-it-among-others", "header-disables-another-callback"],
+)
+async def test_the_classifier_call_skips_a_callback_the_parents_disable_callbacks_header_turned_off(
+    monkeypatch: pytest.MonkeyPatch, disable_header: str, logged: bool
+) -> None:
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    await _drain_logging_worker()
+    logs: Final = _ClassifierLogs()
+    monkeypatch.setattr(litellm, "callbacks", [logs])
+    monkeypatch.setattr(litellm, "_async_success_callback", [logs])
+    router: Final = Router(
+        model_list=[_mock_deployment("classifier", '{"verdicts": {"call_ls": {"flagged": false}}}')], num_retries=0
+    )
+    parent_logging: Final = Logging(
+        model="fireworks_ai/kimi",
+        messages=list(MESSAGES),
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="parent-call",
+        function_id="parent",
+    )
+    with (
+        patch.dict(CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE, {"classifier_logs": _ClassifierLogs}),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}),
+    ):
+        evaluator: Final = request_safeguards_evaluator(
+            {
+                "safeguards": SAFEGUARDS,
+                "litellm_metadata": dict(LITELLM_METADATA),
+                "litellm_router": router,
+                "litellm_logging_obj": parent_logging,
+                "proxy_server_request": {"headers": {"x-litellm-disable-callbacks": disable_header}},
+            },
+            MESSAGES,
+        )
+        assert evaluator is not None
+        await evaluator.evaluate((ToolUseUnderReview(id="call_ls", name="Bash", input={"command": "ls"}),))
+        await _drain_logging_worker()
+
+    assert (len(logs.logged) == 1) is logged
+
+
 def _mock_deployment(model_name: str, reply: str) -> dict[str, object]:
     return {
         "model_name": model_name,
