@@ -75,6 +75,7 @@ from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
+    DeploymentListingPrice,
     DeploymentTypedDict,
     LiteLLM_Params,
     ModelGroupInfo,
@@ -10767,6 +10768,176 @@ def test_get_model_listing_info_returns_none_for_unknown_name():
     )
 
     assert router.get_model_listing_info("not-a-real-model") is None
+
+
+def test_configured_price_reads_model_info_when_litellm_params_has_none():
+    """Custom pricing is accepted in both blocks, so model_info alone still counts."""
+    price = litellm.Router._configured_price(
+        {"input_cost_per_token": 3e-07}, {"model": "openai/gpt-4o-mini"}, "input_cost_per_token"
+    )
+
+    assert price == 3e-07, f"expected the model_info price, got {price}"
+
+
+def test_configured_price_is_none_when_the_deployment_configures_none():
+    """Nothing configured means the cost map answers instead, so this must not report 0."""
+    price = litellm.Router._configured_price(
+        {"mode": "chat"}, {"model": "openai/gpt-4o-mini"}, "input_cost_per_token"
+    )
+
+    assert price is None, f"expected no configured price, got {price}"
+
+
+def test_configured_price_ignores_a_malformed_configured_value():
+    """model_info reaches the listing uncoerced, so a config typo must not become a price."""
+    price = litellm.Router._configured_price(
+        {"input_cost_per_token": ""}, {"input_cost_per_token": -1e-06}, "input_cost_per_token"
+    )
+
+    assert price is None, f"expected malformed and negative values to be dropped, got {price}"
+
+
+def test_deployment_listing_price_keys_on_base_model_and_prefers_litellm_params():
+    """The record a deployment contributes: its catalog key, plus its own configured prices.
+
+    base_model names the catalog entry when set, because litellm_params.model can be an
+    opaque backend name, and litellm_params wins over model_info for a price, matching the
+    copy the router makes when it builds the deployment's cost-map entry.
+    """
+    price = litellm.Router._deployment_listing_price(
+        {"base_model": "eu.anthropic.claude-opus-5", "input_cost_per_token": 1e-06},
+        {"model": "bedrock/some-opaque-arn", "input_cost_per_token": 4e-06},
+    )
+
+    assert price == DeploymentListingPrice(
+        cost_map_key="eu.anthropic.claude-opus-5", input_cost_per_token=4e-06, output_cost_per_token=None
+    ), f"base_model keys the catalog and litellm_params wins the price, got {price}"
+
+
+def test_get_model_listing_info_keeps_each_deployment_price_separate():
+    """A group's price is only correct once each deployment resolves its own price first.
+
+    Collapsing the group to the highest override here would hide a deployment that
+    configures nothing and is dearer in the catalog, so the listing gets one record per
+    deployment, carrying that deployment's own cost-map key.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 3e-07,
+                },
+            },
+            {"model_name": "mixed", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "test-key"}},
+        ]
+    )
+
+    info = router.get_model_listing_info("mixed")
+
+    assert info is not None
+    assert info.deployment_prices == (
+        DeploymentListingPrice(
+            cost_map_key="openai/gpt-4o-mini", input_cost_per_token=3e-07, output_cost_per_token=None
+        ),
+        DeploymentListingPrice(cost_map_key="openai/gpt-5.5", input_cost_per_token=None, output_cost_per_token=None),
+    ), f"each deployment needs its own record and key, got {info.deployment_prices}"
+
+
+def test_pattern_deployments_yields_every_deployment_behind_every_pattern():
+    """The wildcard price scan reads through this to decide whether any pattern
+    configures a price at all, so it has to see all of them: missing one would skip
+    pattern matching and quote the catalog for a deployment that overrides it."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "k",
+                    "input_cost_per_token": 9e-06,
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "k",
+                    "input_cost_per_token": 4e-05,
+                },
+            },
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": "k",
+                    "input_cost_per_token": 2e-05,
+                },
+            },
+        ]
+    )
+
+    seen = [
+        deployment.get("litellm_params", {}).get("input_cost_per_token")
+        for deployment in router._pattern_deployments()
+    ]
+
+    assert sorted(price for price in seen if price) == [
+        9e-06,
+        2e-05,
+        4e-05,
+    ], f"every deployment behind every pattern must be visited, saw {seen}"
+
+
+def test_get_wildcard_listing_prices_reports_every_matched_deployment():
+    """A pattern can front several deployments and routing can pick any of them, so the
+    listing needs all their prices, not the first one's: the caller reports the dearest."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 9e-06,
+                    "output_cost_per_token": 9e-05,
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 4e-05,
+                    "output_cost_per_token": 8e-05,
+                },
+            },
+        ]
+    )
+
+    prices = router.get_wildcard_listing_prices("openai/gpt-4o-mini")
+
+    assert {(p.input_cost_per_token, p.output_cost_per_token) for p in prices} == {
+        (9e-06, 9e-05),
+        (4e-05, 8e-05),
+    }, f"every matched deployment must be returned, got {prices}"
+
+
+def test_get_wildcard_listing_prices_skips_pattern_matching_when_no_wildcard_is_priced():
+    """Pattern matching is the expensive path, so an unpriced wildcard must not trigger it.
+
+    With no override the catalog is already the right answer, so there is nothing to find.
+    """
+    router = litellm.Router(
+        model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}}]
+    )
+
+    with patch.object(router.pattern_router, "route", side_effect=AssertionError("pattern matching ran")) as routed:
+        assert router.get_wildcard_listing_prices("openai/gpt-4o-mini") == ()
+
+    routed.assert_not_called()
 
 
 def test_get_model_listing_info_carries_configured_limits():
@@ -26135,3 +26306,45 @@ async def test_batch_completion_fastest_response_streams_mocked_chunks() -> None
 
     assert text == "stream answer"
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+def test_deployment_section_gives_callers_a_mapping_even_when_the_block_is_absent():
+    """Every caller reads these blocks with `.get(...)`, so a deployment that configures
+    neither must still hand back something mapping-shaped rather than None."""
+    from litellm.router import _deployment_section
+
+    configured = {"model_info": {"id": "d1", "base_model": "openai/gpt-4o"}}
+
+    assert _deployment_section(configured, "model_info") == {"id": "d1", "base_model": "openai/gpt-4o"}
+    assert _deployment_section(configured, "litellm_params") == {}
+    assert _deployment_section({"litellm_params": None}, "litellm_params") == {}
+
+
+def test_discovered_info_key_treats_a_non_string_id_as_absent():
+    """`get_discovered_model_info` keys its cache on this, so anything that is not a usable
+    string id has to read as absent rather than keying the cache on it."""
+    from litellm.router import _discovered_info_key
+
+    assert _discovered_info_key({"model_info": {"id": "d1"}}) == "d1"
+    assert _discovered_info_key({"model_info": {"id": 17}}) is None
+    assert _discovered_info_key({"model_info": {}}) is None
+    assert _discovered_info_key({}) is None
+
+
+def test_pattern_route_deployments_returns_every_match_and_an_empty_tuple_for_none():
+    """`PatternMatchRouter.route` answers None when nothing matches, and the wildcard price
+    scan iterates the result, so it has to be a sequence either way."""
+    from litellm.router import _pattern_route_deployments
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "k", "input_cost_per_token": 7e-06},
+            },
+        ]
+    )
+
+    matched = _pattern_route_deployments(router.pattern_router, "openai/gpt-4o-mini")
+    assert [d["litellm_params"]["input_cost_per_token"] for d in matched] == [7e-06]
+    assert _pattern_route_deployments(router.pattern_router, "anthropic/claude-sonnet-5") == ()

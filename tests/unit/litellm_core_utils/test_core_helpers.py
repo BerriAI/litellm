@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.core_helpers import (
     RESPONSE_COST_HEADER,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
+    coerce_token_price,
     drop_params_env_flag,
     drop_params_flag,
     get_parent_otel_span_from_kwargs,
@@ -586,3 +587,53 @@ class TestProviderResponseHeadersInHiddenParams:
 
         assert get_provider_response_headers_from_hidden_params(sibling) is None
         assert "additional_headers" not in sibling._hidden_params
+
+
+class TestCoerceTokenPrice:
+    """Per-token prices reach the listing from the same uncoerced sources as token
+    limits, since a deployment's model_info is registered into litellm.model_cost
+    verbatim. A config value written as a string has to survive, while anything that
+    cannot be a price has to read as absent rather than as free."""
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (0.000003, 0.000003),
+            (3, 3.0),
+            ("0.000003", 0.000003),
+            ("3", 3.0),
+            (0, 0.0),
+            ("0", 0.0),
+        ],
+    )
+    def test_a_usable_price_survives_as_a_float(self, value, expected):
+        assert coerce_token_price(value) == expected, f"{value!r} should coerce to {expected}"
+
+    def test_zero_is_a_price_not_an_absence(self):
+        """A deployment priced at zero is deliberately free, which is not the same as
+        a model nobody has priced."""
+        assert coerce_token_price(0) == 0.0, "an explicit zero must not read as absent"
+        assert coerce_token_price(0) is not None, "an explicit zero must not read as absent"
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_bool_is_rejected(self, value):
+        """True is an int in Python, so without this guard it would price a token at 1."""
+        assert coerce_token_price(value) is None, f"{value!r} is never a meaningful price"
+
+    @pytest.mark.parametrize("value", [None, [], {}, (), object(), b"3"])
+    def test_a_value_that_is_not_a_number_or_string_is_rejected(self, value):
+        assert coerce_token_price(value) is None, f"{value!r} cannot be a price"
+
+    @pytest.mark.parametrize("value", ["", "abc", "1.2.3", " "])
+    def test_a_string_that_is_not_a_number_is_rejected(self, value):
+        assert coerce_token_price(value) is None, f"{value!r} must not fail the listing"
+
+    @pytest.mark.parametrize("value", [-1, -0.5, "-0.000003"])
+    def test_a_negative_price_is_rejected(self, value):
+        """A caller pricing a request would read a negative rate as a discount."""
+        assert coerce_token_price(value) is None, f"{value!r} must not be reported as a price"
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "nan", "inf"])
+    def test_a_non_finite_price_is_rejected(self, value):
+        """NaN and infinity serialize to invalid JSON."""
+        assert coerce_token_price(value) is None, f"{value!r} must not reach the response body"
