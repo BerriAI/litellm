@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
 from litellm.proxy._types import TokenCountRequest
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -75,7 +76,7 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
             "input_schema": (
                 declaration.parameters_json_schema
                 if declaration.parameters_json_schema is not None
-                else declaration.parameters
+                else normalize_json_schema_types(declaration.parameters)
                 if declaration.parameters is not None
                 else {"type": "object", "properties": {}}
             ),

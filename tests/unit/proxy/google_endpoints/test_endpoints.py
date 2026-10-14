@@ -48,6 +48,39 @@ def test_google_count_tokens_translates_system_and_function_declarations(
     ]
     assert request.messages == [{"role": "user", "content": "Look this up"}]
 
+
+@pytest.mark.parametrize(
+    ("schema_key", "expected_schema"),
+    (
+        ("parameters", {"type": "object", "properties": {"query": {"type": "string"}}}),
+        ("parametersJsonSchema", {"type": "OBJECT", "properties": {"query": {"type": "STRING"}}}),
+    ),
+)
+def test_google_count_tokens_normalizes_parameters_only(
+    schema_key: str, expected_schema: dict[str, JsonValue]
+) -> None:
+    request: Final = _google_count_tokens_request(
+        "claude-sonnet",
+        {
+            "contents": [{"role": "user", "parts": [{"text": "Look this up"}]}],
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": "lookup",
+                            schema_key: {
+                                "type": "OBJECT",
+                                "properties": {"query": {"type": "STRING"}},
+                            },
+                        }
+                    ]
+                }
+            ],
+        },
+    )
+
+    assert request.tools == [{"name": "lookup", "input_schema": expected_schema}]
+
 load_dotenv()
 
 

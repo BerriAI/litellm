@@ -1,4 +1,6 @@
 
+from typing import Final
+
 import pytest
 
 from litellm.llms.openai.responses.count_tokens.transformation import (
@@ -73,6 +75,64 @@ def test_transform_includes_tools():
     result = config.transform_request_to_count_tokens(
         model="gpt-4o",
         input="What's the weather?",
+        tools=tools,
+    )
+
+    assert result["tools"] == tools
+
+
+def test_transform_anthropic_tool_shape():
+    config: Final = OpenAICountTokensConfig()
+
+    result: Final = config.transform_request_to_count_tokens(
+        model="gpt-4o",
+        input="Find a record",
+        tools=[{"name": "lookup", "input_schema": {"type": "object", "properties": {}}}],
+    )
+
+    assert result["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "description": "",
+            "parameters": {"type": "object", "properties": {}},
+        }
+    ]
+
+
+def test_transform_custom_tool_shape():
+    config: Final = OpenAICountTokensConfig()
+
+    result: Final = config.transform_request_to_count_tokens(
+        model="gpt-4o",
+        input="Find a record",
+        tools=[
+            {
+                "type": "custom",
+                "name": "lookup",
+                "description": "Find a record",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
+    )
+
+    assert result["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "description": "Find a record",
+            "parameters": {"type": "object", "properties": {}},
+        }
+    ]
+
+
+def test_transform_builtin_tool_passes_through():
+    config: Final = OpenAICountTokensConfig()
+    tools: Final = [{"type": "web_search", "search_context_size": "low"}]
+
+    result: Final = config.transform_request_to_count_tokens(
+        model="gpt-4o",
+        input="Find a record",
         tools=tools,
     )
 

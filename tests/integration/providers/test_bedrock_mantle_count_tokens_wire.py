@@ -543,6 +543,53 @@ def test_google_count_tokens_forwards_system_and_tools_to_mantle(
         )
 
 
+def test_google_count_tokens_normalizes_uppercase_parameters_for_mantle(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    body: Final[dict[str, JsonValue]] = {
+        "contents": [{"role": "user", "parts": [{"text": "status=404"}]}],
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "get_weather",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {"location": {"type": "STRING"}},
+                            "required": ["location"],
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = gateway.request("POST", f"/v1beta/models/{model}:countTokens", body)
+        assert _payload(response) == {"totalTokens": _MANTLE_COUNT, "promptTokensDetails": []}, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (
+            _mantle_body(
+                messages=[{"role": "user", "content": "status=404"}],
+                tools=[
+                    {
+                        "name": "get_weather",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    }
+                ],
+            ),
+        )
+
+
 def test_responses_input_tokens_counts_through_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
     gateway: Final = counting_proxy.gateway
     with (
