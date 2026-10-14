@@ -554,7 +554,7 @@ async def test_message_history_retries_a_spend_log_the_batch_writer_has_not_flus
         ("assistant", "OK"),
     ]
     assert result["litellm_session_id"] == session_id
-    assert fake_prisma_client.db.calls == [(request_id,), (request_id,)]
+    assert fake_prisma_client.db.calls == [([request_id],), ([request_id],)]
 
 
 @pytest.mark.asyncio
@@ -622,7 +622,34 @@ async def test_message_history_looks_up_the_decoded_chat_completion_id():
             encoded_response_id
         )
 
-    assert fake_prisma_client.db.calls == [(request_id,)]
+    assert fake_prisma_client.db.calls == [([encoded_response_id, request_id],)]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_matches_the_encoded_id_stored_by_bridged_deployments():
+    """
+    Bridged deployments (`use_chat_completions_api: true`) store the encoded `resp_...`
+    id in SpendLogs.request_id, while the session lookup decodes `previous_response_id`
+    to the chat completion id. The query has to match either stored form or session
+    history always misses on those deployments.
+    """
+    request_id = "chatcmpl-935b8dad-fdc2-466e-a8ca-e26e5a8a21bb"
+    encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="anthropic",
+        model_id="e0f302a1412e78470ebb28cbed01fff5f88c0d331c667e9f2ba4b413c6fbd282",
+        response_id=request_id,
+    )
+    fake_prisma_client = _FakePrismaClient(
+        results=[[_spend_log(encoded_response_id, "session-a", "Hello.", "Hi.")]]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        spend_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+            encoded_response_id
+        )
+
+    assert fake_prisma_client.db.calls == [([encoded_response_id, request_id],)]
+    assert [log["request_id"] for log in spend_logs] == [encoded_response_id]
 
 
 @pytest.mark.asyncio
@@ -643,7 +670,7 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
         )
 
     assert spend_logs == []
-    assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
+    assert fake_prisma_client.db.calls == [(["chatcmpl-does-not-exist"],)]
 
 
 def test_normalize_redacted_arguments_skips_custom_tool_calls():
