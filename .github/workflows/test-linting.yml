@@ -412,7 +412,7 @@ jobs:
 
       - name: Install backend dependencies
         if: steps.changes.outputs.relevant == 'true'
-        run: .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+        run: uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.relevant == 'true'
