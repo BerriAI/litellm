@@ -1364,6 +1364,7 @@ class LiteLLMParamsBody(BaseModel):
     litellm_credential_name: str | None = None
     api_base: str | None = Field(default=None, repr=False)
     api_version: str | None = None
+    responses_api_version: str | None = None
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
     drop_params: bool | None = None

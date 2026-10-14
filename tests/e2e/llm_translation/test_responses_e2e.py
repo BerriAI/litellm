@@ -42,7 +42,7 @@ from provider_edge import LiveEdge, start_provider_edge
 from provider_edge_bedrock import bedrock_signer
 from proxy_client import ProxyClient
 from pydantic import BaseModel, TypeAdapter
-from responses_helpers import AZURE_OPENAI_BACKEND, azure_openai_params
+from responses_helpers import AZURE_OPENAI_API_VERSION, AZURE_OPENAI_BACKEND, azure_openai_params
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
@@ -768,6 +768,37 @@ class TestResponses:
         )
         assert response.output_text.strip(), (
             f"/responses over azure openai preview returned no output text: {response.output!r}"
+        )
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_responses_azure_openai_dated_chat_api_version_serves_responses_via_responses_api_version(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model: Final = _register(
+            proxy,
+            resources,
+            azure_openai_params(api_version="2024-10-21", responses_api_version=AZURE_OPENAI_API_VERSION),
+            prefix="e2e-responses-azure-dated-chat",
+        )
+        client: Final = sdk.openai(resources.key())
+
+        response: Final = client.responses.create(
+            model=model,
+            input="reply with one word",
+            instructions=INSTRUCTIONS,
+            extra_body=NO_PROXY_CACHE,
+        )
+        assert response.output_text.strip(), (
+            f"/responses over an azure deployment pinned to a dated chat api_version returned no output text: "
+            f"{response.output!r}"
         )
 
     @meta(
