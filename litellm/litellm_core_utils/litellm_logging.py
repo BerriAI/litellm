@@ -651,6 +651,10 @@ class Logging(LiteLLMLoggingBaseClass):
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
+        self.relays_llm_passthrough: Final = call_type in (
+            CallTypes.llm_passthrough_route.value,
+            CallTypes.allm_passthrough_route.value,
+        )
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
 
@@ -2388,10 +2392,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 service_tier=ws_service_tier,
             )
 
-        elif (
-            self.call_type == CallTypes.llm_passthrough_route.value
-            or self.call_type == CallTypes.allm_passthrough_route.value
-        ) and isinstance(result, Response):
+        elif self.relays_llm_passthrough and isinstance(result, Response):
             from litellm.utils import ProviderConfigManager
 
             provider_config: Final = ProviderConfigManager.get_provider_passthrough_config(
@@ -2588,7 +2589,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
             logging_result: Final = self.normalize_logging_result(result=result)
 
-            if isinstance(result, Response) and isinstance(logging_result, (ModelResponse, EmbeddingResponse)):
+            if isinstance(result, Response) and isinstance(
+                logging_result, (ModelResponse, EmbeddingResponse, TextCompletionResponse)
+            ):
                 result = logging_result
 
             if standard_logging_object is None and result is not None and self.stream is not True:
