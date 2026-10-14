@@ -263,6 +263,10 @@ class RedisCircuitBreaker:
         self._report(transitions_to=None, failure_class=None)
 
     @property
+    def state(self) -> str:
+        return self._state
+
+    @property
     def generation(self) -> int:
         """Counts state transitions, so a call can tell whether the breaker moved while it ran."""
         return self._generation
@@ -458,7 +462,7 @@ _LIVE_BREAKERS: Final[weakref.WeakSet[RedisCircuitBreaker]] = weakref.WeakSet()
 
 def redis_breaker_state_counts() -> Mapping[str, int]:
     """How many live Redis circuit breakers sit in each state, for the Prometheus services logger."""
-    return MappingProxyType(dict(Counter(breaker._state for breaker in _LIVE_BREAKERS)))
+    return MappingProxyType(dict(Counter(breaker.state for breaker in _LIVE_BREAKERS)))
 
 
 class RedisCircuitBreakerOpenError(Exception):
@@ -647,12 +651,9 @@ class RedisCache(BaseCache):
             redis_kwargs["socket_timeout"] = socket_timeout
 
         ### HEALTH MONITORING OBJECT ###
-        if kwargs.get("service_logger_obj", None) is not None and isinstance(
-            kwargs["service_logger_obj"], ServiceLogging
-        ):
+        self.service_logger_obj: ServiceLogging = ServiceLogging()
+        if isinstance(kwargs.get("service_logger_obj"), ServiceLogging):
             self.service_logger_obj = kwargs.pop("service_logger_obj")
-        else:
-            self.service_logger_obj = ServiceLogging()
 
         redis_kwargs.update(kwargs)
         self.redis_client = get_redis_client(**redis_kwargs)
