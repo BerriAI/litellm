@@ -4889,7 +4889,6 @@ def _is_remote_module_url(value: object) -> bool:
 def sentry_is_configured(general_settings: Mapping[str, object]) -> bool:
     alerting: Final = general_settings.get("alerting")
     configured: Final = (
-        *litellm.callbacks,
         *litellm.success_callback,
         *litellm.failure_callback,
         *(alerting if isinstance(alerting, list) else ()),

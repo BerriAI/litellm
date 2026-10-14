@@ -211,9 +211,10 @@ async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured
     "config_text",
     (
         "model_list: []\nlitellm_settings:\n  failure_callback:\n    - sentry\n",
+        "model_list: []\nlitellm_settings:\n  success_callback:\n    - sentry\n",
         "model_list: []\ngeneral_settings:\n  alerting:\n    - sentry\n",
     ),
-    ids=("failure_callback", "alerting"),
+    ids=("failure_callback", "success_callback", "alerting"),
 )
 async def test_proxy_config_starts_sentry_at_boot_without_request_bodies(tmp_path, monkeypatch, config_text) -> None:
     import sentry_sdk
@@ -222,9 +223,12 @@ async def test_proxy_config_starts_sentry_at_boot_without_request_bodies(tmp_pat
 
     init: Final = MagicMock()
     monkeypatch.setattr(sentry_sdk, "init", init)
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
     monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    monkeypatch.setattr(litellm_logging, "sentry_dsn", None)
     monkeypatch.setattr(litellm_logging, "capture_exception", None)
     monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
+    monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)

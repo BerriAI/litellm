@@ -331,6 +331,7 @@ _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 sentry_sdk_instance = None
+sentry_dsn: str | None = None  # rebind-ok: initialize_sentry records the DSN the SDK was started with
 capture_exception = None
 add_breadcrumb = None
 slack_app = None
@@ -4478,8 +4479,9 @@ _get_masked_values = get_masked_values
 
 
 def initialize_sentry() -> None:
-    global sentry_sdk_instance, capture_exception, add_breadcrumb
-    if sentry_sdk_instance is not None:
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, sentry_dsn
+    dsn: Final = os.environ.get("SENTRY_DSN")
+    if not dsn or dsn == sentry_dsn:
         return
     try:
         import sentry_sdk
@@ -4490,9 +4492,10 @@ def initialize_sentry() -> None:
     from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
 
     sentry_sdk.init(**build_sentry_init_options(os.environ))
-    sentry_sdk_instance = sentry_sdk
-    capture_exception = sentry_sdk.capture_exception
-    add_breadcrumb = sentry_sdk.add_breadcrumb
+    sentry_dsn = dsn  # rebind-ok: process-wide Sentry SDK handle, swapped when SENTRY_DSN changes
+    sentry_sdk_instance = sentry_sdk  # rebind-ok: process-wide Sentry SDK handle read by every logging path
+    capture_exception = sentry_sdk.capture_exception  # rebind-ok: process-wide Sentry SDK handle
+    add_breadcrumb = sentry_sdk.add_breadcrumb  # rebind-ok: process-wide Sentry SDK handle
 
 
 def set_callbacks(

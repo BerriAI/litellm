@@ -3240,6 +3240,7 @@ class ProxyLogging:
             )
         for client in self.alerting:
             if client == "sentry":
+                litellm.litellm_core_utils.litellm_logging.initialize_sentry()
                 sentry: Final = litellm.litellm_core_utils.litellm_logging.sentry_sdk_instance
                 if sentry is None:
                     raise Exception("Missing SENTRY_DSN from environment")

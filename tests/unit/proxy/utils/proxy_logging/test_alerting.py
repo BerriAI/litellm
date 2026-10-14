@@ -7,7 +7,7 @@ Covers ``failed_tracking_alert``, ``budget_alerts``, ``alerting_handler``,
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -210,7 +210,9 @@ async def test_alerting_handler_sends_to_slack(proxy_logging):
 @pytest.mark.asyncio
 async def test_alerting_handler_sentry_without_sdk_error_raises(proxy_logging, monkeypatch):
     proxy_logging.alerting = ["sentry"]
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
     monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    monkeypatch.setattr(litellm_logging, "sentry_dsn", None)
     with pytest.raises(Exception, match="SENTRY_DSN"):
         await proxy_logging.alerting_handler(message="x", level="Low", alert_type=AlertType.db_exceptions)
 
@@ -223,6 +225,28 @@ async def test_alerting_handler_sentry_sends_through_the_initialized_sdk(proxy_l
     await proxy_logging.alerting_handler(message="db down", level="High", alert_type=AlertType.db_exceptions)
     sentry.capture_message.assert_called_once()
     assert "db down" in sentry.capture_message.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_alerting_handler_starts_sentry_when_the_alert_was_not_configured_at_boot(proxy_logging, monkeypatch):
+    import sentry_sdk
+
+    monkeypatch.setattr(proxy_logging, "alerting", ["sentry"])
+    init: Final = MagicMock()
+    capture_message: Final = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", init)
+    monkeypatch.setattr(sentry_sdk, "capture_message", capture_message)
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
+    monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    monkeypatch.setattr(litellm_logging, "sentry_dsn", None)
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
+
+    await proxy_logging.alerting_handler(message="db down", level="High", alert_type=AlertType.db_exceptions)
+
+    assert init.call_args.kwargs["dsn"] == "https://key@sentry.example/1"
+    capture_message.assert_called_once()
+    assert "db down" in capture_message.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
