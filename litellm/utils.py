@@ -73,6 +73,7 @@ from litellm.constants import (
     HF_CONFIG_FETCH_TIMEOUT_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
@@ -263,6 +264,7 @@ from litellm.types.utils import (
     SandboxProviders,
     SearchProviders,
     SelectTokenizerResponse,
+    StandardLoggingPayloadErrorInformation,
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
@@ -1406,15 +1408,29 @@ def _speech_stream_error_mapper(
     return map_error
 
 
+_CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInformation] = {
+    "error_code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
+    "error_message": "Client disconnected the request",
+    "error_class": "ClientDisconnected",
+}
+
+
 def _mark_speech_stream_closed_early(logging_obj: LiteLLMLoggingObject) -> None:
     litellm_params: Final = logging_obj.model_call_details.get("litellm_params")
     if not isinstance(litellm_params, dict):
         return
-    metadata: Final = litellm_params.get("metadata")
-    if isinstance(metadata, dict):
-        metadata["client_disconnected"] = True
+    request_metadata: Final = tuple(
+        metadata for metadata in map(litellm_params.get, ("metadata", "litellm_metadata")) if isinstance(metadata, dict)
+    )
+    if not request_metadata:
+        litellm_params["metadata"] = {
+            "client_disconnected": True,
+            "error_information": dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION),
+        }
         return
-    litellm_params["metadata"] = {"client_disconnected": True}
+    for metadata in request_metadata:
+        metadata["client_disconnected"] = True
+        metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
 
 
 def _async_speech_end_logger(

@@ -54,6 +54,8 @@ from litellm.litellm_core_utils.thread_pool_executor import executor as logging_
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import is_valid_api_key
 from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
@@ -3836,6 +3838,38 @@ async def test_aspeech_stream_closed_mid_clip_is_logged_with_the_audio_sent(
     assert logged["status"] == "success"
     assert logged["response"] == _audio_summary(len(b"first"))
     assert logged["error_information"] == {
+        "error_code": "499",
+        "error_message": "Client disconnected the request",
+        "error_class": "ClientDisconnected",
+    }
+
+
+class _SpendRowLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: Final[asyncio.Queue[SpendLogsPayload]] = asyncio.Queue()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        await self.rows.put(get_logging_payload(kwargs, response_obj, start_time, end_time))
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_closed_mid_clip_marks_the_spend_row_as_a_client_disconnect(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spend_rows: Final = _SpendRowLogger()
+    monkeypatch.setattr(litellm, "callbacks", [spend_rows])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"never sent", pause_seconds=60))
+
+    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True, metadata={"user_api_key": "hashed-key"})
+    audio: Final = await response.aiter_bytes()
+    assert await anext(audio) == b"first"
+    await response.aclose()
+    row: Final = await asyncio.wait_for(spend_rows.rows.get(), timeout=5)
+
+    assert row["status"] == "success"
+    assert json.loads(row["metadata"])["error_information"] == {
         "error_code": "499",
         "error_message": "Client disconnected the request",
         "error_class": "ClientDisconnected",
