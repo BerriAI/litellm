@@ -52,7 +52,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
     resolve_resource_owner_id,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import DB_CONNECTION_ERROR_TYPES, UserAPIKeyAuth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.repositories.managed_file_repository import ManagedFileRepository
@@ -481,9 +481,17 @@ def _addressed_raw_response_ids(path: str, body: Mapping[str, object]) -> frozen
 
 
 async def _passthrough_issued_response_id(raw_id: str, provider: str, prisma_client: PrismaClient) -> bool:
-    row: Final = await _object_table(prisma_client).find_first(
-        where={"model_object_id": f"passthrough:{provider}:{raw_id}"}
-    )
+    from prisma.errors import PrismaError
+
+    try:
+        row: Final = await _object_table(prisma_client).find_first(
+            where={"model_object_id": f"passthrough:{provider}:{raw_id}"}
+        )
+    except (PrismaError, *DB_CONNECTION_ERROR_TYPES):
+        verbose_proxy_logger.warning(
+            "managed_id_rewriter: response id ownership lookup failed, refusing the id", exc_info=True
+        )
+        return False
     return row is not None
 
 

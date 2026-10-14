@@ -3,7 +3,9 @@ import json
 from collections.abc import AsyncIterator, Iterable
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from prisma.errors import PrismaError
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.managed_id_codec import(
@@ -1796,12 +1798,12 @@ class TestAddressesUnissuedResponseId:
         pc.db.litellm_managedobjecttable.find_first.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_failed_lookup_is_never_read_as_issued(self):
+    @pytest.mark.parametrize("lookup_error", [httpx.ConnectError("db down"), PrismaError("query failed")])
+    async def test_failed_lookup_is_never_read_as_issued(self, lookup_error):
         pc = _prisma_client_passthrough_managed()
-        pc.db.litellm_managedobjecttable.find_first = AsyncMock(side_effect=RuntimeError("db down"))
+        pc.db.litellm_managedobjecttable.find_first = AsyncMock(side_effect=lookup_error)
 
-        with pytest.raises(RuntimeError, match="db down"):
-            await addresses_unissued_response_id(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", pc)
+        assert await addresses_unissued_response_id(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", pc) is True
 
     @pytest.mark.asyncio
     async def test_without_a_database_the_pass_through_issues_only_raw_ids_so_none_is_refused(self):

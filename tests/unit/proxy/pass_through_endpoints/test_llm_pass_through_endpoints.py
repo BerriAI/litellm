@@ -7067,6 +7067,162 @@ class TestAzureBodyModelGroupRelay:
         assert route["target"] == "https://operator.openai.azure.com/openai/v1/fine_tuning/jobs"
 
 
+_VENDOR_RESPONSE_ID: Final = "resp_0000000000000000vendor"
+
+
+class _ManagedObjectStore:
+    def __init__(self) -> None:
+        self.rows: list[SimpleNamespace] = []
+        self.litellm_managedobjecttable = SimpleNamespace(
+            find_first=AsyncMock(side_effect=self._find_first),
+            upsert=AsyncMock(side_effect=self._upsert),
+            update=AsyncMock(),
+        )
+
+    @property
+    def db(self) -> "_ManagedObjectStore":
+        return self
+
+    async def _find_first(self, where: Mapping[str, str]) -> SimpleNamespace | None:
+        ((column, value),) = where.items()
+        return next((row for row in self.rows if getattr(row, column) == value), None)
+
+    async def _upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, str | None]]) -> None:
+        self.rows.append(SimpleNamespace(**data["create"]))
+
+
+class TestAzureRouterRelayManagedIds:
+    def _install(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        bodies: Iterator[dict],
+        upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        general_settings: Mapping[str, object] = MappingProxyType({}),
+    ) -> tuple[list[dict], _ManagedObjectStore]:
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        from litellm.proxy import proxy_server
+
+        captured: list[dict] = []
+        store: Final = _ManagedObjectStore()
+
+        async def next_request_body(_request: Request) -> dict:
+            return next(bodies)
+
+        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream))
+        monkeypatch.setattr(ep, "get_request_body", next_request_body)
+        monkeypatch.setattr(
+            proxy_server, "general_settings", {"passthrough_managed_object_ids": True, **general_settings}
+        )
+        monkeypatch.setattr(proxy_server, "prisma_client", store)
+        monkeypatch.setattr(proxy_server, "master_key", "sk-test-master-key")
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(get_proxy_hook=lambda name: object()))
+        monkeypatch.delenv("AZURE_API_BASE", raising=False)
+        return captured, store
+
+    def _request(self, method: str) -> Request:
+        request = MagicMock(spec=Request)
+        request.method = method
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {"api-version": "2025-03-01-preview"}
+        return request
+
+    async def _call(self, method: str, endpoint: str, user_id: str) -> Response:
+        return await azure_proxy_route(
+            endpoint=endpoint,
+            request=self._request(method),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key=f"hashed-{user_id}", user_id=user_id),
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "endpoint", "body"),
+        [
+            ("POST", "openai/v1/responses", {"model": "gpt-5.4", "previous_response_id": _VENDOR_RESPONSE_ID}),
+            (
+                "POST",
+                "gpt-5.4/openai/v1/responses",
+                {"model": "gpt-5.4", "previous_response_id": _VENDOR_RESPONSE_ID},
+            ),
+            ("GET", f"gpt-5.4/openai/v1/responses/{_VENDOR_RESPONSE_ID}", {}),
+            ("POST", "gpt-5.4/openai/v1/responses/compact", {"previous_response_id": _VENDOR_RESPONSE_ID}),
+        ],
+        ids=["body_model_create", "path_model_create", "path_model_retrieve", "path_model_compact"],
+    )
+    async def test_router_relay_refuses_a_response_id_the_pass_through_never_issued(
+        self, monkeypatch, method, endpoint, body
+    ):
+        captured, _ = self._install(monkeypatch, iter([body]))
+
+        with pytest.raises(HTTPException) as refusal:
+            await self._call(method, endpoint, "user-2")
+
+        assert refusal.value.status_code == 403
+        assert "allow_unmanaged_response_ids" in refusal.value.detail
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_router_relay_lets_a_vendor_id_through_with_allow_unmanaged_response_ids(self, monkeypatch):
+        body = {"model": "gpt-5.4", "previous_response_id": _VENDOR_RESPONSE_ID}
+        captured, _ = self._install(monkeypatch, iter([body]), general_settings={"allow_unmanaged_response_ids": True})
+
+        result = await self._call("POST", "openai/v1/responses", "user-2")
+
+        assert result.status_code == 200
+        assert captured[0]["json"]["previous_response_id"] == _VENDOR_RESPONSE_ID
+
+    @pytest.mark.asyncio
+    async def test_an_id_the_router_relay_issued_keeps_working_for_its_owner_only(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints.managed_id_codec import decode
+
+        captured, store = self._install(monkeypatch, iter([{"model": "gpt-5.4", "input": "ping"}, {}, {}, {}]))
+
+        created = await self._call("POST", "openai/v1/responses", "user-1")
+        issued_id = json.loads(created.body)["id"]
+        payload = decode(issued_id)
+        assert payload is not None
+        assert (payload.provider, payload.raw_provider_id) == ("azure", "resp_1")
+        assert [(row.model_object_id, row.created_by) for row in store.rows] == [("passthrough:azure:resp_1", "user-1")]
+
+        await self._call("GET", f"gpt-5.4/openai/v1/responses/{issued_id}", "user-1")
+        assert captured[-1]["endpoint"] == "gpt-5.4/openai/v1/responses/resp_1"
+
+        await self._call("GET", "gpt-5.4/openai/v1/responses/resp_1", "user-1")
+        assert captured[-1]["endpoint"] == "gpt-5.4/openai/v1/responses/resp_1"
+
+        relayed_before_the_stranger: Final = len(captured)
+        with pytest.raises(HTTPException) as refusal:
+            await self._call("GET", f"gpt-5.4/openai/v1/responses/{issued_id}", "user-2")
+        assert refusal.value.status_code == 403
+        assert len(captured) == relayed_before_the_stranger
+
+    @pytest.mark.asyncio
+    async def test_a_streamed_create_through_the_router_relay_hands_out_an_owned_id(self, monkeypatch):
+        from litellm.proxy.pass_through_endpoints.managed_id_codec import decode
+
+        async def upstream_events() -> AsyncIterator[bytes]:
+            yield b'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_1"}}\n\n'
+            yield b'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_1"}}\n\n'
+
+        async def streaming_upstream() -> AsyncIterator[bytes]:
+            return upstream_events()
+
+        _, store = self._install(
+            monkeypatch, iter([{"model": "gpt-5.4", "input": "ping", "stream": True}]), streaming_upstream
+        )
+
+        result = await self._call("POST", "openai/v1/responses", "user-1")
+
+        assert isinstance(result, StreamingResponse)
+        streamed = b"".join([chunk async for chunk in result.body_iterator]).decode()
+        assert "resp_1" not in streamed
+        ((row),) = store.rows
+        assert row.created_by == "user-1"
+        assert streamed.count(row.unified_object_id) == 2
+        payload = decode(row.unified_object_id)
+        assert payload is not None and payload.raw_provider_id == "resp_1"
+
+
 AZURE_SPEECH_SHORT_AUDIO_ENDPOINT: Final = "/speech/recognition/conversation/cognitiveservices/v1"
 AZURE_SPEECH_BATCH_ENDPOINT: Final = "/speechtotext/v3.2/transcriptions"
 AZURE_SPEECH_FAST_ENDPOINT: Final = "/speechtotext/transcriptions:transcribe"

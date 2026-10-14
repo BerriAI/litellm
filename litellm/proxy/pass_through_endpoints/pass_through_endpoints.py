@@ -153,6 +153,7 @@ from .upstream_usage_headers import (
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
@@ -1340,13 +1341,7 @@ async def pass_through_request(
             )
             _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook("managed_files")
             if _passthrough_managed_hook is not None:
-                from litellm.proxy.hooks.responses_id_security import (
-                    UNMANAGED_RESPONSE_ID_DETAIL,
-                    proxy_signing_key,
-                    unmanaged_response_ids_allowed,
-                )
                 from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
-                    addresses_unissued_response_id,
                     rewrite_body_ids,
                     rewrite_path_ids,
                     rewrite_query_ids,
@@ -1355,15 +1350,13 @@ async def pass_through_request(
                     prisma_client as _passthrough_prisma,
                 )
 
-                if not unmanaged_response_ids_allowed(
-                    general_settings_view(), proxy_signing_key(), user_api_key_dict
-                ) and await addresses_unissued_response_id(
+                await refuse_unissued_response_ids(
                     url.path,
                     _REQUEST_BODY_VIEW.validate_python(_parsed_body or {}),
                     _managed_id_provider,
                     _passthrough_prisma,
-                ):
-                    raise HTTPException(status_code=403, detail=UNMANAGED_RESPONSE_ID_DETAIL)
+                    user_api_key_dict,
+                )
 
                 _original_path: Final = url.path
                 _original_query_params: Final = requested_query_params
@@ -2903,6 +2896,29 @@ def _own_streamed_managed_ids(
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
     )
+
+
+async def refuse_unissued_response_ids(
+    path: str,
+    body: Mapping[str, object],
+    managed_id_provider: str,
+    prisma_client: "PrismaClient | None",
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy.hooks.responses_id_security import (
+        UNMANAGED_RESPONSE_ID_DETAIL,
+        proxy_signing_key,
+        unmanaged_response_ids_allowed,
+    )
+    from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+        addresses_unissued_response_id,
+    )
+    from litellm.proxy.proxy_server import general_settings_view
+
+    if unmanaged_response_ids_allowed(general_settings_view(), proxy_signing_key(), user_api_key_dict):
+        return
+    if await addresses_unissued_response_id(path, body, managed_id_provider, prisma_client):
+        raise HTTPException(status_code=403, detail=UNMANAGED_RESPONSE_ID_DETAIL)
 
 
 def _should_buffer_passthrough_response(response: httpx.Response) -> bool:

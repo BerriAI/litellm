@@ -25,7 +25,7 @@ import httpx
 import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly, TypedDict
 
@@ -51,6 +51,7 @@ from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
     is_azure_body_model_inference_endpoint,
 )
+from litellm.llms.base_llm.passthrough.transformation import strip_leading_model_segment
 from litellm.llms.bedrock.passthrough.transformation import is_bedrock_streaming_endpoint
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.deepgram.common_utils import (
@@ -100,6 +101,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     create_pass_through_route,
     create_websocket_passthrough_route,
+    refuse_unissued_response_ids,
     websocket_passthrough_request,
 )
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
@@ -131,7 +133,9 @@ from litellm.utils import ProviderConfigManager
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
 
     ProxyConfig = _ProxyConfig  # rebind-ok: conditional type alias
@@ -2058,9 +2062,101 @@ async def _relay_upstream_bytes(upstream: AsyncGenerator[bytes, bytes]) -> Async
         await upstream.aclose()
 
 
-async def _relay_upstream_response(upstream: httpx.Response) -> Response:
+_RELAYED_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+@dataclass(frozen=True, slots=True)
+class _RouterRelayManagedIds:
+    provider: str
+    prisma_client: PrismaClient
+    managed_files_hook: CustomLogger
+    user_api_key_dict: UserAPIKeyAuth
+    method: str
+    route: str
+
+    async def resolve_request(
+        self, endpoint: str, request_body: Mapping[str, object]
+    ) -> tuple[str, Mapping[str, object]]:
+        from litellm.proxy.pass_through_endpoints.managed_id_rewriter import rewrite_body_ids, rewrite_path_ids
+
+        await refuse_unissued_response_ids(
+            endpoint, request_body, self.provider, self.prisma_client, self.user_api_key_dict
+        )
+        resolved_endpoint: Final = await rewrite_path_ids(
+            endpoint, self.provider, self.user_api_key_dict, self.prisma_client, self.managed_files_hook
+        )
+        resolved_body: Final = await rewrite_body_ids(
+            dict(request_body), self.provider, self.user_api_key_dict, self.prisma_client, self.managed_files_hook
+        )
+        return resolved_endpoint, request_body if resolved_body is None else resolved_body
+
+    async def own_response_body(self, content: bytes, status_code: int) -> bytes:
+        from litellm.proxy.pass_through_endpoints.managed_id_rewriter import rewrite_response_ids
+
+        if status_code >= 300:
+            return content
+        try:
+            body: Final = _RELAYED_JSON_OBJECT.validate_json(content)
+        except ValidationError:
+            return content
+        owned: Final = await rewrite_response_ids(
+            provider=self.provider,
+            method=self.method,
+            route=self.route,
+            body=body,
+            user_api_key_dict=self.user_api_key_dict,
+            prisma_client=self.prisma_client,
+            managed_files_hook=self.managed_files_hook,
+        )
+        return content if owned is body else json.dumps(owned).encode("utf-8")
+
+    def own_stream(self, stream: AsyncGenerator[bytes, None]) -> AsyncGenerator[bytes, None]:
+        from litellm.proxy.pass_through_endpoints.managed_id_rewriter import rewrite_streamed_response_ids
+
+        return rewrite_streamed_response_ids(
+            stream=stream,
+            provider=self.provider,
+            method=self.method,
+            route=self.route,
+            user_api_key_dict=self.user_api_key_dict,
+            prisma_client=self.prisma_client,
+        )
+
+
+def _router_relay_managed_ids(
+    provider: str, method: str, route: str, user_api_key_dict: UserAPIKeyAuth
+) -> _RouterRelayManagedIds | None:
+    from litellm.proxy.proxy_server import general_settings_view, prisma_client, proxy_logging_obj
+
+    managed_files_hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if (
+        not general_settings_view().get("passthrough_managed_object_ids", False)
+        or prisma_client is None
+        or managed_files_hook is None
+    ):
+        return None
+    return _RouterRelayManagedIds(
+        provider=provider,
+        prisma_client=prisma_client,
+        managed_files_hook=managed_files_hook,
+        user_api_key_dict=user_api_key_dict,
+        method=method,
+        route=route,
+    )
+
+
+def _owned_relay_stream(
+    stream: AsyncGenerator[bytes, None], managed_ids: _RouterRelayManagedIds | None
+) -> AsyncGenerator[bytes, None]:
+    return stream if managed_ids is None else managed_ids.own_stream(stream)
+
+
+async def _relay_upstream_response(
+    upstream: httpx.Response, managed_ids: _RouterRelayManagedIds | None = None
+) -> Response:
+    content: Final = await upstream.aread()
     return Response(
-        content=await upstream.aread(),
+        content=content if managed_ids is None else await managed_ids.own_response_body(content, upstream.status_code),
         status_code=upstream.status_code,
         headers=HttpPassThroughEndpointHelpers.get_response_headers(headers=upstream.headers, custom_headers=None),
     )
@@ -2074,6 +2170,7 @@ async def _relay_azure_router_model(
     request_body: Mapping[str, object],
     is_streaming_request: bool,
     user_api_key_dict: UserAPIKeyAuth,
+    managed_ids: _RouterRelayManagedIds | None,
 ) -> Response:
     foreign_deployment: Final = foreign_azure_deployment(
         endpoint, model, lambda: _models_served_by_group(llm_router, model)
@@ -2092,6 +2189,7 @@ async def _relay_azure_router_model(
         request_body=request_body,
         is_streaming_request=is_streaming_request,
         user_api_key_dict=user_api_key_dict,
+        managed_ids=managed_ids,
     )
 
 
@@ -2103,6 +2201,7 @@ async def _relay_router_model(
     request_body: Mapping[str, object],
     is_streaming_request: bool,
     user_api_key_dict: UserAPIKeyAuth,
+    managed_ids: _RouterRelayManagedIds | None,
 ) -> Response:
     try:
         result: Final = await llm_router.allm_passthrough_route(
@@ -2125,13 +2224,13 @@ async def _relay_router_model(
         return await _relay_upstream_response(upstream_error.response)
 
     if not is_streaming_request:
-        return await _relay_upstream_response(cast(httpx.Response, result))
+        return await _relay_upstream_response(cast(httpx.Response, result), managed_ids)
 
     if inspect.isasyncgen(result):
         sse_headers: Final = {"content-type": "text/event-stream"}
         return StreamingResponse(
             content=wrap_passthrough_sse_bytes_with_keepalive_pings(
-                stream=_relay_upstream_bytes(result),
+                stream=_owned_relay_stream(_relay_upstream_bytes(result), managed_ids),
                 ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
                 upstream_headers=sse_headers,
             ),
@@ -2142,7 +2241,7 @@ async def _relay_router_model(
     upstream_stream: Final = cast(AsyncPassthroughStreamingResponse, result)
     return StreamingResponse(
         content=wrap_passthrough_sse_bytes_with_keepalive_pings(
-            stream=_relay_upstream_bytes(upstream_stream),
+            stream=_owned_relay_stream(_relay_upstream_bytes(upstream_stream), managed_ids),
             ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
             upstream_headers=upstream_stream.headers,
         ),
@@ -2207,6 +2306,7 @@ async def relay_nvidia_nim_request(
             request_body=request_body,
             is_streaming_request=is_streaming_request,
             user_api_key_dict=user_api_key_dict,
+            managed_ids=None,
         ),
         ping_interval_seconds=(litellm.sse_keepalive_ping_interval_seconds if is_streaming_request else None),
     )
@@ -2226,16 +2326,37 @@ async def _relay_azure_body_model_group(
     model: Final = _optional_str(request_body.get("model"))
     if model is None or not is_passthrough_request_using_router_model(request_body, llm_router):
         return None
+    return await _open_azure_router_relay(llm_router, model, endpoint, request, request_body, user_api_key_dict)
+
+
+async def _open_azure_router_relay(
+    llm_router: litellm.Router,
+    model: str,
+    endpoint: str,
+    request: Request,
+    request_body: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Response:
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
+    managed_ids: Final = _router_relay_managed_ids(
+        LlmProviders.AZURE.value,
+        request.method,
+        f"/azure/{strip_leading_model_segment(endpoint, (model,))}",
+        user_api_key_dict,
+    )
+    relayed_endpoint, relayed_body = (
+        (endpoint, request_body) if managed_ids is None else await managed_ids.resolve_request(endpoint, request_body)
+    )
     return await open_sse_before_first_byte(
         _relay_azure_router_model(
             llm_router=llm_router,
             model=model,
-            endpoint=endpoint,
+            endpoint=relayed_endpoint,
             request=request,
-            request_body=request_body,
+            request_body=relayed_body,
             is_streaming_request=is_streaming_request,
             user_api_key_dict=user_api_key_dict,
+            managed_ids=managed_ids,
         ),
         ping_interval_seconds=(litellm.sse_keepalive_ping_interval_seconds if is_streaming_request else None),
     )
@@ -2289,21 +2410,8 @@ async def azure_proxy_route(
             )
 
             if is_router_model:
-                request_body = await get_request_body(request)
-                is_streaming_request = is_passthrough_request_streaming(request_body)
-                return await open_sse_before_first_byte(
-                    _relay_azure_router_model(
-                        llm_router=llm_router,
-                        model=part,
-                        endpoint=endpoint,
-                        request=request,
-                        request_body=request_body,
-                        is_streaming_request=is_streaming_request,
-                        user_api_key_dict=user_api_key_dict,
-                    ),
-                    ping_interval_seconds=(
-                        litellm.sse_keepalive_ping_interval_seconds if is_streaming_request else None
-                    ),
+                return await _open_azure_router_relay(
+                    llm_router, part, endpoint, request, await get_request_body(request), user_api_key_dict
                 )
             elif is_vector_store_index:
                 # get the api key from the provider config
