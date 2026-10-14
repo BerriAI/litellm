@@ -17,6 +17,7 @@ const renderForm = (
         tpm_limit: 1000,
         rpm_limit: 50,
         max_budget: 20,
+        soft_budget: 15,
         team_member_budget: 10,
         team_member_budget_duration: "30d",
         team_member_tpm_limit: 100,
@@ -141,6 +142,22 @@ describe("TeamAdminSettingsForm", () => {
     );
 
     expect(screen.getByLabelText("Member Default Budget Duration")).toHaveTextContent("Never resets");
+  });
+
+  it("shows the soft budget when the proxy lets team admins edit it", () => {
+    renderForm(new Set(["soft_budget"]));
+
+    expect(screen.getByLabelText("Soft Budget (USD)")).toHaveValue(15);
+  });
+
+  it("saves a lowered soft budget and nothing else", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(new Set(["soft_budget", "max_budget"]));
+
+    fireEvent.change(screen.getByLabelText("Soft Budget (USD)"), { target: { value: "10.5" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ soft_budget: 10.5 }));
   });
 
   it("closes without saving on cancel", async () => {

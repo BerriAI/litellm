@@ -93,6 +93,7 @@ DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTER
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_S3_MAX_CONCURRENT_UPLOADS: Final = int(os.getenv("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", "16"))
 DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY: Final = get_env_int("DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY", 200)
+S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS: Final = get_env_int_in_range("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 30, 1, 3600)
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 MAX_S3_OBJECT_KEY_BYTES: Final = 1024
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
@@ -345,7 +346,7 @@ EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING: Final = 10_000
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT: Final = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
 AIOHTTP_CONNECTOR_LIMIT_PER_HOST: Final = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500))
-AIOHTTP_KEEPALIVE_TIMEOUT: Final = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
+AIOHTTP_KEEPALIVE_TIMEOUT: Final = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 15))
 AIOHTTP_TTL_DNS_CACHE: Final = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 # TCP keep-alive (SO_KEEPALIVE) — opt-in. Required when running behind NAT/LBs
 # whose idle timeout is shorter than provider response timeouts (e.g. AWS NAT

@@ -617,11 +617,19 @@ def test_concurrent_prioritized_burst_across_instances_and_endpoints_is_served(p
 @pytest.mark.timeout(PAIR_CELL_TIMEOUT)
 def test_fresh_queue_during_a_cooldown_is_refused_at_once(pair: Pair) -> None:
     group: Final = PAIR_GROUPS[2]
-    cooled(pair.second, pair.upstream, group)
-    client: Final = sdk(pair.second)
-    started: Final = time.monotonic()
-    with pytest.raises(openai.APIStatusError) as refused:
-        client.completions.create(model=group, prompt=new_marker(), extra_body={"priority": 1})
+    with ExitStack() as stack:
+        worker: Final = pinned(pair.second, stack)
+        cooled(worker, pair.upstream, group)
+        client: Final = openai.OpenAI(
+            base_url=str(worker.client.base_url),
+            api_key=worker.key,
+            max_retries=0,
+            timeout=30,
+            http_client=worker.client,
+        )
+        started: Final = time.monotonic()
+        with pytest.raises(openai.APIStatusError) as refused:
+            client.completions.create(model=group, prompt=new_marker(), extra_body={"priority": 1})
     assert refused.value.status_code == 429, refused.value.message
     assert NO_DEPLOYMENTS in refused.value.message
     assert_cut_short(time.monotonic() - started, injected_delay=ROUTER_TIMEOUT_SECONDS)

@@ -277,6 +277,25 @@ class TestTeamMemberDefaultEdits:
         assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "team_member_budget": 5.0}
 
 
+class TestSoftBudgetEdits:
+    def test_enabled_soft_budget_change_is_allowed(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", soft_budget=20.0)
+        verdict: Final = team_admin_edit_verdict(data, _team(soft_budget=10.0), _permitted("soft_budget"))
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "soft_budget": 20.0}
+
+    def test_soft_budget_change_without_it_enabled_names_it(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", soft_budget=20.0)
+        verdict: Final = team_admin_edit_verdict(data, _team(soft_budget=10.0), _permitted("max_budget"))
+        assert verdict == TeamAdminFieldNotPermitted(field="soft_budget")
+
+    def test_unchanged_soft_budget_resend_is_dropped_when_not_permitted(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", tpm_limit=6, soft_budget=10)
+        verdict: Final = team_admin_edit_verdict(data, _team(soft_budget=10.0), _permitted("tpm_limit"))
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "tpm_limit": 6}
+
+
 class TestTeamAdminRequestOrRaise:
     def test_allowed_hands_back_its_request(self):
         request = UpdateTeamRequest(team_id="team-1", tpm_limit=6)

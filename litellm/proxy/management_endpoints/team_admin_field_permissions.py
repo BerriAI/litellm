@@ -37,6 +37,7 @@ SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset(
         "tpm_limit",
         "rpm_limit",
         "max_budget",
+        "soft_budget",
         "team_member_budget",
         "team_member_budget_duration",
         "team_member_tpm_limit",
