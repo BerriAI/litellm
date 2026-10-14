@@ -20,6 +20,7 @@ import inspect
 
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
+    GenerateKeyResponse,
     GenerateKeyRequest,
     KeyManagementRoutes,
     NewUserRequest,
@@ -22423,6 +22424,61 @@ def test_other_key_requests_keep_the_key_type_they_asked_for():
     request = _member_key_request(GenerateKeyRequest(key_type=LiteLLMKeyType.MANAGEMENT), acting_as_team_admin=False)
 
     assert handle_key_type(request, {}) == {"key_type": "management", "allowed_routes": ["management_routes"]}
+
+
+async def _team_admin_generates_member_key(
+    find_owner: AsyncMock,
+    generate_key: AsyncMock,
+    editable_fields: tuple[str, ...] = ("create_member_keys",),
+) -> GenerateKeyResponse:
+    prisma_client: Final = MagicMock()
+    prisma_client.writer_db.litellm_usertable.find_unique = find_owner
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"team_admin_editable_team_fields": list(editable_fields)},
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            generate_key,
+        ),
+    ):
+        return await _common_key_generation_helper(
+            data=GenerateKeyRequest(user_id="member-1", team_id="team-1"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="team-admin-1", user_role=LitellmUserRoles.INTERNAL_USER),
+            litellm_changed_by=None,
+            team_table=_MEMBER_KEY_TEAM,
+        )
+
+
+@pytest.mark.asyncio
+async def test_team_admin_creates_an_llm_api_key_owned_by_an_internal_user_teammate():
+    generate_key: Final = AsyncMock(return_value={"key": "sk-member", "user_id": "member-1", "team_id": "team-1"})
+
+    await _team_admin_generates_member_key(
+        AsyncMock(return_value=MagicMock(user_role=LitellmUserRoles.INTERNAL_USER.value)), generate_key
+    )
+
+    saved: Final = generate_key.await_args.kwargs
+    assert (saved["user_id"], saved["team_id"]) == ("member-1", "team-1")
+    assert (saved["key_type"], saved["allowed_routes"]) == ("llm_api", ["llm_api_routes"])
+
+
+@pytest.mark.asyncio
+async def test_team_admin_cannot_create_a_key_owned_by_a_proxy_admin_teammate():
+    generate_key: Final = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc:
+        await _team_admin_generates_member_key(
+            AsyncMock(return_value=MagicMock(user_role=LitellmUserRoles.PROXY_ADMIN.value)), generate_key
+        )
+
+    assert exc.value.status_code == 403
+    generate_key.assert_not_awaited()
 
 
 @pytest.mark.asyncio
