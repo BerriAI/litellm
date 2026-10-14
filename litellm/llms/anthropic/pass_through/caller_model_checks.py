@@ -30,6 +30,8 @@ CallerModelVerdict: TypeAlias = Literal["allowed", "denied", "denied_for_now"]
 _DEFAULT_SUB_CALL_ROUTE: Final = "/v1/messages"
 _MODEL_SCOPED_DESCRIPTOR_PREFIX: Final = "model_per_"
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
+_LASTING_REFUSAL_STATUSES: Final = frozenset({401, 403})
+_LASTING_REFUSAL_CODES: Final = frozenset(str(status) for status in _LASTING_REFUSAL_STATUSES)
 
 
 class _TeamMemberModelBudgetLimiter(Protocol):
@@ -121,8 +123,11 @@ async def caller_can_call_model(
     These are the checks the parent request passed for its own model, so every scope they cover (key, team,
     team member, user, project, end user, managed agent grants) applies to the sub-call's model too, and a
     deployment that skips them for the parent (no-auth dev mode, custom auth without common checks) skips
-    them here. Budgets are left to ``caller_within_model_budget`` so nothing is reserved. ``denied`` answers
-    a refusal, ``denied_for_now`` a check that could not run, and ``allowed`` a caller outside the proxy.
+    them here. Budgets are checked too, so a spent budget the parent skipped for a free model still refuses
+    a paid one. ``denied`` answers a budget refusal or a 401 or 403, which only an admin or the next budget
+    window changes. ``denied_for_now`` answers any other failure, such as a team read that 404s, since the
+    parent passed the same checks this turn and the next turn may clear it. ``allowed`` answers a caller
+    outside the proxy.
     """
     if user_api_key_auth is None:
         return "allowed"
@@ -141,10 +146,10 @@ async def caller_can_call_model(
         return "allowed"
 
     route: Final = user_api_key_auth.request_route or _DEFAULT_SUB_CALL_ROUTE
-    request: Final = _sub_call_request(route, parent_litellm_metadata)
-    request_data: Final = _sub_call_request_data(model, parent_litellm_metadata, parent_trace_id)
-    caller: Final = user_api_key_auth.model_copy(update={"budget_reservation": None})
     try:
+        request: Final = _sub_call_request(route, parent_litellm_metadata)
+        request_data: Final = _sub_call_request_data(model, parent_litellm_metadata, parent_trace_id)
+        caller: Final = user_api_key_auth.model_copy(update={"budget_reservation": None})
         await enforce_key_and_fallback_model_access(
             valid_token=caller,
             request_data=request_data,
@@ -153,15 +158,23 @@ async def caller_can_call_model(
             llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy global has untyped deployment entries
             llm_router=llm_router,
         )
-        await run_centralized_common_checks(caller, request, request_data, route, check_budgets=False)
-    except (ProxyException, HTTPException, litellm.BudgetExceededError):
+        await run_centralized_common_checks(caller, request, request_data, route, sub_call=True)
+    except litellm.BudgetExceededError:
         return "denied"
+    except HTTPException as e:
+        return "denied" if e.status_code in _LASTING_REFUSAL_STATUSES else _check_failed_this_turn(model, e)
+    except ProxyException as e:
+        return "denied" if e.code in _LASTING_REFUSAL_CODES else _check_failed_this_turn(model, e)
     except Exception as e:  # noqa: BLE001  # a check that cannot run must not invoke the model with the caller's limits dropped
-        verbose_logger.warning(
-            "proxy sub-call: model access check for model=%s could not run; denying for now: %s", model, e
-        )
-        return "denied_for_now"
+        return _check_failed_this_turn(model, e)
     return "allowed"
+
+
+def _check_failed_this_turn(model: str, error: Exception) -> CallerModelVerdict:
+    verbose_logger.warning(
+        "proxy sub-call: model access check for model=%s failed this turn; denying for now: %s", model, error
+    )
+    return "denied_for_now"
 
 
 def _sub_call_request(route: str, parent_litellm_metadata: Mapping[str, object] | None) -> "Request":

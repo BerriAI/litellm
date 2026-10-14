@@ -3,6 +3,7 @@ from typing import Final
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -11,6 +12,7 @@ from litellm.llms.anthropic.pass_through.caller_model_checks import (
     caller_model_verdict,
     rate_limit_verdict,
 )
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -20,6 +22,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.user_api_key_auth import run_centralized_common_checks
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
@@ -27,6 +30,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitUnverifiableError,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
+from litellm.router import Router
 from litellm.types.agents import AgentResponse
 from tests.unit.llms.anthropic.pass_through.conftest import ProxyAuthState
 
@@ -337,3 +341,92 @@ async def test_a_full_per_model_rpm_limit_on_the_classifier_still_denies_for_now
     )
 
     assert (before, after) == ("allowed", "denied_for_now")
+
+
+def _classifier_router(cost_per_token: float) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": CLASSIFIER,
+                "litellm_params": {
+                    "model": "openai/classifier",
+                    "api_key": "sk-fake",
+                    "input_cost_per_token": cost_per_token,
+                    "output_cost_per_token": cost_per_token,
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller, rows",
+    [
+        (UserAPIKeyAuth(api_key="sk-spent", spend=2.0, max_budget=1.0), ()),
+        (
+            UserAPIKeyAuth(api_key="sk-team", team_id="t-1"),
+            (LiteLLM_TeamTableCachedObj(team_id="t-1", models=[CLASSIFIER], spend=2.0, max_budget=1.0),),
+        ),
+    ],
+    ids=["key-budget-spent", "team-budget-spent"],
+)
+async def test_a_spent_budget_denies_a_paid_classifier_even_when_the_parent_model_is_free(
+    proxy_auth_state: ProxyAuthState, caller: UserAPIKeyAuth, rows: Sequence[_ProxyRow]
+) -> None:
+    router: Final = _classifier_router(cost_per_token=0.001)
+    proxy_auth_state.serve(router)
+    proxy_auth_state.seed(*rows)
+
+    assert await caller_model_verdict(caller, CLASSIFIER, llm_router=router) == "denied"
+
+
+@pytest.mark.asyncio
+async def test_a_spent_budget_leaves_a_free_classifier_allowed(proxy_auth_state: ProxyAuthState) -> None:
+    router: Final = _classifier_router(cost_per_token=0.0)
+    proxy_auth_state.serve(router)
+    caller: Final = UserAPIKeyAuth(api_key="sk-spent", spend=2.0, max_budget=1.0)
+
+    assert await caller_model_verdict(caller, CLASSIFIER, llm_router=router) == "allowed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sub_call, reserved", [(False, True), (True, False)], ids=["parent-request", "sub-call"])
+async def test_a_sub_call_reserves_nothing_against_the_callers_budget(
+    proxy_auth_state: ProxyAuthState, sub_call: bool, reserved: bool
+) -> None:
+    proxy_auth_state.serve(_classifier_router(cost_per_token=0.001))
+    caller: Final = UserAPIKeyAuth(api_key="sk-live", spend=0.0, max_budget=10.0)
+    counter_key: Final = f"spend:key:{caller.token}"
+    await proxy_server.spend_counter_cache.async_set_cache(counter_key, 0.0)
+    request: Final = Request(
+        scope={"type": "http", "method": "POST", "path": "/v1/messages", "headers": [], "query_string": b""}
+    )
+    priced_body: Final[dict[str, object]] = {
+        "model": CLASSIFIER,
+        "messages": [{"role": "user", "content": "classify this tool call"}],
+        "max_tokens": 100,
+    }
+
+    await run_centralized_common_checks(caller, request, priced_body, "/v1/messages", sub_call=sub_call)
+
+    counter: Final = await proxy_server.spend_counter_cache.async_get_cache(counter_key)
+    assert (counter > 0, caller.budget_reservation is not None) == (reserved, reserved)
+
+
+@pytest.mark.asyncio
+async def test_a_parent_header_the_sub_call_request_cannot_carry_denies_for_now() -> None:
+    parent_metadata: Final = {"headers": {"x-client-name": "snow ☃"}}
+
+    verdict: Final = await caller_model_verdict(
+        UserAPIKeyAuth(models=[CLASSIFIER]), CLASSIFIER, llm_router=None, parent_litellm_metadata=parent_metadata
+    )
+
+    assert verdict == "denied_for_now"
+
+
+@pytest.mark.asyncio
+async def test_a_team_read_that_fails_mid_turn_denies_for_now(proxy_auth_state: ProxyAuthState) -> None:
+    caller: Final = UserAPIKeyAuth(api_key="sk-team-key", team_id="team-not-in-cache")
+
+    assert await caller_model_verdict(caller, CLASSIFIER, llm_router=None) == "denied_for_now"
