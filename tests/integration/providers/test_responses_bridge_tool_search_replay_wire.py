@@ -29,6 +29,7 @@ _CACHE_BUST: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache": {"no-ca
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _ITEMS: Final = TypeAdapter(list[dict[str, JsonValue]])
 _EMPTY_TURN: Final[Mapping[str, JsonValue]] = MappingProxyType({"role": "user", "content": ""})
+_EARLIER_PAIRS: Final = 200
 _WEATHER_PARAMETERS: Final[dict[str, JsonValue]] = {
     "type": "object",
     "properties": {"city": {"type": "string"}},
@@ -281,6 +282,56 @@ def test_a_replayed_search_call_is_dropped_only_when_nothing_answers_it(
         _assert_served(response, call.marker, stream)
         request, body = _only_request(wire)
         _assert_wire(call, request, body)
+
+
+def _earlier_pairs(marker: str) -> Iterator[JsonValue]:
+    for index in range(_EARLIER_PAIRS):
+        call_id = f"toolu_{marker}_{index}"
+        call: JsonValue = {
+            "id": call_id,
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+        yield {"role": "assistant", "content": f"step {index}", "tool_calls": [call]}
+        yield _tool_message(call_id, "22C")
+
+
+def _long_history(marker: str, answers: Sequence[Mapping[str, JsonValue]]) -> tuple[JsonValue, ...]:
+    first, *rest = _history(marker, answers)
+    return (first, *_earlier_pairs(marker), *rest)
+
+
+def _last_assistant_tool_uses(messages: Sequence[Mapping[str, JsonValue]]) -> tuple[tuple[str, str], ...]:
+    last: Final = [turn for turn in messages if turn["role"] == "assistant"][-1]
+    blocks: Final = _ITEMS.validate_python(last["content"])
+    return tuple(sorted((str(block["id"]), str(block["name"])) for block in blocks if block["type"] == "tool_use"))
+
+
+@pytest.mark.parametrize("answer", ["unanswered", "answered"])
+def test_a_search_call_after_two_hundred_answered_tool_turns_is_paired_only_by_its_own_answers(
+    gateway: Gateway, answer: Answer
+) -> None:
+    call: Final = _Call("anthropic", answer, False, uuid.uuid4().hex)
+    with wire_server(_vendor) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, "anthropic", wire.url)
+        history: Final = _long_history(call.marker, _answers(call.marker, answer))
+        response: Final = _raw(gateway, "/v1/chat/completions", _chat_body(model, call.marker, history, False))
+        _assert_served(response, call.marker, False)
+        request, body = _only_request(wire)
+        assert request.target == "/v1/messages", request.target
+        _assert_tools_forwarded("anthropic", body)
+        messages: Final = _ITEMS.validate_python(body["messages"])
+        earlier: Final = [f"toolu_{call.marker}_{index}" for index in range(_EARLIER_PAIRS)]
+        weather: Final = (f"toolu_{call.marker}", "get_weather")
+        search: Final = (f"srvtoolu_{call.marker}", _REGEX_TOOL_NAME)
+        match answer:
+            case "unanswered":
+                assert "srvtoolu_" not in json.dumps(messages), messages[-4:]
+                assert _last_assistant_tool_uses(messages) == (weather,), messages[-4:]
+                assert sorted(_tool_results(messages)) == sorted([*earlier, weather[0]]), messages[-4:]
+            case "answered":
+                assert _last_assistant_tool_uses(messages) == (search, weather), messages[-4:]
+                assert sorted(_tool_results(messages)) == sorted([*earlier, search[0], weather[0]]), messages[-4:]
 
 
 def test_a_function_role_answer_keeps_the_replayed_search_call(gateway: Gateway) -> None:

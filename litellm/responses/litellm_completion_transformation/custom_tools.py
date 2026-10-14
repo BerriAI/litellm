@@ -180,6 +180,62 @@ def validated_defer_loading(value: object) -> bool:
         raise BadRequestError(message="defer_loading must be a boolean", model="", llm_provider="") from exc
 
 
+_TOOL_FLAG_ADAPTERS: Final = MappingProxyType(
+    {"defer_loading": _DEFER_LOADING_ADAPTER, "allowed_callers": _ALLOWED_CALLERS_ADAPTER}
+)
+
+
+def _is_well_formed_tool_flag(key: str, value: object) -> bool:
+    adapter: Final = _TOOL_FLAG_ADAPTERS.get(key)
+    if adapter is None:
+        return True
+    try:
+        adapter.validate_python(value, strict=True)
+    except ValidationError:
+        return False
+    return True
+
+
+_NAMESPACE_MEMBERS_ADAPTER: Final = TypeAdapter[list[object]](list[object])
+_TOOL_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
+
+
+def _with_well_formed_flags(tool: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in tool.items() if _is_well_formed_tool_flag(key, value)}
+
+
+def _member_with_well_formed_flags(member: object) -> object:
+    try:
+        return _with_well_formed_flags(_TOOL_ADAPTER.validate_python(member))
+    except ValidationError:
+        return member
+
+
+def without_malformed_tool_flags(tool: Mapping[str, object]) -> Mapping[str, object]:
+    kept: Final = _with_well_formed_flags(tool)
+    if tool.get("type") != "namespace":
+        return kept
+    try:
+        members: Final = _NAMESPACE_MEMBERS_ADAPTER.validate_python(tool.get("tools"))
+    except ValidationError:
+        return kept
+    return {**kept, "tools": [_member_with_well_formed_flags(member) for member in members]}
+
+
+def function_chat_tool(
+    function: ChatCompletionToolParamFunctionChunk, allowed_callers: Sequence[str] | None, deferred: bool
+) -> ChatCompletionToolParam:
+    if allowed_callers is None and not deferred:
+        return ChatCompletionToolParam(type="function", function=function)
+    if allowed_callers is None:
+        return ChatCompletionToolParam(type="function", function=function, defer_loading=True)
+    if not deferred:
+        return ChatCompletionToolParam(type="function", function=function, allowed_callers=list(allowed_callers))
+    return ChatCompletionToolParam(
+        type="function", function=function, allowed_callers=list(allowed_callers), defer_loading=True
+    )
+
+
 def custom_tool_grammar_suffix(fmt: object) -> str:
     try:
         parsed: Final = _CustomToolFormat.model_validate(fmt)
@@ -196,8 +252,8 @@ def convert_custom_tool_to_function_tool(tool: Mapping[str, object]) -> ChatComp
 
     The grammar definition is embedded in the description so the model can
     produce correctly-formatted output. Returns ``None`` if the tool is not a
-    custom tool. Raises ``ValueError`` if ``allowed_callers`` is not a list of
-    strings.
+    custom tool. Raises ``BadRequestError`` if ``allowed_callers`` is not a list
+    of strings or ``defer_loading`` is not a boolean.
     """
     if tool.get("type") != "custom":
         return None
@@ -208,6 +264,7 @@ def convert_custom_tool_to_function_tool(tool: Mapping[str, object]) -> ChatComp
         tool.get("format")
     )
     allowed_callers: Final = validated_allowed_callers(tool.get("allowed_callers"))
+    deferred: Final = validated_defer_loading(tool.get("defer_loading"))
     function_chunk: Final = ChatCompletionToolParamFunctionChunk(
         name=name,
         description=description,
@@ -222,6 +279,4 @@ def convert_custom_tool_to_function_tool(tool: Mapping[str, object]) -> ChatComp
             "required": ["content"],
         },
     )
-    if allowed_callers is None:
-        return ChatCompletionToolParam(type="function", function=function_chunk)
-    return ChatCompletionToolParam(type="function", function=function_chunk, allowed_callers=allowed_callers)
+    return function_chat_tool(function_chunk, allowed_callers, deferred)

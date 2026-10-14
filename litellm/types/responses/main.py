@@ -133,7 +133,7 @@ class CustomToolCallOutputItem(BaseLiteLLMOpenAIResponseObject):
     status: Literal["in_progress", "completed", "incomplete"] | None = None
 
 
-class ResponseToolSearchCall(BaseLiteLLMOpenAIResponseObject):
+class OutputToolSearchCall(BaseLiteLLMOpenAIResponseObject):
     model_config = ConfigDict(extra="allow", frozen=True, protected_namespaces=())
 
     id: str

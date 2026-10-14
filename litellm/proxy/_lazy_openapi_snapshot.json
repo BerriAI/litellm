@@ -24116,6 +24116,60 @@
           "title": "OutputTokensDetails",
           "type": "object"
         },
+        "OutputToolSearchCall": {
+          "additionalProperties": true,
+          "properties": {
+            "arguments": {
+              "title": "Arguments"
+            },
+            "call_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Call Id"
+            },
+            "execution": {
+              "enum": [
+                "server",
+                "client"
+              ],
+              "title": "Execution",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "in_progress",
+                "completed",
+                "incomplete"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_search_call",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "arguments",
+            "execution",
+            "status",
+            "type"
+          ],
+          "title": "OutputToolSearchCall",
+          "type": "object"
+        },
         "PendingSafetyCheck": {
           "additionalProperties": true,
           "description": "A pending safety check for the computer call.",
@@ -25748,7 +25802,7 @@
                     "$ref": "#/components/schemas/ResponseFunctionToolCallOutputItem"
                   },
                   {
-                    "$ref": "#/components/schemas/openai__types__responses__response_tool_search_call__ResponseToolSearchCall"
+                    "$ref": "#/components/schemas/ResponseToolSearchCall"
                   },
                   {
                     "$ref": "#/components/schemas/ResponseToolSearchOutputItem"
@@ -26102,6 +26156,71 @@
           "title": "ResponseTextConfigParam",
           "type": "object"
         },
+        "ResponseToolSearchCall": {
+          "additionalProperties": true,
+          "properties": {
+            "arguments": {
+              "title": "Arguments"
+            },
+            "call_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Call Id"
+            },
+            "created_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created By"
+            },
+            "execution": {
+              "enum": [
+                "server",
+                "client"
+              ],
+              "title": "Execution",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "in_progress",
+                "completed",
+                "incomplete"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_search_call",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "arguments",
+            "execution",
+            "status",
+            "type"
+          ],
+          "title": "ResponseToolSearchCall",
+          "type": "object"
+        },
         "ResponseToolSearchOutputItem": {
           "additionalProperties": true,
           "properties": {
@@ -26336,7 +26455,7 @@
                         "$ref": "#/components/schemas/ResponseReasoningItem"
                       },
                       {
-                        "$ref": "#/components/schemas/openai__types__responses__response_tool_search_call__ResponseToolSearchCall"
+                        "$ref": "#/components/schemas/ResponseToolSearchCall"
                       },
                       {
                         "$ref": "#/components/schemas/ResponseToolSearchOutputItem"
@@ -26419,7 +26538,7 @@
                         "$ref": "#/components/schemas/CustomToolCallOutputItem"
                       },
                       {
-                        "$ref": "#/components/schemas/litellm__types__responses__main__ResponseToolSearchCall"
+                        "$ref": "#/components/schemas/OutputToolSearchCall"
                       }
                     ]
                   },
@@ -27356,125 +27475,6 @@
             "type"
           ],
           "title": "WebSearchTool",
-          "type": "object"
-        },
-        "litellm__types__responses__main__ResponseToolSearchCall": {
-          "additionalProperties": true,
-          "properties": {
-            "arguments": {
-              "title": "Arguments"
-            },
-            "call_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Call Id"
-            },
-            "execution": {
-              "enum": [
-                "server",
-                "client"
-              ],
-              "title": "Execution",
-              "type": "string"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "status": {
-              "enum": [
-                "in_progress",
-                "completed",
-                "incomplete"
-              ],
-              "title": "Status",
-              "type": "string"
-            },
-            "type": {
-              "const": "tool_search_call",
-              "title": "Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "arguments",
-            "execution",
-            "status",
-            "type"
-          ],
-          "title": "ResponseToolSearchCall",
-          "type": "object"
-        },
-        "openai__types__responses__response_tool_search_call__ResponseToolSearchCall": {
-          "additionalProperties": true,
-          "properties": {
-            "arguments": {
-              "title": "Arguments"
-            },
-            "call_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Call Id"
-            },
-            "created_by": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Created By"
-            },
-            "execution": {
-              "enum": [
-                "server",
-                "client"
-              ],
-              "title": "Execution",
-              "type": "string"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "status": {
-              "enum": [
-                "in_progress",
-                "completed",
-                "incomplete"
-              ],
-              "title": "Status",
-              "type": "string"
-            },
-            "type": {
-              "const": "tool_search_call",
-              "title": "Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "arguments",
-            "execution",
-            "status",
-            "type"
-          ],
-          "title": "ResponseToolSearchCall",
           "type": "object"
         },
         "openai__types__responses__web_search_preview_tool__UserLocation": {

@@ -1,25 +1,27 @@
 import asyncio
+import itertools
 import json
 import re
 import socket
 import threading
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
-from types import MappingProxyType
-from typing import Final, Literal
+from types import EllipsisType, MappingProxyType
+from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote, urlsplit
 
 import httpx
 import psutil
 import pytest
 import yaml
+from _pytest.mark.structures import ParameterSet
 from integration._support import claude_code as cc
 from integration._support import responses_vendor as rv
-from integration._support.anthropic_thinking import EVENT_STREAM, Event, aws_chunks, sse_chunks
-from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.anthropic_thinking import BEDROCK_MODEL, EVENT_STREAM, Event, aws_chunks, sse_chunks
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -27,6 +29,7 @@ from pydantic import JsonValue
 
 _CLAUDE: Final = cc.OPUS
 _BEDROCK_CLAUDE: Final = "anthropic.claude-sonnet-5-5"
+_MISTRAL: Final = "mistral-large-latest"
 _CONFIG_MODEL: Final = "responses-bridge-tool-search-chaos"
 _ANTHROPIC_BASE: Final = "http://api.anthropic.com"
 _REGEX_TOOL_TYPE: Final = "tool_search_tool_regex_20251119"
@@ -43,7 +46,15 @@ _WEATHER_PARAMETERS: Final[dict[str, JsonValue]] = {
     "required": ["city"],
 }
 
+_ORDER_PARAMETERS: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"order_id": {"type": "string"}},
+    "required": ["order_id"],
+}
+
 Endpoint = Literal["responses", "chat", "messages"]
+StoredShape: TypeAlias = Literal["tool_use", "search_only", "search_and_text"]
+OffAnthropicRoute: TypeAlias = Literal["mistral", "bedrock_converse"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -635,3 +646,365 @@ def test_bedrock_invoke_pass_through_relays_the_search_frames_untouched(owned_ri
             seconds=70,
         )
         assert str(rows[0]["status"]) == "success", rows
+
+
+def _server_tool_use(marker: str) -> Event:
+    return {
+        "type": "server_tool_use",
+        "id": f"srvtoolu_{marker}",
+        "name": _REGEX_TOOL_NAME,
+        "input": json.loads(_SEARCH_ARGUMENTS),
+    }
+
+
+def _stored_turn(marker: str, shape: StoredShape) -> dict[str, JsonValue]:
+    match shape:
+        case "tool_use":
+            return _message(marker)
+        case "search_only":
+            return {
+                **_message(marker),
+                "content": [_server_tool_use(marker), _search_result(marker)],
+                "stop_reason": "pause_turn",
+            }
+        case "search_and_text":
+            return {
+                **_message(marker),
+                "content": [
+                    _server_tool_use(marker),
+                    _search_result(marker),
+                    {"type": "text", "text": f"found marker-{marker}"},
+                ],
+                "stop_reason": "end_turn",
+            }
+
+
+def _stored_turn_vendor(shape: StoredShape) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.method != "POST":
+            return Reply()
+        marker: Final = rv.newest_marker(request.body.decode()) or "health"
+        return Reply(body=json.dumps(_stored_turn(marker, shape)).encode())
+
+    return respond
+
+
+def _tool_call_ids(message: Mapping[str, JsonValue]) -> frozenset[str]:
+    return frozenset(str(call["id"]) for call in rv.ITEMS.validate_python(message.get("tool_calls") or []))
+
+
+def _answer_ids_after(messages: Sequence[Mapping[str, JsonValue]], index: int) -> frozenset[str]:
+    answers: Final = itertools.takewhile(lambda message: message.get("role") == "tool", messages[index + 1 :])
+    return frozenset(str(message.get("tool_call_id")) for message in answers)
+
+
+def _opening_call_ids(messages: Sequence[Mapping[str, JsonValue]], index: int) -> frozenset[str]:
+    opener: Final = next((message for message in reversed(messages[:index]) if message.get("role") != "tool"), None)
+    return frozenset() if opener is None else _tool_call_ids(opener)
+
+
+def _unmatched_tool_ids(messages: Sequence[Mapping[str, JsonValue]]) -> Iterator[str]:
+    for index, message in enumerate(messages):
+        if message.get("role") == "assistant":
+            yield from sorted(_tool_call_ids(message) - _answer_ids_after(messages, index))
+        if message.get("role") == "tool" and str(message.get("tool_call_id")) not in _opening_call_ids(messages, index):
+            yield str(message.get("tool_call_id"))
+
+
+def _chat_answer(marker: str, stream: bool) -> Reply:
+    head: Final[Mapping[str, JsonValue]] = {"id": f"cmpl-{marker}", "created": 1, "model": _MISTRAL}
+    if not stream:
+        message: Final = {"role": "assistant", "content": f"answered marker-{marker}"}
+        completion: Final = {
+            **head,
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+            "usage": rv.CHAT_USAGE,
+        }
+        return Reply(body=json.dumps(completion).encode())
+    delta: Final[dict[str, JsonValue]] = {"role": "assistant", "content": f"answered marker-{marker}"}
+    opened: Final[dict[str, JsonValue]] = {"index": 0, "delta": delta, "finish_reason": None}
+    return Reply(
+        content_type="text/event-stream",
+        chunks=(
+            rv.chat_sse({**head, "object": "chat.completion.chunk", "choices": [opened]}),
+            rv.chat_sse(
+                {
+                    **head,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": rv.CHAT_USAGE,
+                }
+            ),
+            b"data: [DONE]\n\n",
+        ),
+    )
+
+
+def _strict_mistral(request: Request) -> Reply:
+    if request.method != "POST":
+        return Reply()
+    marker: Final = rv.newest_marker(request.body.decode()) or "health"
+    if request.target != "/v1/chat/completions":
+        return rv.error(404, f"unexpected target {request.target}", "not_found")
+    if "defer_loading" in request.body.decode():
+        return rv.error(422, f"tools: defer_loading: Extra inputs are not permitted marker-{marker}", "extra_forbidden")
+    body: Final = rv.JSON_OBJECT.validate_json(request.body)
+    unmatched: Final = tuple(_unmatched_tool_ids(rv.ITEMS.validate_python(body.get("messages") or [])))
+    if unmatched:
+        return rv.error(
+            400,
+            f"Not the same number of function calls and responses: {', '.join(unmatched)} marker-{marker}",
+            "invalid_request_message_order",
+        )
+    return _chat_answer(marker, body.get("stream") is True)
+
+
+def _converse_ids(message: Mapping[str, JsonValue], block_key: str) -> frozenset[str]:
+    return frozenset(
+        str(rv.JSON_OBJECT.validate_python(block[block_key])["toolUseId"])
+        for block in rv.ITEMS.validate_python(message.get("content") or [])
+        if block_key in block
+    )
+
+
+def _unpaired_converse_turns(messages: Sequence[Mapping[str, JsonValue]]) -> tuple[int, ...]:
+    return tuple(
+        index + 1
+        for index, (previous, current) in enumerate(zip(messages, messages[1:]))
+        if _converse_ids(previous, "toolUse") != _converse_ids(current, "toolResult")
+    )
+
+
+def _strict_converse(request: Request) -> Reply:
+    if request.method != "POST":
+        return Reply()
+    marker: Final = rv.newest_marker(request.body.decode()) or "health"
+    if unquote(request.target) != f"/model/{BEDROCK_MODEL}/converse":
+        return rv.error(404, f"unexpected target {request.target}", "not_found")
+    body: Final = rv.JSON_OBJECT.validate_json(request.body)
+    unpaired: Final = _unpaired_converse_turns(rv.ITEMS.validate_python(body.get("messages") or []))
+    if unpaired:
+        refusal: Final = (
+            f"Expected toolResult blocks at messages.{unpaired[0]}.content for the toolUse ids of the previous turn "
+            f"marker-{marker}"
+        )
+        return Reply(status=400, body=json.dumps({"message": refusal}).encode())
+    answer: Final = {
+        "output": {"message": {"role": "assistant", "content": [{"text": f"answered marker-{marker}"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 11, "outputTokens": 4, "totalTokens": 15},
+        "metrics": {"latencyMs": 1},
+    }
+    return Reply(body=json.dumps(answer).encode())
+
+
+def _strict_vendor(route: OffAnthropicRoute) -> Callable[[Request], Reply]:
+    match route:
+        case "mistral":
+            return _strict_mistral
+        case "bedrock_converse":
+            return _strict_converse
+
+
+def _off_anthropic_deployment(scenario: Scenario, route: OffAnthropicRoute, wire_url: str) -> str:
+    match route:
+        case "mistral":
+            return scenario.model(model=f"mistral/{_MISTRAL}", api_base=wire_url, api_key="synthetic-mistral-key")
+        case "bedrock_converse":
+            return scenario.model(
+                model=f"bedrock/converse/{BEDROCK_MODEL}",
+                aws_access_key_id="AKIASCRIPTEDPROVIDER",
+                aws_secret_access_key="scripted-secret",
+                aws_region_name="us-east-1",
+                aws_bedrock_runtime_endpoint=wire_url,
+            )
+
+
+def _stored_first_turn(proxy: Gateway, model: str, marker: str) -> str:
+    first: Final = proxy.request("POST", "/v1/responses", _body(model, _Call("responses", False, marker)))
+    assert first.status_code == 200, first.text
+    payload: Final = rv.JSON_OBJECT.validate_json(first.text)
+    types: Final = [item["type"] for item in rv.ITEMS.validate_python(payload["output"])]
+    assert "tool_search_call" in types, types
+    response_id: Final = str(payload["id"])
+    eventually(
+        lambda: read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+        lambda rows: any(rv.same_response(str(row["request_id"]), response_id) for row in rows),
+        seconds=70,
+    )
+    return response_id
+
+
+def _follow_up_input(marker: str, shape: StoredShape) -> list[JsonValue]:
+    if shape == "tool_use":
+        return [{"type": "function_call_output", "call_id": f"toolu_{marker}", "output": f"22C marker-{marker}"}]
+    return [{"role": "user", "content": f"continue marker-{marker}"}]
+
+
+def _chat_turn(message: Mapping[str, JsonValue]) -> tuple[str, tuple[str, ...]]:
+    if message.get("role") == "tool":
+        return "tool", (str(message.get("tool_call_id")),)
+    return str(message["role"]), tuple(sorted(_tool_call_ids(message)))
+
+
+def _expected_chat_turns(marker: str, shape: StoredShape) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    match shape:
+        case "tool_use":
+            return (("user", ()), ("assistant", (f"toolu_{marker}",)), ("tool", (f"toolu_{marker}",)))
+        case "search_only":
+            return (("user", ()), ("user", ()))
+        case "search_and_text":
+            return (("user", ()), ("assistant", ()), ("user", ()))
+
+
+def _assert_converse_follow_up(messages: Sequence[Mapping[str, JsonValue]], marker: str) -> None:
+    assert [message["role"] for message in messages] == ["user", "assistant", "user"], messages
+    assert _converse_ids(messages[1], "toolUse") == {f"toolu_{marker}"}, messages
+    assert _converse_ids(messages[2], "toolResult") == {f"toolu_{marker}"}, messages
+
+
+def _off_anthropic_cells() -> tuple[ParameterSet, ...]:
+    cases: Final[tuple[tuple[OffAnthropicRoute, StoredShape, bool], ...]] = (
+        ("mistral", "search_only", False),
+        ("mistral", "search_and_text", False),
+        ("mistral", "search_and_text", True),
+        ("bedrock_converse", "tool_use", False),
+    )
+    return tuple(
+        pytest.param(route, shape, stream, id=f"{route}-{shape}-{'stream' if stream else 'sync'}")
+        for route, shape, stream in cases
+    )
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@pytest.mark.parametrize(("route", "shape", "stream"), _off_anthropic_cells())
+def test_a_follow_up_off_anthropic_drops_the_stored_search_call_and_is_served(
+    owned_rig: _OwnedRig, route: OffAnthropicRoute, shape: StoredShape, stream: bool
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    proxy: Final = owned_rig.proxy.gateway
+    with (
+        wire_server(_stored_turn_vendor(shape)) as claude_wire,
+        wire_server(_strict_vendor(route)) as follow_up_wire,
+        proxy.scenario() as scenario,
+    ):
+        claude: Final = scenario.model(
+            model=f"anthropic/{_CLAUDE}", api_base=claude_wire.url, api_key=cc.ANTHROPIC_API_KEY
+        )
+        target: Final = _off_anthropic_deployment(scenario, route, follow_up_wire.url)
+        response_id: Final = _stored_first_turn(proxy, claude, marker)
+        follow_up: Final = proxy.request(
+            "POST",
+            "/v1/responses",
+            {
+                **_body(target, _Call("responses", stream, marker)),
+                "previous_response_id": response_id,
+                "input": _follow_up_input(marker, shape),
+            },
+        )
+        assert follow_up.status_code == 200, follow_up.text
+        assert f"answered marker-{marker}" in follow_up.text, follow_up.text
+        (request,) = _marked_posts(follow_up_wire.drain(), marker)
+        sent: Final = request.body.decode()
+        assert "srvtoolu_" not in sent and "tool_search" not in sent and "defer_loading" not in sent, sent
+        body: Final = rv.JSON_OBJECT.validate_json(request.body)
+        messages: Final = rv.ITEMS.validate_python(body["messages"])
+        if route == "bedrock_converse":
+            _assert_converse_follow_up(messages, marker)
+            return
+        assert tuple(_chat_turn(message) for message in messages) == _expected_chat_turns(marker, shape), messages
+        tools: Final = rv.ITEMS.validate_python(body["tools"])
+        assert [rv.JSON_OBJECT.validate_python(tool["function"])["name"] for tool in tools] == ["get_weather"], tools
+        if shape == "search_and_text":
+            assert f"found marker-{marker}" in json.dumps(messages[1]), messages
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_a_follow_up_on_anthropic_that_answers_the_stored_search_call_replays_it_with_its_answer(
+    owned_rig: _OwnedRig,
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    proxy: Final = owned_rig.proxy.gateway
+    with wire_server(_stored_turn_vendor("tool_use")) as claude_wire, proxy.scenario() as scenario:
+        claude: Final = scenario.model(
+            model=f"anthropic/{_CLAUDE}", api_base=claude_wire.url, api_key=cc.ANTHROPIC_API_KEY
+        )
+        response_id: Final = _stored_first_turn(proxy, claude, marker)
+        answers: Final[list[JsonValue]] = [
+            {"type": "function_call_output", "call_id": f"srvtoolu_{marker}", "output": f"get_weather marker-{marker}"},
+            {"type": "function_call_output", "call_id": f"toolu_{marker}", "output": f"22C marker-{marker}"},
+        ]
+        follow_up: Final = proxy.request(
+            "POST",
+            "/v1/responses",
+            {**_body(claude, _Call("responses", False, marker)), "previous_response_id": response_id, "input": answers},
+        )
+        assert follow_up.status_code == 200, follow_up.text
+        opening, replay = _marked_posts(claude_wire.drain(), marker)
+        _assert_forwarded_with_tool_search(opening)
+        _assert_forwarded_with_tool_search(replay)
+        messages: Final = rv.ITEMS.validate_python(rv.JSON_OBJECT.validate_json(replay.body)["messages"])
+        stored_turn: Final = next(turn for turn in messages if turn["role"] == "assistant")
+        blocks: Final = rv.ITEMS.validate_python(stored_turn["content"])
+        assert [(block.get("id"), block.get("name")) for block in blocks if block["type"] != "text"] == [
+            (f"srvtoolu_{marker}", _REGEX_TOOL_NAME),
+            (f"toolu_{marker}", "get_weather"),
+        ], blocks
+        assert sorted(str(block["tool_use_id"]) for block in _tool_results(messages)) == [
+            f"srvtoolu_{marker}",
+            f"toolu_{marker}",
+        ], messages
+
+
+@pytest.fixture(scope="module")
+def drop_params_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
+    directory: Final = tmp_path_factory.mktemp("tool-search-drop-params")
+    config: Final = rv.JSON_OBJECT.validate_python(
+        yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    )
+    settings: Final = rv.JSON_OBJECT.validate_python(config["litellm_settings"])
+    path: Final = directory / "responses-bridge-tool-search-drop-params.yaml"
+    path.write_text(yaml.safe_dump({**config, "litellm_settings": {**settings, "drop_params": True}}))
+    with (
+        gateway_from_environment() as gateway,
+        owned_proxy_process(gateway, directory, {}, config=path, workers=2) as owned,
+    ):
+        yield owned
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@pytest.mark.parametrize("request_drop_params", [..., False], ids=["absent", "false"])
+def test_a_global_drop_params_drops_a_malformed_defer_loading_and_serves_the_search_call(
+    drop_params_proxy: OwnedProxy, request_drop_params: bool | EllipsisType
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    proxy: Final = drop_params_proxy.gateway
+    with wire_server(_Vendor().respond) as wire, proxy.scenario() as scenario:
+        model: Final = scenario.model(model=f"anthropic/{_CLAUDE}", api_base=wire.url, api_key=cc.ANTHROPIC_API_KEY)
+        opening: Final = _body(model, _Call("responses", False, marker))
+        lookup: Final[dict[str, JsonValue]] = {
+            "type": "function",
+            "name": "lookup_order",
+            "description": "Look up an order",
+            "parameters": _ORDER_PARAMETERS,
+            "defer_loading": "true",
+        }
+        flag: Final[Mapping[str, JsonValue]] = (
+            {} if isinstance(request_drop_params, EllipsisType) else {"drop_params": request_drop_params}
+        )
+        response: Final = proxy.request(
+            "POST",
+            "/v1/responses",
+            {**opening, "tools": [*rv.ITEMS.validate_python(opening["tools"]), lookup], **flag},
+        )
+        _assert_carries_the_search_call(
+            _Served(_Call("responses", False, marker), response.status_code, response.text, "")
+        )
+        (request,) = _marked_posts(wire.drain(), marker)
+        tools: Final = rv.ITEMS.validate_python(rv.JSON_OBJECT.validate_json(request.body)["tools"])
+        assert tools[0] == dict(_REGEX_TOOL), tools
+        assert [(tool["name"], tool.get("defer_loading")) for tool in tools[1:]] == [
+            ("get_weather", True),
+            ("lookup_order", None),
+        ], tools

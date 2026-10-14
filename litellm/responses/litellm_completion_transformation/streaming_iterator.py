@@ -858,8 +858,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._cached_item_id is None:
             self._cached_item_id = f"msg_{uuid.uuid4()}"
 
-        text: Final = self.litellm_model_response.choices[0].message.content or ""
-        annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)
+        text: Final = litellm_complete_object.choices[0].message.content or ""
+        annotations = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
         response_annotations: Final = (
             LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
