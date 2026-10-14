@@ -718,6 +718,104 @@ def test_chat_completion_claude_platform_override_kwarg_is_honoured_and_not_sent
     assert requests[0]["body"] == {**EXPECTED_CHAT_BODY, "context_management": context_management}
 
 
+EXPLICIT_BREAKPOINT: Final = {"mode": "explicit"}
+EPHEMERAL: Final = {"type": "ephemeral"}
+
+
+def test_chat_completion_claude_platform_sends_prompt_cache_breakpoints_as_cache_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    requests: Final[list[dict]] = []
+
+    litellm.completion(
+        model="bedrock/claude_platform/claude-sonnet-4-6",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "rules", "prompt_cache_breakpoint": EXPLICIT_BREAKPOINT}],
+            },
+            {"role": "user", "content": "hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+        ],
+        max_tokens=10,
+        workspace_id="wrkspc_test",
+        client=_sync_gateway_client(requests),
+        **API_KEY_KWARGS,
+    )
+
+    assert requests[0]["body"]["system"] == [{"type": "text", "text": "rules", "cache_control": EPHEMERAL}]
+    assert requests[0]["body"]["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "hello", "cache_control": EPHEMERAL}]}
+    ]
+
+
+def test_chat_completion_claude_platform_holds_breakpoints_to_four_unless_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    requests: Final[list[dict]] = []
+    request: Final = {
+        "model": "bedrock/claude_platform/claude-sonnet-4-6",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": EXPLICIT_BREAKPOINT}
+                    for index in range(5)
+                ],
+            }
+        ],
+        "max_tokens": 10,
+        "workspace_id": "wrkspc_test",
+        "client": _sync_gateway_client(requests),
+        **API_KEY_KWARGS,
+    }
+
+    with pytest.raises(litellm.BadRequestError, match=r"Claude accepts at most 4 cache breakpoints, found 5"):
+        litellm.completion(**request)
+    assert requests == []
+
+    litellm.completion(**request, drop_params=True)
+
+    assert requests[0]["body"]["messages"][0]["content"] == [
+        {"type": "text", "text": "part 0"},
+        *({"type": "text", "text": f"part {index}", "cache_control": EPHEMERAL} for index in range(1, 5)),
+    ]
+
+
+@pytest.mark.parametrize("source", ["top-level", "extra_body"])
+def test_chat_completion_claude_platform_rejects_prompt_cache_options_unless_drop_params(
+    source: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    requests: Final[list[dict]] = []
+    options: Final = {"prompt_cache_options": EXPLICIT_BREAKPOINT}
+    request: Final = {
+        "model": "bedrock/claude_platform/claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+        "workspace_id": "wrkspc_test",
+        "client": _sync_gateway_client(requests),
+        **(options if source == "top-level" else {"extra_body": options}),
+        **API_KEY_KWARGS,
+    }
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
+        litellm.completion(**request)
+    assert requests == []
+
+    response: Final = litellm.completion(**request, drop_params=True)
+
+    assert response.choices[0].message.content == "ok"
+    assert requests[0]["body"] == EXPECTED_CHAT_BODY
+
+
 def test_fake_claude_platform_gateway_rejects_leaked_internal_fields():
     leaked = json.dumps({**EXPECTED_NATIVE_BODY, "workspace_id": "wrkspc_test", "aws_region_name": "us-west-2"})
     response = _fake_claude_platform_gateway(

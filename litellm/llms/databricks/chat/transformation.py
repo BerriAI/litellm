@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 import httpx
 from pydantic import BaseModel, TypeAdapter
 
-import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
@@ -59,8 +58,10 @@ from litellm.types.utils import (
 from ...anthropic.chat.prompt_cache_breakpoints import (
     PROMPT_CACHE_BREAKPOINT_ON_TOOLS,
     claude_cache_marks,
-    reject_prompt_cache_options,
+    claude_extra_body,
+    drop_params_enabled,
     resolved_claude_cache_marks,
+    resolved_claude_extra_body,
     tools_carry_prompt_cache_breakpoint,
 )
 from ...anthropic.chat.transformation import (
@@ -468,6 +469,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             ),
         )
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        if "claude" not in model:
+            return extra_body
+        return resolved_claude_extra_body(
+            claude_extra_body(extra_body, drop_params=drop_params_enabled(litellm_params)),
+            model=model,
+            llm_provider="databricks",
+        )
+
     def _messages_with_claude_cache_marks(
         self,
         model: str,
@@ -479,16 +495,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         """OpenAI ``prompt_cache_breakpoint`` marks as the ``cache_control`` Databricks forwards to Claude, held to
         Claude's cap, with ``prompt_cache_options`` rejected or dropped. Tool definitions reach Databricks without
         any mark, so only the message marks count toward the cap."""
-        drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
-        reject_prompt_cache_options(
-            model=model, options=optional_params.pop("prompt_cache_options", None), drop_params=drop_params
-        )
         cache_marks: Final = resolved_claude_cache_marks(
             claude_cache_marks(
                 messages=messages,
                 tools=(),
                 automatic_breakpoint=optional_params.get("cache_control") is not None,
-                drop_params=drop_params,
+                drop_params=drop_params_enabled(litellm_params),
+                prompt_cache_options=optional_params.pop("prompt_cache_options", None),
                 tools_carried_breakpoint=tools_carried_breakpoint,
             ),
             model=model,

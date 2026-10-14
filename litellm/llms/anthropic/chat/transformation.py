@@ -114,8 +114,10 @@ from ..common_utils import (
 from .prompt_cache_breakpoints import (
     PROMPT_CACHE_BREAKPOINT_ON_TOOLS,
     claude_cache_marks,
-    reject_prompt_cache_options,
+    claude_extra_body,
+    drop_params_enabled,
     resolved_claude_cache_marks,
+    resolved_claude_extra_body,
     tools_carry_prompt_cache_breakpoint,
 )
 
@@ -1579,6 +1581,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 requested_tools = cast(object, value)  # cast-ok: the loop yields untyped values
                 anthropic_tools, mcp_servers = self._map_tools(
                     list(tools_with_prompt_cache_breakpoints_as_cache_control(requested_tools))
+                    if tools_carry_prompt_cache_breakpoint(requested_tools)
+                    else value
                 )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
@@ -1983,6 +1987,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers=headers,
         )
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return resolved_claude_extra_body(
+            claude_extra_body(extra_body, drop_params=drop_params_enabled(litellm_params)),
+            model=model,
+            llm_provider=self._resolved_provider,
+        )
+
     def transform_request(
         self,
         model: str,
@@ -2023,11 +2040,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
-        drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
             optional_params=optional_params,
-            drop_params=drop_params,
+            drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
             custom_llm_provider=self.custom_llm_provider,
         )
 
@@ -2038,15 +2054,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
         body: Final = cast(dict[str, object], optional_params)  # cast-ok: BaseConfig passes an untyped dict
-        reject_prompt_cache_options(
-            model=model, options=body.pop("prompt_cache_options", None), drop_params=drop_params
-        )
         cache_marks: Final = resolved_claude_cache_marks(
             claude_cache_marks(
                 messages=messages,
                 tools=body.get("tools"),
                 automatic_breakpoint=body.get("cache_control") is not None,
-                drop_params=drop_params,
+                drop_params=drop_params_enabled(litellm_params),
+                prompt_cache_options=body.pop("prompt_cache_options", None),
                 tools_carried_breakpoint=bool(body.pop(PROMPT_CACHE_BREAKPOINT_ON_TOOLS, False)),
             ),
             model=model,

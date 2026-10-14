@@ -873,6 +873,49 @@ async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sourc
     } in captured["body"]["messages"][0]["content"]
 
 
+async def test_bedrock_invoke_claude_holds_extra_body_prompt_cache_options_to_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: Final[list[dict[str, object]]] = []  # mutable-ok: the transport records each request
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    request: Final = {
+        "model": "bedrock/invoke/us.anthropic.claude-sonnet-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "extra_body": {"prompt_cache_options": {"mode": "explicit"}, "top_k": 3},
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "fake-secret",
+        "aws_region_name": "us-east-1",
+        "client": client,
+    }
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
+        await litellm.acompletion(**request)
+    assert bodies == []
+
+    await litellm.acompletion(**request, drop_params=True)
+
+    assert "prompt_cache_options" not in bodies[-1]
+    assert bodies[-1]["top_k"] == 3
+
+
 @pytest.mark.parametrize(
     "model, expected_betas",
     [

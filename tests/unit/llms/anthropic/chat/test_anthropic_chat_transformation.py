@@ -1,5 +1,6 @@
 import copy
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -9085,9 +9086,16 @@ async def test_a_message_level_breakpoint_on_list_content_does_not_count_toward_
     ]
 
 
-def test_map_openai_params_maps_a_tuple_of_tools() -> None:
+@pytest.mark.parametrize(
+    "tools",
+    [
+        pytest.param(lambda tool: (tool,), id="tuple"),
+        pytest.param(lambda tool: iter([tool]), id="iterator"),
+    ],
+)
+def test_map_openai_params_maps_tools_given_as_any_iterable(tools: Callable[[object], object]) -> None:
     optional_params: Final = AnthropicConfig().map_openai_params(
-        non_default_params={"tools": ({"type": "function", "function": _WEATHER_FUNCTION},)},
+        non_default_params={"tools": tools({"type": "function", "function": _WEATHER_FUNCTION})},
         optional_params={},
         model=PROMPT_CACHING_MODEL,
         drop_params=False,

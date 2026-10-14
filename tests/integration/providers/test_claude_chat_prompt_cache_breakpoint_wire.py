@@ -39,10 +39,20 @@ from integration.providers._cache_control_marks_support import (
 )
 from pydantic import BaseModel, ConfigDict, JsonValue
 
-Provider = Literal["anthropic", "bedrock_converse", "bedrock_invoke", "vertex_ai", "azure_ai"]
+Provider = Literal[
+    "anthropic", "bedrock_converse", "bedrock_invoke", "bedrock_claude_platform", "vertex_ai", "azure_ai"
+]
 Site = Literal["tool", "system", "user_part", "tool_call", "tool_result_part", "string_message"]
 
-_PROVIDERS: Final[tuple[Provider, ...]] = ("anthropic", "bedrock_converse", "bedrock_invoke", "vertex_ai", "azure_ai")
+_PROVIDERS: Final[tuple[Provider, ...]] = (
+    "anthropic",
+    "bedrock_converse",
+    "bedrock_invoke",
+    "bedrock_claude_platform",
+    "vertex_ai",
+    "azure_ai",
+)
+_EXTRA_BODY_PROVIDERS: Final[tuple[Provider, ...]] = ("bedrock_invoke", "bedrock_claude_platform", "azure_ai")
 _SITES: Final[tuple[Site, ...]] = ("tool", "system", "user_part", "tool_call", "tool_result_part", "string_message")
 _FIVE_SITES: Final[tuple[Site, ...]] = ("tool", "system", "user_part", "tool_call", "string_message")
 _EXPLICIT: Final[dict[str, JsonValue]] = {"mode": "explicit"}
@@ -59,6 +69,7 @@ _TARGETS: Final[Mapping[Provider, str]] = MappingProxyType(
         "anthropic": "/v1/messages",
         "bedrock_converse": f"/model/{BEDROCK_MODEL}/converse",
         "bedrock_invoke": f"/model/{BEDROCK_MODEL}/invoke",
+        "bedrock_claude_platform": "/v1/messages",
         "vertex_ai": (
             f"/v1/projects/{_VERTEX_PROJECT}/locations/{_VERTEX_LOCATION}"
             f"/publishers/anthropic/models/{ANTHROPIC_MODEL}:rawPredict"
@@ -137,6 +148,14 @@ def _litellm_params(gateway: Gateway, wire: Wire, provider: Provider) -> dict[st
                 "aws_region_name": "us-east-1",
                 "api_base": wire.url,
                 "aws_bedrock_runtime_endpoint": wire.url,
+            }
+        case "bedrock_claude_platform":
+            return {
+                "model": f"bedrock/claude_platform/{ANTHROPIC_MODEL}",
+                "api_base": wire.url,
+                "api_key": PROVIDER_KEY,
+                "workspace_id": "wrkspc_scripted",
+                "aws_region_name": "us-east-1",
             }
         case "vertex_ai":
             return {
@@ -349,6 +368,35 @@ def test_prompt_cache_options_are_a_400_before_any_provider_call_without_drop_pa
     assert "prompt_cache_options" in text, text
     assert "drop_params" in text, text
     assert received == (), [request.target for request in received]
+
+
+@pytest.mark.parametrize("provider", _EXTRA_BODY_PROVIDERS)
+def test_prompt_cache_options_in_extra_body_are_a_400_before_any_provider_call_without_drop_params(
+    gateway: Gateway, provider: Provider
+) -> None:
+    marker: Final = new_marker()
+    extra_body: Final[dict[str, JsonValue]] = {"prompt_cache_options": _EXPLICIT}
+    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire, provider)
+        status, _, text = post_chat(gateway, _body(model, marker, _marked(("user_part",)), extra_body=extra_body))
+        received: Final = wire.drain()
+    assert status == 400, text
+    assert "prompt_cache_options" in text, text
+    assert "drop_params" in text, text
+    assert received == (), [request.target for request in received]
+
+
+@pytest.mark.parametrize("provider", _EXTRA_BODY_PROVIDERS)
+def test_prompt_cache_options_in_extra_body_are_dropped_under_drop_params(gateway: Gateway, provider: Provider) -> None:
+    marker: Final = new_marker()
+    extra_body: Final[dict[str, JsonValue]] = {"prompt_cache_options": _EXPLICIT}
+    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire, provider, drop_params=True)
+        status, _, text = post_chat(gateway, _body(model, marker, _marked(("user_part",)), extra_body=extra_body))
+        assert status == 200, text
+        request: Final = _only_request(wire)
+    assert b"prompt_cache_options" not in request.body, request.body
+    assert _labels(provider, request) == [ASK_LABEL]
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS)

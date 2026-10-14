@@ -7,11 +7,15 @@ has no Claude equivalent and is rejected or dropped like any other unsupported p
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
-from typing import Final, Literal, TypeAlias, assert_never
+from typing import Final, Literal, NoReturn, TypeAlias
 
+from typing_extensions import assert_never
+
+import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     message_fields,
     message_without_cache_control_marks,
@@ -35,6 +39,19 @@ class ClaudeCacheMarks:
 @dataclass(frozen=True, slots=True)
 class CacheBreakpointCapExceeded:
     found: int
+
+
+@dataclass(frozen=True, slots=True)
+class PromptCacheOptionsUnsupported:
+    options: object
+
+
+ClaudeCacheRefusal: TypeAlias = CacheBreakpointCapExceeded | PromptCacheOptionsUnsupported
+
+
+def drop_params_enabled(litellm_params: Mapping[str, object]) -> bool:
+    """``drop_params`` from the global setting, or from the request or deployment (both arrive in ``litellm_params``)."""
+    return bool(litellm.drop_params) or normalize_drop_params(litellm_params.get("drop_params")) is True
 
 
 def _as_mapping(value: object) -> Mapping[str, object] | None:
@@ -150,23 +167,37 @@ def _message_without(index: int, message: AllMessageValues, dropped: frozenset[_
     )
 
 
+def _prompt_cache_options_refusal(options: object, drop_params: bool) -> PromptCacheOptionsUnsupported | None:
+    if options is None:
+        return None
+    if not drop_params:
+        return PromptCacheOptionsUnsupported(options)
+    verbose_logger.debug("Dropping prompt_cache_options=%r: Claude caches through cache_control.", options)
+    return None
+
+
 def claude_cache_marks(
     messages: Sequence[AllMessageValues],
     tools: object,
     *,
     automatic_breakpoint: bool,
     drop_params: bool,
+    prompt_cache_options: object = None,
     tools_carried_breakpoint: bool = False,
     wire: ClaudeWire = "anthropic",
-) -> ClaudeCacheMarks | CacheBreakpointCapExceeded:
+) -> ClaudeCacheMarks | ClaudeCacheRefusal:
     """The request's ``prompt_cache_breakpoint`` marks renamed to ``cache_control`` and, when it carried any, held to
     Claude's cap: ``drop_params`` keeps the latest four in wire order, otherwise the excess is reported. A request
     that carried none is forwarded as written so the provider's own answer reaches the client.
 
-    ``automatic_breakpoint`` is the request-level ``cache_control`` (Anthropic's automatic caching), which takes one
-    slot of its own and is never dropped. ``tools_carried_breakpoint`` covers tools already mapped to Anthropic's
-    shape, where the mark was renamed before this census ran. ``wire`` is the body the marks are rendered into, so
-    the count matches the breakpoints the provider receives."""
+    ``prompt_cache_options`` has no Claude equivalent: the caller has already taken it out of the request, and it is
+    reported unless ``drop_params``. ``automatic_breakpoint`` is the request-level ``cache_control`` (Anthropic's
+    automatic caching), which takes one slot of its own and is never dropped. ``tools_carried_breakpoint`` covers
+    tools already mapped to Anthropic's shape, where the mark was renamed before this census ran. ``wire`` is the
+    body the marks are rendered into, so the count matches the breakpoints the provider receives."""
+    options_refusal: Final = _prompt_cache_options_refusal(prompt_cache_options, drop_params)
+    if options_refusal is not None:
+        return options_refusal
     listed_tools: Final = _as_blocks(tools) or ()
     if not tools_carried_breakpoint and not _sites(messages, listed_tools, "prompt_cache_breakpoint", wire):
         return ClaudeCacheMarks(tuple(messages), tuple(listed_tools))
@@ -194,12 +225,20 @@ def claude_cache_marks(
     )
 
 
-def resolved_claude_cache_marks(
-    outcome: ClaudeCacheMarks | CacheBreakpointCapExceeded, model: str, llm_provider: str
-) -> ClaudeCacheMarks:
-    match outcome:
-        case ClaudeCacheMarks():
-            return outcome
+def claude_extra_body(
+    extra_body: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object] | PromptCacheOptionsUnsupported:
+    """``extra_body`` merged into a Claude body, held to the same ``prompt_cache_options`` rule as the request."""
+    refusal: Final = _prompt_cache_options_refusal(extra_body.get("prompt_cache_options"), drop_params)
+    if refusal is not None:
+        return refusal
+    if "prompt_cache_options" not in extra_body:
+        return extra_body
+    return {key: value for key, value in extra_body.items() if key != "prompt_cache_options"}
+
+
+def raise_claude_cache_refusal(refusal: ClaudeCacheRefusal, model: str, llm_provider: str) -> NoReturn:
+    match refusal:
         case CacheBreakpointCapExceeded(found=found):
             raise BadRequestError(
                 message=(
@@ -209,25 +248,31 @@ def resolved_claude_cache_marks(
                 model=model,
                 llm_provider=llm_provider,
             )
+        case PromptCacheOptionsUnsupported(options=options):
+            raise UnsupportedParamsError(
+                message=(
+                    f"{model} does not support prompt_cache_options={options!r}. It caches through cache_control "
+                    "marks (or prompt_cache_breakpoint on the OpenAI dialect). To drop unsupported params, set "
+                    "`litellm.drop_params = True`."
+                ),
+                model=model,
+                status_code=400,
+            )
         case _:
-            assert_never(outcome)
+            assert_never(refusal)
 
 
-def reject_prompt_cache_options(model: str, options: object, drop_params: bool) -> None:
-    """``prompt_cache_options`` has already been popped from the request; this decides whether that was allowed."""
-    if options is None:
-        return
-    if drop_params:
-        verbose_logger.debug(
-            "Dropping prompt_cache_options=%r for %s: Claude caches through cache_control.", options, model
-        )
-        return
-    raise UnsupportedParamsError(
-        message=(
-            f"{model} does not support prompt_cache_options={options!r}. Claude caches through cache_control "
-            "marks (or prompt_cache_breakpoint on the OpenAI dialect). To drop unsupported params, set "
-            "`litellm.drop_params = True`."
-        ),
-        model=model,
-        status_code=400,
-    )
+def resolved_claude_cache_marks(
+    outcome: ClaudeCacheMarks | ClaudeCacheRefusal, model: str, llm_provider: str
+) -> ClaudeCacheMarks:
+    if isinstance(outcome, ClaudeCacheMarks):
+        return outcome
+    raise_claude_cache_refusal(outcome, model=model, llm_provider=llm_provider)
+
+
+def resolved_claude_extra_body(
+    outcome: Mapping[str, object] | PromptCacheOptionsUnsupported, model: str, llm_provider: str
+) -> Mapping[str, object]:
+    if isinstance(outcome, PromptCacheOptionsUnsupported):
+        raise_claude_cache_refusal(outcome, model=model, llm_provider=llm_provider)
+    return outcome

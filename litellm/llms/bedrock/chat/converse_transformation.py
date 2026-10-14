@@ -46,7 +46,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
     claude_cache_marks,
-    reject_prompt_cache_options,
+    drop_params_enabled,
     resolved_claude_cache_marks,
 )
 from litellm.llms.anthropic.chat.transformation import (
@@ -57,7 +57,6 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
 from litellm.llms.bedrock.request_metadata import (
@@ -2018,31 +2017,25 @@ class AmazonConverseConfig(BaseConfig):
 
         return data
 
-    def _messages_with_claude_cache_marks(
+    def _messages_with_prompt_cache_breakpoints(
         self,
         model: str,
         messages: Sequence[AllMessageValues],
         optional_params: dict[str, object],  # mutable-ok: the request body is built from this out-param
         litellm_params: Mapping[str, object],
     ) -> tuple[AllMessageValues, ...]:
-        """On Claude, OpenAI ``prompt_cache_breakpoint`` marks as ``cache_control`` so the factory emits
-        ``cachePoint`` blocks, held to Claude's cap, with ``prompt_cache_options`` rejected or dropped. A Claude model
-        that never emits ``cachePoint`` blocks keeps its marks as written. Other models are left as they are."""
-        if BaseAWSLLM.get_bedrock_invoke_provider(model) != "anthropic":
-            return tuple(messages)
-        emits_cache_points: Final = bedrock_model_accepts_cache_points(model)
-        drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
-        reject_prompt_cache_options(
-            model=model, options=optional_params.pop("prompt_cache_options", None), drop_params=drop_params
-        )
-        if not emits_cache_points:
+        """On a model that takes ``cachePoint`` blocks, OpenAI ``prompt_cache_breakpoint`` marks as ``cache_control``
+        so the factory emits them, held to the cap of four, with ``prompt_cache_options`` rejected or dropped. Any
+        other model gets the request as written."""
+        if not bedrock_model_accepts_cache_points(model):
             return tuple(messages)
         cache_marks: Final = resolved_claude_cache_marks(
             claude_cache_marks(
                 messages=messages,
                 tools=optional_params.get("tools"),
                 automatic_breakpoint=optional_params.get("cache_control") is not None,
-                drop_params=drop_params,
+                drop_params=drop_params_enabled(litellm_params),
+                prompt_cache_options=optional_params.pop("prompt_cache_options", None),
                 wire="bedrock_converse",
             ),
             model=model,
@@ -2063,7 +2056,7 @@ class AmazonConverseConfig(BaseConfig):
         body: Final = cast(dict[str, object], optional_params)  # cast-ok: BaseConfig passes an untyped dict
         params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: BaseConfig passes an untyped dict
         messages, system_content_blocks = self._transform_system_message(
-            list(self._messages_with_claude_cache_marks(model, messages, body, params)), model=model
+            list(self._messages_with_prompt_cache_breakpoints(model, messages, body, params)), model=model
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
@@ -2135,7 +2128,7 @@ class AmazonConverseConfig(BaseConfig):
         body: Final = cast(dict[str, object], optional_params)  # cast-ok: BaseConfig passes an untyped dict
         params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: BaseConfig passes an untyped dict
         messages, system_content_blocks = self._transform_system_message(
-            list(self._messages_with_claude_cache_marks(model, messages, body, params)), model=model
+            list(self._messages_with_prompt_cache_breakpoints(model, messages, body, params)), model=model
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present

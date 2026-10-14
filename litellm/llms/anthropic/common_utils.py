@@ -106,7 +106,6 @@ _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
-CACHE_MARK_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 _CLAUDE_CODE_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
@@ -462,15 +461,18 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     _workload_identity_eligible: ClassVar[bool] = True
 
     def is_cache_control_set(self, messages: list[AllMessageValues]) -> bool:
-        """Whether a message or one of its content blocks carries a cache mark, Anthropic's ``cache_control`` or
-        OpenAI's ``prompt_cache_breakpoint`` (which the chat transform renames on the way to Claude)."""
+        """
+        Return if {"cache_control": ..} in message content block
+
+        Used to check if anthropic prompt caching headers need to be set.
+        """
         for message in messages:
-            if any(message.get(key) is not None for key in CACHE_MARK_KEYS):
+            if message.get("cache_control", None) is not None:
                 return True
             _message_content = message.get("content")
             if _message_content is not None and isinstance(_message_content, list):
                 for content in _message_content:
-                    if isinstance(content, dict) and any(key in content for key in CACHE_MARK_KEYS):
+                    if isinstance(content, dict) and "cache_control" in content:
                         return True
 
         return False

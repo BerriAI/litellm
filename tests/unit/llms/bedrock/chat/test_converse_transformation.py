@@ -10293,19 +10293,12 @@ async def test_six_breakpoints_are_a_bad_request_without_drop_params(
         await _breakpoint_request(sync_mode, {"tools": [{**_LOOKUP_TOOL, "prompt_cache_breakpoint": _EXPLICIT}]}, {})
 
 
-@pytest.mark.parametrize("emits_cache_points", [True, False], ids=["cache-points", "no-cache-points"])
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
 @pytest.mark.asyncio
 async def test_prompt_cache_options_are_rejected_unless_drop_params(
-    sync_mode: bool, emits_cache_points: bool, monkeypatch: pytest.MonkeyPatch
+    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
-    if not emits_cache_points:
-        monkeypatch.setitem(
-            litellm.model_cost,
-            _BREAKPOINT_MODEL,
-            {"litellm_provider": "bedrock", "mode": "chat", "supports_prompt_cache_breakpoint": False},
-        )
 
     with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
         await _breakpoint_request(sync_mode, {"prompt_cache_options": {"mode": "explicit"}}, {})
@@ -10317,6 +10310,54 @@ async def test_prompt_cache_options_are_rejected_unless_drop_params(
     monkeypatch.setattr(litellm, "drop_params", True)
     dropped_globally: Final = await _breakpoint_request(sync_mode, {"prompt_cache_options": {"mode": "explicit"}}, {})
     assert "prompt_cache_options" not in json.dumps(dropped_globally)
+
+
+_INFERENCE_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_an_inference_profile_arn_gets_cache_points_and_the_prompt_cache_options_rule(
+    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _EXPLICIT}]}
+    ]
+
+    result: Final = await _breakpoint_converse_request(sync_mode, _INFERENCE_PROFILE_ARN, messages)
+
+    assert result["messages"] == [{"role": "user", "content": [{"text": "hi"}, _CACHE_POINT]}]
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
+        await _breakpoint_converse_request(
+            sync_mode, _INFERENCE_PROFILE_ARN, messages, optional_params={"prompt_cache_options": _EXPLICIT}
+        )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_a_model_without_cache_points_gets_the_request_as_written(
+    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        _BREAKPOINT_MODEL,
+        {"litellm_provider": "bedrock", "mode": "chat", "supports_prompt_cache_breakpoint": False},
+    )
+    marked: Final = [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": _EXPLICIT} for index in range(5)
+    ]
+
+    result: Final = await _breakpoint_converse_request(
+        sync_mode,
+        _BREAKPOINT_MODEL,
+        [{"role": "user", "content": marked}],
+        optional_params={"prompt_cache_options": {"mode": "implicit"}},
+    )
+
+    assert result["messages"] == [{"role": "user", "content": [{"text": f"part {index}"} for index in range(5)]}]
+    assert result["additionalModelRequestFields"] == {"prompt_cache_options": {"mode": "implicit"}}
 
 
 def test_the_automatic_cache_control_takes_one_of_the_four_cache_points() -> None:
@@ -10427,20 +10468,3 @@ async def test_a_tool_result_with_two_marked_parts_is_one_cache_point_within_the
             ],
         },
     ]
-
-
-@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
-@pytest.mark.asyncio
-async def test_prompt_cache_options_on_a_non_claude_converse_model_are_forwarded_as_before(
-    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-
-    result: Final = await _breakpoint_converse_request(
-        sync_mode,
-        "us.amazon.nova-pro-v1:0",
-        [{"role": "user", "content": "hi"}],
-        optional_params={"prompt_cache_options": {"mode": "implicit"}},
-    )
-
-    assert result["additionalModelRequestFields"] == {"prompt_cache_options": {"mode": "implicit"}}

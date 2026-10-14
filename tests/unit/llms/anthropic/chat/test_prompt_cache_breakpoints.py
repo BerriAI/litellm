@@ -6,9 +6,12 @@ import litellm
 from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
     CacheBreakpointCapExceeded,
     ClaudeCacheMarks,
+    PromptCacheOptionsUnsupported,
     claude_cache_marks,
-    reject_prompt_cache_options,
+    claude_extra_body,
+    drop_params_enabled,
     resolved_claude_cache_marks,
+    resolved_claude_extra_body,
     tools_carry_prompt_cache_breakpoint,
 )
 
@@ -327,15 +330,68 @@ def test_marks_within_the_cap_resolve_to_themselves() -> None:
     assert resolved_claude_cache_marks(marks, model=MODEL, llm_provider="anthropic") is marks
 
 
-def test_prompt_cache_options_are_rejected_unless_drop_params() -> None:
+def test_prompt_cache_options_are_reported_before_the_marks_unless_drop_params() -> None:
+    messages, tools = _six_breakpoints()
+
+    assert claude_cache_marks(
+        messages, tools, automatic_breakpoint=False, drop_params=False, prompt_cache_options=EXPLICIT
+    ) == PromptCacheOptionsUnsupported(EXPLICIT)
+    kept: Final = claude_cache_marks(
+        messages, tools, automatic_breakpoint=False, drop_params=True, prompt_cache_options=EXPLICIT
+    )
+    assert isinstance(kept, ClaudeCacheMarks)
+    assert claude_cache_marks(messages, tools, automatic_breakpoint=False, drop_params=True) == kept
+
+
+def test_the_prompt_cache_options_error_is_an_unsupported_param_naming_drop_params() -> None:
     with pytest.raises(litellm.UnsupportedParamsError) as caught:
-        reject_prompt_cache_options(model=MODEL, options={"mode": "explicit"}, drop_params=False)
+        resolved_claude_cache_marks(PromptCacheOptionsUnsupported(EXPLICIT), model=MODEL, llm_provider="anthropic")
 
     assert "prompt_cache_options" in str(caught.value)
     assert "drop_params" in str(caught.value)
     assert caught.value.status_code == 400
-    assert reject_prompt_cache_options(model=MODEL, options={"mode": "explicit"}, drop_params=True) is None
-    assert reject_prompt_cache_options(model=MODEL, options=None, drop_params=False) is None
+
+
+@pytest.mark.parametrize(
+    ("extra_body", "drop_params", "expected"),
+    [
+        ({"metadata": {"a": 1}}, False, {"metadata": {"a": 1}}),
+        ({"metadata": {"a": 1}, "prompt_cache_options": EXPLICIT}, True, {"metadata": {"a": 1}}),
+        ({"metadata": {"a": 1}, "prompt_cache_options": EXPLICIT}, False, PromptCacheOptionsUnsupported(EXPLICIT)),
+    ],
+    ids=["no-options", "dropped", "rejected"],
+)
+def test_extra_body_follows_the_prompt_cache_options_rule(
+    extra_body: dict[str, object], drop_params: bool, expected: object
+) -> None:
+    assert claude_extra_body(extra_body, drop_params=drop_params) == expected
+
+
+def test_a_rejected_extra_body_raises_and_an_accepted_one_resolves_to_itself() -> None:
+    body: Final = {"metadata": {"a": 1}}
+
+    assert resolved_claude_extra_body(body, model=MODEL, llm_provider="anthropic") is body
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
+        resolved_claude_extra_body(PromptCacheOptionsUnsupported(EXPLICIT), model=MODEL, llm_provider="anthropic")
+
+
+@pytest.mark.parametrize(
+    ("global_drop", "litellm_params", "expected"),
+    [
+        (False, {}, False),
+        (True, {}, True),
+        (False, {"drop_params": True}, True),
+        (False, {"drop_params": "true"}, True),
+        (False, {"drop_params": False}, False),
+    ],
+    ids=["off", "global", "request", "request-string", "request-false"],
+)
+def test_drop_params_enabled_reads_the_global_and_the_request(
+    global_drop: bool, litellm_params: dict[str, object], expected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop)
+
+    assert drop_params_enabled(litellm_params) is expected
 
 
 @pytest.mark.parametrize(
