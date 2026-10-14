@@ -8559,7 +8559,7 @@ def speech(
         if api_key is not None:
             litellm_params_dict["api_key"] = api_key
 
-        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch  # pyright: ignore[reportUnknownMemberType]  # untyped shared TTS handler, as for every provider branch
             model=model,
             input=input,
             voice=gradium_voice_id,
@@ -8569,8 +8569,8 @@ def speech(
             litellm_params=litellm_params_dict,
             logging_obj=logging_obj,
             timeout=http_timeout,
-            extra_headers=extra_headers,
-            client=client,
+            extra_headers=extra_headers,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
+            client=client,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
             _is_async=aspeech or False,
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":

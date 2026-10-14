@@ -188,6 +188,23 @@ def test_omits_model_name_for_the_default_model():
     assert "model_name" not in data["dict_body"]
 
 
+def test_merges_extra_body_into_the_request_and_skips_none_values():
+    config = GradiumTextToSpeechConfig()
+
+    data = config.transform_text_to_speech_request(
+        model="default",
+        input="bonjour",
+        voice="YTpq7expH9539ERJ",
+        optional_params={"extra_body": {"json_config": '{"padding_bonus": -1.2}', "unset": None}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert data["dict_body"]["json_config"] == '{"padding_bonus": -1.2}'
+    assert "unset" not in data["dict_body"]
+    assert "extra_body" not in data["dict_body"]
+
+
 def test_raises_on_gradium_plain_text_errors():
     config = GradiumTextToSpeechConfig()
     raw_response = httpx.Response(
