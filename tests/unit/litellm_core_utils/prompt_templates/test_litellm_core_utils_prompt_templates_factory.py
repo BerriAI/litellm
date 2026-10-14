@@ -59,6 +59,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import get_completion_messages
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
+from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -409,6 +410,56 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     # toolUse blocks must still be present
     tool_use_blocks = [b for b in assistant_blocks[0]["content"] if "toolUse" in b]
     assert len(tool_use_blocks) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(use_async: bool, placement: str):
+    """A redacted_thinking block that Bedrock returned must go back as reasoningContent.redactedContent,
+    in order, ahead of text and toolUse. It used to collapse into an empty unsigned reasoningText and get dropped."""
+    bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
+        {"reasoningText": {"text": "Let me look this up.", "signature": "sig-abc"}},
+        {"redactedContent": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"},
+    ]
+    thinking_blocks: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
+    assistant_text: Final = "Checking the weather."
+    assistant_message: Final = (
+        {"role": "assistant", "content": assistant_text, "thinking_blocks": thinking_blocks}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [*thinking_blocks, {"type": "text", "text": assistant_text}]}
+    )
+    messages: Final = [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {
+            **assistant_message,
+            "tool_calls": [
+                {
+                    "id": "tooluse_weather_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tooluse_weather_1", "content": "18C, sunny"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [
+        {"reasoningContent": bedrock_reasoning_blocks[0]},
+        {"reasoningContent": bedrock_reasoning_blocks[1]},
+        {"text": assistant_text},
+        {"toolUse": {"toolUseId": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}}},
+    ]
 
 
 @pytest.mark.parametrize(
