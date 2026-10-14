@@ -2,13 +2,22 @@ import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -211,6 +220,131 @@ def test_vector_store_create_forwards_chunking_strategy_on_sdk_and_alias_routes(
             ("POST", "/v1/vector_stores"),
         ]
         for request in requests:
+            _assert_create_request(request, ["file-wire-create"], provider_key)
+            body: Final = JSON_OBJECT.validate_json(request.body)
+            metadata_value: Final = body.get("metadata")
+            assert metadata_value is not None, request.body.decode()
+            metadata: Final = object_value(metadata_value)
+            assert metadata.get("team") == "blue", request.body.decode()
+
+
+def test_vector_store_create_routes_by_the_model_query_parameter(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: vector store create ignores the ?model= query parameter and falls through to the default openai provider"
+    )
+
+    provider_key: Final = f"provider-query-{uuid.uuid4().hex}"
+    expected_sdk_response: Final = {
+        "id": "vs_query_model",
+        "object": "vector_store",
+        "created_at": 1700000000,
+        "name": _CREATE_FIELDS["name"],
+        "file_counts": {
+            "in_progress": 0,
+            "completed": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "total": 1,
+        },
+        "status": "completed",
+        "usage_bytes": 12,
+        "expires_after": _CREATE_FIELDS["expires_after"],
+        "expires_at": None,
+        "last_active_at": None,
+        "metadata": _CREATE_FIELDS["metadata"],
+    }
+
+    def respond(_: Request) -> Reply:
+        return _vector_store_reply("vs_query_model")
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire.url, provider_key)
+        _wait_until_every_worker_serves(gateway, model)
+        wire.drain()
+        with OpenAI(
+            base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1",
+            api_key=gateway.key,
+            http_client=httpx.Client(trust_env=False),
+            max_retries=0,
+        ) as client:
+            sdk_response: Final = client.vector_stores.create(
+                name=str(_CREATE_FIELDS["name"]),
+                file_ids=["file-wire-create"],
+                expires_after={"anchor": "last_active_at", "days": 7},
+                chunking_strategy=_CHUNKING,
+                metadata={"team": "blue"},
+                extra_query={"model": model},
+            )
+            assert sdk_response.model_dump(exclude_unset=True) == expected_sdk_response
+        requests: Final = wire.drain()
+        assert [(request.method, urlsplit(request.target).path) for request in requests] == [
+            ("POST", "/v1/vector_stores")
+        ]
+        (request,) = requests
+        _assert_create_request(request, ["file-wire-create"], provider_key)
+        body: Final = JSON_OBJECT.validate_json(request.body)
+        metadata_value: Final = body.get("metadata")
+        assert metadata_value is not None, request.body.decode()
+        metadata: Final = object_value(metadata_value)
+        assert metadata.get("team") == "blue", request.body.decode()
+
+
+def test_vector_store_create_without_model_uses_the_default_openai_credentials(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    provider_key: Final = f"provider-default-{uuid.uuid4().hex}"
+    expected_sdk_response: Final = {
+        "id": "vs_default_openai",
+        "object": "vector_store",
+        "created_at": 1700000000,
+        "name": _CREATE_FIELDS["name"],
+        "file_counts": {
+            "in_progress": 0,
+            "completed": 1,
+            "failed": 0,
+            "cancelled": 0,
+            "total": 1,
+        },
+        "status": "completed",
+        "usage_bytes": 12,
+        "expires_after": _CREATE_FIELDS["expires_after"],
+        "expires_at": None,
+        "last_active_at": None,
+        "metadata": _CREATE_FIELDS["metadata"],
+    }
+
+    def respond(_: Request) -> Reply:
+        return _vector_store_reply("vs_default_openai")
+
+    with (
+        gateway_from_environment() as upstream_gateway,
+        wire_server(respond) as wire,
+    ):
+        with owned_proxy(
+            upstream_gateway,
+            tmp_path,
+            {"OPENAI_BASE_URL": f"{wire.url}/v1", "OPENAI_API_KEY": provider_key},
+            remove_environment=("OPENAI_API_BASE",),
+        ) as owned:
+            with OpenAI(
+                base_url=f"{str(owned.client.base_url).rstrip('/')}/v1",
+                api_key=owned.key,
+                http_client=httpx.Client(trust_env=False),
+                max_retries=0,
+            ) as client:
+                sdk_response: Final = client.vector_stores.create(
+                    name=str(_CREATE_FIELDS["name"]),
+                    file_ids=["file-wire-create"],
+                    expires_after={"anchor": "last_active_at", "days": 7},
+                    chunking_strategy=_CHUNKING,
+                    metadata={"team": "blue"},
+                )
+                assert sdk_response.model_dump(exclude_unset=True) == expected_sdk_response
+            requests: Final = wire.drain()
+            assert [(request.method, urlsplit(request.target).path) for request in requests] == [
+                ("POST", "/v1/vector_stores")
+            ]
+            (request,) = requests
             _assert_create_request(request, ["file-wire-create"], provider_key)
             body: Final = JSON_OBJECT.validate_json(request.body)
             metadata_value: Final = body.get("metadata")
