@@ -65,7 +65,7 @@ def session_keys_from_master_key(master_key: str) -> SessionKeys:
 @lru_cache(maxsize=8)
 def _legacy_session_keys(master_key: str) -> SessionKeys | None:
     """The pre-rotation scrypt signing key, kept so session tokens minted before the KDF
-    rotation can still be opened during the opt-in grace window. ``None`` when scrypt is
+    rotation can still be opened during the default-on grace window. ``None`` when scrypt is
     unavailable."""
     signing: Final = legacy_scrypt(master_key, _SESSION_SIGNING_KEY_DOMAIN)
     if signing is None:
@@ -78,7 +78,7 @@ def legacy_session_keys_from_master_key(
     active: SessionSigningKeys,
     environ: Callable[[str], str | None] = os.environ.get,
 ) -> SessionKeys | None:
-    """The legacy session key when the operator enabled the KDF grace window, else ``None``.
+    """The legacy session key unless the operator explicitly disabled the KDF grace window.
 
     The fallback only applies to the default master-key HS256 path: a configured
     ``mcp_session_token_signing`` RS256 key was never scrypt-derived, so an

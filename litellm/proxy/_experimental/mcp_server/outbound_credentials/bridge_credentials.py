@@ -67,7 +67,7 @@ def envelope_keys_from_master_key(master_key: str) -> EnvelopeKeys:
 @lru_cache(maxsize=8)
 def _legacy_envelope_keys(master_key: str) -> EnvelopeKeys | None:
     """The pre-rotation scrypt subkeys, kept so envelopes minted before the KDF rotation
-    can still be opened during the opt-in grace window. ``None`` when scrypt is unavailable."""
+    can still be opened during the default-on grace window. ``None`` when scrypt is unavailable."""
     signing: Final = legacy_scrypt(master_key, _SIGNING_KEY_DOMAIN)
     encryption: Final = legacy_scrypt(master_key, _ENCRYPTION_KEY_DOMAIN)
     if signing is None or encryption is None:
@@ -78,7 +78,7 @@ def _legacy_envelope_keys(master_key: str) -> EnvelopeKeys | None:
 def legacy_envelope_keys_from_master_key(
     master_key: str, environ: Callable[[str], str | None] = os.environ.get
 ) -> EnvelopeKeys | None:
-    """The legacy envelope keys when the operator enabled the KDF grace window, else ``None``."""
+    """The legacy envelope keys unless the operator explicitly disabled the KDF grace window."""
     if not legacy_kdf_grace_enabled(environ):
         return None
     return _legacy_envelope_keys(master_key)
