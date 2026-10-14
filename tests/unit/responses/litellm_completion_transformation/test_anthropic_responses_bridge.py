@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -365,3 +365,192 @@ def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(res
     assert deltas == "Argentina won."
     assert completed.response.status == "completed"
     assert completed.response.output[0].content[0].text == "Argentina won."
+
+
+_CLAUDE: Final = "anthropic/claude-haiku-5-5"
+_BREAKPOINT: Final[Mapping[str, object]] = {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}
+_CACHE_CONTROL: Final[Mapping[str, object]] = {"cache_control": {"type": "ephemeral"}}
+_EPHEMERAL: Final = {"type": "ephemeral"}
+
+
+class _MarkedBlock(BaseModel, frozen=True):
+    type: str
+    text: str | None = None
+    tool_use_id: str | None = None
+    cache_control: dict[str, str] | None = None
+
+
+class _MarkedMessage(BaseModel, frozen=True):
+    role: str
+    content: str | tuple[_MarkedBlock, ...]
+
+
+class _MarkedRequest(BaseModel, frozen=True):
+    system: str | tuple[_MarkedBlock, ...] = ()
+    messages: tuple[_MarkedMessage, ...]
+
+
+def _block_label(role: str, block: _MarkedBlock) -> str:
+    return f"{role}:{block.type}:{block.text if block.text is not None else block.tool_use_id}"
+
+
+def _labelled_blocks(request: _MarkedRequest) -> Iterator[tuple[str, _MarkedBlock]]:
+    yield from (("system", block) for block in (request.system if isinstance(request.system, tuple) else ()))
+    for message in request.messages:
+        yield from ((message.role, block) for block in (message.content if isinstance(message.content, tuple) else ()))
+
+
+def _cache_marks(body: bytes) -> list[tuple[str, dict[str, str]]]:
+    return [
+        (_block_label(role, block), block.cache_control)
+        for role, block in _labelled_blocks(_MarkedRequest.model_validate_json(body))
+        if block.cache_control is not None
+    ]
+
+
+def _claude_reply() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_cached",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "sunny"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+
+def _input_text(text: str, mark: Mapping[str, object] | None = None) -> dict[str, object]:
+    return {"type": "input_text", "text": text, **(mark or {})}
+
+
+def _tool_output(output: object, mark: Mapping[str, object] | None = None) -> dict[str, object]:
+    return {"type": "function_call_output", "call_id": "call_1", "output": output, **(mark or {})}
+
+
+def _history(
+    developer: Mapping[str, object] | None = None,
+    ask: Mapping[str, object] | None = None,
+    more: Mapping[str, object] | None = None,
+    tool_output: Mapping[str, object] | None = None,
+    final: Mapping[str, object] | None = None,
+) -> list[object]:
+    return [
+        {"type": "message", "role": "developer", "content": [_input_text("Rules", developer)]},
+        {"role": "user", "content": [_input_text("Ask", ask), _input_text("More", more)]},
+        {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+        _tool_output("sunny", tool_output),
+        {"role": "user", "content": "Final", **(final or {})},
+    ]
+
+
+_FIVE_BREAKPOINTS: Final = _history(
+    developer=_BREAKPOINT, ask=_BREAKPOINT, more=_BREAKPOINT, tool_output=_BREAKPOINT, final=_BREAKPOINT
+)
+
+
+def _responses_to_claude(respx_mock: respx.MockRouter, input: list[object], **params: object) -> bytes:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_claude_reply())
+    litellm.responses(model=_CLAUDE, input=input, api_key="sk-ant-fake", **params)
+    return route.calls.last.request.content
+
+
+@pytest.mark.parametrize("mark", (_BREAKPOINT, _CACHE_CONTROL), ids=("prompt_cache_breakpoint", "cache_control"))
+@pytest.mark.parametrize(
+    ("site", "label"),
+    (
+        ("developer", "system:text:Rules"),
+        ("ask", "user:text:Ask"),
+        ("tool_output", "user:tool_result:call_1"),
+        ("final", "user:text:Final"),
+    ),
+)
+def test_a_responses_cache_mark_reaches_claude_as_cache_control_on_the_same_block(
+    respx_mock: respx.MockRouter, mark: Mapping[str, object], site: str, label: str
+) -> None:
+    body: Final = _responses_to_claude(respx_mock, _history(**{site: mark}))
+
+    assert _cache_marks(body) == [(label, _EPHEMERAL)]
+    assert b"prompt_cache_breakpoint" not in body
+    assert b"30m" not in body
+
+
+@pytest.mark.parametrize(
+    "tool_output",
+    (
+        _tool_output([_input_text("cloudy"), _input_text("sunny", _BREAKPOINT)]),
+        _tool_output([_input_text("cloudy"), _input_text("sunny")], _BREAKPOINT),
+    ),
+    ids=("mark-on-a-part", "mark-on-the-item"),
+)
+def test_a_marked_part_list_tool_output_caches_its_tool_result_on_claude(
+    respx_mock: respx.MockRouter, tool_output: Mapping[str, object]
+) -> None:
+    body: Final = _responses_to_claude(respx_mock, [*_history()[:3], tool_output])
+
+    assert _cache_marks(body) == [("user:tool_result:call_1", _EPHEMERAL)]
+
+
+def test_a_responses_request_without_marks_reaches_claude_without_cache_control(respx_mock: respx.MockRouter) -> None:
+    assert b"cache_control" not in _responses_to_claude(respx_mock, _history())
+
+
+def test_five_responses_breakpoints_keep_the_latest_four_on_claude_under_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    body: Final = _responses_to_claude(respx_mock, _FIVE_BREAKPOINTS, drop_params=True)
+
+    assert [label for label, _ in _cache_marks(body)] == [
+        "user:text:Ask",
+        "user:text:More",
+        "user:tool_result:call_1",
+        "user:text:Final",
+    ]
+
+
+def test_five_responses_breakpoints_are_a_400_before_any_claude_call_without_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_claude_reply())
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.responses(model=_CLAUDE, input=_FIVE_BREAKPOINTS, api_key="sk-ant-fake")
+
+    assert raised.value.status_code == 400
+    assert "Claude accepts at most 4 cache breakpoints, found 5" in str(raised.value)
+    assert "drop_params" in str(raised.value)
+    assert route.call_count == 0
+
+
+def test_responses_prompt_cache_options_toward_claude_are_a_400_before_any_call_without_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_claude_reply())
+
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        litellm.responses(
+            model=_CLAUDE,
+            input=_history(ask=_BREAKPOINT),
+            prompt_cache_options={"mode": "explicit"},
+            api_key="sk-ant-fake",
+        )
+
+    assert raised.value.status_code == 400
+    assert "prompt_cache_options" in str(raised.value)
+    assert "drop_params" in str(raised.value)
+    assert route.call_count == 0
+
+
+def test_responses_prompt_cache_options_toward_claude_are_dropped_under_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    body: Final = _responses_to_claude(
+        respx_mock, _history(ask=_BREAKPOINT), prompt_cache_options={"mode": "explicit"}, drop_params=True
+    )
+
+    assert b"prompt_cache_options" not in body
+    assert _cache_marks(body) == [("user:text:Ask", _EPHEMERAL)]

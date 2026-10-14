@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import CACHE_MARK_KEYS
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -228,6 +229,24 @@ def _attribute_fields(value: object) -> dict[str, object]:
 
 def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
+
+
+def _cache_marks(block: Mapping[str, object]) -> Mapping[str, object]:
+    """The block's ``cache_control`` and ``prompt_cache_breakpoint``, both of which the chat transforms read off the
+    same block (the Claude ones rename the breakpoint to ``cache_control``)."""
+    return {key: block[key] for key in CACHE_MARK_KEYS if block.get(key) is not None}
+
+
+def _tool_output_cache_marks(tool_call_output: Mapping[str, object]) -> Mapping[str, object]:
+    """The marks on the output item and on the last marked part of a part-list output. The chat tool message carries
+    them at message level, since a text-only part list is flattened to a string there."""
+    output: Final = tool_call_output.get("output")
+    parts: Final = _OBJECT_LIST_ADAPTER.validate_python(output) if isinstance(output, list) else []
+    part_marks: Final = tuple(
+        _cache_marks(_STR_KEY_DICT_ADAPTER.validate_python(part)) for part in parts if isinstance(part, dict)
+    )
+    last_part_marks: Final[Mapping[str, object]] = next((marks for marks in reversed(part_marks) if marks), {})
+    return {**last_part_marks, **_cache_marks(tool_call_output)}
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -1468,12 +1487,17 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+            message: Final = GenericChatCompletionMessage(
+                role=_input_item_role(input_item),
+                content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                    content
+                ),
+            )
+            if not isinstance(content, str):
+                return [message]
             return [
-                GenericChatCompletionMessage(
-                    role=_input_item_role(input_item),
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
+                cast(  # cast-ok: a string message plus the item's message-level cache marks
+                    GenericChatCompletionMessage, {**message, **_cache_marks(input_item)}
                 )
             ]
 
@@ -1665,10 +1689,16 @@ class LiteLLMCompletionResponsesConfig:
             except Exception:
                 return str(output)
 
-        tool_output_message: Final = ChatCompletionToolMessage(
-            role="tool",
-            content=_normalize_function_call_output_to_tool_content(tool_call_output.get("output")),
-            tool_call_id=str(call_id),
+        tool_output_message: Final = cast(  # cast-ok: the tool message plus the output's message-level cache marks
+            ChatCompletionToolMessage,
+            {
+                **ChatCompletionToolMessage(
+                    role="tool",
+                    content=_normalize_function_call_output_to_tool_content(tool_call_output.get("output")),
+                    tool_call_id=str(call_id),
+                ),
+                **_tool_output_cache_marks(tool_call_output),
+            },
         )
 
         _tool_use_definition: Final = TOOL_CALLS_CACHE.get_cache(
@@ -1798,10 +1828,7 @@ class LiteLLMCompletionResponsesConfig:
         if item.get("filename"):
             file_dict["filename"] = item["filename"]
 
-        new_item: Final[dict[str, object]] = {"type": "file", "file": file_dict}
-        if "cache_control" in item:
-            new_item["cache_control"] = item["cache_control"]
-        return new_item
+        return {"type": "file", "file": file_dict, **_cache_marks(item)}
 
     @staticmethod
     def _transform_input_image_item_to_image_item(
@@ -1843,12 +1870,12 @@ class LiteLLMCompletionResponsesConfig:
                             LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(item)
                         )
                     elif item.get("type") == "input_image":
-                        image_block = _STR_KEY_DICT_ADAPTER.validate_python(
-                            dict(LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item))
+                        content_list.append(
+                            {
+                                **LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item),
+                                **_cache_marks(item),
+                            }
                         )
-                        if "cache_control" in item:
-                            image_block["cache_control"] = item["cache_control"]
-                        content_list.append(image_block)
                     elif item.get("type") == "encrypted_content":
                         encrypted_content = item.get("encrypted_content")
                         if encrypted_content is not None:
@@ -1860,15 +1887,15 @@ class LiteLLMCompletionResponsesConfig:
                         text_value = item.get("text")
                         if text_value is None:
                             continue
-                        content_block: dict[str, object] = {
-                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                item.get("type") or "text"
-                            ),
-                            "text": text_value,
-                        }
-                        if "cache_control" in item:
-                            content_block["cache_control"] = item["cache_control"]
-                        content_list.append(content_block)
+                        content_list.append(
+                            {
+                                "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                    item.get("type") or "text"
+                                ),
+                                "text": text_value,
+                                **_cache_marks(item),
+                            }
+                        )
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")

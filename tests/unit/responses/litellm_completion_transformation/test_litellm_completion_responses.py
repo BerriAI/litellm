@@ -4408,6 +4408,26 @@ class TestCacheControlPreservation:
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
 
+    @pytest.mark.parametrize(
+        ("part", "chat_type"),
+        (
+            ({"type": "input_text", "text": "long context"}, "text"),
+            ({"type": "input_image", "image_url": "https://example.com/img.png"}, "image_url"),
+            ({"type": "input_file", "file_id": "file-abc123"}, "file"),
+        ),
+    )
+    def test_prompt_cache_breakpoint_is_carried_onto_the_chat_part_beside_cache_control(
+        self, part: dict[str, str], chat_type: str
+    ) -> None:
+        breakpoint_mark: Final = {"mode": "explicit", "ttl": "30m"}
+        result: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            [{**part, "prompt_cache_breakpoint": breakpoint_mark, "cache_control": {"type": "ephemeral"}}]
+        )
+        assert isinstance(result, list)
+        assert [(block["type"], block["prompt_cache_breakpoint"], block["cache_control"]) for block in result] == [
+            (chat_type, breakpoint_mark, {"type": "ephemeral"})
+        ]
+
 
 def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0`` that
