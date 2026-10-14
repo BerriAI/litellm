@@ -939,6 +939,7 @@ class CheckBatchCost:
                 batch_failed_requests=batch_result.failed_requests,
                 batch_prompt_cost=batch_result.prompt_cost,
                 batch_completion_cost=batch_result.completion_cost,
+                batch_tool_cost=batch_result.tool_cost,
             )
         except Exception:
             await self._release_job_claim(job)

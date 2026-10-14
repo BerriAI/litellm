@@ -356,6 +356,24 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
     )
 
 
+def calculate_batch_cache_writing_cost(
+    model_info: ModelInfo,
+    usage: Usage,
+    cache_creation_rate: float,
+) -> float:
+    details: Final = parse_prompt_tokens_details(usage)
+    ttl: Final = details["cache_creation_token_details"]
+    one_hour_tokens: Final = min(
+        details["cache_creation_tokens"],
+        max(ttl.ephemeral_1h_input_tokens or 0, 0) if ttl is not None else 0,
+    )
+    if one_hour_tokens == 0:
+        return details["cache_creation_tokens"] * cache_creation_rate
+    standard_rates: Final = _get_token_base_cost(model_info, usage, cache_creation_1hr_fallback=cache_creation_rate * 2)
+    one_hour_rate: Final = standard_rates[3] / 2
+    return (details["cache_creation_tokens"] - one_hour_tokens) * cache_creation_rate + one_hour_tokens * one_hour_rate
+
+
 def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict | None:
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if not isinstance(tiered_pricing, list) or not tiered_pricing:
@@ -376,7 +394,9 @@ def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | N
     return tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
 
 
-def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, float, float, float, float] | None:
+def _get_tiered_base_costs(
+    model_info: ModelInfo, usage: Usage, *, cache_creation_1hr_fallback: float | None = None
+) -> tuple[float, float, float, float, float] | None:
     """
     Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
 
@@ -404,7 +424,9 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, 
         tier_rate(tier, "cache_creation_input_token_cost_above_1hr")
         if "cache_creation_input_token_cost_above_1hr" in tier
         and tier["cache_creation_input_token_cost_above_1hr"] is not None
-        else cache_creation_cost,
+        else cache_creation_cost
+        if cache_creation_1hr_fallback is None
+        else cache_creation_1hr_fallback,
         tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
     )
 
@@ -631,6 +653,7 @@ def _get_token_base_cost(
     current_time: datetime | None = None,
     *,
     threshold_is_inclusive: bool = False,
+    cache_creation_1hr_fallback: float | None = None,
 ) -> tuple[float, float, float, float, float]:
     """
     Return prompt cost, completion cost, and cache costs for a given model and usage.
@@ -646,11 +669,15 @@ def _get_token_base_cost(
     provider that publishes no cache price bills cached tokens as ordinary input. An
     absent 1h write rate resolves to the cache-creation rate, off-peak included. An
     explicit 0.0 stays a real price for all of them.
+    `cache_creation_1hr_fallback` overrides only the missing 1h rate, allowing
+    batch callers to retain their configured batch write price.
 
     Returns:
         Tuple[float, float, float, float] - (prompt_cost, completion_cost, cache_creation_cost, cache_read_cost)
     """
-    tiered_base_costs: Final = _get_tiered_base_costs(model_info=model_info, usage=usage)
+    tiered_base_costs: Final = _get_tiered_base_costs(
+        model_info=model_info, usage=usage, cache_creation_1hr_fallback=cache_creation_1hr_fallback
+    )
     if tiered_base_costs is not None:
         return _apply_off_peak_to_base_costs(model_info, current_time, tiered_base_costs)
 
@@ -675,7 +702,7 @@ def _get_token_base_cost(
             completion_base_cost = output_image_cost
     cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
     cache_creation_cost_above_1hr = get_cost_per_unit(
-        model_info, "cache_creation_input_token_cost_above_1hr", default_value=None
+        model_info, "cache_creation_input_token_cost_above_1hr", default_value=cache_creation_1hr_fallback
     )
     cache_read_cost = get_cost_per_unit(model_info, cache_read_cost_key, default_value=None)
 
