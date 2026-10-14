@@ -1,29 +1,25 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, patch
-
 
 import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
-from datetime import datetime, timedelta, timezone
-from typing import Final
-
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.proxy._types import Litellm_EntityType
+from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
-    _budget_model_candidates,
     PROXY_VirtualKeyModelMaxBudgetLimiter,
+    _budget_model_candidates,
     build_model_max_budget_usage,
     model_budget_spend_cache_key,
     model_budget_start_time_cache_key,
     resolve_model_budget,
 )
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
 
 async def _reset_at_of_open_window(
@@ -508,14 +504,10 @@ async def test_model_budget_limiter_initializes_redis_increment_queue_lock():
     limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     spend_key = "virtual_key_spend:test-key:gpt-4:1d"
 
-    await limiter._increment_spend_in_current_window(
-        spend_key=spend_key, response_cost=0.01, ttl=86400
-    )
+    await limiter._increment_spend_in_current_window(spend_key=spend_key, response_cost=0.01, ttl=86400)
 
     assert limiter.redis_increment_operation_queue == [
-        RedisPipelineIncrementOperation(
-            key=spend_key, increment_value=0.01, ttl=86400
-        )
+        RedisPipelineIncrementOperation(key=spend_key, increment_value=0.01, ttl=86400)
     ]
 
 
@@ -1572,6 +1564,7 @@ class _SharedFakeRedis(RedisCache):
 
     def __init__(self):
         self._store = MappingProxyType({})
+        self.expiry_seconds = MappingProxyType({})
 
     async def async_set_cache(self, key, value, **kwargs):
         self._store = MappingProxyType({**self._store, key: value})
@@ -1586,6 +1579,7 @@ class _SharedFakeRedis(RedisCache):
         for op in increment_list:
             total = self._store.get(op["key"], 0.0) + op["increment_value"]
             self._store = MappingProxyType({**self._store, op["key"]: total})
+            self.expiry_seconds = MappingProxyType({**self.expiry_seconds, op["key"]: op["ttl"]})
         return [self._store[op["key"]] for op in increment_list]
 
 
@@ -1680,10 +1674,91 @@ async def test_a_replica_reports_the_reset_of_a_window_another_replica_opened():
     }
 
 
-def _log_success(limiter, **kwargs):
-    return limiter.async_log_success_event(
-        _success_kwargs(**kwargs), response_obj=None, start_time=None, end_time=None
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("opened_at", "charged_at"),
+    [
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), datetime(2026, 2, 1, 12, tzinfo=timezone.utc)),
+        (datetime(2026, 2, 15, 12, tzinfo=timezone.utc), datetime(2026, 3, 1, 12, tzinfo=timezone.utc)),
+    ],
+    ids=["opened_in_a_long_month", "opened_in_february"],
+)
+async def test_a_monthly_window_is_enforced_until_the_reset_it_reports(opened_at, charged_at):
+    """
+    Each charge sets when the shared spend counter expires, which is when the model is
+    allowed again, so it must match the reset /key/info reports.
+
+    Regression: the expiry was a month counted from the charge instead of the window
+    start, so a window opened in a month of another length stayed blocked past its
+    reported reset, or reported no reset while still blocked.
+    """
+    shared_redis = _SharedFakeRedis()
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=DualCache(redis_cache=shared_redis), clock=charged_at.timestamp
     )
+    model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}}
+    window: Final = {
+        "entity_type": Litellm_EntityType.KEY,
+        "entity_id": "vk-monthly",
+        "budget_model": "gpt-4",
+        "budget_duration": "1mo",
+    }
+    await shared_redis.async_set_cache(model_budget_start_time_cache_key(**window), opened_at.timestamp())
+
+    await _log_spend(limiter, key_hash="vk-monthly", model_max_budget=model_max_budget, response_cost=0.5)
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="vk-monthly",
+        model_max_budget=model_max_budget,
+        cache=limiter.dual_cache,
+        now=charged_at,
+    )
+    reported_reset: Final = datetime.fromisoformat(usage["gpt-4"]["budget_reset_at"])
+    assert usage["gpt-4"]["current_spend"] == 0.5
+    assert shared_redis.expiry_seconds[model_budget_spend_cache_key(**window)] == int(
+        (reported_reset - charged_at).total_seconds()
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_window_that_ends_past_the_calendar_reports_no_reset():
+    """
+    Regression: a period long enough to end after year 9999 raised while formatting the
+    reset, so /key/info, /user/info and /team/info answered 500.
+    """
+    dual_cache = DualCache()
+    opened_at: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+    model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "99999999h"}}
+    window: Final = {
+        "entity_type": Litellm_EntityType.KEY,
+        "entity_id": "vk-forever",
+        "budget_model": "gpt-4",
+        "budget_duration": "99999999h",
+    }
+    await dual_cache.async_set_cache(model_budget_spend_cache_key(**window), 0.25)
+    await dual_cache.async_set_cache(model_budget_start_time_cache_key(**window), opened_at.timestamp())
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="vk-forever",
+        model_max_budget=model_max_budget,
+        cache=dual_cache,
+        now=opened_at + timedelta(days=1),
+    )
+
+    assert usage == {
+        "gpt-4": {
+            "current_spend": 0.25,
+            "budget_limit": 1.0,
+            "time_period": "99999999h",
+            "budget_reset_at": None,
+        }
+    }
+
+
+def _log_success(limiter, **kwargs):
+    return limiter.async_log_success_event(_success_kwargs(**kwargs), response_obj=None, start_time=None, end_time=None)
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -14,11 +14,11 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds, duration_in_seconds_from
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, StandardLoggingPayload
@@ -42,6 +42,8 @@ _SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
 _LEGACY_REQUEST_MODEL_SCOPES: Final = frozenset({Litellm_EntityType.KEY, Litellm_EntityType.END_USER})
 
 _PROCESS_STARTED_AT: Final = time.monotonic()
+
+_LATEST_RESET_AT: Final = datetime(9999, 12, 31, tzinfo=timezone.utc).timestamp()
 
 _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
     {
@@ -311,10 +313,8 @@ def _readings(values: Sequence[float | None], window_count: int) -> tuple[_Windo
 def _window_reset_at(started_at: float | None, budget_duration: str | None, now: float) -> str | None:
     if started_at is None or budget_duration is None:
         return None
-    ends_at: Final = started_at + duration_in_seconds_from(
-        start=datetime.fromtimestamp(started_at, tz=timezone.utc).astimezone(), duration=budget_duration
-    )
-    if ends_at <= now:
+    ends_at: Final = started_at + budget_window_seconds(started_at, budget_duration)
+    if ends_at <= now or ends_at > _LATEST_RESET_AT:
         return None
     return datetime.fromtimestamp(ends_at, tz=timezone.utc).isoformat()
 
@@ -379,8 +379,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     Example: key=$LITELLM_API_KEY, model=gpt-4o, max_budget=100, time_period=1d
     """
 
-    def __init__(self, dual_cache: DualCache):
+    def __init__(self, dual_cache: DualCache, clock: Callable[[], float] = time.time):
         self.dual_cache = dual_cache
+        self._clock = clock
         self.redis_increment_operation_queue = []
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
