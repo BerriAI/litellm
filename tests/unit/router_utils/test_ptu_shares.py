@@ -11,7 +11,9 @@ from litellm.router_utils.ptu_shares import (
     model_group_deployments,
     model_group_ptu_capacity,
     ptu_capacity_warning,
+    ptu_share_teams,
     PTUTeamCeiling,
+    share_holder_request_kwargs,
     team_ptu_ceiling,
     team_servable_deployments,
 )
@@ -89,6 +91,17 @@ def test_a_single_team_deployment_and_a_malformed_share_map_are_not_filtered_her
     result: Final = filter_ptu_shared_deployments([_single_team(), _shared(shares={"team-a": 0})], "team-z")
     assert [d["model_info"]["id"] for d in result.deployments] == ["single", "shared"]
     assert result.withheld is False
+
+
+def test_only_a_share_holders_request_keeps_its_team_for_the_retry_lookup():
+    """A team owning a deployment through ``team_id`` keeps the router's unscoped retry lookup."""
+    share_teams: Final = ptu_share_teams([_shared(shares={"team-b": 50}), _single_team()])
+    holder: Final = {"metadata": {"user_api_key_team_id": "team-b"}}
+    messages_holder: Final = {"litellm_metadata": {"user_api_key_team_id": "team-b"}}
+    assert share_holder_request_kwargs(holder, share_teams) is holder
+    assert share_holder_request_kwargs(messages_holder, share_teams) is messages_holder
+    assert share_holder_request_kwargs({"metadata": {"user_api_key_team_id": "team-a"}}, share_teams) is None
+    assert share_holder_request_kwargs({"metadata": {}}, share_teams) is None
 
 
 _TERMLESS_SHARED: Final = {

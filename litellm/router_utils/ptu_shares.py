@@ -18,7 +18,7 @@ from litellm.llms.azure.ptu_capacity import (
     is_azure_deployment,
     is_str_keyed_mapping,
 )
-from litellm.router_utils.common_utils import team_may_use_deployment
+from litellm.router_utils.common_utils import get_request_team_id, team_may_use_deployment
 
 _DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 WildcardRoute: TypeAlias = Callable[[str], Sequence[Mapping[str, object]]]
@@ -78,6 +78,13 @@ def ptu_share_teams(deployments: Sequence[Mapping[str, object]]) -> frozenset[st
     return frozenset[str]().union(
         *(shares for deployment in deployments if (shares := _deployment_shares(deployment)) is not None)
     )
+
+
+def share_holder_request_kwargs(
+    request_kwargs: Mapping[str, object], share_teams: frozenset[str]
+) -> Mapping[str, object] | None:
+    """``request_kwargs`` when the caller's team is in ``share_teams``, else None."""
+    return request_kwargs if get_request_team_id(request_kwargs) in share_teams else None
 
 
 def deployments_shared_with(deployments: Sequence[Mapping[str, object]], team_id: str) -> tuple[str, ...]:
