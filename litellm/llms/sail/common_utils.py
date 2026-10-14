@@ -70,6 +70,52 @@ def completion_window_for_service_tier(
     )
 
 
+def _unserved_pairing(window: str | None, *, background: bool, source: str) -> str | None:
+    if window == "flex" and not background:
+        return (
+            f"sail serves {source} only to Responses requests with background=true. "
+            "Send 'balanced' for a synchronous request."
+        )
+    if window == "asap" and background:
+        return (
+            f"sail does not serve {source} to Responses requests with background=true. "
+            "Send 'balanced' or 'flex' for a background request."
+        )
+    return None
+
+
+def _window_sail_serves(
+    window: str | None, *, background: bool, source: str, model: str, drop_params: bool | None
+) -> str | None:
+    """Sail serves ``flex`` only to Responses requests with ``background=true``
+    and ``asap`` only to requests without it, and answers the other pairings
+    with a 400, so they are rejected before the call. ``drop_params=None``
+    means the pairing cannot be dropped."""
+    message: Final = _unserved_pairing(window, background=background, source=source)
+    if message is None:
+        return window
+    if drop_params is None:
+        raise litellm.UnsupportedParamsError(message=message, llm_provider=SAIL, model=model)
+    if _dropping(drop_params):
+        return None
+    raise _unsupported(message, model)
+
+
+def _tier_source(service_tier: object, window: str | None) -> str:
+    return f"service_tier={service_tier!r} (completion_window {window!r})"
+
+
+def chat_completion_window(service_tier: object, *, model: str, drop_params: bool) -> str | None:
+    """Chat Completions requests are always synchronous, so a tier that selects
+    ``flex`` is rejected. Chat billing reads the caller's ``service_tier``, not
+    the mapped params, so dropping it would bill flex for a request Sail runs
+    at asap, and ``drop_params`` does not drop it."""
+    window: Final = completion_window_for_service_tier(service_tier, model=model, drop_params=drop_params)
+    return _window_sail_serves(
+        window, background=False, source=_tier_source(service_tier, window), model=model, drop_params=None
+    )
+
+
 def _metadata_without_caller_window(
     metadata: object, *, field: str, model: str, drop_params: bool
 ) -> Mapping[str, object]:
@@ -107,7 +153,7 @@ def extra_body_for_sail(
 
 def chat_request_for_sail(request: Mapping[str, object], *, model: str, drop_params: bool) -> Mapping[str, object]:
     raw_tier: Final = request.get("service_tier")
-    window: Final = completion_window_for_service_tier(raw_tier, model=model, drop_params=drop_params)
+    window: Final = chat_completion_window(raw_tier, model=model, drop_params=drop_params)
     caller_metadata: Final = _metadata_without_caller_window(
         request.get("metadata"), field="metadata", model=model, drop_params=drop_params
     )
@@ -162,7 +208,15 @@ def responses_params_with_completion_window(
             "select different completion windows. Send one of them.",
             model,
         )
-    window: Final = caller_window or tier_window
+    window: Final = _window_sail_serves(
+        caller_window or tier_window,
+        background=params.get("background") is True,
+        source=(
+            f"metadata.completion_window={caller_window!r}" if caller_window else _tier_source(raw_tier, tier_window)
+        ),
+        model=model,
+        drop_params=drop_params,
+    )
     other_metadata: Final = without_keys(metadata, frozenset({"completion_window"}))
     wire_metadata: Final = (
         MappingProxyType({**other_metadata, "completion_window": window}) if window else other_metadata
