@@ -109,7 +109,7 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
 
 
 @pytest.mark.parametrize("api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (SERVERLESS_BASE, True)])
-def testwill_bridge_to_chat_completions_follows_host(api_base, bridged):
+def test_will_bridge_to_chat_completions_follows_host(api_base, bridged):
     assert will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
 
 

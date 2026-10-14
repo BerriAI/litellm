@@ -43,7 +43,7 @@ async def test_vertex_gemini_is_served_by_python(recording_server: RecordingServ
     )
 
     assert recording_server.requests == []
-    assert "x-litellm-rust" not in str(response)
+    assert "x-litellm-rust" not in get_hidden_params_dict(response).get("additional_headers", {})
 
 
 @pytest.mark.asyncio
@@ -51,7 +51,7 @@ async def test_vertex_claude_is_served_natively(recording_server: RecordingServe
     recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
 
     response: Final = await litellm.anthropic.messages.acreate(
-        model="vertex_ai/claude-sonnet-4-5@20250929",
+        model="vertex_ai/claude-sonnet-5-5",
         messages=[dict(message) for message in MESSAGES],
         max_tokens=16,
         api_base=recording_server.base_url,

@@ -499,7 +499,7 @@ def test_internal_is_async_marker_bypasses_native() -> None:
     ("model", "expected"),
     (
         ("anthropic/claude-sonnet-5-5", Route.MESSAGES),
-        ("vertex_ai/claude-sonnet-5-5@20250929", Route.MESSAGES),
+        ("vertex_ai/claude-sonnet-5-5", Route.MESSAGES),
         ("vertex_ai/gemini-3.8-flash", Route.CHAT_COMPLETIONS),
         ("openai/gpt-5.6", Route.RESPONSES),
     ),

@@ -45,9 +45,7 @@ def test_shipped_decisions(
     if environment is not None:
         monkeypatch.setenv("LITELLM_RUST", environment)
     target: Final = Route.RESPONSES if route is Route.CHAT_COMPLETIONS else Route.CHAT_COMPLETIONS
-    context: Final = RouteContext(
-        route, target=target if bridged else route, provider=provider, model="test-model"
-    )
+    context: Final = RouteContext(route, target=target if bridged else route, provider=provider, model="test-model")
 
     if bridged:
         assert catalog.rollout(context) is Rollout.PYTHON_ONLY
@@ -193,9 +191,8 @@ def test_a_rule_without_targets_never_matches_a_bridged_target(target: Route) ->
         RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     )
 
-    assert (
-        catalog.decision(RouteContext(Route.MESSAGES, target=target, provider="vertex_ai", model="m"), rules)
-        is (Decision.RUST_REQUIRED if target is Route.MESSAGES else Decision.PYTHON)
+    assert catalog.decision(RouteContext(Route.MESSAGES, target=target, provider="vertex_ai", model="m"), rules) is (
+        Decision.RUST_REQUIRED if target is Route.MESSAGES else Decision.PYTHON
     )
 
 
@@ -210,9 +207,7 @@ def test_a_rule_with_targets_matches_only_the_listed_targets() -> None:
         catalog.decision(RouteContext(Route.MESSAGES, target=Route.CHAT_COMPLETIONS, model="m"), rules)
         is Decision.RUST_WITH_FALLBACK
     )
-    assert (
-        catalog.decision(RouteContext(Route.MESSAGES, target=Route.MESSAGES, model="m"), rules) is Decision.PYTHON
-    )
+    assert catalog.decision(RouteContext(Route.MESSAGES, target=Route.MESSAGES, model="m"), rules) is Decision.PYTHON
 
 
 def test_first_match_still_wins_across_targets() -> None:

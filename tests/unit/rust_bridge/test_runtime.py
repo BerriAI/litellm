@@ -148,8 +148,20 @@ def test_context_outside_rule_stays_on_python() -> None:
     calls: Final = recorder()
     configuration.rust(True)
 
-    assert run(Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.MESSAGES, target=Route.MESSAGES, provider="openai")) == "python"
-    assert run(Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.RESPONSES, target=Route.RESPONSES, provider="anthropic")) == "python"
+    assert (
+        run(
+            Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.MESSAGES, target=Route.MESSAGES, provider="openai")
+        )
+        == "python"
+    )
+    assert (
+        run(
+            Rollout.RUST_REQUIRED,
+            calls,
+            context=RouteContext(Route.RESPONSES, target=Route.RESPONSES, provider="anthropic"),
+        )
+        == "python"
+    )
     assert calls.calls == (PYTHON, PYTHON)
 
 
@@ -498,7 +510,10 @@ async def test_route_without_python_raises_when_native_cannot_serve_the_call(
         (Rollout.PYTHON_ONLY, CONTEXT),
         (Rollout.RUST_OPT_IN, CONTEXT),
         (Rollout.RUST_OPT_OUT, CONTEXT),
-        (Rollout.RUST_REQUIRED, RouteContext(Route.MESSAGES, target=Route.MESSAGES, provider="unmatched", model="model")),
+        (
+            Rollout.RUST_REQUIRED,
+            RouteContext(Route.MESSAGES, target=Route.MESSAGES, provider="unmatched", model="model"),
+        ),
     ),
     ids=("python-only", "opt-in", "opt-out", "no-matching-rule"),
 )

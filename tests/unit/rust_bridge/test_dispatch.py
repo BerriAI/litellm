@@ -31,7 +31,9 @@ def test_route_without_rules_forwards_before_request_projection(rules: Rules) ->
         pytest.fail("Python-only routes must not project the request")
 
     dispatch: Final = PublicDispatch(
-        route=Route.CHAT_COMPLETIONS, request=reject_request, context=lambda _: RouteContext(Route.CHAT_COMPLETIONS, target=Route.CHAT_COMPLETIONS)
+        route=Route.CHAT_COMPLETIONS,
+        request=reject_request,
+        context=lambda _: RouteContext(Route.CHAT_COMPLETIONS, target=Route.CHAT_COMPLETIONS),
     )
     result: Final = dispatch.run(
         ("model",),
@@ -76,7 +78,9 @@ def test_disabled_optional_rust_rule_forwards_before_projection() -> None:
     def reject_request(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request:
         pytest.fail("Disabled optional Rust must not project the request")
 
-    dispatch: Final = PublicDispatch(route=Route.OCR, request=reject_request, context=lambda _: RouteContext(Route.OCR, target=Route.OCR))
+    dispatch: Final = PublicDispatch(
+        route=Route.OCR, request=reject_request, context=lambda _: RouteContext(Route.OCR, target=Route.OCR)
+    )
     expected: Final = object()
     configuration.rust(False)
     try:
@@ -139,7 +143,9 @@ async def test_async_route_without_rules_preserves_async_iterator_result(rules: 
         return stream
 
     dispatch: Final = PublicDispatch(
-        route=Route.RESPONSES, request=reject_request, context=lambda _: RouteContext(Route.RESPONSES, target=Route.RESPONSES)
+        route=Route.RESPONSES,
+        request=reject_request,
+        context=lambda _: RouteContext(Route.RESPONSES, target=Route.RESPONSES),
     )
     result: Final = await dispatch.arun(
         ("model",),
@@ -194,7 +200,9 @@ def test_rules_for_other_routes_and_constrained_python_rules_skip_projection() -
     def reject_request(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request:
         pytest.fail("Rules that cannot select Rust must not project the request")
 
-    dispatch: Final = PublicDispatch(route=Route.OCR, request=reject_request, context=lambda _: RouteContext(Route.OCR, target=Route.OCR))
+    dispatch: Final = PublicDispatch(
+        route=Route.OCR, request=reject_request, context=lambda _: RouteContext(Route.OCR, target=Route.OCR)
+    )
     expected: Final = object()
     result: Final = dispatch.run(
         ("model",),

@@ -328,9 +328,7 @@ def test_positional_parameters_remain_available_to_native_projection() -> None:
     ),
     ids=("explicit provider", "provider resolved from the model", "chat completions bridge requested"),
 )
-def test_context_target_is_the_api_the_call_reaches(
-    model: str, kwargs: Mapping[str, object], expected: Route
-) -> None:
+def test_context_target_is_the_api_the_call_reaches(model: str, kwargs: Mapping[str, object], expected: Route) -> None:
     request: Final = _public_request(_RESPONSES, (INPUT, model), kwargs)
 
     assert request is not None
@@ -344,9 +342,7 @@ def test_context_target_for_anthropic_follows_the_bridge_check() -> None:
         if python_responses.will_bridge_to_chat_completions(model, "anthropic", False, None, None)
         else Route.RESPONSES
     )
-    request: Final = _public_request(
-        _RESPONSES, (INPUT, model), {"custom_llm_provider": "anthropic"}
-    )
+    request: Final = _public_request(_RESPONSES, (INPUT, model), {"custom_llm_provider": "anthropic"})
 
     assert request is not None
     assert _context(request).target is expected
