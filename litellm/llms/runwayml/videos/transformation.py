@@ -445,6 +445,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         """
         Transform the RunwayML video content download response (synchronous).
@@ -474,6 +475,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "AsyncHTTPHandler | None" = None,
     ) -> bytes:
         """
         Transform the RunwayML video content download response (asynchronous).

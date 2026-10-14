@@ -48,14 +48,36 @@ export const parseSupportedTeamAdminEditableFields = (uiSettingsFieldSchema: unk
   return items.success ? fieldListSchema.parse(items.data.enum) : [];
 };
 
-export const TEAM_ADMIN_SETTINGS_FIELDS = ["tpm_limit", "rpm_limit", "max_budget"] as const;
+export const TEAM_ADMIN_SETTINGS_FIELDS = [
+  "tpm_limit",
+  "rpm_limit",
+  "max_budget",
+  "soft_budget",
+  "team_member_budget",
+  "team_member_budget_duration",
+  "team_member_tpm_limit",
+  "team_member_rpm_limit",
+] as const;
 
 export type TeamAdminSettingsField = (typeof TEAM_ADMIN_SETTINGS_FIELDS)[number];
+
+type TeamAdminDurationSettingsField = "team_member_budget_duration";
+
+type TeamAdminNumericSettingsField = Exclude<TeamAdminSettingsField, TeamAdminDurationSettingsField>;
+
+export const isTeamAdminDurationSettingsField = (
+  field: TeamAdminSettingsField,
+): field is TeamAdminDurationSettingsField => field === "team_member_budget_duration";
 
 const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([
   ["tpm_limit", "Tokens per minute Limit (TPM)"],
   ["rpm_limit", "Requests per minute Limit (RPM)"],
   ["max_budget", "Max Budget (USD)"],
+  ["soft_budget", "Soft Budget (USD)"],
+  ["team_member_budget", "Member Default Budget (USD)"],
+  ["team_member_budget_duration", "Member Default Budget Duration"],
+  ["team_member_tpm_limit", "Member Default TPM Limit"],
+  ["team_member_rpm_limit", "Member Default RPM Limit"],
   [TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION, "Raise the team's max budget"],
   ["projects", "Create and update projects"],
   ["member_key_budgets", "Update budgets on team members' keys"],
@@ -66,7 +88,26 @@ export const teamAdminFieldLabel = (field: string): string => TEAM_ADMIN_FIELD_L
 
 export type TeamAdminSettingsValues = { readonly [F in TeamAdminSettingsField]?: string | number | null };
 
-export type TeamAdminSettingsChanges = { readonly [F in TeamAdminSettingsField]?: number | null };
+export type TeamAdminSettingsChanges = { readonly [F in TeamAdminNumericSettingsField]?: number | null } & {
+  readonly [F in TeamAdminDurationSettingsField]?: string | null;
+};
+
+const durationOrNull = (value: string | number | null | undefined): string | null =>
+  typeof value === "string" && value !== "" ? value : null;
+
+const changedValue = (
+  field: TeamAdminSettingsField,
+  value: string | number | null | undefined,
+  initialValue: string | number | null | undefined,
+): readonly [TeamAdminSettingsField, string | number | null] | null => {
+  if (!isTeamAdminDurationSettingsField(field)) {
+    const number = numberOrNull(value);
+    return number === numberOrNull(initialValue) ? null : [field, number];
+  }
+  if (value === undefined) return null;
+  const duration = durationOrNull(value);
+  return initialValue !== undefined && duration === durationOrNull(initialValue) ? null : [field, duration];
+};
 
 export const teamAdminSettingsChanges = (
   values: TeamAdminSettingsValues,
@@ -75,8 +116,8 @@ export const teamAdminSettingsChanges = (
 ): TeamAdminSettingsChanges =>
   Object.fromEntries(
     TEAM_ADMIN_SETTINGS_FIELDS.flatMap((field) => {
-      const value = numberOrNull(values[field]);
-      return editableFields.has(field) && value !== numberOrNull(initialValues[field]) ? [[field, value]] : [];
+      const change = editableFields.has(field) ? changedValue(field, values[field], initialValues[field]) : null;
+      return change === null ? [] : [change];
     }),
   );
 
