@@ -3,13 +3,15 @@ import json
 import re
 import threading
 import uuid
+from collections import deque
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from email.message import Message
 from email.parser import BytesParser
 from email.policy import HTTP
 from functools import partial
-from typing import Final, Literal
+from queue import Queue
+from typing import Final, Literal, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -685,7 +687,14 @@ def test_batch_output_file_content_downloads_through_the_model_encoded_id(
     key: Final = f"provider-key-{provider}-" + uuid.uuid4().hex[:8]
     gate: Final = threading.Event()
     gate.set()
-    with wire_server(_multiplexed_openai_backends(content_gate=gate)) as wire, gateway.scenario() as scenario:
+    received: Final[Queue[Request]] = Queue()
+    backend: Final = _multiplexed_openai_backends(content_gate=gate)
+
+    def respond(request: Request) -> Reply:
+        received.put(request)
+        return backend(request)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
         deployment: Final = (
             {"model": "openai/gpt-4o-mini", "api_base": wire.url + "/v1", "api_key": key}
             if provider == "openai"
@@ -701,12 +710,11 @@ def test_batch_output_file_content_downloads_through_the_model_encoded_id(
         encoded_output, raw_output = _encoded_output_file_id(gateway, alias, key)
         assert encoded_output == encode_file_id_with_model(file_id=raw_output, model=alias), encoded_output
 
-        setup: Final = _drained_other_than_model_list_probes(wire)
-        late: Final = eventually(
-            lambda: _drained_other_than_model_list_probes(wire),
-            lambda drained: bool(drained) or any("/content" in request.target for request in setup),
+        eventually(
+            lambda: tuple(cast(deque[Request], received.queue)),
+            lambda pending: any(urlsplit(request.target).path.endswith("/content") for request in pending),
         )
-        settled: Final = setup + late
+        settled: Final = _drained_other_than_model_list_probes(wire)
         base_prefix: Final = "/v1/" if provider == "openai" else "/openai/"
         api_suffix: Final = "" if provider == "openai" else f"?api-version={AZURE_API_VERSION}"
         expected_content_target: Final = f"{base_prefix}files/{raw_output}/content{api_suffix}"
