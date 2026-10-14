@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
@@ -491,19 +492,35 @@ def _fallback_target_group(target: object) -> str | None:
     return named_model if isinstance(named_model, str) else None
 
 
-def _fallback_target_answers(
-    group: str | None,
+def _next_fallback_groups(
+    model: str,
     data: Mapping[str, object],
+    fallbacks: list[object],  # mutable-ok: mirrors get_fallback_model_group's contract
+) -> tuple[str, ...]:
+    return tuple(
+        group
+        for target in _fallback_targets(model, data, fallbacks)
+        if has_unattempted_fallback_target((target,), data) and (group := _fallback_target_group(target)) is not None
+    )
+
+
+def _frontier_reaches_chat(
+    frontier: tuple[str, ...],
+    seen: frozenset[str],
+    data: Mapping[str, object],
+    fallbacks: list[object],  # mutable-ok: mirrors get_fallback_model_group's contract
     llm_router: LitellmRouter,
     team_id: str | None,
-    walked: frozenset[str],
 ) -> bool:
-    if group is None or group in walked:
+    reached: Final = dict.fromkeys(chain.from_iterable(_next_fallback_groups(m, data, fallbacks) for m in frontier))
+    fresh: Final = tuple(group for group in reached if group not in seen)
+    if not fresh:
         return False
-    deployments: Final = _group_deployments(group, llm_router, team_id)
-    if not deployments:
-        return False
-    return _any_serves_chat(deployments) or _fallback_would_answer(group, data, llm_router, team_id, walked)
+    deployments_by_group: Final = tuple((group, _group_deployments(group, llm_router, team_id)) for group in fresh)
+    if any(deployments and _any_serves_chat(deployments) for _, deployments in deployments_by_group):
+        return True
+    expandable: Final = tuple(group for group, deployments in deployments_by_group if deployments)
+    return _frontier_reaches_chat(expandable, seen | frozenset(fresh), data, fallbacks, llm_router, team_id)
 
 
 def _fallback_would_answer(
@@ -511,7 +528,6 @@ def _fallback_would_answer(
     data: Mapping[str, object],
     llm_router: LitellmRouter,
     team_id: str | None,
-    walked: frozenset[str] = frozenset(),
 ) -> bool:
     if data.get("disable_fallbacks") is True:
         return False
@@ -522,12 +538,7 @@ def _fallback_would_answer(
         fallbacks: Final = _FALLBACK_LIST_ADAPTER.validate_python(raw_fallbacks)
     except ValidationError:
         return True
-    walked_here: Final = walked | {model}
-    return any(
-        has_unattempted_fallback_target((target,), data)
-        and _fallback_target_answers(_fallback_target_group(target), data, llm_router, team_id, walked_here)
-        for target in _fallback_targets(model, data, fallbacks)
-    )
+    return _frontier_reaches_chat((model,), frozenset({model}), data, fallbacks, llm_router, team_id)
 
 
 def endpoint_unsupported_by_model(

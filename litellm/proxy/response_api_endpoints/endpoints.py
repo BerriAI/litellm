@@ -1571,6 +1571,11 @@ async def _responses_websocket_session(
             team_id=user_api_key_dict.team_id,
         )
         if unsupported_endpoint is not None:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=unsupported_endpoint,
+                request_data=data,
+            )
             raise unsupported_endpoint
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")

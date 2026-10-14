@@ -15,6 +15,7 @@ from httpx import Response
 
 import litellm
 from litellm.proxy.proxy_server import app
+from litellm.proxy.route_llm_request import ProxyUnsupportedEndpointError
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests._master_key import MASTER_KEY
 
@@ -1069,6 +1070,10 @@ class TestResponsesWSDeclaredNonChatModel:
                 return_value=fake_llm_call(),
             ) as mock_route_request,
             patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the session reads the proxy's router global
+            patch(  # test-quality-ok: the session reads the proxy's logging global; the failure hook releases reservations
+                "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+                new_callable=AsyncMock,
+            ) as mock_failure_hook,
         ):
             await responses_websocket_endpoint(
                 websocket=ws,
@@ -1079,7 +1084,11 @@ class TestResponsesWSDeclaredNonChatModel:
         if not rejected:
             mock_route_request.assert_awaited_once()
             ws.close.assert_not_awaited()
+            mock_failure_hook.assert_not_awaited()
             return
+        mock_failure_hook.assert_awaited_once()
+        assert isinstance(mock_failure_hook.await_args.kwargs["original_exception"], ProxyUnsupportedEndpointError)
+        assert mock_failure_hook.await_args.kwargs["request_data"]["model"] == "embed-only"
         frame = json.loads(ws.send_text.await_args.args[0])
         assert frame["type"] == "error"
         assert frame["error"]["type"] == "invalid_request_error"

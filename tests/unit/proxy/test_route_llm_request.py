@@ -2060,6 +2060,29 @@ def test_endpoint_unsupported_ignores_endpoints_copied_from_the_loaded_catalog(d
     assert isinstance(_unsupported("acompletion", "catalog-row", router), ProxyUnsupportedEndpointError) is rejected
 
 
+class _LookupCountingRouter(Router):
+    def __init__(self, **router_kwargs: object) -> None:
+        self.looked_up: list[str | None] = []
+        super().__init__(**router_kwargs)
+        self.looked_up.clear()
+
+    def get_model_list(self, model_name: str | None = None, team_id: str | None = None):
+        self.looked_up.append(model_name)
+        return super().get_model_list(model_name=model_name, team_id=team_id)
+
+
+def test_endpoint_unsupported_looks_up_each_repeated_fallback_group_once():
+    fallback_groups: Final = ("embed-a", "embed-b", "embed-c")
+    router: Final = _LookupCountingRouter(
+        model_list=[_embedding_deployment(name, EMBEDDING_ONLY) for name in ("embed-only", *fallback_groups)]
+    )
+
+    error: Final = _unsupported("acompletion", "embed-only", router, fallbacks=list(fallback_groups) * 5)
+
+    assert isinstance(error, ProxyUnsupportedEndpointError)
+    assert sorted(name for name in router.looked_up if name in fallback_groups) == sorted(fallback_groups)
+
+
 def _router_with_defaults(default_litellm_params: dict[str, object]):
     import litellm
 

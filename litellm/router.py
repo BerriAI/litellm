@@ -1076,7 +1076,7 @@ class Router:
         self.assistants_config = assistants_config
         self.search_tools = search_tools or []
         self.guardrail_list = guardrail_list or []
-        self.deployment_names: list = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
+        self.deployment_names: list[str] = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
         cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
