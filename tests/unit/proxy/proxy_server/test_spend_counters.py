@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -830,31 +830,25 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(
         assert counter_cache.in_memory_cache.get_cache(key=key) == 1.5
 
 
-@pytest.mark.asyncio
-async def test_increment_spend_counters_pipeline_failure_invalidates_all_counters(
-    monkeypatch,
-):
-    """A failing pipeline must invalidate every pending counter so the next
-    request reseeds from the DB (which already holds this request's cost)
-    instead of trusting a value the write may have partially applied."""
-    from redis.exceptions import MaxConnectionsError
+_PENDING_SPEND_COUNTER_KEYS: tuple[str, ...] = (
+    "spend:key:hashed",
+    "spend:team:team-1",
+    "spend:team_member:user-1:team-1",
+    "spend:user:user-1",
+    "spend:end_user:eu-1",
+    "spend:tag:tag-a",
+    "spend:tag:tag-b",
+    "spend:org:org-1",
+)
 
+
+def _warm_counters_behind_a_failing_pipeline(monkeypatch, pipeline_error: Exception) -> AsyncMock:
     counter_cache = ps.DualCache()
-    pending_keys = (
-        "spend:key:hashed",
-        "spend:team:team-1",
-        "spend:team_member:user-1:team-1",
-        "spend:user:user-1",
-        "spend:end_user:eu-1",
-        "spend:tag:tag-a",
-        "spend:tag:tag-b",
-        "spend:org:org-1",
-    )
-    for key in pending_keys:
+    for key in _PENDING_SPEND_COUNTER_KEYS:
         counter_cache.in_memory_cache.set_cache(key=key, value=1.0)
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(return_value=1.0)  # counters warm
-    fake_redis.async_increment_pipeline = AsyncMock(side_effect=MaxConnectionsError())
+    fake_redis.async_increment_pipeline = AsyncMock(side_effect=pipeline_error)
     fake_redis.async_increment = AsyncMock()
     fake_redis.async_delete_cache = AsyncMock()
     fake_redis.get_ttl = MagicMock(return_value=None)
@@ -862,23 +856,63 @@ async def test_increment_spend_counters_pipeline_failure_invalidates_all_counter
     monkeypatch.setattr(ps, "spend_counter_cache", counter_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", ps.DualCache())
     monkeypatch.setattr(ps, "prisma_client", None)
+    return fake_redis
 
-    with pytest.raises(MaxConnectionsError):
-        await ps.increment_spend_counters(
-            token="hashed",
-            team_id="team-1",
-            user_id="user-1",
-            response_cost=0.5,
-            org_id="org-1",
-            end_user_id="eu-1",
-            tags=["tag-a", "tag-b"],
-        )
 
+async def _increment_every_spend_counter() -> None:
+    await ps.increment_spend_counters(
+        token="hashed",
+        team_id="team-1",
+        user_id="user-1",
+        response_cost=0.5,
+        org_id="org-1",
+        end_user_id="eu-1",
+        tags=["tag-a", "tag-b"],
+    )
+
+
+def _assert_every_pending_counter_invalidated(fake_redis: AsyncMock) -> None:
     assert fake_redis.async_increment.await_count == 0
     deleted_keys = {call.kwargs["key"] for call in fake_redis.async_delete_cache.await_args_list}
-    assert deleted_keys == set(pending_keys)
-    for key in pending_keys:
-        assert counter_cache.in_memory_cache.get_cache(key=key) is None
+    assert deleted_keys == set(_PENDING_SPEND_COUNTER_KEYS)
+    for key in _PENDING_SPEND_COUNTER_KEYS:
+        assert ps.spend_counter_cache.in_memory_cache.get_cache(key=key) is None
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_pipeline_failure_invalidates_all_counters(
+    monkeypatch,
+):
+    """A failing pipeline must invalidate every pending counter so the next
+    request reseeds from the DB (which already holds this request's cost)
+    instead of trusting a value the write may have partially applied."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    fake_redis = _warm_counters_behind_a_failing_pipeline(monkeypatch, RedisConnectionError("Redis is down"))
+
+    with pytest.raises(RedisConnectionError):
+        await _increment_every_spend_counter()
+
+    _assert_every_pending_counter_invalidated(fake_redis)
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_pool_exhaustion_invalidates_all_counters_without_failing(
+    monkeypatch,
+):
+    """A cluster node with every connection busy raises MaxConnectionsError at once. That is a busy pool, the
+    same as the standalone pool's wait timeout, so the counters are invalidated and the request still succeeds."""
+    from redis import exceptions as redis_exceptions
+
+    max_connections_error = cast(  # cast-ok: types-redis 4.6 stubs predate MaxConnectionsError
+        "type[Exception]",
+        redis_exceptions.MaxConnectionsError,  # pyright: ignore[reportAttributeAccessIssue]  # old stubs
+    )
+    fake_redis = _warm_counters_behind_a_failing_pipeline(monkeypatch, max_connections_error())
+
+    await _increment_every_spend_counter()
+
+    _assert_every_pending_counter_invalidated(fake_redis)
 
 
 # ---------------------------------------------------------------------------
