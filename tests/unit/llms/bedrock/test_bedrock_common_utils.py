@@ -652,6 +652,26 @@ def test_strip_unsupported_output_config_keeps_format_drops_effort(local_model_c
     assert body["output_config"] == {"format": schema_format}
 
 
+@pytest.mark.parametrize(
+    "model",
+    ["us.anthropic.claude-opus-9-9", "invoke/anthropic.claude-newfamily-9", "global.anthropic.claude-sonnet-8-1"],
+)
+@pytest.mark.parametrize("effort", ["low", "high"])
+def test_strip_unsupported_output_config_keeps_effort_for_unmapped_adaptive_claude(local_model_cost_map, model, effort):
+    """An unmapped Claude id that resolves as adaptive keeps ``output_config.effort`` on Invoke."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.bedrock.common_utils import (
+        strip_unsupported_bedrock_invoke_output_config_keys,
+    )
+
+    assert AnthropicConfig.is_adaptive_thinking_model(model, "bedrock")
+    body = {"output_config": {"effort": effort}}
+
+    strip_unsupported_bedrock_invoke_output_config_keys(model=model, request_body=body)
+
+    assert body["output_config"] == {"effort": effort}
+
+
 def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_map):
     """The legacy ``output_format`` wins over ``output_config.format`` when a
     request carries both, matching the pre-existing precedence."""

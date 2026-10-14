@@ -938,6 +938,7 @@ def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map)
     assert info.get("max_input_tokens") is None
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
         "supports_adaptive_thinking": True,
+        "supports_output_config": True,
         "supports_legacy_thinking": True,
         "supports_tool_search": True,
     }

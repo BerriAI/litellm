@@ -6446,6 +6446,7 @@ def get_model_info_helper(
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 reasoning_effort_levels=_model_info.get("reasoning_effort_levels", None),
                 default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
+                supports_output_config=_model_info.get("supports_output_config", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
                 supports_regex_lookaround=_model_info.get("supports_regex_lookaround", None),

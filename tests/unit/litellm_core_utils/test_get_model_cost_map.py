@@ -205,7 +205,7 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
     adaptive_rule = next(r for r in rules if r.get("name") == "claude-adaptive-thinking")
     assert "supports_adaptive_thinking" not in baseline_rule["model_info"]
     assert "litellm_provider" not in baseline_rule["model_info"]
-    assert adaptive_rule["model_info"] == {"supports_adaptive_thinking": True}
+    assert adaptive_rule["model_info"] == {"supports_adaptive_thinking": True, "supports_output_config": True}
     assert all("extends" not in r for r in rules)
 
     for adaptive in [
