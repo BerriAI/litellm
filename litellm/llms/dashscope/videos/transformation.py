@@ -1,0 +1,992 @@
+"""
+DashScope (Alibaba Model Studio) async video task API: create, poll and download. DashScope has no list,
+delete or remix endpoint, so those raise.
+"""
+
+import base64
+import json
+from collections.abc import Mapping
+from datetime import datetime
+from io import BufferedReader, BytesIO
+from math import log
+from pathlib import Path, PurePath
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Annotated, Final
+
+import httpx
+from httpx._types import RequestFiles
+from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr, TypeAdapter, ValidationError
+
+import litellm
+from litellm.exceptions import UnsupportedParamsError
+from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.custom_httpx.http_handler import (
+    _get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # house cached-client factory has no public alias and its stub leaves params untyped
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # factory stub leaves params untyped
+)
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ModelInfo
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
+from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
+    encode_video_id_with_provider,
+    extract_original_video_id,
+)
+from litellm.utils import get_model_info
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+
+class DashScopeVideoError(BaseLLMException):
+    pass
+
+
+class _TaskOutput(BaseModel, frozen=True):
+    task_id: str
+    task_status: str
+    submit_time: str | None = None
+    scheduled_time: str | None = None
+    end_time: str | None = None
+    orig_prompt: str | None = None
+    video_url: str | None = None
+    code: str | None = None
+    message: str | None = None
+
+
+class _TaskUsage(BaseModel, frozen=True):
+    video_count: int | None = None
+    duration: float | None = None
+    input_video_duration: float | None = None
+    output_video_duration: float | None = None
+    fps: int | None = None
+    SR: int | None = None
+    ratio: str | None = None
+
+
+class _TaskResponse(BaseModel, frozen=True):
+    output: _TaskOutput | None = None
+    usage: _TaskUsage | None = None
+    request_id: str | None = None
+    code: str | None = None
+    message: str | None = None
+
+
+DASHSCOPE_VIDEO_DEFAULT_API_BASE: Final = "https://dashscope.aliyuncs.com"
+DASHSCOPE_VIDEO_SYNTHESIS_PATH: Final = "/api/v1/services/aigc/video-generation/video-synthesis"
+DASHSCOPE_TASKS_PATH: Final = "/api/v1/tasks"
+DASHSCOPE_COMPATIBLE_MODE_PATH: Final = "/compatible-mode/v1"
+
+_EMPTY_PARAMS: Final[dict[str, object]] = {}  # mutable-ok: BaseVideoConfig contract empty params
+
+_TASK_RESPONSE_ADAPTER: Final = TypeAdapter(_TaskResponse)
+_PARAMETERS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_FILE_TUPLE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+_STATUS_MAP: Final = MappingProxyType(
+    {
+        "PENDING": "queued",
+        "RUNNING": "in_progress",
+        "SUCCEEDED": "completed",
+        "FAILED": "failed",
+        "CANCELED": "cancelled",
+        "SUSPENDED": "queued",
+    }
+)
+
+_PENDING_STATUSES: Final = frozenset({"PENDING", "RUNNING", "SUSPENDED"})
+
+_TERMINAL_FAILURE_STATUSES: Final = frozenset({"FAILED", "CANCELED"})
+
+_UNKNOWN_TASK_STATUS: Final = "UNKNOWN"
+
+_TASK_NOT_FOUND_MESSAGE: Final = (
+    "Task not found. DashScope task ids expire 24 hours after creation and are only visible in the region that "
+    "created them."
+)
+
+_LEGACY_INPUT_KEYS: Final = (
+    "img_url",
+    "first_frame_url",
+    "last_frame_url",
+    "audio_url",
+)
+
+_INPUT_KEYS: Final = ("media", "negative_prompt", *_LEGACY_INPUT_KEYS)
+
+_REFERENCE_INPUT_FIELD: Final = "dashscope_video_reference_input"
+_MEDIA_REFERENCE_TYPES: Final = frozenset({"first_frame", "reference_image"})
+
+DASHSCOPE_DEFAULT_DURATION_SECONDS: Final = 5
+DASHSCOPE_DEFAULT_RESOLUTION: Final = "1080P"
+DASHSCOPE_SMART_DURATION: Final = -1
+
+_PARAMETER_KEYS: Final = (
+    "resolution",
+    "ratio",
+    "duration",
+    "audio",
+    "seed",
+    "prompt_extend",
+    "watermark",
+)
+
+# Rebuilt into the body by transform_video_create_request, consumed by the http handler, or stamped by the
+# proxy from the caller's end-user header, so none of them is a DashScope field.
+_REQUEST_METADATA: Final = frozenset({"model", "prompt", "user", "extra_headers", "extra_query", "extra_body"})
+
+# DashScope has no counterpart for these, so they are only dropped when the caller opted in.
+_UNSUPPORTED_BY_DASHSCOPE: Final = frozenset({"characters", "image"})
+
+_MAPPED_ELSEWHERE: Final = frozenset({*_REQUEST_METADATA, *_UNSUPPORTED_BY_DASHSCOPE, "seconds", "size", "parameters"})
+
+_CALLER_PARAMETERS_FIELD: Final = "dashscope_parameters"
+
+_NOT_CALLER_PARAMETERS: Final = frozenset({*_INPUT_KEYS, *_REQUEST_METADATA, "input_reference", "parameters"})
+
+# DashScope bills a reference video's own seconds on top of the output (usage.duration = input + output).
+_INPUT_VIDEO_MEDIA_TYPE: Final = "reference_video"
+
+_TIER_COST_FIELDS: Final = MappingProxyType(
+    {
+        "480P": "output_cost_per_second_480p",
+        "720P": "output_cost_per_second_720p",
+        "1080P": "output_cost_per_second",
+    }
+)
+
+_RESOLUTION_TIERS: Final = MappingProxyType({480: "480p", 720: "720p", 1080: "1080p"})
+
+_RESOLUTION_HEIGHT_TIERS: Final[tuple[tuple[int, str], ...]] = (
+    (600, "480p"),
+    (900, "720p"),
+)
+
+_SUPPORTED_RATIOS: Final[tuple[tuple[int, int], ...]] = ((16, 9), (9, 16), (1, 1), (4, 3), (3, 4))
+
+
+class _KnownParameters(BaseModel, frozen=True):
+    """A malformed value here can fail the task after DashScope created and billed it, so it is caught first."""
+
+    duration: StrictInt | None = None
+    seed: Annotated[StrictInt, Field(ge=0, le=2_147_483_647)] | None = None
+    audio: StrictBool | None = None
+    prompt_extend: StrictBool | None = None
+    watermark: StrictBool | None = None
+    resolution: StrictStr | None = None
+    ratio: StrictStr | None = None
+
+
+def _video_error(raw_response: httpx.Response, status_code: int, message: str) -> DashScopeVideoError:
+    """The provider's own status wins when it reported one. DashScope otherwise answers 200 even for
+    failures, and a 200 has the proxy retry a call the provider already rejected, so the caller's
+    status is used as the floor."""
+    return DashScopeVideoError(
+        status_code=raw_response.status_code if raw_response.status_code >= 400 else status_code,
+        message=message,
+        headers=raw_response.headers,
+    )
+
+
+def _task_not_found(raw_response: httpx.Response) -> DashScopeVideoError:
+    """400, since a 404 would put the deployment in cooldown for everyone over one caller's expired id."""
+    return _video_error(raw_response, 400, _TASK_NOT_FOUND_MESSAGE)
+
+
+def _parse_task_response(raw_response: httpx.Response) -> _TaskResponse:
+    """A body that is not the documented task shape is a provider-side failure, not a parse error."""
+    try:
+        return _TASK_RESPONSE_ADAPTER.validate_python(raw_response.json())
+    except (json.JSONDecodeError, ValidationError) as e:
+        raise _video_error(raw_response, 502, f"Unexpected DashScope video response: {e}") from e
+
+
+def _normalized_api_base(api_base: str) -> str:
+    trimmed: Final = api_base.rstrip("/")
+    if trimmed.endswith(DASHSCOPE_COMPATIBLE_MODE_PATH):
+        return trimmed[: -len(DASHSCOPE_COMPATIBLE_MODE_PATH)]
+    return trimmed
+
+
+def _ratio_from_size(size: str) -> str | None:
+    ratio_width_str, ratio_separator, ratio_height_str = size.partition(":")
+    if ratio_separator:
+        return size if ratio_width_str.isdigit() and ratio_height_str.isdigit() else None
+    width, height = _size_dimensions(size) or (0, 0)
+    if not width or not height:
+        return None
+    ratio_width, ratio_height = min(
+        _SUPPORTED_RATIOS,
+        key=lambda ratio: abs(log((width * ratio[1]) / (height * ratio[0]))),
+    )
+    return f"{ratio_width}:{ratio_height}"
+
+
+def _size_dimensions(size: str) -> tuple[int, int] | None:
+    width_str, separator, height_str = size.partition("x")
+    if not separator or not (width_str.isdigit() and height_str.isdigit()):
+        return None
+    return int(width_str), int(height_str)
+
+
+def _resolution_from_size(size: str) -> str | None:
+    """
+    DashScope bills per second by named tier, so a size must map to its tier or it bills at the 1080P default.
+    """
+    dimensions: Final = _size_dimensions(size)
+    if dimensions is None:
+        return None
+    shortest_side: Final = min(dimensions)
+    return next(
+        (label.upper() for threshold, label in _RESOLUTION_HEIGHT_TIERS if shortest_side < threshold),
+        "1080P",
+    )
+
+
+def _duration_param(seconds: object) -> int | None:
+    if isinstance(seconds, bool):
+        return None
+    if isinstance(seconds, int):
+        return seconds
+    if not isinstance(seconds, (str, float)):
+        return None
+    try:
+        parsed: Final = float(seconds)
+    except ValueError:
+        return None
+    return int(parsed) if parsed.is_integer() else None
+
+
+def _unsupported_value(model: str, message: str) -> UnsupportedParamsError:
+    return UnsupportedParamsError(
+        message=f"{message}, set drop_params=True to ignore it",
+        model=model,
+        llm_provider="dashscope",
+    )
+
+
+def _duration_fields(seconds: object, model: str, drop_params: bool) -> Mapping[str, object]:
+    if seconds is None:
+        return _EMPTY_PARAMS
+    duration: Final = _duration_param(seconds)
+    if duration is not None:
+        return MappingProxyType({"duration": duration})
+    if drop_params:
+        return _EMPTY_PARAMS
+    raise _unsupported_value(model, f"seconds must be a whole number of seconds, got {seconds!r}")
+
+
+def _size_fields(size: object, model: str, drop_params: bool) -> Mapping[str, object]:
+    if size is None:
+        return _EMPTY_PARAMS
+    if not _priced_tiers(model):
+        if drop_params:
+            return _EMPTY_PARAMS
+        raise _unsupported_value(
+            model,
+            f"size only maps onto DashScope video models in litellm's cost map, and {model} is not one, so send "
+            "DashScope's own size fields inside parameters",
+        )
+    ratio: Final = _ratio_from_size(size) if isinstance(size, str) else None
+    if ratio is None or not isinstance(size, str):
+        if drop_params:
+            return _EMPTY_PARAMS
+        raise _unsupported_value(model, f"size must be WIDTHxHEIGHT or a WIDTH:HEIGHT ratio, got {size!r}")
+    resolution: Final = _resolution_from_size(size)
+    return MappingProxyType({"ratio": ratio} if resolution is None else {"ratio": ratio, "resolution": resolution})
+
+
+def _object_fields(value: object) -> Mapping[str, object] | None:
+    if value is None:
+        return _EMPTY_PARAMS
+    try:
+        return _PARAMETERS_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _parameters_fields(parameters: object, model: str, drop_params: bool) -> Mapping[str, object]:
+    fields: Final = _object_fields(parameters)
+    if fields is not None:
+        return fields
+    if drop_params:
+        return _EMPTY_PARAMS
+    raise _unsupported_value(
+        model, f"parameters must be an object of DashScope request fields, got {type(parameters).__name__}"
+    )
+
+
+def _malformed_parameters(parameters: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
+    try:
+        _ = _KnownParameters.model_validate(dict(parameters))
+    except ValidationError as e:
+        return tuple((str(error["loc"][0]), error["msg"]) for error in e.errors() if error["loc"])
+    return ()
+
+
+def _drops_params(litellm_params: GenericLiteLLMParams) -> bool:
+    return litellm_params.drop_params is True or litellm.drop_params is True
+
+
+def _caller_parameters(parameters: Mapping[str, object], extra_body: object) -> Mapping[str, object]:
+    """
+    The caller's own ``parameters`` block and ``extra_body`` fields go to DashScope as sent, while other unmapped
+    kwargs stay behind because litellm's own call options (drop_params, a tracing span) arrive the same way.
+    """
+    extra_fields: Final = (
+        _PARAMETERS_ADAPTER.validate_python(extra_body) if isinstance(extra_body, Mapping) else _EMPTY_PARAMS
+    )
+    return MappingProxyType(
+        {key: value for key, value in (*parameters.items(), *extra_fields.items()) if key not in _NOT_CALLER_PARAMETERS}
+    )
+
+
+class _MediaEntry(BaseModel, frozen=True):
+    type: str | None = None
+
+
+_MEDIA_ADAPTER: Final = TypeAdapter(tuple[_MediaEntry, ...])
+
+
+def _has_input_video(media: object) -> bool:
+    try:
+        entries: Final = _MEDIA_ADAPTER.validate_python(media)
+    except ValidationError:
+        return False
+    return any(entry.type == _INPUT_VIDEO_MEDIA_TYPE for entry in entries)
+
+
+def _dashscope_model_info(model: str) -> ModelInfo | None:
+    try:
+        return get_model_info(model=model, custom_llm_provider="dashscope")
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
+        return None
+
+
+def _priced_tiers(model: str) -> tuple[str, ...] | None:
+    """
+    A tier the model has no price for is one DashScope does not offer it at, and litellm would bill it at the 1080P
+    base rate. A model missing from the cost map has nothing to check against.
+    """
+    info: Final = _dashscope_model_info(model)
+    if info is None:
+        return None
+    return tuple(tier for tier, cost_field in _TIER_COST_FIELDS.items() if info.get(cost_field) is not None)
+
+
+def _is_priced_tier(resolution: object, priced_tiers: tuple[str, ...]) -> bool:
+    return isinstance(resolution, str) and resolution.strip().upper() in priced_tiers
+
+
+def _read_all_bytes(file_obj: object) -> bytes:
+    if isinstance(file_obj, tuple):
+        file_tuple: Final = _FILE_TUPLE_ADAPTER.validate_python(file_obj)
+        return _read_all_bytes(file_tuple[1] if len(file_tuple) >= 2 else None)
+    if isinstance(file_obj, PurePath):
+        return Path(file_obj).read_bytes()
+    if isinstance(file_obj, (BytesIO, BufferedReader)):
+        current_position: Final = file_obj.tell()
+        file_obj.seek(0)
+        content: Final = file_obj.read()
+        file_obj.seek(current_position)
+        return content
+    if isinstance(file_obj, bytes):
+        return file_obj
+    if isinstance(file_obj, bytearray):
+        return bytes(file_obj)
+    read: Final = getattr(file_obj, "read", None)
+    if callable(read):
+        data: Final = read()
+        if isinstance(data, bytes):
+            return data
+    raise ValueError("input_reference must be a URL string, bytes, a path, a file object, or a file tuple")
+
+
+def _image_url(image: object) -> str:
+    if isinstance(image, str):
+        return image
+    content: Final = _read_all_bytes(image)
+    content_type: Final = ImageEditRequestUtils.get_image_content_type(content)
+    encoded: Final = base64.b64encode(content).decode("utf-8")
+    return f"data:{content_type};base64,{encoded}"
+
+
+def _media_reference_type(model: str) -> str | None:
+    """Models without the field predate the media array and take the image on the flat ``img_url`` field."""
+    info: Final = _dashscope_model_info(model)
+    if info is None:
+        return None
+    provider_specific: Final = info.get("provider_specific_entry")
+    value: Final = provider_specific.get(_REFERENCE_INPUT_FIELD) if isinstance(provider_specific, Mapping) else None
+    return value if isinstance(value, str) and value in _MEDIA_REFERENCE_TYPES else None
+
+
+def _resolution_label(usage: _TaskUsage | None, requested_resolution: object) -> str | None:
+    if usage is not None and isinstance(usage.SR, int) and not isinstance(usage.SR, bool):
+        tier: Final = _RESOLUTION_TIERS.get(usage.SR)
+        if tier is not None:
+            return tier
+    if isinstance(requested_resolution, str) and requested_resolution.strip():
+        return requested_resolution.strip().lower()
+    return None
+
+
+def _video_usage(usage: _TaskUsage | None, requested: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    ``usage.duration`` is DashScope's billed duration, including input video seconds, so it beats the request.
+    """
+    billed_duration: Final = usage.duration if usage is not None else None
+    requested_duration: Final = requested.get("duration")
+    duration_seconds: Final = (
+        float(billed_duration)
+        if isinstance(billed_duration, (int, float)) and not isinstance(billed_duration, bool)
+        else float(requested_duration)
+        if isinstance(requested_duration, (int, float))
+        and not isinstance(requested_duration, bool)
+        and requested_duration > 0
+        else None
+    )
+    resolution: Final = _resolution_label(usage, requested.get("resolution"))
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (("duration_seconds", duration_seconds), ("video_resolution", resolution))
+            if value is not None
+        }
+    )
+
+
+def _timestamp(value: str | None) -> int | None:
+    """
+    DashScope stamps times in UTC+8 with no offset.
+    """
+    if not value:
+        return None
+    try:
+        parsed: Final = datetime.strptime(f"{value}+0800", "%Y-%m-%d %H:%M:%S.%f%z")
+    except ValueError:
+        return None
+    return int(parsed.timestamp())
+
+
+def _error_block(output: _TaskOutput) -> Mapping[str, object] | None:
+    if not (output.code or output.message):
+        return None
+    return MappingProxyType(
+        {key: value for key, value in (("code", output.code), ("message", output.message)) if value is not None}
+    )
+
+
+def _size_from_usage(usage: _TaskUsage | None) -> str | None:
+    if usage is None or not isinstance(usage.SR, int) or isinstance(usage.SR, bool) or usage.SR <= 0:
+        return None
+    if not usage.ratio or ":" not in usage.ratio:
+        return None
+    width_str, _, height_str = usage.ratio.partition(":")
+    if not (width_str.isdigit() and height_str.isdigit()):
+        return None
+    ratio_width: Final = int(width_str)
+    ratio_height: Final = int(height_str)
+    if not ratio_width or not ratio_height:
+        return None
+    shortest_ratio_side: Final = min(ratio_width, ratio_height)
+    return f"{usage.SR * ratio_width // shortest_ratio_side}x{usage.SR * ratio_height // shortest_ratio_side}"
+
+
+def _task_output(task: _TaskResponse, raw_response: httpx.Response) -> _TaskOutput:
+    """Create and lookup both report failures as code and message with no output, so a missing output
+    raises instead of defaulting into a queued video with an empty id."""
+    if task.output is not None:
+        return task.output
+    raise _video_error(raw_response, 400, task.message or task.code or "DashScope video request failed")
+
+
+def _video_object_from_task(
+    task: _TaskResponse,
+    raw_response: httpx.Response,
+    model: str | None = None,
+    requested: Mapping[str, object] | None = None,
+) -> VideoObject:
+    output: Final = _task_output(task, raw_response)
+    if output.task_status == _UNKNOWN_TASK_STATUS:
+        raise _task_not_found(raw_response)
+    status: Final = _STATUS_MAP.get(output.task_status)
+    if status is None:  # defaulting it would hand back a job the caller polls forever
+        raise _video_error(raw_response, 502, f"Unknown DashScope task status: {output.task_status}")
+    usage: Final = _video_usage(task.usage, requested or _EMPTY_PARAMS)
+    seconds: Final = usage.get("duration_seconds")
+    error_block: Final = _error_block(output)
+    return VideoObject(
+        id=output.task_id,
+        object="video",
+        status=status,
+        created_at=_timestamp(output.submit_time),
+        completed_at=_timestamp(output.end_time) if status == "completed" else None,
+        error=dict(error_block) if error_block is not None else None,
+        seconds=str(seconds) if seconds is not None else None,
+        size=_size_from_usage(task.usage),
+        model=model,
+        usage=dict(usage) if usage else None,
+    )
+
+
+def _video_url_from_task(task: _TaskResponse, raw_response: httpx.Response) -> str:
+    """A download before the video is ready is the caller polling too early, not a fault of the deployment, so it
+    answers 400, which litellm neither retries nor counts toward a deployment cooldown. A 404 would cool the
+    deployment down, and a 409 or a 5xx would be retried against a job that is simply not finished."""
+    output: Final = _task_output(task, raw_response)
+    if output.video_url:
+        return output.video_url
+
+    if output.task_status in _PENDING_STATUSES:
+        raise _video_error(
+            raw_response,
+            400,
+            f"Video is still processing (status: {output.task_status}). Please wait and try again.",
+        )
+    if output.code or output.message:
+        raise _video_error(raw_response, 400, f"Video generation failed: {output.message or output.code}")
+    if output.task_status in _TERMINAL_FAILURE_STATUSES:
+        raise _video_error(raw_response, 400, f"Video generation ended as {output.task_status} with no video URL.")
+    if output.task_status == _UNKNOWN_TASK_STATUS:
+        raise _task_not_found(raw_response)
+    raise _video_error(raw_response, 502, "Video URL not found in task response. The task may not have succeeded yet.")
+
+
+def _logged_litellm_params(logging_obj: object) -> Mapping[str, object]:
+    litellm_params: Final[object] = getattr(logging_obj, "litellm_params", None)
+    try:
+        return _PARAMETERS_ADAPTER.validate_python(litellm_params)
+    except ValidationError:
+        return _EMPTY_PARAMS
+
+
+def _polled_models(logging_obj: object) -> tuple[str | None, str | None]:
+    """
+    The proxy routes by the models encoded in the polled id, so they must survive into the returned id. The served
+    group survives only when the router sent this poll to it, so an edited id cannot write any name it likes back.
+    """
+    video_id: Final = _logged_litellm_params(logging_obj).get("video_id")
+    if not isinstance(video_id, str):
+        return None, None
+    decoded: Final = decode_video_id_with_provider(video_id)
+    served: Final = decoded.get("served_model")
+    routed: Final = _poll_models(logging_obj)
+    return decoded.get("model_id") or None, served if routed is None or served in routed else None
+
+
+def _poll_models(logging_obj: object) -> tuple[str, str | None] | None:
+    """
+    A later status or content request checks the key's model access against the model encoded in the id, and
+    routes by it. DashScope serves the same model name from several regional hosts, so only the group that
+    served the task can send its polls back to the region that created it, while a key may be scoped to the
+    alias, routing group or wildcard name it asked for instead. The id carries both names: the one the router
+    was asked for on this hop, and the group that served it when that differs and is not a wildcard. The router
+    stamps both into litellm_metadata, and metadata carries a copy only when the caller sent none.
+    """
+    params: Final = _logged_litellm_params(logging_obj)
+    stamped: Final = (_stamped_poll_models(params.get(key)) for key in ("litellm_metadata", "metadata"))
+    return next((models for models in stamped if models), None)
+
+
+def _stamped_poll_models(metadata: object) -> tuple[str, str | None] | None:
+    try:
+        fields: Final = _PARAMETERS_ADAPTER.validate_python(metadata)
+    except ValidationError:
+        return None
+    requested: Final = _id_safe_name(fields.get("model_group"))
+    served: Final = _id_safe_name(fields.get("deployment_model_name"))
+    if requested is None:
+        return None
+    return requested, None if served is None or served == requested or "*" in served else served
+
+
+def _id_safe_name(name: object) -> str | None:
+    return name if isinstance(name, str) and name and ";" not in name else None
+
+
+class DashScopeVideoConfig(BaseVideoConfig):
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseVideoConfig contract returns list
+        return [
+            "model",
+            "prompt",
+            "input_reference",
+            "seconds",
+            "size",
+            "user",
+            "extra_headers",
+            "media",
+            "resolution",
+            "ratio",
+            "duration",
+            "audio",
+            "seed",
+            "prompt_extend",
+            "watermark",
+            "negative_prompt",
+            "parameters",
+            *_LEGACY_INPUT_KEYS,
+        ]
+
+    def map_openai_params(
+        self,
+        video_create_optional_params: VideoCreateOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
+        unsupported: Final = next(
+            (
+                key
+                for key, value in video_create_optional_params.items()
+                if key in _UNSUPPORTED_BY_DASHSCOPE and value is not None
+            ),
+            None,
+        )
+        if unsupported is not None and not drop_params:
+            raise UnsupportedParamsError(
+                message=f"'{unsupported}' is not supported by DashScope video generation, set drop_params=True to ignore it",
+                model=model,
+                llm_provider="dashscope",
+            )
+        parameters: Final = _parameters_fields(video_create_optional_params.get("parameters"), model, drop_params)
+        caller_parameters: Final = _caller_parameters(parameters, video_create_optional_params.get("extra_body"))
+        passthrough: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in video_create_optional_params.items()
+                if value is not None and key not in _MAPPED_ELSEWHERE
+            }
+        )
+        mapped_params: Final[dict[str, object]] = {  # mutable-ok: BaseVideoConfig contract; extra_body merges into it
+            **_size_fields(video_create_optional_params.get("size"), model, drop_params),
+            **_duration_fields(video_create_optional_params.get("seconds"), model, drop_params),
+            **passthrough,
+            **parameters,
+        }
+        if caller_parameters:
+            mapped_params[_CALLER_PARAMETERS_FIELD] = dict(caller_parameters)
+        return mapped_params
+
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        resolved_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
+        if resolved_api_key is None:
+            raise ValueError(
+                "DashScope API key is required. Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."
+            )
+        return resolved_api_key
+
+    def _resolve_video_api_base(self, video_api_base: str | None) -> str:
+        return (
+            video_api_base
+            or get_secret_str("DASHSCOPE_API_BASE_VIDEO")
+            or get_secret_str("DASHSCOPE_API_BASE")
+            or DASHSCOPE_VIDEO_DEFAULT_API_BASE
+        )
+
+    def validate_environment(
+        self,
+        headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract; handler expects a mutable headers dict
+        model: str,
+        api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
+    ) -> dict[str, str]:  # mutable-ok: BaseVideoConfig contract
+        resolved_api_key: Final = self._resolve_api_key(
+            api_key
+            or (litellm_params.api_key if litellm_params is not None and litellm_params.api_key else None)
+            or litellm.api_key
+        )
+
+        auth_headers: Final[dict[str, str]] = {  # mutable-ok: httpx request headers are a mutable dict
+            "Authorization": f"Bearer {resolved_api_key}",
+            "Content-Type": "application/json",
+            "X-DashScope-Async": "enable",
+        }
+        headers.update(auth_headers)
+        return headers
+
+    def get_complete_url(
+        self,
+        model: str,
+        api_base: str | None,
+        litellm_params: dict[str, object],  # mutable-ok: BaseVideoConfig contract
+    ) -> str:
+        return _normalized_api_base(self._resolve_video_api_base(api_base))
+
+    def transform_video_create_request(
+        self,
+        model: str,
+        prompt: str,
+        api_base: str,
+        video_create_optional_request_params: dict[str, object],  # mutable-ok: BaseVideoConfig contract
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
+    ) -> tuple[dict[str, object], RequestFiles, str]:  # mutable-ok: BaseVideoConfig contract
+        reference_field, reference_value = self._reference_input(model, video_create_optional_request_params)
+        passthrough_input: Final = tuple(
+            (key, video_create_optional_request_params[key])
+            for key in _INPUT_KEYS
+            if video_create_optional_request_params.get(key) is not None
+        )
+        reference_entry: Final = (
+            ((reference_field, reference_value),)
+            if reference_field is not None and reference_field not in frozenset(key for key, _ in passthrough_input)
+            else ()
+        )
+        request_input: Final[dict[str, object]] = dict(  # mutable-ok: request body dict, JSON-serialized by the handler
+            (("prompt", prompt), *passthrough_input, *reference_entry)
+        )
+
+        requested_parameters: Final = MappingProxyType(
+            {
+                **{
+                    key: video_create_optional_request_params[key]
+                    for key in _PARAMETER_KEYS
+                    if video_create_optional_request_params.get(key) is not None
+                },
+                **(_object_fields(video_create_optional_request_params.get(_CALLER_PARAMETERS_FIELD)) or _EMPTY_PARAMS),
+            }
+        )
+        if requested_parameters.get("duration") == DASHSCOPE_SMART_DURATION:
+            raise UnsupportedParamsError(
+                message=(
+                    "Smart duration (duration=-1) is not supported through litellm: the video is billed when the task "
+                    "is created, before DashScope has picked its length. Pass an explicit duration in seconds."
+                ),
+                model=model,
+                llm_provider="dashscope",
+            )
+        if _has_input_video(request_input.get("media")):
+            raise UnsupportedParamsError(
+                message=(
+                    "Video input (a reference_video media entry) is not supported through litellm: DashScope bills "
+                    "the input video's seconds on top of the output, and the video is billed when the task is "
+                    "created, before that length is known."
+                ),
+                model=model,
+                llm_provider="dashscope",
+            )
+        drop_params: Final = _drops_params(litellm_params)
+        malformed: Final = _malformed_parameters(requested_parameters)
+        if malformed and not drop_params:
+            raise _unsupported_value(model, "; ".join(f"invalid {field}: {message}" for field, message in malformed))
+        resolution: Final = requested_parameters.get("resolution")
+        priced_tiers: Final = _priced_tiers(model) if resolution is not None else None
+        drops_resolution: Final = priced_tiers is not None and not _is_priced_tier(resolution, priced_tiers)
+        if drops_resolution and not drop_params:
+            raise _unsupported_value(
+                model,
+                f"{model} is not offered at resolution {resolution!r}, only at {', '.join(priced_tiers or ())}",
+            )
+        dropped: Final = frozenset({*(field for field, _ in malformed), *(("resolution",) if drops_resolution else ())})
+        parameters: Final[dict[str, object]] = {  # mutable-ok: request body dict, JSON-serialized by the handler
+            key: value for key, value in requested_parameters.items() if key not in dropped
+        }
+
+        request_data: Final[dict[str, object]] = {  # mutable-ok: request body dict, JSON-serialized by the handler
+            "model": model,
+            "input": request_input,
+        }
+        if parameters:
+            request_data["parameters"] = parameters
+
+        return request_data, (), f"{api_base}{DASHSCOPE_VIDEO_SYNTHESIS_PATH}"
+
+    @staticmethod
+    def _reference_input(
+        model: str,
+        video_create_optional_request_params: Mapping[str, object],
+    ) -> tuple[str | None, object]:
+        input_reference: Final = video_create_optional_request_params.get("input_reference")
+        if input_reference is None:
+            return None, None
+        image_url: Final = _image_url(input_reference)
+        media_type: Final = _media_reference_type(model)
+        if media_type is None:
+            return "img_url", image_url
+        # a plain dict because json.dumps cannot serialize a MappingProxyType
+        return "media", (dict[str, object](type=media_type, url=image_url),)
+
+    def transform_video_create_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+        custom_llm_provider: str | None = None,
+        request_data: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
+    ) -> VideoObject:
+        task: Final = _parse_task_response(raw_response)
+        requested: Final = self._requested_parameters(request_data)
+        video_obj: Final = _video_object_from_task(task, raw_response, model=model, requested=requested)
+        if custom_llm_provider and video_obj.id:
+            requested_model, served_model = _poll_models(logging_obj) or (model, None)
+            video_obj.id = encode_video_id_with_provider(
+                video_obj.id, custom_llm_provider, requested_model, served_model
+            )
+        return video_obj
+
+    @staticmethod
+    def _requested_parameters(request_data: Mapping[str, object] | None) -> Mapping[str, object]:
+        """
+        The create call is the only billed one, so an omitted duration or tier bills DashScope's defaults, not zero.
+        """
+        parameters: Final = (request_data or _EMPTY_PARAMS).get("parameters")
+        requested: Final = (
+            _PARAMETERS_ADAPTER.validate_python(parameters) if isinstance(parameters, Mapping) else _EMPTY_PARAMS
+        )
+        return MappingProxyType(
+            {
+                "duration": DASHSCOPE_DEFAULT_DURATION_SECONDS,
+                "resolution": DASHSCOPE_DEFAULT_RESOLUTION,
+                **requested,
+            }
+        )
+
+    def transform_video_status_retrieve_request(
+        self,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
+        return self._task_url(video_id, api_base), _EMPTY_PARAMS
+
+    @staticmethod
+    def _task_url(video_id: str, api_base: str) -> str:
+        original_task_id: Final = extract_original_video_id(video_id)
+        encoded_task_id: Final = encode_url_path_segment(original_task_id, field_name="video_id")
+        return f"{api_base}{DASHSCOPE_TASKS_PATH}/{encoded_task_id}"
+
+    def transform_video_status_retrieve_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+        custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
+    ) -> VideoObject:
+        task: Final = _parse_task_response(raw_response)
+        model, served_model = _polled_models(logging_obj)
+        video_obj: Final = _video_object_from_task(task, raw_response, model=model)
+        if custom_llm_provider and video_obj.id:
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model, served_model)
+        return video_obj
+
+    def transform_video_content_request(
+        self,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
+        variant: str | None = None,
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
+        return self._task_url(video_id, api_base), _EMPTY_PARAMS
+
+    def transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+        client: "HTTPHandler | None" = None,
+    ) -> bytes:
+        video_url: Final = _video_url_from_task(_parse_task_response(raw_response), raw_response)
+
+        httpx_client: Final[HTTPHandler] = client if client is not None else _get_httpx_client()
+        video_response: Final = httpx_client.get(video_url)  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get stub leaves params/headers untyped
+        video_response.raise_for_status()
+
+        return video_response.content
+
+    async def async_transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+        client: "AsyncHTTPHandler | None" = None,
+    ) -> bytes:
+        video_url: Final = _video_url_from_task(_parse_task_response(raw_response), raw_response)
+
+        async_httpx_client: Final[AsyncHTTPHandler] = (
+            client
+            if client is not None
+            else get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.DASHSCOPE,
+            )
+        )
+        video_response: Final = await async_httpx_client.get(video_url)  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get stub leaves params/headers untyped
+        video_response.raise_for_status()
+
+        return video_response.content
+
+    def transform_video_remix_request(
+        self,
+        video_id: str,
+        prompt: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
+        extra_body: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
+        raise NotImplementedError("Video remix is not supported by DashScope.")
+
+    def transform_video_remix_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+        custom_llm_provider: str | None = None,
+    ) -> VideoObject:
+        raise NotImplementedError("Video remix is not supported by DashScope.")
+
+    def transform_video_list_request(
+        self,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_query: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
+        raise NotImplementedError(
+            "Video list is not supported by DashScope. Retrieve tasks individually by task id within their 24 hour "
+            "retention window."
+        )
+
+    def transform_video_list_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+        custom_llm_provider: str | None = None,
+    ) -> dict[str, str]:  # mutable-ok: BaseVideoConfig contract
+        raise NotImplementedError("Video list is not supported by DashScope.")
+
+    def transform_video_delete_request(
+        self,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, str],  # mutable-ok: BaseVideoConfig contract
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: BaseVideoConfig contract
+        raise NotImplementedError(
+            "Video delete is not supported by DashScope. Tasks and their artifacts expire 24 hours after creation."
+        )
+
+    def transform_video_delete_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: "Logging",
+    ) -> VideoObject:
+        raise NotImplementedError("Video delete is not supported by DashScope.")
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, str] | httpx.Headers,  # mutable-ok: BaseVideoConfig contract
+    ) -> BaseLLMException:
+        return DashScopeVideoError(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+        )

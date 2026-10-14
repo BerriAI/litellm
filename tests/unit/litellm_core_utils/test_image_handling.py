@@ -3,13 +3,11 @@ import base64
 import copy
 import time
 import uuid
-from unittest.mock import patch
 
 import pytest
 from httpx import Request, Response
 
 import litellm
-from litellm import constants
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     MAX_CONCURRENT_REMOTE_MEDIA_FETCHES,
@@ -275,9 +273,7 @@ def _stub_image_client(content, content_type):
 
 
 def test_convert_url_to_base64_infers_the_type_when_the_server_sends_octet_stream(monkeypatch):
-    monkeypatch.setattr(
-        litellm, "module_level_client", _stub_image_client(REAL_PNG_BYTES, "application/octet-stream")
-    )
+    monkeypatch.setattr(litellm, "module_level_client", _stub_image_client(REAL_PNG_BYTES, "application/octet-stream"))
 
     result = convert_url_to_base64(f"http://img.example/{uuid.uuid4()}")
 
@@ -285,9 +281,7 @@ def test_convert_url_to_base64_infers_the_type_when_the_server_sends_octet_strea
 
 
 def test_convert_url_to_base64_keeps_a_real_content_type(monkeypatch):
-    monkeypatch.setattr(
-        litellm, "module_level_client", _stub_image_client(REAL_PNG_BYTES, "image/jpeg")
-    )
+    monkeypatch.setattr(litellm, "module_level_client", _stub_image_client(REAL_PNG_BYTES, "image/jpeg"))
 
     result = convert_url_to_base64(f"http://img.example/{uuid.uuid4()}.png")
 
@@ -312,7 +306,7 @@ def test_image_size_limit_disabled(monkeypatch):
     """
     Test that setting MAX_IMAGE_URL_DOWNLOAD_SIZE_MB to 0 disables all image URL downloads.
     """
-    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
+    from litellm.litellm_core_utils.prompt_templates import image_handling
 
     monkeypatch.setattr(litellm, "module_level_client", SmallImageClient())
     monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0)
@@ -578,6 +572,54 @@ def test_convert_url_to_base64_hides_the_ssrf_verdict_and_does_not_retry(monkeyp
 
     assert attempts == [url] * len(_SSRF_VERDICTS)
     _assert_verdict_free_messages(messages, url)
+
+
+def test_convert_url_to_base64_retries_within_one_deadline(monkeypatch):
+    timeouts = []
+
+    def time_out(client, url, timeout=None, **kwargs):
+        timeouts.append(timeout)
+        time.sleep(timeout)
+        raise litellm.Timeout(message="timed out", model="", llm_provider="")
+
+    monkeypatch.setattr(image_handling, "safe_get", time_out)
+    started = time.monotonic()
+    with pytest.raises(litellm.ImageFetchError, match="after 3 attempts"):
+        convert_url_to_base64(f"https://slow.example/{uuid.uuid4()}.png", timeout=0.3)
+
+    assert time.monotonic() - started < 0.6
+    assert len(timeouts) == 1 and 0 < timeouts[0] <= 0.3
+
+
+async def test_async_convert_url_to_base64_retries_within_one_deadline(monkeypatch):
+    timeouts = []
+
+    async def time_out(client, url, timeout=None, **kwargs):
+        timeouts.append(timeout)
+        await asyncio.sleep(timeout)
+        raise litellm.Timeout(message="timed out", model="", llm_provider="")
+
+    monkeypatch.setattr(image_handling, "async_safe_get", time_out)
+    started = time.monotonic()
+    with pytest.raises(litellm.ImageFetchError, match="after 3 attempts"):
+        await async_convert_url_to_base64(f"https://slow.example/{uuid.uuid4()}.png", timeout=0.3)
+
+    assert time.monotonic() - started < 0.6
+    assert len(timeouts) == 1 and 0 < timeouts[0] <= 0.3
+
+
+def test_convert_url_to_base64_still_retries_fast_failures_three_times(monkeypatch):
+    attempts = []
+
+    def refuse(client, url, timeout=None, **kwargs):
+        attempts.append(timeout)
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(image_handling, "safe_get", refuse)
+    with pytest.raises(litellm.ImageFetchError, match="after 3 attempts"):
+        convert_url_to_base64(f"https://down.example/{uuid.uuid4()}.png", timeout=30.0)
+
+    assert len(attempts) == 3 and all(0 < timeout <= 30.0 for timeout in attempts)
 
 
 async def test_async_inline_remote_media_caps_in_flight_fetches_per_request(monkeypatch):

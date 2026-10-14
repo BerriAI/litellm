@@ -2449,6 +2449,7 @@ export interface paths {
          *         - homepage: Plugin homepage URL (optional)
          *         - keywords: Search keywords (optional)
          *         - category: Plugin category (optional)
+         *         - installation_preference: 'available', 'auto_install', or 'required' (optional)
          *
          *     Returns:
          *         Registration status (action is always "created") and plugin information.
@@ -2515,6 +2516,7 @@ export interface paths {
          *         - homepage: Plugin homepage URL (optional)
          *         - keywords: Search keywords (optional)
          *         - category: Plugin category (optional)
+         *         - installation_preference: 'available', 'auto_install', or 'required' (optional)
          *
          *     Returns:
          *         Update status (action is always "updated") and plugin information.
@@ -6145,6 +6147,9 @@ export interface paths {
          * @description Cache activity for the Admin UI cache dashboard, aggregated per call_type:
          *     cache hits vs successful LLM API requests vs failed requests, plus totals
          *     for the stat cards and the available key-alias/model filter options.
+         *
+         *     Admin callers see proxy-wide activity; all other callers see only their own
+         *     spend logs and those of teams they may view, exactly like ``/spend/logs/ui``.
          */
         get: operations["get_global_activity_global_activity_cache_hits_get"];
         put?: never;
@@ -7497,6 +7502,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/health/deployment_warnings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Deployment Warnings
+         * @description List the active deployment warnings with their severity and whether an admin ignored or snoozed them.
+         *     Readable by proxy admins and proxy admin viewers.
+         */
+        get: operations["get_deployment_warnings_health_deployment_warnings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/deployment_warnings/{warning_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Deployment Warning Ignore
+         * @description Ignore, snooze, or restore one deployment warning for every admin of this proxy.
+         *     Only proxy admins can call this, and it needs a database.
+         */
+        patch: operations["update_deployment_warning_ignore_health_deployment_warnings__warning_id__patch"];
+        trace?: never;
+    };
     "/health/drain": {
         parameters: {
             query?: never;
@@ -8347,7 +8394,7 @@ export interface paths {
          *     - key_alias: Optional[str] - User defined key alias
          *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
-         *     - user_id: Optional[str] - The user id of the key
+         *     - user_id: Optional[str] - The user id of the key. Non-admin callers may only pass their own id, except a team admin creating a key in a team they administer for another member of that team, when a proxy admin has added `create_member_keys` to `team_admin_editable_team_fields`. That member must have the `internal_user` or `internal_user_viewer` role, and the key is always an `llm_api` key.
          *     - agent_id: Optional[str] - The agent id associated with the key.
          *     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
          *     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
@@ -17496,6 +17543,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/telemetry/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Telemetry Reports
+         * @description Stored telemetry reports, oldest first, for installs that keep telemetry local instead of sending it.
+         *     Page with ``after=next_after&after_id=next_after_id`` until ``next_after`` is null. Another worker can commit a
+         *     report just after a newer one is exported, so resume a later export a few windows before the last cursor and skip
+         *     ids already seen
+         */
+        get: operations["export_telemetry_reports_telemetry_reports_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Telemetry Settings
+         * @description Which telemetry groups are on, whether env vars control them, where reports go and a last or sample report.
+         *     Nothing is recorded until a destination is chosen by ``LITELLM_TELEMETRY_DESTINATION`` or a saved setting
+         */
+        get: operations["get_telemetry_settings_telemetry_settings_get"];
+        /**
+         * Update Telemetry Settings
+         * @description Store the telemetry groups and destination for every worker, applied from the next report window
+         */
+        put: operations["update_telemetry_settings_telemetry_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/ui_events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Ui Event
+         * @description Count one Admin UI page view or tab click. Events are dropped unless Page navigation is on
+         */
+        post: operations["record_ui_event_telemetry_ui_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/ui_events/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ui Events Enabled */
+        get: operations["ui_events_enabled_telemetry_ui_events_enabled_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/test": {
         parameters: {
             query?: never;
@@ -25359,6 +25491,26 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** AdminIgnore */
+        AdminIgnore: {
+            /**
+             * Ignored At
+             * Format: date-time
+             */
+            ignored_at: string;
+            /** Ignored By */
+            ignored_by: string;
+            /**
+             * Ignored Until
+             * @description When the snooze ends. Null means the warning is ignored until an admin restores it.
+             */
+            ignored_until?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "admin";
+        };
         /**
          * AgentCapabilities
          * @description Defines optional capabilities supported by an agent.
@@ -31406,6 +31558,47 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** DeploymentWarning */
+        DeploymentWarning: {
+            /** Id */
+            id: string;
+            /** Ignore */
+            ignore?: (components["schemas"]["AdminIgnore"] | components["schemas"]["EnvVarIgnore"]) | null;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "warning";
+        };
+        /** DeploymentWarningIgnoreResponse */
+        DeploymentWarningIgnoreResponse: {
+            /** Id */
+            id: string;
+            ignore: components["schemas"]["AdminIgnore"] | null;
+        };
+        /** DeploymentWarningIgnoreUpdate */
+        DeploymentWarningIgnoreUpdate: {
+            /**
+             * Ignored
+             * @description True ignores the warning for every admin, false restores it.
+             */
+            ignored: boolean;
+            /**
+             * Snooze Seconds
+             * @description How long to ignore the warning, up to 30 days. Leave it out to ignore it forever.
+             */
+            snooze_seconds?: number | null;
+        };
+        /** DeploymentWarningsResponse */
+        DeploymentWarningsResponse: {
+            /**
+             * Ignore Available
+             * @description False when no database is connected, so warnings cannot be ignored.
+             */
+            ignore_available: boolean;
+            /** Warnings */
+            warnings: components["schemas"]["DeploymentWarning"][];
+        };
         /** DiscoverAgentRequest */
         DiscoverAgentRequest: {
             /**
@@ -31743,6 +31936,16 @@ export interface components {
             service_principal_id?: string | null;
             /** Tenant Id */
             tenant_id: string;
+        };
+        /** EnvVarIgnore */
+        EnvVarIgnore: {
+            /** Env Var */
+            env_var: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            source: "env_var";
         };
         /** EnvironmentReport */
         EnvironmentReport: {
@@ -36978,6 +37181,10 @@ export interface components {
             dcr_server_url?: string | null;
             /** Id Jag Resource */
             id_jag_resource?: string | null;
+            /** Id Jag Resource Client Id */
+            id_jag_resource_client_id?: string | null;
+            /** Id Jag Resource Client Secret */
+            id_jag_resource_client_secret?: string | null;
             /** Id Jag Resource Token Endpoint */
             id_jag_resource_token_endpoint?: string | null;
             /** Redirect Uris */
@@ -40153,6 +40360,8 @@ export interface components {
             homepage?: string | null;
             /** Id */
             id: string;
+            /** Installation Preference */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /** Keywords */
             keywords?: string[] | null;
             /** Name */
@@ -40188,6 +40397,11 @@ export interface components {
              * @description Plugin unique ID
              */
             id: string;
+            /**
+             * Installation Preference
+             * @description Plugin installation preference
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
              * Name
              * @description Plugin name
@@ -41606,6 +41820,11 @@ export interface components {
              * @description Plugin homepage URL
              */
             homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
              * Keywords
              * @description Search keywords
@@ -45314,6 +45533,16 @@ export interface components {
              */
             user_ids: string[];
         };
+        /** StoredReport */
+        StoredReport: {
+            /** Id */
+            id: string;
+            report: components["schemas"]["JsonValue"];
+            /** Window End */
+            window_end: number;
+            /** Window Start */
+            window_start: number;
+        };
         /**
          * SuccessfulKeyUpdate
          * @description Successfully updated key with its updated information
@@ -46132,6 +46361,71 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TelemetryDestination
+         * @enum {string}
+         */
+        TelemetryDestination: "local_table" | "http";
+        /**
+         * TelemetryGroup
+         * @description A telemetry group describes a group of metrics that can be toggled on/off separately. One
+         *     group may have dependencies on another.
+         * @enum {string}
+         */
+        TelemetryGroup: "heartbeat" | "request_success" | "token_info" | "request_taxonomy" | "event_details" | "instance_configuration" | "page_navigation";
+        /** TelemetryGroupInfo */
+        TelemetryGroupInfo: {
+            /** Enabled */
+            enabled: boolean;
+            group: components["schemas"]["TelemetryGroup"];
+            requires: components["schemas"]["TelemetryGroup"] | null;
+        };
+        /** TelemetryReportsResponse */
+        TelemetryReportsResponse: {
+            /** Next After */
+            next_after: number | null;
+            /** Next After Id */
+            next_after_id: string | null;
+            /** Reports */
+            reports: components["schemas"]["StoredReport"][];
+        };
+        /** TelemetrySettingsResponse */
+        TelemetrySettingsResponse: {
+            /** Available Destinations */
+            available_destinations: components["schemas"]["TelemetryDestination"][];
+            destination: components["schemas"]["TelemetryDestination"] | null;
+            /** Destination Set By Environment */
+            destination_set_by_environment: boolean;
+            /** Editable */
+            editable: boolean;
+            /** Environment Variables */
+            environment_variables: string[];
+            /** Flush Interval Seconds */
+            flush_interval_seconds: number;
+            /** Groups */
+            groups: components["schemas"]["TelemetryGroupInfo"][];
+            /** Report */
+            report: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Report Is Sample */
+            report_is_sample: boolean;
+            /** Retention Days */
+            retention_days: number;
+            /** Set By Environment */
+            set_by_environment: boolean;
+            stored_destination: components["schemas"]["TelemetryDestination"] | null;
+            /** Stored Groups */
+            stored_groups: components["schemas"]["TelemetryGroup"][] | null;
+            /** Vetoed */
+            vetoed: boolean;
+        };
+        /** TelemetrySettingsUpdate */
+        TelemetrySettingsUpdate: {
+            destination?: components["schemas"]["TelemetryDestination"] | null;
+            /** Groups */
+            groups: string[];
         };
         /**
          * TestCustomCodeGuardrailRequest
@@ -47118,6 +47412,33 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * UIAction
+         * @enum {string}
+         */
+        UIAction: "view" | "click" | "submit";
+        /** UIEventAccepted */
+        UIEventAccepted: {
+            /**
+             * Accepted
+             * @default true
+             * @constant
+             */
+            accepted: true;
+        };
+        /** UIEventBody */
+        UIEventBody: {
+            action: components["schemas"]["UIAction"];
+            /** Page */
+            page: string;
+            /** Target */
+            target?: string | null;
+        };
+        /** UIEventsEnabledResponse */
+        UIEventsEnabledResponse: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** UIField */
         UIField: {
             /** Key */
@@ -47661,6 +47982,11 @@ export interface components {
              * @description Plugin homepage URL
              */
             homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
             /**
              * Keywords
              * @description Search keywords
@@ -60833,6 +61159,61 @@ export interface operations {
             };
         };
     };
+    get_deployment_warnings_health_deployment_warnings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentWarningsResponse"];
+                };
+            };
+        };
+    };
+    update_deployment_warning_ignore_health_deployment_warnings__warning_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                warning_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentWarningIgnoreUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentWarningIgnoreResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_drain_health_drain_get: {
         parameters: {
             query?: never;
@@ -71345,6 +71726,22 @@ export interface operations {
                         content_type: string;
                     })[];
                     /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
+                    /**
                      * Model
                      * @description A decision model from the proxy model_list
                      */
@@ -73297,6 +73694,147 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_telemetry_reports_telemetry_reports_get: {
+        parameters: {
+            query?: {
+                /** @description window_end of the last report already exported */
+                after?: number;
+                /** @description id of the last report already exported */
+                after_id?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetryReportsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_telemetry_settings_telemetry_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetrySettingsResponse"];
+                };
+            };
+        };
+    };
+    update_telemetry_settings_telemetry_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelemetrySettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetrySettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_ui_event_telemetry_ui_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UIEventBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UIEventAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ui_events_enabled_telemetry_ui_events_enabled_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UIEventsEnabledResponse"];
                 };
             };
         };
@@ -80067,6 +80605,22 @@ export interface operations {
                          */
                         content_type: string;
                     })[];
+                    /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
                     /**
                      * Model
                      * @description A decision model from the proxy model_list
