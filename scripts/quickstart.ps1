@@ -9,10 +9,16 @@
 #
 # Asks where to keep the files, then offers to copy the admin password and
 # open the admin UI; every question has a default you accept by pressing Enter.
+# Run it again for a menu to open, stop, start, update, or remove the install.
 # It asks nothing when input is not a console, under CI or Claude Code, or
 # with -Yes.
 #
-#   -Yes, or LITELLM_YES=1   no questions: install to ~\litellm-gateway, don't open a browser
+# It also takes an action, which the litellm-gateway command it installs takes too:
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.ps1))) stop
+#   status, start (up), stop (down), restart, logs, open, update, uninstall
+#
+#   -Yes, or LITELLM_YES=1   no questions: install to ~\litellm-gateway, don't open a browser,
+#                            and let uninstall delete the database without asking
 #   LITELLM_DIR              folder to install into (skips the folder question)
 #   LITELLM_PORT             port for the gateway (default 4000, or the next free one)
 #   NO_COLOR                 plain output, which agents, CI, and log files always get
@@ -29,7 +35,7 @@
 param([switch]$Yes)
 
 function Invoke-LiteLLMQuickstart {
-  param([switch]$Yes)
+  param([switch]$Yes, [object[]]$Rest = @())
   $ErrorActionPreference = 'Stop'
   # Windows PowerShell draws a progress bar for every web request, which makes them crawl.
   $ProgressPreference = 'SilentlyContinue'
@@ -37,7 +43,60 @@ function Invoke-LiteLLMQuickstart {
 
   $composeUrl = 'https://raw.githubusercontent.com/BerriAI/litellm/main/docker/docker-compose.quickstart.yml'
   if ($env:LITELLM_COMPOSE_URL) { $composeUrl = $env:LITELLM_COMPOSE_URL }
+  $scriptUrl = 'https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.ps1'
+  if ($env:LITELLM_SCRIPT_URL) { $scriptUrl = $env:LITELLM_SCRIPT_URL }
   $onWindows = ($PSVersionTable.PSEdition -eq 'Desktop') -or ((Test-Path variable:IsWindows) -and $IsWindows)
+
+  # A step that cannot go on stops the whole run with exit code 1, from any depth.
+  $exitSignal = 'LITELLM_QUICKSTART_EXIT'
+  function Stop-Quickstart { throw $exitSignal }
+
+  function Show-Usage([IO.TextWriter]$To) {
+    @(
+      'Usage: quickstart.ps1 [-Yes] [action]'
+      ''
+      'With no action it installs the LiteLLM Gateway, or shows a menu to manage the'
+      'install it finds. Actions:'
+      '  status      whether it is running, and where'
+      '  start       start it (also: up)'
+      '  stop        stop it; models, keys, and logs are kept (also: down)'
+      '  restart     stop it and start it again'
+      "  logs        show the gateway's logs"
+      '  open        open the admin UI in your browser'
+      '  update      download the latest image and restart on it'
+      '  uninstall   remove its containers, its database, and its files'
+      ''
+      '  -Yes, -y    ask nothing; without a console, uninstall needs it'
+      ''
+      'From the install command:'
+      '  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.ps1))) status'
+    ) | ForEach-Object { $To.WriteLine($_) }
+  }
+
+  # Windows PowerShell passes -y and --yes through as plain arguments.
+  $noQuestions = [bool]$Yes
+  $action = ''
+  foreach ($arg in $Rest) {
+    $a = "$arg"
+    if ($a -in '-y', '--yes', '-yes') {
+      $noQuestions = $true
+    } elseif ($a -in '-h', '--help', '-help', 'help') {
+      Show-Usage ([Console]::Out)
+      return 0
+    } elseif ($a -in 'status', 'start', 'up', 'stop', 'down', 'restart', 'logs', 'open', 'update', 'uninstall') {
+      if ($action) {
+        [Console]::Error.WriteLine("Choose one action, not both $action and $a")
+        return 1
+      }
+      $action = $a.ToLowerInvariant()
+    } else {
+      [Console]::Error.WriteLine("Unknown option: $a")
+      Show-Usage ([Console]::Error)
+      return 1
+    }
+  }
+  if ($action -eq 'up') { $action = 'start' } elseif ($action -eq 'down') { $action = 'stop' }
+  if ($env:LITELLM_YES) { $noQuestions = $true }
 
   # ------------------------------------------------------------ output
 
@@ -127,6 +186,16 @@ function Invoke-LiteLLMQuickstart {
     return [pscustomobject]@{ Code = $code; Out = @($out) }
   }
 
+  # Run a native program with its output on the console, never in this
+  # function's results; returns its exit code.
+  function Invoke-Shown {
+    param([string]$File, [string[]]$Arguments)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $File @Arguments 2>&1 | ForEach-Object { [Console]::Out.WriteLine("$_") }; return $LASTEXITCODE }
+    finally { $ErrorActionPreference = $prev }
+  }
+
   # Write a text file as UTF-8 without a byte order mark, with LF line endings,
   # which is what Docker Compose and git expect.
   function Write-PlainText([string]$Path, [string]$Text, [switch]$Append) {
@@ -154,7 +223,7 @@ function Invoke-LiteLLMQuickstart {
 
   # ------------------------------------------------------------ questions
 
-  $interactive = (-not $Yes) -and (-not $env:LITELLM_YES) -and (-not $env:CI) -and (-not $env:CLAUDECODE) -and
+  $interactive = (-not $noQuestions) -and (-not $env:CI) -and (-not $env:CLAUDECODE) -and
     (-not [Console]::IsInputRedirected) -and [Environment]::UserInteractive
 
   # Menu "Question" Default @(@('label', 'note'), ...) -> the 1-based pick.
@@ -224,19 +293,29 @@ function Invoke-LiteLLMQuickstart {
   # ------------------------------------------------------------ steps
 
   function Test-PortFree([int]$Port) {
+    # Windows lets a second program bind a port that another one holds on a
+    # different address, so ask it what is listening first.
+    if ($onWindows -and (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
+      try {
+        if (Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue) { return $false }
+      } catch { <# no answer: binding below decides #> }
+    }
     # Binding answers right away and is accurate. Probing with a connect is
     # not: the WSL2 localhost relay (Podman, Rancher Desktop) swallows the
     # refusal on closed ports, so every connect waits out its timeout and
-    # closed ports look taken.
-    $listener = New-Object System.Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $Port)
-    try {
-      $listener.Start()
-      return $true
-    } catch {
-      return $false
-    } finally {
-      $listener.Stop()
+    # closed ports look taken. A listener on all addresses only blocks the
+    # second bind, so try both.
+    foreach ($address in [Net.IPAddress]::Loopback, [Net.IPAddress]::Any) {
+      $listener = New-Object System.Net.Sockets.TcpListener($address, $Port)
+      try {
+        $listener.Start()
+      } catch {
+        return $false
+      } finally {
+        $listener.Stop()
+      }
     }
+    return $true
   }
 
   function Test-Ready([int]$Port) {
@@ -250,13 +329,7 @@ function Invoke-LiteLLMQuickstart {
   # show if it fails. Without styling it runs in the open.
   function Invoke-WithSpinner {
     param([string]$Label, [string]$Detail, [string]$File, [string[]]$Arguments)
-    if (-not $style) {
-      $prev = $ErrorActionPreference
-      $ErrorActionPreference = 'Continue'
-      try { & $File @Arguments 2>&1 | ForEach-Object { [Console]::Out.WriteLine("$_") }; $code = $LASTEXITCODE }
-      finally { $ErrorActionPreference = $prev }
-      return $code
-    }
+    if (-not $style) { return Invoke-Shown $File $Arguments }
     $out = [IO.Path]::GetTempFileName(); $err = [IO.Path]::GetTempFileName()
     try {
       $p = Start-Process -FilePath $File -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
@@ -363,9 +436,569 @@ function Invoke-LiteLLMQuickstart {
     Say "{a:$($sym.BL)$rule$($sym.BR)}"
   }
 
+  # ------------------------------------------------------------ the install
+
+  # The install this run manages, filled in by Use-Install.
+  $inst = @{ Dir = ''; Project = ''; Port = 0; Url = ''; Command = '' }
+  $cf = @('compose', '-f', 'docker-compose.quickstart.yml')
+
+  function Read-EnvValue([string]$Name) {
+    $p = Join-Path (Get-Location).ProviderPath '.env'
+    if (-not (Test-Path -LiteralPath $p)) { return '' }
+    $m = Get-Content -LiteralPath $p |
+      Where-Object { $_.StartsWith("$Name=") } | Select-Object -Last 1
+    if ($m) { return ($m -split '=', 2)[1] }
+    return ''
+  }
+
+  # An existing install: LITELLM_DIR, this folder, .\litellm-gateway, or
+  # ~\litellm-gateway, whichever has a .env first. Empty when there is none.
+  function Find-Install {
+    $here = (Get-Location).ProviderPath
+    if ($env:LITELLM_DIR) {
+      if (Test-Path -LiteralPath (Join-Path $env:LITELLM_DIR '.env')) { return $env:LITELLM_DIR }
+    } elseif ((Test-Path -LiteralPath (Join-Path $here '.env')) -and (Test-Path -LiteralPath (Join-Path $here 'docker-compose.quickstart.yml'))) {
+      return $here
+    } elseif (Test-Path -LiteralPath (Join-Path $here 'litellm-gateway/.env')) {
+      return (Join-Path $here 'litellm-gateway')
+    } elseif (Test-Path -LiteralPath (Join-Path $HOME 'litellm-gateway/.env')) {
+      return (Join-Path $HOME 'litellm-gateway')
+    }
+    return ''
+  }
+
+  # What holds a port: Owner describes it, FreeIt is the command that frees it,
+  # and Kind is container or process. All stay empty when the holder cannot be
+  # named, such as another user's process.
+  function Get-PortOwner([int]$Port) {
+    $o = @{ Owner = ''; FreeIt = ''; FreeArgs = @(); Kind = ''; Project = '' }
+    $name = ''
+    foreach ($line in (Invoke-Native $docker @('ps', '--format', '{{.Names}} {{.Ports}}')).Out) {
+      if ("$line" -match "[:]$Port->") { $name = ("$line" -split ' ')[0]; break }
+    }
+    if ($name) {
+      $o.Kind = 'container'
+      # Labels come as JSON: Windows PowerShell mangles the quotes an index template needs.
+      $labels = Invoke-Native $docker @('inspect', '--format', '{{json .Config.Labels}}', $name)
+      if ($labels.Code -eq 0) {
+        try {
+          $json = ($labels.Out -join "`n") | ConvertFrom-Json
+          if ($json -and $json.PSObject.Properties['com.docker.compose.project']) { $o.Project = "$($json.'com.docker.compose.project')" }
+        } catch { <# unreadable labels: treat it as a plain container #> }
+      }
+      if (-not $o.Project) {
+        $o.Owner = "the $engineName container $name"; $o.FreeIt = "$engine stop $name"; $o.FreeArgs = @('stop', $name)
+      } else {
+        if ($o.Project -like 'litellm-gateway*') {
+          $o.Owner = "another LiteLLM quickstart install ($engineName project $($o.Project))"
+        } else {
+          $o.Owner = "the $engineName container $name (project $($o.Project))"
+        }
+        $o.FreeIt = "$engine compose -p $($o.Project) stop"; $o.FreeArgs = @('compose', '-p', $o.Project, 'stop')
+      }
+      return $o
+    }
+    $procId = 0; $name = ''; $args0 = ''
+    if ($onWindows) {
+      try {
+        $conn = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($conn) {
+          $procId = [int]$conn.OwningProcess
+          $name = (Get-Process -Id $procId -ErrorAction SilentlyContinue).ProcessName
+          $args0 = "$((Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue).CommandLine)"
+        }
+      } catch { <# not allowed to look: leave it unnamed #> }
+      if ($procId) { $o.FreeIt = "Stop-Process -Id $procId" }
+    } elseif (Get-Command lsof -CommandType Application -ErrorAction SilentlyContinue) {
+      $found = (Invoke-Native lsof @('-nP', "-iTCP:$Port", '-sTCP:LISTEN', '-t')).Out | Select-Object -First 1
+      if ($found) {
+        $procId = [int]"$found"
+        $name = "$((Invoke-Native ps @('-o', 'comm=', '-p', "$procId")).Out | Select-Object -First 1)"
+        if ($name) { $name = Split-Path -Leaf $name.Trim() }
+        $args0 = "$((Invoke-Native ps @('-o', 'args=', '-p', "$procId")).Out | Select-Object -First 1)"
+        $o.FreeIt = "kill $procId"
+      }
+    }
+    if (-not $procId) { return $o }
+    $o.Kind = 'process'
+    if ($args0 -match 'litellm') {
+      $o.Owner = "a litellm server (pid $procId), maybe one started after pip install litellm"
+    } else {
+      if (-not $name) { $name = 'a program' }
+      $o.Owner = "$name (pid $procId)"
+    }
+    return $o
+  }
+
+  function Select-Port {
+    $saved = Read-EnvValue 'LITELLM_PORT'
+    if ($env:LITELLM_PORT) {
+      $port = [int]$env:LITELLM_PORT
+    } elseif ($saved) {
+      $port = [int]$saved
+    } elseif (Test-Path -LiteralPath '.env') {
+      $port = 4000   # an existing install without a saved port runs on the compose default
+    } else {
+      $port = 4000
+      while (-not (Test-PortFree $port)) {
+        $port++
+        if ($port -gt 4099) {
+          Fail 'Ports 4000 to 4099 are all in use.' 'Set LITELLM_PORT to a free port and run this again.'
+          Stop-Quickstart
+        }
+      }
+      if ($port -eq 4000) {
+        Step 'Port {b:4000} is free'
+      } else {
+        $o = Get-PortOwner 4000
+        $by = if ($o.Owner) { ' by ' + (Lit $o.Owner) } else { '' }
+        Warn "Port 4000 is in use$by, so LiteLLM will use {b:$port}"
+      }
+    }
+    $env:LITELLM_PORT = "$port"
+    return $port
+  }
+
+  # Compose prefers values already set in the environment over .env, so drop
+  # inherited ones: .env stays the only source for keys and the project name.
+  function Clear-ComposeEnv {
+    foreach ($name in 'LITELLM_MASTER_KEY', 'LITELLM_SALT_KEY', 'POSTGRES_PASSWORD', 'COMPOSE_PROJECT_NAME') {
+      Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+    }
+    # The bind address follows .env when .env sets it. For an older .env without
+    # it, a value already in the environment is kept.
+    if (Get-Content -LiteralPath '.env' | Where-Object { $_ -match '^LITELLM_BIND=' }) { Remove-Item Env:LITELLM_BIND -ErrorAction SilentlyContinue }
+  }
+
+  function Use-Install([string]$Dir) {
+    Set-Location -LiteralPath $Dir
+    $inst.Dir = (Get-Location).ProviderPath
+    $inst.Project = Read-EnvValue 'COMPOSE_PROJECT_NAME'
+    # Installs from before COMPOSE_PROJECT_NAME have Compose's default, the folder name.
+    if (-not $inst.Project) { $inst.Project = (Split-Path -Leaf $inst.Dir).ToLowerInvariant() -replace '[^a-z0-9_-]', '' }
+    $inst.Port = Select-Port
+    Clear-ComposeEnv
+    $inst.Url = "http://localhost:$($inst.Port)/ui"
+  }
+
+  function Save-Compose {
+    Invoke-WebRequest -UseBasicParsing -Uri $composeUrl -OutFile (Join-Path (Get-Location).ProviderPath 'docker-compose.quickstart.yml')
+  }
+
+  # Where a symbolic link points, or nothing when the path is not one.
+  function Get-LinkTarget([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($item -and $item.LinkType -eq 'SymbolicLink') { return "$(@($item.Target)[0])" }
+    return ''
+  }
+
+  function Test-BinOnPath {
+    $bin = Join-Path $HOME '.local/bin'
+    return (-not $onWindows) -and (@($env:PATH -split ':') -contains $bin) -and (Test-Path -LiteralPath $bin -PathType Container)
+  }
+
+  # The litellm-gateway command: the copy of this script kept beside .env, run
+  # against this folder, so up, down, status, and the rest work from anywhere.
+  function Install-Command {
+    $dir = $inst.Dir
+    $tmp = Join-Path $dir ('quickstart.ps1.' + [IO.Path]::GetRandomFileName())
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri $scriptUrl -OutFile $tmp
+      if ([IO.File]::ReadAllText($tmp) -match '(?m)^\$code = Invoke-LiteLLMQuickstart') {
+        Move-Item -LiteralPath $tmp -Destination (Join-Path $dir 'quickstart.ps1') -Force
+      }
+    } catch {
+      # Offline, or a partial download: keep the copy already here, if any.
+    } finally {
+      Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $dir 'quickstart.ps1'))) { return }
+    if ($onWindows) {
+      # cmd reads a batch file line by line as it runs, so the last line exits
+      # before uninstall has deleted the file under it.
+      $path = Join-Path $dir 'litellm-gateway.cmd'
+      $text = (@(
+          '@echo off'
+          'setlocal'
+          'rem Manages the LiteLLM Gateway in this folder. Run it for a menu, or with one of'
+          'rem status, up, down, restart, logs, open, update, uninstall'
+          'set "LITELLM_DIR=%~dp0."'
+          'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0quickstart.ps1" %* & exit /b'
+        ) -join "`r`n") + "`r`n"
+    } else {
+      $path = Join-Path $dir 'litellm-gateway'
+      $shell = if (Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue) { 'pwsh' } else { (Get-Process -Id $PID).Path }
+      $text = (@(
+          '#!/bin/sh'
+          '# Manages the LiteLLM Gateway in this folder. Run it for a menu, or with one of'
+          '# status, up, down, restart, logs, open, update, uninstall'
+          ("export LITELLM_DIR='" + $dir.Replace("'", "'\''") + "'")
+          ("exec '" + $shell.Replace("'", "'\''") + "' -NoProfile -File `"`$LITELLM_DIR/quickstart.ps1`" `"`$@`"")
+        ) -join "`n") + "`n"
+    }
+    $current = if (Test-Path -LiteralPath $path) { [IO.File]::ReadAllText($path) } else { '' }
+    if ($current -ne $text) { Write-PlainText $path $text }
+    if ($onWindows) { return }
+    $null = Invoke-Native chmod @('755', $path)
+    # Linked into ~/.local/bin when that is on PATH. A link another install made
+    # stays, unless that install is gone.
+    if (-not (Test-BinOnPath)) { return }
+    $bin = Join-Path $HOME '.local/bin'
+    $link = Join-Path $bin 'litellm-gateway'
+    $target = Get-LinkTarget $link
+    if ($target) {
+      if ($target -eq $path -or (Test-Path -LiteralPath ([IO.Path]::Combine($bin, $target)))) { return }
+      Remove-Item -LiteralPath $link -Force
+    } elseif (Test-Path -LiteralPath $link) {
+      return
+    }
+    try { $null = New-Item -ItemType SymbolicLink -Path $link -Target $path } catch { <# not allowed: the full path still works #> }
+  }
+
+  # How this install's litellm-gateway command runs from anywhere, or nothing.
+  function Find-Command {
+    $name = if ($onWindows) { 'litellm-gateway.cmd' } else { 'litellm-gateway' }
+    $path = Join-Path $inst.Dir $name
+    if (-not (Test-Path -LiteralPath $path)) { return '' }
+    if ((Test-BinOnPath) -and (Get-LinkTarget (Join-Path $HOME '.local/bin/litellm-gateway')) -eq $path) { return 'litellm-gateway' }
+    $command = Tildify $path
+    if ($command -match ' ') { $command = "& `"$command`"" }
+    return $command
+  }
+
+  # The command for an action: the litellm-gateway command, or Compose itself.
+  function Hint([string]$What) {
+    if ($inst.Command) { return "$($inst.Command) $What" }
+    $verb = switch ($What) { 'up' { 'up -d' } 'down' { 'stop' } 'uninstall' { 'down --volumes' } 'logs' { 'logs litellm' } default { $What } }
+    $where = Tildify $inst.Dir
+    if ($where -match ' ') { $where = "`"$where`"" }
+    return "cd $where; $engine compose -f docker-compose.quickstart.yml $verb"
+  }
+
+  # The gateway container's status, such as "Up 2 hours", or nothing when there is none.
+  function Get-GatewayStatus {
+    $r = Invoke-Native $docker @('ps', '-a', '--filter', "label=com.docker.compose.project=$($inst.Project)",
+      '--filter', 'label=com.docker.compose.service=litellm', '--format', '{{.Status}}')
+    return "$($r.Out | Select-Object -First 1)"
+  }
+
+  function Test-Running { return (Get-GatewayStatus) -like 'Up*' }
+
+  function Test-HasContainers([switch]$All) {
+    $a = @('ps', '-q')
+    if ($All) { $a += '-a' }
+    $a += @('--filter', "label=com.docker.compose.project=$($inst.Project)")
+    return [bool](@((Invoke-Native $docker $a).Out | Where-Object { $_ }).Count)
+  }
+
+  # The running version, from the API description: the first "version" in it is
+  # the gateway's, and it needs no key.
+  function Get-GatewayVersion {
+    try {
+      $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri "http://127.0.0.1:$($inst.Port)/openapi.json"
+      if ("$($r.Content)" -match '"version": *"([^"]*)"') { return $Matches[1] }
+    } catch { <# not up yet #> }
+    return ''
+  }
+
+  function Get-Images {
+    return @((Invoke-Native $docker ($cf + @('config', '--images'))).Out | Where-Object { $_ } | ForEach-Object { "$_" })
+  }
+
+  # Before starting: if something else holds the port, say what and how to free it.
+  function Confirm-PortFree {
+    $port = $inst.Port
+    if ((Test-Running) -or (Test-PortFree $port)) { return }
+    $o = Get-PortOwner $port
+    if ($o.Kind -eq 'container' -and $interactive) {
+      $pick = if ($o.Project -like 'litellm-gateway*') { 1 } else { 2 }
+      $choice = Menu "Port $port is in use by $($o.Owner). Stop it and start this one?" $pick @(@('Yes, stop it', $o.FreeIt), @('No'))
+      if ($choice -eq 1 -and (Invoke-WithSpinner 'Stopping it' '' $docker $o.FreeArgs) -eq 0) {
+        Step ('Stopped ' + (Lit $o.Owner))
+        return
+      }
+    }
+    $who = if ($o.Owner) { $o.Owner } else { 'another program' }
+    Fail (Lit "Port $port is in use by $who.") ('Free it, or set LITELLM_PORT in ' + (Lit (Join-Path (Tildify $inst.Dir) '.env')) + ' to another port.')
+    if ($o.FreeIt) { Say ('  To free it:  ' + (Lit $o.FreeIt)) -Err }
+    Stop-Quickstart
+  }
+
+  function Start-Gateway {
+    Confirm-PortFree
+    if (-not (Test-Path -LiteralPath 'docker-compose.quickstart.yml')) { Save-Compose }
+    $started = Get-Date
+    $detail = ''
+    foreach ($image in Get-Images) {
+      if ((Invoke-Native $docker @('image', 'inspect', $image)).Code -ne 0) { $detail = 'downloading images, first run only' }
+    }
+    if (-not $style) { if ($detail) { Say "Starting LiteLLM and Postgres ($detail)..." } else { Say 'Starting LiteLLM and Postgres...' } }
+    if ((Invoke-WithSpinner 'Starting LiteLLM and Postgres' $detail $docker ($cf + @('up', '-d'))) -ne 0) {
+      Fail "$engineName could not start LiteLLM and Postgres." 'Its output is above.'
+      Stop-Quickstart
+    }
+    if (-not (Wait-Ready $inst.Port)) {
+      Fail 'The gateway did not become ready in 3 minutes.' 'See what it logged:'
+      Say ('    ' + (Lit (Hint 'logs'))) -Err
+      Stop-Quickstart
+    }
+    Step "LiteLLM is up at {a:$($inst.Url)} {d:$($sym.Dot) $(Elapsed $started)}"
+  }
+
+  function Stop-Gateway {
+    if (-not (Test-HasContainers)) { Step 'LiteLLM is already stopped'; return }
+    if ((Invoke-WithSpinner 'Stopping LiteLLM and Postgres' '' $docker ($cf + @('stop'))) -ne 0) {
+      Fail "$engineName could not stop LiteLLM and Postgres." 'Its output is above.'
+      Stop-Quickstart
+    }
+    Step ("Stopped LiteLLM. Your models, keys, and logs are kept {d:$($sym.Dot) start it again: " + (Lit (Hint 'up')) + '}')
+  }
+
+  function Restart-Gateway {
+    if ((Test-HasContainers) -and (Invoke-WithSpinner 'Stopping LiteLLM and Postgres' '' $docker ($cf + @('stop'))) -ne 0) {
+      Fail "$engineName could not stop LiteLLM and Postgres." 'Its output is above.'
+      Stop-Quickstart
+    }
+    Start-Gateway
+  }
+
+  function Update-Gateway {
+    $before = ''
+    if (Test-Running) { $before = Get-GatewayVersion }
+    Save-Compose
+    Install-Command
+    $inst.Command = Find-Command
+    $images = Get-Images
+    $old = @(foreach ($image in $images) {
+        $r = Invoke-Native $docker @('image', 'inspect', '--format', '{{.Id}}', $image)
+        if ($r.Code -eq 0) { "$($r.Out | Select-Object -First 1)" }
+      })
+    if (-not $style) { Say 'Downloading the latest LiteLLM and Postgres images...' }
+    if ((Invoke-WithSpinner 'Downloading the latest images' '' $docker ($cf + @('pull'))) -ne 0) {
+      Fail "$engineName could not download the images." 'Its output is above.'
+      Stop-Quickstart
+    }
+    Start-Gateway
+    # Delete the images this replaced. Removal fails, and they stay, while any
+    # container still uses them or another tag points at them.
+    $now = @(foreach ($image in $images) { "$((Invoke-Native $docker @('image', 'inspect', '--format', '{{.Id}}', $image)).Out | Select-Object -First 1)" })
+    foreach ($id in $old) {
+      if ($id -and $now -notcontains $id) { $null = Invoke-Native $docker @('image', 'rm', $id) }
+    }
+    $after = Get-GatewayVersion
+    if ($before -and $before -eq $after) {
+      Step "LiteLLM $after is already the latest"
+    } elseif ($before -and $after) {
+      Step "Updated LiteLLM from $before to $after"
+    } elseif ($after) {
+      Step "LiteLLM $after is on the latest image"
+    } else {
+      Step 'LiteLLM is on the latest image'
+    }
+  }
+
+  function Show-Logs([switch]$Follow) {
+    if (-not (Test-HasContainers -All)) { Step 'No logs yet: start LiteLLM first'; return }
+    if ($Follow) {
+      Say '{d:The gateway logs. Press Ctrl+C to stop following them.}'
+      $null = Invoke-Shown $docker ($cf + @('logs', '-f', '--tail', '100', 'litellm'))
+      return
+    }
+    $null = Invoke-Shown $docker ($cf + @('logs', '--tail', '100', 'litellm'))
+  }
+
+  function Get-DesktopNote {
+    if ($engine -eq 'docker' -and ((Invoke-Native $docker @('info', '--format', '{{.OperatingSystem}}')).Out -match 'Docker Desktop')) {
+      return "listed as $($inst.Project) in Docker Desktop"
+    }
+    return ''
+  }
+
+  function Show-Status {
+    $status = Get-GatewayStatus
+    $image = "$(Get-Images | Where-Object { $_ -match 'litellm' } | Select-Object -First 1)"
+    $desktop = Get-DesktopNote
+    $rows = New-Object System.Collections.ArrayList
+    if ($status -like 'Up*') {
+      $uptime = ($status -replace '^Up ', '') -replace ' \(.*$', ''
+      $version = Get-GatewayVersion
+      if (-not $version) { $version = 'starting' }
+      $null = $rows.Add(@('Admin UI', $inst.Url))
+      $null = $rows.Add(@('Version', $version))
+      $null = $rows.Add(@('Uptime', $uptime))
+      $null = $rows.Add(@('Folder', (Tildify $inst.Dir)))
+      $null = $rows.Add(@('Image', $image))
+      if ($desktop) { $null = $rows.Add(@('Desktop', $desktop)) }
+      $null = $rows.Add(@('Stop it', (Hint 'down')))
+      Show-Box 'LiteLLM is running' $rows.ToArray()
+    } else {
+      $null = $rows.Add(@('Folder', (Tildify $inst.Dir)))
+      $null = $rows.Add(@('Image', $image))
+      if ($desktop) { $null = $rows.Add(@('Desktop', $desktop)) }
+      $null = $rows.Add(@('Start it', (Hint 'up')))
+      $null = $rows.Add(@('Remove it', (Hint 'uninstall')))
+      Show-Box 'LiteLLM is stopped' $rows.ToArray()
+    }
+  }
+
+  function Open-UI {
+    if (Test-Running) { Open-Url $inst.Url } else { Warn ('LiteLLM is stopped. Start it with: ' + (Lit (Hint 'up'))) }
+  }
+
+  # Returns $false when the person keeps the install, so the menu can carry on.
+  function Remove-Gateway {
+    $dir = $inst.Dir
+    $volume = "$($inst.Project)_postgres_data"
+    if (-not (Test-Path -LiteralPath 'docker-compose.quickstart.yml')) { Save-Compose }
+    $images = Get-Images
+    $link = ''
+    if (-not $onWindows) {
+      $bin = Join-Path $HOME '.local/bin'
+      if ((Get-LinkTarget (Join-Path $bin 'litellm-gateway')) -eq (Join-Path $dir 'litellm-gateway')) { $link = Join-Path $bin 'litellm-gateway' }
+    }
+    if ($interactive) {
+      Write-Host ''
+      Say ('{b:This removes LiteLLM from ' + (Lit (Tildify $dir)) + ':}')
+      Say "  - its containers ($engineName project $($inst.Project))"
+      Say "  - its database, the $engineName volume $volume, with your models, keys, and spend logs"
+      Say ('  - its files in ' + (Lit (Tildify $dir)) + ', including .env with the admin password')
+      if ($link) { Say ('  - the litellm-gateway command in ' + (Lit (Tildify $bin))) }
+      if ((Menu 'Remove LiteLLM and delete its database?' 2 @(@('Yes, remove it'), @('No, keep it'))) -ne 1) {
+        Step 'Kept LiteLLM and its data'
+        return $false
+      }
+    } elseif (-not $noQuestions) {
+      Fail "Removing LiteLLM deletes its database ($engineName volume $volume)." 'To confirm, run it again with -Yes.'
+      Stop-Quickstart
+    }
+
+    if (-not $style) { Say 'Removing the LiteLLM and Postgres containers and the database...' }
+    if ((Invoke-WithSpinner 'Removing the containers and the database' '' $docker ($cf + @('down', '--volumes', '--remove-orphans'))) -ne 0) {
+      Fail "$engineName could not remove them." 'Its output is above.'
+      Stop-Quickstart
+    }
+    Step "Removed the containers and the database {d:($volume)}"
+
+    $kept = New-Object System.Collections.ArrayList
+    foreach ($image in $images) {
+      if ((Invoke-Native $docker @('image', 'inspect', $image)).Code -eq 0) { $null = $kept.Add($image) }
+    }
+    if ($kept.Count -and $interactive) {
+      # The size on disk, as the images list shows it (1.68GB, or 1.23 GB on Podman).
+      $bytes = 0.0
+      foreach ($image in $kept) {
+        $size = "$((Invoke-Native $docker @('images', '--format', '{{.Size}}', $image)).Out | Select-Object -First 1)"
+        if ($size -match '^([\d.]+)\s*([kKMGT]?)') {
+          $unit = switch -CaseSensitive ($Matches[2]) { 'k' { 1e3 } 'K' { 1e3 } 'M' { 1e6 } 'G' { 1e9 } 'T' { 1e12 } default { 1 } }
+          $bytes += [double]::Parse($Matches[1], [Globalization.CultureInfo]::InvariantCulture) * $unit
+        }
+      }
+      $total = if ($bytes -gt 0) { ' (' + ($bytes / 1e9).ToString('0.0', [Globalization.CultureInfo]::InvariantCulture) + ' GB)' } else { '' }
+      $choice = Menu "Also delete the LiteLLM and Postgres images$($total)?" 2 @(@('Yes, delete them'), @('No, keep them', 'a reinstall starts faster'))
+      if ($choice -eq 1) {
+        foreach ($image in @($kept.ToArray())) {
+          if ((Invoke-Native $docker @('image', 'rm', $image)).Code -eq 0) {
+            Step "Deleted the image $image"
+            $kept.Remove($image)
+          } else {
+            Warn "Kept the image $image, which other containers use"
+          }
+        }
+      }
+    }
+
+    foreach ($name in '.env', 'docker-compose.quickstart.yml', 'quickstart.ps1', 'quickstart.sh', 'litellm-gateway', 'litellm-gateway.cmd') {
+      Remove-Item -LiteralPath (Join-Path $dir $name) -Force -ErrorAction SilentlyContinue
+    }
+    $ignore = Join-Path $dir '.gitignore'
+    if ((Test-Path -LiteralPath $ignore) -and
+      -not ([IO.File]::ReadAllText($ignore) -split "`r?`n" | Where-Object { $_ -and $_ -ne '*' -and $_ -ne '.env' })) {
+      Remove-Item -LiteralPath $ignore -Force
+    }
+    if ($link) { Remove-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue }
+    # Windows will not delete the folder a program is working in, this one included.
+    Set-Location -LiteralPath $HOME
+    [Environment]::CurrentDirectory = $HOME
+    try {
+      [IO.Directory]::Delete($dir, $false)
+      Step ('Deleted ' + (Lit (Tildify $dir)))
+    } catch {
+      $why = if (@(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue).Count) { 'it has other files' } else { 'a program is using it' }
+      Step ('Deleted the LiteLLM files in ' + (Lit (Tildify $dir)) + " {d:(the folder stays: $why)}")
+    }
+
+    $left = New-Object System.Collections.ArrayList
+    if (Test-HasContainers -All) { $null = $left.Add('containers') }
+    if ((Invoke-Native $docker @('volume', 'inspect', $volume)).Code -eq 0) { $null = $left.Add("volume $volume") }
+    if (Test-Path -LiteralPath (Join-Path $dir '.env')) { $null = $left.Add((Join-Path (Tildify $dir) '.env')) }
+    if ($left.Count) {
+      Warn ('Still there: ' + (Lit ($left.ToArray() -join ', ')))
+      return $true
+    }
+    Step 'LiteLLM is removed. Nothing is left running, and its data is deleted'
+    if ($kept.Count) {
+      Say ("  {d:The images stay, so a reinstall starts faster. To delete them:} $engine image rm " + ($kept.ToArray() -join ' '))
+    }
+    return $true
+  }
+
+  # Over SSH the clipboard would be the server's, not yours. On Linux,
+  # Set-Clipboard without xclip quietly keeps the text inside PowerShell, so
+  # only Windows and macOS, which always have a clipboard, get the option.
+  function Test-CanCopy {
+    return $interactive -and (-not $env:SSH_CONNECTION) -and (-not $env:SSH_TTY) -and
+      ($onWindows -or ((Test-Path variable:IsMacOS) -and $IsMacOS))
+  }
+
+  # The menu a rerun shows for an existing install. Its options follow whether
+  # LiteLLM is running, and come back after each choice until Done.
+  function Show-ManageMenu {
+    Show-Status
+    $canCopy = Test-CanCopy
+    $pick = 1
+    while ($true) {
+      $options = New-Object System.Collections.ArrayList
+      if (Test-Running) {
+        $question = "LiteLLM is running at $($inst.Url). What next?"
+        $null = $options.Add(@('Open the admin UI in your browser'))
+        if ($canCopy) { $null = $options.Add(@('Copy the admin password', 'to the clipboard, ready to paste')) }
+        $null = $options.Add(@('Stop it', 'keeps your models, keys, and logs'))
+        $null = $options.Add(@('Restart it'))
+        $null = $options.Add(@('Show the logs', 'the last 100 lines'))
+        $null = $options.Add(@('Update it', 'download the latest image and restart'))
+        $null = $options.Add(@('Remove it', 'delete its containers, database, and files'))
+        $null = $options.Add(@('Done'))
+      } else {
+        $question = 'LiteLLM is stopped. What next?'
+        $null = $options.Add(@('Start it', "at $($inst.Url)"))
+        $null = $options.Add(@('Update it', 'download the latest image and start'))
+        $null = $options.Add(@('Show the logs', 'the last 100 lines'))
+        $null = $options.Add(@('Remove it', 'delete its containers, database, and files'))
+        $null = $options.Add(@('Done'))
+      }
+      if ($pick -gt $options.Count) { $pick = 1 }
+      $choice = Menu $question $pick $options.ToArray()
+      $picked = $options[$choice - 1][0]
+      $pick = 1
+      switch -Wildcard ($picked) {
+        'Open*' { Open-Url $inst.Url; $pick = $options.Count }
+        'Copy*' { Copy-Password $inst.Dir }
+        'Start*' { Start-Gateway }
+        'Stop*' { Stop-Gateway }
+        'Restart*' { Restart-Gateway }
+        'Show*' { Show-Logs }
+        'Update*' { Update-Gateway }
+        'Remove*' { if (Remove-Gateway) { return } }
+        default { return }
+      }
+    }
+  }
+
   # ------------------------------------------------------------ main
 
   $savedEncoding = $null
+  $savedLocation = (Get-Location).ProviderPath
+  $savedPort = $env:LITELLM_PORT
   try {
     if ($unicode -and $onWindows) {
       # Windows PowerShell writes the console in the OEM code page, which has no check marks.
@@ -377,7 +1010,9 @@ function Invoke-LiteLLMQuickstart {
       [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     }
 
-    if ($style) {
+    if ($action) {
+      # An action prints only its own result.
+    } elseif ($style) {
       Write-Host ''
       Say "{u:$($sym.Head) LiteLLM quickstart}"
       Say '{d:  The gateway, Postgres, and the admin UI in one command}'
@@ -416,6 +1051,32 @@ function Invoke-LiteLLMQuickstart {
       Fail "$engineName is installed but not running." $startHint
       return 1
     }
+
+    if ($action) {
+      $existing = Find-Install
+      if (-not $existing) {
+        $s = [IO.Path]::DirectorySeparatorChar
+        $places = if ($env:LITELLM_DIR) { $env:LITELLM_DIR } else { "this folder, .${s}litellm-gateway, or ~${s}litellm-gateway" }
+        Fail 'No LiteLLM install found' ('in ' + (Lit $places) + '.')
+        $runner = if ($onWindows) { 'powershell' } else { 'pwsh' }
+        Say "  Install it with:  $runner -c `"irm $scriptUrl | iex`"" -Err
+        return 1
+      }
+      Use-Install $existing
+      $inst.Command = Find-Command
+      switch ($action) {
+        'status' { Show-Status }
+        'start' { if (Test-Running) { Step "LiteLLM is already running at {a:$($inst.Url)}" } else { Start-Gateway } }
+        'stop' { Stop-Gateway }
+        'restart' { Restart-Gateway }
+        'logs' { if ($interactive) { Show-Logs -Follow } else { Show-Logs } }
+        'open' { Open-UI }
+        'update' { Update-Gateway }
+        'uninstall' { $null = Remove-Gateway }
+      }
+      return 0
+    }
+
     $server = Invoke-Native $docker @('version', '--format', '{{.Server.Version}}')
     $engineVersion = if ($server.Code -eq 0 -and $server.Out.Count) { "$($server.Out[0]) " } else { '' }
     $composeVersion = "$($compose.Out[0])".TrimStart('v')
@@ -423,13 +1084,12 @@ function Invoke-LiteLLMQuickstart {
 
     $homeDir = Join-Path $HOME 'litellm-gateway'
     $hereDir = Join-Path (Get-Location).ProviderPath 'litellm-gateway'
-    $found = $false
-    if ($env:LITELLM_DIR) {
+    $dir = Find-Install
+    $found = [bool]$dir
+    if ($found) {
+      # installed before
+    } elseif ($env:LITELLM_DIR) {
       $dir = $env:LITELLM_DIR
-    } elseif (Test-Path -LiteralPath (Join-Path $hereDir '.env')) {
-      $dir = $hereDir; $found = $true   # installed in this folder before
-    } elseif (Test-Path -LiteralPath (Join-Path $homeDir '.env')) {
-      $dir = $homeDir; $found = $true   # installed in the home folder before
     } elseif ($hereDir -eq $homeDir) {
       $dir = $homeDir
     } else {
@@ -474,11 +1134,19 @@ function Invoke-LiteLLMQuickstart {
       # commits if the folder becomes a repository later.
       $ignore = Join-Path $dir '.gitignore'
       $current = if (Test-Path -LiteralPath $ignore) { [IO.File]::ReadAllText($ignore) } else { '' }
-      if (($current -split "`r?`n") -notcontains '.env') {
+      if (($current -split "`r?`n") -notcontains '.env' -and ($current -split "`r?`n") -notcontains '*') {
         # Start on a new line if the file does not end with one.
         $lead = if ($current.Length -gt 0 -and -not $current.EndsWith("`n")) { "`n" } else { '' }
         Write-PlainText $ignore "$lead.env`n" -Append
       }
+    }
+
+    if ($found -and $interactive) {
+      Use-Install $dir
+      if (-not (Test-Path -LiteralPath 'quickstart.ps1') -or -not (Find-Command)) { Install-Command }
+      $inst.Command = Find-Command
+      Show-ManageMenu
+      return 0
     }
 
     # The engine names containers and the database volume after the project, so
@@ -505,35 +1173,13 @@ function Invoke-LiteLLMQuickstart {
       }
     }
 
-    Invoke-WebRequest -UseBasicParsing -Uri $composeUrl -OutFile (Join-Path $dir 'docker-compose.quickstart.yml')
+    Save-Compose
     Step 'Downloaded docker-compose.quickstart.yml'
-
-    $saved = ''
-    if (Test-Path -LiteralPath $envFile) {
-      $m = Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^LITELLM_PORT=(.*)$' } | Select-Object -Last 1
-      if ($m) { $saved = ($m -split '=', 2)[1] }
-    }
-    if ($env:LITELLM_PORT) {
-      $port = [int]$env:LITELLM_PORT
-    } elseif ($saved) {
-      $port = [int]$saved
-    } elseif (Test-Path -LiteralPath $envFile) {
-      $port = 4000   # an existing install without a saved port runs on the compose default
-    } else {
-      $port = 4000
-      while (-not (Test-PortFree $port)) {
-        $port++
-        if ($port -gt 4099) {
-          Fail 'Ports 4000 to 4099 are all in use.' 'Set LITELLM_PORT to a free port and run this again.'
-          return 1
-        }
-      }
-      if ($port -eq 4000) { Step 'Port {b:4000} is free' } else { Warn "Port 4000 is in use, so LiteLLM will use {b:$port}" }
-    }
 
     if (Test-Path -LiteralPath $envFile) {
       Step 'Reusing .env, so existing keys and data keep working'
     } else {
+      $port = Select-Port
       $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
       $hex = {
         param([int]$n)
@@ -566,51 +1212,32 @@ function Invoke-LiteLLMQuickstart {
       Step 'Generated .env with your master key, salt key, and database password {d:(keep this file; only you can read it)}'
     }
 
-    # Compose prefers values already set in the environment over .env, so drop
-    # inherited ones: .env stays the only source for keys and the project name.
-    foreach ($name in 'LITELLM_MASTER_KEY', 'LITELLM_SALT_KEY', 'POSTGRES_PASSWORD', 'COMPOSE_PROJECT_NAME') {
-      Remove-Item "Env:$name" -ErrorAction SilentlyContinue
-    }
-    # The bind address follows .env when .env sets it. For an older .env without
-    # it, a value already in the environment is kept.
-    if (Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^LITELLM_BIND=' }) { Remove-Item Env:LITELLM_BIND -ErrorAction SilentlyContinue }
-    $env:LITELLM_PORT = "$port"
+    Use-Install $dir
+    Install-Command
+    $inst.Command = Find-Command
+    Start-Gateway
 
-    $started = Get-Date
-    $detail = ''
-    foreach ($image in (Invoke-Native $docker @('compose', '-f', 'docker-compose.quickstart.yml', 'config', '--images')).Out) {
-      if ($image -and (Invoke-Native $docker @('image', 'inspect', "$image")).Code -ne 0) { $detail = 'downloading images, first run only' }
-    }
-    if (-not $style) { Say 'Starting LiteLLM and Postgres (the first run downloads the images)...' }
-    $code = Invoke-WithSpinner 'Starting LiteLLM and Postgres' $detail $docker @('compose', '-f', 'docker-compose.quickstart.yml', 'up', '-d')
-    if ($code -ne 0) {
-      Fail "$engineName could not start LiteLLM and Postgres." 'Its output is above.'
-      return 1
-    }
-    if (-not (Wait-Ready $port)) {
-      Fail 'The gateway did not become ready in 3 minutes.' 'See what it logged:'
-      Say ('    cd ' + (Lit (Tildify $dir)) + "; $engine compose -f docker-compose.quickstart.yml logs litellm") -Err
-      return 1
-    }
-    Step ("LiteLLM and Postgres are up {d:$($sym.Dot) $(Elapsed $started)}")
-
-    $url = "http://localhost:$port/ui"
-    $where = Tildify $dir
-    if ($where -match ' ') { $where = "`"$where`"" }
+    $url = $inst.Url
     Write-Host ''
-    # Over SSH the clipboard would be the server's, not yours. On Linux,
-    # Set-Clipboard without xclip quietly keeps the text inside PowerShell, so
-    # only Windows and macOS, which always have a clipboard, get the option.
-    $canCopy = $interactive -and (-not $env:SSH_CONNECTION) -and
-      ($onWindows -or ((Test-Path variable:IsMacOS) -and $IsMacOS))
+    $canCopy = Test-CanCopy
     $password = "the LITELLM_MASTER_KEY value in $(Join-Path (Tildify $dir) '.env')"
     if ($canCopy) { $password = "copy it below, or LITELLM_MASTER_KEY in $(Join-Path (Tildify $dir) '.env')" }
-    Show-Box 'LiteLLM is running' @(
-      , @('Admin UI', $url)
-      , @('Username', 'admin')
-      , @('Password', $password)
-      , @('Next', 'in the UI, open Models + Endpoints > Add Model and paste a provider API key')
-      , @('Stop it', "cd $where; $engine compose -f docker-compose.quickstart.yml down"))
+    # A rerun finds ~\litellm-gateway on its own; any other folder needs naming.
+    $rerun = 'rerun the install command'
+    if ($dir -ne $homeDir) { $rerun += " with LITELLM_DIR=$(Tildify $dir)" }
+    $manage = if ($inst.Command) { "run $($inst.Command), or $rerun" } else { $rerun }
+    $rows = New-Object System.Collections.ArrayList
+    $null = $rows.Add(@('Admin UI', $url))
+    $null = $rows.Add(@('Username', 'admin'))
+    $null = $rows.Add(@('Password', $password))
+    $null = $rows.Add(@('Next', 'in the UI, open Models + Endpoints > Add Model and paste a provider API key'))
+    $null = $rows.Add(@('Stop it', (Hint 'down')))
+    $null = $rows.Add(@('Start it', (Hint 'up')))
+    $null = $rows.Add(@('Remove it', (Hint 'uninstall')))
+    $desktop = Get-DesktopNote
+    if ($desktop) { $null = $rows.Add(@('Desktop', $desktop)) }
+    $null = $rows.Add(@('Manage', $manage))
+    Show-Box 'LiteLLM is running' $rows.ToArray()
 
     if ($canCopy) {
       # Come back to the menu after each choice, with the next step as the default.
@@ -625,15 +1252,20 @@ function Invoke-LiteLLMQuickstart {
         else { break }
       }
     } elseif ($interactive) {
-      if ((Menu 'Open the admin UI in your browser?' 1 @(, @('Yes'), @('No'))) -eq 1) { Open-Url $url }
+      if ((Menu 'Open the admin UI in your browser?' 1 @(@('Yes'), @('No'))) -eq 1) { Open-Url $url }
     }
     return 0
+  } catch {
+    if ($_.Exception.Message -eq $exitSignal) { return 1 }
+    throw
   } finally {
     if ($savedEncoding) { [Console]::OutputEncoding = $savedEncoding }
+    if ($savedPort) { $env:LITELLM_PORT = $savedPort } else { Remove-Item Env:LITELLM_PORT -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $savedLocation) { Set-Location -LiteralPath $savedLocation }
   }
 }
 
-$code = Invoke-LiteLLMQuickstart -Yes:$Yes | Select-Object -Last 1
+$code = Invoke-LiteLLMQuickstart -Yes:$Yes -Rest $args | Select-Object -Last 1
 $global:LASTEXITCODE = $code
 # Run from a file, or as `powershell -c "irm ... | iex"`, the exit code should
 # reach the caller. Pasted into an open window, `exit` would close that window,
