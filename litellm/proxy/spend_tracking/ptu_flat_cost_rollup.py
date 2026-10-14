@@ -17,9 +17,9 @@ import json
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from itertools import chain
+from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -58,6 +58,25 @@ def _daily_team_spend_table(prisma_client: "PrismaClient") -> "TableActions[pris
 def _proxy_model_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_ProxyModelTable]":
     """The stored deployments the rollup scans for PTU config."""
     return ModelRepository(prisma_client).table
+
+
+class _SentinelBatchTable(Protocol):
+    def upsert(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
+
+
+class _SentinelBatch(Protocol):
+    litellm_dailyteamspend: _SentinelBatchTable
+
+
+class _SentinelBatchManager(Protocol):
+    async def __aenter__(self) -> _SentinelBatch: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+def _sentinel_batch(prisma_client: "PrismaClient") -> _SentinelBatchManager:
+    batch: Final[_SentinelBatchManager] = prisma_client.db.batch_()
+    return batch
 
 
 _HOURS_PER_DAY: Final = 24
@@ -242,102 +261,117 @@ def _aggregate_charges(ptu_models: tuple[PTUModel, ...], day: date) -> tuple[_PT
     )
 
 
-async def _upsert_ptu_daily_row(
-    prisma_client: "PrismaClient",
-    *,
-    team_id: str,
-    model_id: str,
-    model_name: str,
-    date_str: str,
-    flat_cost: float,
-) -> None:
-    """Idempotent upsert of a sentinel-api_key row on LiteLLM_DailyTeamSpend.
+@dataclass(frozen=True, slots=True)
+class _DeploymentDay:
+    """Every team's charge for one deployment on one UTC day.
+
+    The backfill counts a deployment day as priced once any team's row exists for it, so
+    the charges are written together or not at all: a day where only some teams' rows
+    landed would read as priced and the missing teams would never be billed.
+    """
+
+    date_str: str
+    charges: tuple[_PTUCharge, ...]
+
+    @property
+    def model_id(self) -> str:
+        return self.charges[0].model_id
+
+
+def _deployment_days(charges: tuple[_PTUCharge, ...], date_str: str) -> tuple[_DeploymentDay, ...]:
+    by_deployment: Final = sorted(charges, key=lambda charge: (charge.model_id, charge.team_id))
+    return tuple(
+        _DeploymentDay(date_str=date_str, charges=tuple(group))
+        for _, group in groupby(by_deployment, key=lambda charge: charge.model_id)
+    )
+
+
+def _queue_deployment_day(table: _SentinelBatchTable, deployment_day: _DeploymentDay) -> None:
+    """Queue an idempotent upsert of one sentinel-api_key row per team on LiteLLM_DailyTeamSpend.
 
     ``model`` holds the deployment id because it is part of the table's unique key and a
     rename must not move the row. ``model_group`` carries the operator-facing name, which
     is outside the key and is what the usage views display.
     """
-    where: Final = {
-        "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
-            "team_id": team_id,
-            "date": date_str,
-            "api_key": PTU_SENTINEL_API_KEY,
-            "model": model_id,
-            "custom_llm_provider": "",
-            "mcp_namespaced_tool_name": "",
-            "endpoint": "",
-        }
-    }
     now: Final = datetime.now(timezone.utc)
-    await _daily_team_spend_table(prisma_client).upsert(
-        where=where,
-        data={
-            "create": {
-                "team_id": team_id,
-                "date": date_str,
-                "api_key": PTU_SENTINEL_API_KEY,
-                "model": model_id,
-                "model_group": model_name,
-                "custom_llm_provider": "",
-                "mcp_namespaced_tool_name": "",
-                "endpoint": "",
-                "ptu_flat_cost": flat_cost,
+    for charge in deployment_day.charges:
+        table.upsert(
+            where={
+                "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
+                    "team_id": charge.team_id,
+                    "date": deployment_day.date_str,
+                    "api_key": PTU_SENTINEL_API_KEY,
+                    "model": charge.model_id,
+                    "custom_llm_provider": "",
+                    "mcp_namespaced_tool_name": "",
+                    "endpoint": "",
+                }
             },
-            "update": {
-                "model_group": model_name,
-                "ptu_flat_cost": flat_cost,
-                "updated_at": now,
+            data={
+                "create": {
+                    "team_id": charge.team_id,
+                    "date": deployment_day.date_str,
+                    "api_key": PTU_SENTINEL_API_KEY,
+                    "model": charge.model_id,
+                    "model_group": charge.model_name,
+                    "custom_llm_provider": "",
+                    "mcp_namespaced_tool_name": "",
+                    "endpoint": "",
+                    "ptu_flat_cost": charge.flat_cost,
+                },
+                "update": {
+                    "model_group": charge.model_name,
+                    "ptu_flat_cost": charge.flat_cost,
+                    "updated_at": now,
+                },
             },
-        },
-    )
+        )
 
 
-async def _upsert_charge_with_retry(
-    prisma_client: "PrismaClient",
-    *,
-    charge: _PTUCharge,
-    date_str: str,
-) -> bool:
-    """Write one charge, retrying transient failures. Returns False once attempts are spent.
+async def _write_deployment_day_with_retry(prisma_client: "PrismaClient", deployment_day: _DeploymentDay) -> bool:
+    """Write one deployment day's charges in one transaction, retrying transient failures.
+    Returns False once attempts are spent, with none of that day's rows written.
 
-    The upsert is idempotent on the sentinel unique key, so a retry can only rewrite the
-    same amount for the same day. Retrying in-run matters because the scheduled job moves
-    on to the next date: a write lost here is a day of PTU cost that no later run replays.
+    The upserts are idempotent on the sentinel unique key, so a retry can only rewrite the
+    same amounts for the same day. Retrying in-run matters because the scheduled job moves
+    on to the next date: a write lost here waits for the next night's backfill.
     """
+    teams: Final = ",".join(charge.team_id for charge in deployment_day.charges)
     for attempt in range(1, _UPSERT_ATTEMPTS + 1):
         try:
-            await _upsert_ptu_daily_row(
-                prisma_client,
-                team_id=charge.team_id,
-                model_id=charge.model_id,
-                model_name=charge.model_name,
-                date_str=date_str,
-                flat_cost=charge.flat_cost,
-            )
+            async with _sentinel_batch(prisma_client) as batch:
+                _queue_deployment_day(batch.litellm_dailyteamspend, deployment_day)
             return True
-        except Exception as exc:  # noqa: BLE001  # one bad row must not stop the batch
+        except Exception as exc:  # noqa: BLE001  # one bad deployment day must not stop the batch
             if attempt < _UPSERT_ATTEMPTS:
                 verbose_proxy_logger.warning(
-                    "PTU rollup: upsert attempt %d/%d failed for team=%s model=%s day=%s: %s",
+                    "PTU rollup: write attempt %d/%d failed for model=%s teams=%s day=%s: %s",
                     attempt,
                     _UPSERT_ATTEMPTS,
-                    charge.team_id,
-                    charge.model_name,
-                    date_str,
+                    deployment_day.charges[0].model_name,
+                    teams,
+                    deployment_day.date_str,
                     exc,
                 )
                 await asyncio.sleep(_UPSERT_RETRY_BACKOFF_SECONDS * attempt)
                 continue
             verbose_proxy_logger.error(
-                "PTU rollup: upsert failed after %d attempts for team=%s model=%s day=%s "
+                "PTU rollup: write failed after %d attempts for model=%s teams=%s day=%s "
                 "(rerun the rollup for that date to recover): %s",
                 _UPSERT_ATTEMPTS,
-                charge.team_id,
-                charge.model_name,
-                date_str,
+                deployment_day.charges[0].model_name,
+                teams,
+                deployment_day.date_str,
                 exc,
             )
     return False
+
+
+async def _write_deployment_days(prisma_client: "PrismaClient", deployment_days: tuple[_DeploymentDay, ...]) -> int:
+    landed: Final = tuple(
+        [await _write_deployment_day_with_retry(prisma_client, deployment_day) for deployment_day in deployment_days]
+    )
+    return sum(len(day.charges) for day, ok in zip(deployment_days, landed, strict=True) if ok)
 
 
 @dataclass(frozen=True, slots=True)
@@ -429,10 +463,7 @@ async def run_ptu_flat_cost_rollup(
     ptu_models: Final = loaded.models
     charges: Final = _aggregate_charges(ptu_models, day)
 
-    landed: Final = tuple(
-        [await _upsert_charge_with_retry(prisma_client, charge=charge, date_str=date_str) for charge in charges]
-    )
-    rows_written: Final = sum(landed)
+    rows_written: Final = await _write_deployment_days(prisma_client, _deployment_days(charges, date_str))
     rows_failed: Final = len(charges) - rows_written
 
     if not may_prune:
@@ -521,13 +552,13 @@ def _backfill_window(ptu_models: tuple[PTUModel, ...], end: date) -> tuple[date,
     return tuple(start + timedelta(days=offset) for offset in range((end - start).days + 1))
 
 
-def _unpriced_charges(
+def _unpriced_deployment_days(
     ptu_models: tuple[PTUModel, ...], days: tuple[date, ...], priced: frozenset[tuple[str, str]]
-) -> Iterator[tuple[str, _PTUCharge]]:
+) -> Iterator[_DeploymentDay]:
     for day in days:
-        for charge in _aggregate_charges(ptu_models, day):
-            if (charge.model_id, day.isoformat()) not in priced:
-                yield (day.isoformat(), charge)
+        for deployment_day in _deployment_days(_aggregate_charges(ptu_models, day), day.isoformat()):
+            if (deployment_day.model_id, deployment_day.date_str) not in priced:
+                yield deployment_day
 
 
 async def _existing_sentinel_keys(
@@ -566,8 +597,10 @@ async def run_ptu_flat_cost_backfill(
     row, so a day already priced keeps the amount it was billed, whatever the config says
     now. A day counts as priced when a sentinel row exists for that deployment id, for any
     team, so neither renaming a deployment nor moving its shares to another team re-prices
-    its history or files a second charge beside the rows already there. Zero-cost days write nothing, which leaves a day
-    outside a window reconsidered on each run rather than recorded as done.
+    its history or files a second charge beside the rows already there. That is sound
+    because a deployment day's team rows are written in one transaction. Zero-cost days
+    write nothing, which leaves a day outside a window reconsidered on each run rather
+    than recorded as done.
 
     It deletes nothing. Removing a deployment stops it accruing new charges and leaves the
     days it was billed for standing, since those days were incurred.
@@ -585,31 +618,26 @@ async def run_ptu_flat_cost_backfill(
         return BackfillResult(start=end, end=end, days_scanned=0, rows_written=0)
 
     priced: Final = await _existing_sentinel_keys(prisma_client, start=days[0], end=days[-1])
-    missing: Final = tuple(_unpriced_charges(ptu_models, days, priced))
+    missing: Final = tuple(_unpriced_deployment_days(ptu_models, days, priced))
     if not missing:
         return BackfillResult(start=days[0], end=days[-1], days_scanned=len(days), rows_written=0)
 
-    landed: Final = tuple(
-        [
-            await _upsert_charge_with_retry(prisma_client, charge=charge, date_str=date_str)
-            for date_str, charge in missing
-        ]
-    )
-    rows_written: Final = sum(landed)
+    charge_count: Final = sum(len(deployment_day.charges) for deployment_day in missing)
+    rows_written: Final = await _write_deployment_days(prisma_client, missing)
     verbose_proxy_logger.info(
         "PTU backfill for %s to %s: %d unpriced charge(s) found, %d written, %d failed",
         days[0].isoformat(),
         days[-1].isoformat(),
-        len(missing),
+        charge_count,
         rows_written,
-        len(missing) - rows_written,
+        charge_count - rows_written,
     )
     return BackfillResult(
         start=days[0],
         end=days[-1],
         days_scanned=len(days),
         rows_written=rows_written,
-        rows_failed=len(missing) - rows_written,
+        rows_failed=charge_count - rows_written,
     )
 
 
