@@ -48,7 +48,7 @@ export const parseSupportedTeamAdminEditableFields = (uiSettingsFieldSchema: unk
   return items.success ? fieldListSchema.parse(items.data.enum) : [];
 };
 
-export const TEAM_ADMIN_SETTINGS_FIELDS = ["tpm_limit", "rpm_limit", "max_budget"] as const;
+export const TEAM_ADMIN_SETTINGS_FIELDS = ["tpm_limit", "rpm_limit", "max_budget", "soft_budget"] as const;
 
 export type TeamAdminSettingsField = (typeof TEAM_ADMIN_SETTINGS_FIELDS)[number];
 
@@ -56,6 +56,7 @@ const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([
   ["tpm_limit", "Tokens per minute Limit (TPM)"],
   ["rpm_limit", "Requests per minute Limit (RPM)"],
   ["max_budget", "Max Budget (USD)"],
+  ["soft_budget", "Soft Budget (USD)"],
   [TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION, "Raise the team's max budget"],
   ["projects", "Create and update projects"],
   ["member_key_budgets", "Update budgets on team members' keys"],

@@ -31,7 +31,9 @@ from litellm.proxy._types import (
 TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING: Final = "team_admin_editable_team_fields"
 
 # TODO(LIT-5722): add the remaining team settings one per PR, each with its value-diff tests and dashboard field
-SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset({"tpm_limit", "rpm_limit", "max_budget"})
+SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset(
+    {"tpm_limit", "rpm_limit", "max_budget", "soft_budget"}
+)
 TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION: Final = "raise_max_budget"
 TEAM_ADMIN_PROJECTS_PERMISSION: Final = "projects"
 TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION: Final = "member_key_budgets"
