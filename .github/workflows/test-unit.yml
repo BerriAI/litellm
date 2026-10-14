@@ -38,13 +38,6 @@ jobs:
         timeout-minutes: 2
         uses: ./.github/actions/detect-changes
 
-      - name: Define editable Rust bridge cache key
-        id: rust-bridge-key
-        if: steps.changes.outputs.decision != 'skip'
-        env:
-          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'pyproject.toml') }}
-        run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
-
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
@@ -59,29 +52,10 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Restore editable Rust bridge
-        id: rust-bridge-cache
+      - name: Build the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 5
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: rust-bridge-dist
-          key: ${{ steps.rust-bridge-key.outputs.key }}
-
-      - name: Cache the Rust build
-        if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 5
-        uses: ./.github/actions/cache-cargo-build
-
-      - name: Build editable Rust bridge
-        if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 15
-        run: |
-          mkdir -p rust-bridge-dist
-          uv run --no-project --with maturin==1.15.0 python -c 'import maturin; maturin.build_editable("rust-bridge-dist")'
-          strip --strip-debug litellm/rust_bridge/_native.abi3.so
-          mkdir -p rust-bridge-dist/litellm/rust_bridge
-          cp litellm/rust_bridge/_native.abi3.so rust-bridge-dist/litellm/rust_bridge/_native.abi3.so
+        timeout-minutes: 20
+        uses: ./.github/actions/build-rust-bridge
 
       - name: Upload Rust bridge artifact
         if: steps.changes.outputs.decision != 'skip'
@@ -91,14 +65,6 @@ jobs:
           name: rust-bridge-${{ github.run_id }}-${{ github.run_attempt }}
           path: rust-bridge-dist/
           retention-days: 1
-
-      - name: Save editable Rust bridge
-        if: steps.changes.outputs.decision != 'skip' && github.ref == 'refs/heads/main' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 10
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: rust-bridge-dist
-          key: ${{ steps.rust-bridge-key.outputs.key }}
 
       - name: Expose the Rust bridge artifact
         id: rust-bridge-artifact
@@ -981,7 +947,7 @@ jobs:
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_rust_bridge.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
           else
             uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
@@ -1219,14 +1185,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
-      - name: Cache the Rust build
+      - name: Set up the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-cargo-build
+        uses: ./.github/actions/rust-bridge
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+          .github/scripts/uv_sync_with_rust_bridge.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
@@ -1419,7 +1385,7 @@ jobs:
           RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
         run: |
           if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
-            uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
+            .github/scripts/uv_sync_with_rust_bridge.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
           else
             uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
             uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl

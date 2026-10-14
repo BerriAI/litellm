@@ -52,8 +52,11 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
+
       - name: Install dependencies
-        run: uv sync --frozen --extra proxy --extra cli --group dev --group proxy-dev --python ${{ matrix.python-version }}
+        run: .github/scripts/uv_sync_with_rust_bridge.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python ${{ matrix.python-version }}
 
       - name: Create the loopback-only network namespace
         run: |
@@ -117,8 +120,11 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
+
       - name: Install every extra and dependency group
-        run: uv sync --frozen --all-groups --all-extras --python ${{ matrix.python-version }}
+        run: .github/scripts/uv_sync_with_rust_bridge.sh --frozen --all-groups --all-extras --python ${{ matrix.python-version }}
 
       - name: Import the SDK, the proxy server and the enterprise package
         run: .venv/bin/python -c "import litellm, litellm.proxy.proxy_server, litellm_enterprise"
@@ -126,7 +132,7 @@ jobs:
   windows-sdk:
     name: windows-sdk
     runs-on: windows-2025
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       LITELLM_LOCAL_MODEL_COST_MAP: "True"
     defaults:
@@ -148,8 +154,11 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
+
       - name: Install dependencies
-        run: uv sync --frozen --no-install-workspace --group dev --python 3.11
+        run: .github/scripts/uv_sync_with_rust_bridge.sh --frozen --group dev --python 3.11
 
       - name: Run the Windows tests
         run: uv run --no-sync python -m pytest --tb=short -v tests/windows_tests

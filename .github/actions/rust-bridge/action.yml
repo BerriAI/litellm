@@ -1,5 +1,7 @@
 name: Set up the Rust bridge
-description: Select the shared Rust bridge artifact or the Cargo cache
+description: >-
+  Fill rust-bridge-dist from the shared Rust bridge artifact, or restore or build it
+  when no artifact is given. Install it with .github/scripts/uv_sync_with_rust_bridge.sh
 inputs:
   artifact:
     description: Rust bridge artifact name
@@ -8,9 +10,9 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Restore the Cargo build cache
+    - name: Build the Rust bridge
       if: inputs.artifact == ''
-      uses: ./.github/actions/cache-cargo-build
+      uses: ./.github/actions/build-rust-bridge
     - name: Download the Rust bridge artifact
       if: inputs.artifact != ''
       uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
