@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
-from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.litellm_core_utils.llm_judge import (
     attached_auth,
     caller_team_for,
@@ -14,8 +13,8 @@ from litellm.litellm_core_utils.llm_judge import (
     judge_acompletion,
     judge_target,
     parse_json_verdict,
-    team_routed_model,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 @pytest.mark.parametrize(
@@ -32,7 +31,7 @@ def test_parse_json_verdict_tolerates_fences_and_prose(raw, expected):
 
 
 def test_parse_json_verdict_rejects_non_object():
-    with pytest.raises(ValueError, match='judge response is not a JSON object'):
+    with pytest.raises(ValueError, match="judge response is not a JSON object"):
         parse_json_verdict('["not", "an", "object"]')
     with pytest.raises((json.JSONDecodeError, ValueError)):
         parse_json_verdict("no json here at all")
@@ -245,6 +244,7 @@ def test_attached_auth_reads_only_the_instance_the_proxy_attached(
         ((_TEAM_PUBLIC_WILDCARD,), "openai/gpt-4o-mini", "owner", None),
         ((_TEAM_PUBLIC_WILDCARD, _SHARED_JUDGE), "openai/gpt-4o", "owner", None),
         ((_TEAM_PUBLIC_WILDCARD, _TEAM_FIXED_UNDER_PUBLIC_WILDCARD), "openai/gpt-4o-mini", "owner", None),
+        ((_TEAM_FIXED_UNDER_PUBLIC_WILDCARD,), "openai/gpt-4o-mini", "owner", None),
     ],
     ids=[
         "team-model",
@@ -261,6 +261,7 @@ def test_attached_auth_reads_only_the_instance_the_proxy_attached(
         "team-wildcard-over-a-public-name",
         "team-wildcard-over-a-shared-deployments-model",
         "team-wildcard-beside-a-fixed-team-model",
+        "team-wildcard-name-over-a-fixed-model",
     ],
 )
 def test_caller_team_for_uses_the_team_only_where_it_has_its_own_deployment(
@@ -275,36 +276,3 @@ def test_caller_team_for_follows_an_alias_that_wins_over_the_team_name() -> None
         model_list=[dict(_TEAM_JUDGE), dict(_SHARED_JUDGE)], model_group_alias={"team-judge": "shared-judge"}
     )
     assert caller_team_for(router, "team-judge", UserAPIKeyAuth(team_id="owner")) is None
-
-
-def _team_deployment(deployment_id: str, model: str, public_name: str) -> dict[str, object]:
-    return {
-        "model_name": f"{deployment_id}-name",
-        "litellm_params": {"model": model, "api_key": "fake"},
-        "model_info": {"id": deployment_id, "team_id": "owner", "team_public_model_name": public_name},
-    }
-
-
-@pytest.mark.parametrize(
-    ("model", "team_id", "expected"),
-    [
-        ("team-judge", "owner", {"owner-a", "owner-b"}),
-        ("team-judge", None, {"team-judge"}),
-        ("shared-judge", None, {"shared-judge"}),
-        ("team-wc/gpt-4o-mini", "owner", {"team-wc/gpt-4o-mini"}),
-    ],
-    ids=["team-deployments", "no-team", "shared-model", "team-wildcard"],
-)
-@pytest.mark.asyncio
-async def test_team_routed_model_pins_the_team_deployment_the_router_picks(
-    model: str, team_id: str | None, expected: set[str]
-) -> None:
-    router = litellm.Router(
-        model_list=[
-            _team_deployment("owner-a", "openai/gpt-4o-mini", "team-judge"),
-            _team_deployment("owner-b", "openai/gpt-4o-mini", "team-judge"),
-            _team_deployment("owner-wildcard", "openai/*", "team-wc/*"),
-            dict(_SHARED_JUDGE),
-        ]
-    )
-    assert await team_routed_model(router, model, team_id) in expected

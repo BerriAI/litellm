@@ -146,9 +146,12 @@ def attached_auth(request_data: object) -> UserAPIKeyAuth | None:
     )
 
 
-def _callable_by_id(router: Router, deployment_id: str) -> bool:
+def _named_route(router: Router, deployment_id: str) -> bool:
     deployment: Final = router.get_deployment(model_id=deployment_id)
-    return deployment is not None and "*" not in deployment.litellm_params.model
+    if deployment is None:
+        return False
+    public_names: Final = (deployment.model_name, deployment.model_info.team_public_model_name or "")
+    return all("*" not in name for name in public_names)
 
 
 def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | None) -> str | None:
@@ -156,9 +159,9 @@ def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | No
 
     It is the caller's team only when the router's route to `model` for that team reaches a
     deployment a caller without a team cannot reach, which means the team has its own
-    deployment behind the name, and every deployment on that route is a concrete model rather
-    than a wildcard. Names every caller shares, and names only a team wildcard covers, keep
-    resolving exactly as they do without a team.
+    deployment behind the name, and every deployment on that route is listed under a name
+    rather than a wildcard pattern. Names every caller shares, and names only a team wildcard
+    covers, keep resolving exactly as they do without a team.
     """
     team_id: Final = auth.team_id if auth is not None else None
     if team_id is None or router is None:
@@ -166,30 +169,7 @@ def caller_team_for(router: Router | None, model: str, auth: UserAPIKeyAuth | No
     team_route: Final = router.get_candidate_model_ids_for_route(model, team_id)
     if team_route <= router.get_candidate_model_ids_for_route(model):
         return None
-    return team_id if all(_callable_by_id(router, deployment_id) for deployment_id in team_route) else None
-
-
-def _field(value: object, key: str) -> object:
-    mapping: Final = _object_mapping(value)
-    return mapping.get(key) if mapping is not None else None
-
-
-async def team_routed_model(router: Router, model: str, team_id: str | None) -> str:
-    """`model`, or the id of the deployment the router picks for `team_id` on `model`.
-
-    The guardrail call then reaches the team's deployment without carrying the team, so,
-    like every other guardrail call, it is charged to no team and no key. A wildcard pick
-    keeps `model`, since its id alone would send the pattern to the provider.
-    """
-    if team_id is None:
-        return model
-    picked: Final = _object_mapping(
-        await router.async_get_available_deployment(  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # untyped router return
-            model=model, request_kwargs={"litellm_metadata": {"user_api_key_team_id": team_id}}
-        )
-    )
-    deployment_id: Final = _field(_field(picked, "model_info"), "id")
-    return deployment_id if isinstance(deployment_id, str) and _callable_by_id(router, deployment_id) else model
+    return team_id if all(_named_route(router, deployment_id) for deployment_id in team_route) else None
 
 
 async def judge_acompletion(
