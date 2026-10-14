@@ -32,7 +32,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | Chat (non-stream) | `test_cost_calculator.py`, `local_testing/test_completion_cost.py` | covered | yes (`test_chat_completion_writes_nonzero_spend_row`) |
 | Chat (streaming) | `test_streaming_interrupt_spend_tracking.py` | partial | yes (`test_streaming_chat_completion_tracks_spend`) |
 | Embedding | `test_cost_calculator.py` (#29956) | partial | yes (`test_embedding_writes_nonzero_spend_row`) |
-| Pass-through (gemini/anthropic) | `pass_through_tests/*.test.js` + `llm_translation/` suite | covered | yes (llm_translation suite) |
+| Pass-through (Gemini/Vertex) | `tests/integration/observability/test_passthrough_upstream_error_visibility.py`, `tests/unit/proxy/pass_through_endpoints/test_pass_through_endpoints.py`, and `tests/e2e/llm_translation/` | covered | yes (integration and e2e suites) |
 | Image / audio / rerank / responses / realtime | per-provider unit cost tests | partial/gap | gap |
 
 ## Entity spend aggregation
@@ -43,14 +43,14 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | Tag | `test_update_daily_tag_spend.py` | partial | yes (`test_tag_spend_matches_sum_of_tagged_logs`) |
 | End-user | `test_proxy_update_spend.py` | covered | yes |
 | Spend == sum(logs) consistency | none | gap | yes (key + tag aggregate == sum of rows) |
-| Concurrent increments (one key, parallel writers) | `tests/spend_tracking_tests/test_spend_accuracy_tests.py` (burst) | partial | yes (`test_burst_of_concurrent_calls_loses_no_spend`) |
+| Concurrent increments (one key, parallel writers) | `tests/integration/spend/test_spend_rollup_accuracy.py`, `tests/integration/spend/test_chaos_burst_spend_once.py` (burst) | partial | yes (`test_burst_of_concurrent_calls_loses_no_spend`) |
 
 ## Spend read endpoints (verification surface)
 
 | Endpoint | Existing | Status | Live e2e |
 |----------|----------|--------|----------|
 | `/spend/logs` (request_id / api_key) | `test_spend_management_endpoints.py` | covered | yes (primary read path; `test_spend_logs_endpoint_returns_spend` asserts 200 + spend, never 5xx) |
-| `/spend/calculate` | `local_testing/test_spend_calculate_endpoint.py` | covered | yes (`test_spend_calculate_returns_nonzero_cost`) |
+| `/spend/calculate` | `unit/proxy/spend_tracking/test_spend_management_endpoints.py` | covered | yes (`test_spend_calculate_returns_nonzero_cost`) |
 | `/spend/tags` | `test_spend_management_endpoints.py` | partial | yes (tag accuracy test) |
 | `/spend/logs/v2` pagination (total/total_pages/out-of-range) | `test_spend_query_optimization.py` | covered | yes (`test_spend_logs_v2_pagination_caps_pages_and_keeps_total`; filter takes the hashed token, not the raw key) |
 | whole spend GET surface (22 routes) | unit per-handler | partial | yes (`test_spend_routes.py` probes each for 404/5xx) |
