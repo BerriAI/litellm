@@ -131,13 +131,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def _tool_result_output_value(
         output_text: str,
         file_parts: tuple[dict[str, str], ...],  # mutable-ok: json content parts
-        tool_result: Mapping[str, object],
+        prompt_cache_breakpoint: object,
     ) -> str | list[dict[str, str]]:  # mutable-ok: API message payload
         """Plain string output, or a part list when document file parts or a cache breakpoint are present.
 
         OpenAI reads a breakpoint only on a part, so a marked result ends on a part that carries it.
         """
-        prompt_cache_breakpoint: Final = tool_result.get("prompt_cache_breakpoint")
         text_parts: Final = [{"type": "input_text", "text": output_text}] if output_text else []
         parts: Final = [*text_parts, *file_parts]
         if not parts or (not file_parts and prompt_cache_breakpoint is None):
@@ -292,6 +291,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
+                            tool_breakpoint = cast(Mapping[str, object], block).get(  # cast-ok: TypedDict upcast
+                                "prompt_cache_breakpoint"
+                            )
                             document_candidates = (
                                 tuple(
                                     self._translate_anthropic_document_block_to_file_part(c)
@@ -302,6 +304,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 else ()
                             )
                             tool_file_parts = tuple(part for part in document_candidates if part is not None)
+                            image_candidates = (
+                                tuple(
+                                    self._translate_anthropic_image_source_to_url(c.get("source"))
+                                    for c in inner
+                                    if isinstance(c, dict) and c.get("type") == "image"
+                                )
+                                if isinstance(inner, list)
+                                else ()
+                            )
+                            image_urls = tuple(url for url in image_candidates if url)
                             if inner is None:
                                 output_text = ""
                             elif isinstance(inner, str):
@@ -311,29 +323,30 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
                                 ]
                                 output_text = "\n".join(parts)
-                                image_candidates = tuple(
-                                    self._translate_anthropic_image_source_to_url(c.get("source"))
-                                    for c in inner
-                                    if isinstance(c, dict) and c.get("type") == "image"
-                                )
-                                image_urls = tuple(url for url in image_candidates if url)
                                 if image_urls:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
                                         if output_text
                                         else TOOL_RESULT_IMAGE_PLACEHOLDER
                                     )
-                                    tool_image_parts.extend(
-                                        {"type": "input_image", "image_url": url} for url in image_urls
-                                    )
                             else:
                                 output_text = str(inner)
+                            # OpenAI caches only up to the breakpoint, so it moves to the last image hoisted below
+                            tool_image_parts.extend(
+                                with_prompt_cache_breakpoint(
+                                    {"type": "input_image", "image_url": url},
+                                    tool_breakpoint if index == len(image_urls) - 1 else None,
+                                )
+                                for index, url in enumerate(image_urls)
+                            )
                             # tool_result is a top-level item, not inside the message
                             input_items.append(
                                 {
                                     "type": "function_call_output",
                                     "call_id": tool_use_id,
-                                    "output": self._tool_result_output_value(output_text, tool_file_parts, block),
+                                    "output": self._tool_result_output_value(
+                                        output_text, tool_file_parts, None if image_urls else tool_breakpoint
+                                    ),
                                 }
                             )
                     if tool_image_parts:
