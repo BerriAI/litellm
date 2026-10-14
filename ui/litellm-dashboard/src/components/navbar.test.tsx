@@ -266,7 +266,7 @@ describe("Navbar", () => {
     renderWithProviders(<Navbar {...publicPageProps} />);
 
     expect(screen.queryByRole("button", { name: /open account menu/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^notifications/i })).not.toBeInTheDocument();
   });
 
   it("should handle hide new feature indicators toggle", async () => {

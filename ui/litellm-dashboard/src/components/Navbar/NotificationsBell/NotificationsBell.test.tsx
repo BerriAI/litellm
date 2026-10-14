@@ -55,6 +55,18 @@ describe("NotificationsBellView", () => {
     expect(docs).toHaveAttribute("target", "_blank");
   });
 
+  it("uses singular wording for counts of one", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <NotificationsBellView
+        currentVersion="1.102.0"
+        latestRelease={{ ...RELEASE, new_features: 1, bug_fixes: 1, other_updates: 1 }}
+      />,
+    );
+    await user.click(bell(2));
+    expect(announcement("LiteLLM v1.103.0 is available")).toHaveTextContent("1 new feature, 1 fix, and 1 other update");
+  });
+
   it.each([
     ["the running version is unknown", undefined, RELEASE],
     ["the latest release is unavailable", "1.102.0", null],
@@ -112,6 +124,12 @@ describe("NotificationsBellView", () => {
     expect(announcement("LiteLLM v1.104.0 is available")).toContainElement(
       screen.getAllByRole("button", { name: /^mark as read$/i })[0],
     );
+  });
+
+  it("treats a release whose upgrade banner was dismissed as already read", () => {
+    localStorage.setItem("litellm:upgradeBannerDismissed:1.103.0", "true");
+    renderWithProviders(<NotificationsBellView currentVersion="1.102.0" latestRelease={RELEASE} />);
+    expect(bell(1)).toBeInTheDocument();
   });
 
   it("keeps Auto Router read when it was read before", async () => {
