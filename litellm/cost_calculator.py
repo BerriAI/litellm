@@ -919,6 +919,18 @@ def select_model_name_for_cost_calc(
 
     elif base_model is not None or provider_response_model is not None:
         return_model = base_model if base_model is not None else provider_response_model
+        # Streamed Bedrock invoke responses surface the region-stripped model
+        # as provider_response_model, which would otherwise win here and price
+        # cross-region profiles (eu./us./apac./...) at the global rate - the
+        # same gap the completion_response_model branch below closes for
+        # non-streamed responses (#46286).
+        if (
+            return_model == provider_response_model
+            and model is not None
+            and (custom_llm_provider == "bedrock" or model.startswith("bedrock/") or "/bedrock/" in model)
+            and _is_bedrock_region_stripped_form(model, return_model)
+        ):
+            return_model = model
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:

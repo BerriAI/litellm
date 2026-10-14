@@ -9070,3 +9070,17 @@ def test_bedrock_cross_region_profile_prices_at_deployment_model():
     )
     assert selected_jp is not None
     assert "jp.anthropic.claude-haiku-4-5-20251001-v1:0" in selected_jp
+
+    # Streamed Bedrock invoke responses surface the region-stripped id as
+    # provider_response_model in hidden params, which wins over the response
+    # model branch - the deployment model must still keep its prefix there.
+    selected_streamed = select_model_name_for_cost_calc(
+        model="bedrock/invoke/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        completion_response={
+            "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "_hidden_params": {"provider_response_model": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+        },
+        custom_llm_provider="bedrock",
+    )
+    assert selected_streamed is not None
+    assert "eu.anthropic.claude-haiku-4-5-20251001-v1:0" in selected_streamed
