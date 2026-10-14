@@ -7,7 +7,6 @@ import time
 import traceback
 import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
-from concurrent.futures import Future
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -948,15 +947,13 @@ class BaseResponsesAPIStreamingIterator:
                 end_time=end_time,
             )
         finally:
-            sync_failure_logging: Final = self._submit_sync_failure_handler(exception, traceback_exception, end_time)
-            if sync_failure_logging is not None:
-                await asyncio.wrap_future(sync_failure_logging)
+            await asyncio.to_thread(
+                self.logging_obj.failure_handler, exception, traceback_exception, self.start_time, end_time
+            )
 
-    def _submit_sync_failure_handler(
-        self, exception: Exception, traceback_exception: str, end_time: datetime
-    ) -> Future[None] | None:
+    def _submit_sync_failure_handler(self, exception: Exception, traceback_exception: str, end_time: datetime) -> None:
         try:
-            return executor.submit(
+            executor.submit(
                 self.logging_obj.failure_handler,
                 exception,
                 traceback_exception,
@@ -964,7 +961,7 @@ class BaseResponsesAPIStreamingIterator:
                 end_time,
             )
         except Exception:
-            return None
+            pass
 
     def _record_pending_logging_task(self, task: asyncio.Task[object]) -> None:
         self._pending_logging_tasks = (*self._pending_logging_tasks, task)

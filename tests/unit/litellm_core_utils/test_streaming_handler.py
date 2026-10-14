@@ -1196,6 +1196,42 @@ async def test_stream_failure_is_logged_against_the_failed_deployment_before_the
     assert recorder.sync_failed_deployment_ids == ("rate-limited-deployment",)
 
 
+@pytest.mark.asyncio
+async def test_stream_failure_runs_sync_failure_callbacks_without_queueing_behind_a_busy_logging_pool(
+    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.thread_pool_executor import MAX_THREADS, executor
+
+    sync_failure_logged: Final = threading.Event()
+
+    def cooldown_failed_deployment(kwargs, completion_response, start_time, end_time) -> None:
+        sync_failure_logged.set()
+
+    monkeypatch.setattr(litellm, "failure_callback", [cooldown_failed_deployment])
+
+    async def _raise_rate_limit(**kwargs):
+        raise litellm.RateLimitError(message="Rate limit reached", llm_provider="openai", model="gpt-5.5")
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-5.5",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        make_call=_raise_rate_limit,
+    )
+    pool_released: Final = threading.Event()
+    for _ in range(MAX_THREADS):
+        executor.submit(pool_released.wait, 10)
+    try:
+        with pytest.raises(MidStreamFallbackError):
+            await asyncio.wait_for(response.__anext__(), timeout=5)
+    finally:
+        pool_released.set()
+
+    assert sync_failure_logged.is_set()
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):
