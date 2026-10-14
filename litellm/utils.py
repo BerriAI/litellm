@@ -604,20 +604,38 @@ def add_custom_logger_callback_to_specific_event(callback: str, logging_event: L
     )
 
     if callback_class:
-        if logging_event == "success" and _custom_logger_class_exists_in_success_callbacks(callback_class) is False:
-            litellm.logging_callback_manager.add_litellm_success_callback(callback_class)
-            litellm.logging_callback_manager.add_litellm_async_success_callback(callback_class)
-            if callback in litellm.success_callback:
-                litellm.success_callback.remove(callback)  # remove the string from the callback list
-            if callback in litellm._async_success_callback:
-                litellm._async_success_callback.remove(callback)  # remove the string from the callback list
-        elif logging_event == "failure" and _custom_logger_class_exists_in_failure_callbacks(callback_class) is False:
-            litellm.logging_callback_manager.add_litellm_failure_callback(callback_class)
-            litellm.logging_callback_manager.add_litellm_async_failure_callback(callback_class)
-            if callback in litellm.failure_callback:
-                litellm.failure_callback.remove(callback)  # remove the string from the callback list
-            if callback in litellm._async_failure_callback:
-                litellm._async_failure_callback.remove(callback)  # remove the string from the callback list
+        register_custom_logger_for_event(callback, callback_class, logging_event)
+
+
+def add_configured_callback_to_specific_event(callback: str, logging_event: Literal["success", "failure"]) -> None:
+    from litellm.litellm_core_utils.litellm_logging import (
+        init_custom_logger_compatible_class_at_startup,
+    )
+
+    callback_class: Final = init_custom_logger_compatible_class_at_startup(
+        callback, internal_usage_cache=None, llm_router=None
+    )
+    if callback_class is not None:
+        register_custom_logger_for_event(callback, callback_class, logging_event)
+
+
+def register_custom_logger_for_event(
+    callback: str, callback_class: CustomLogger, logging_event: Literal["success", "failure"]
+) -> None:
+    if logging_event == "success" and _custom_logger_class_exists_in_success_callbacks(callback_class) is False:
+        litellm.logging_callback_manager.add_litellm_success_callback(callback_class)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(callback_class)
+        if callback in litellm.success_callback:
+            litellm.success_callback.remove(callback)  # remove the string from the callback list
+        if callback in litellm._async_success_callback:
+            litellm._async_success_callback.remove(callback)  # remove the string from the callback list
+    elif logging_event == "failure" and _custom_logger_class_exists_in_failure_callbacks(callback_class) is False:
+        litellm.logging_callback_manager.add_litellm_failure_callback(callback_class)
+        litellm.logging_callback_manager.add_litellm_async_failure_callback(callback_class)
+        if callback in litellm.failure_callback:
+            litellm.failure_callback.remove(callback)  # remove the string from the callback list
+        if callback in litellm._async_failure_callback:
+            litellm._async_failure_callback.remove(callback)  # remove the string from the callback list
 
 
 _add_custom_logger_callback_to_specific_event = add_custom_logger_callback_to_specific_event
@@ -5073,6 +5091,13 @@ def get_optional_params(
             model=model,
             drop_params=bool(drop_params),
         )
+    if (litellm.drop_params or drop_params) and custom_llm_provider != "litellm_proxy":
+        litellm.AnthropicConfig.maybe_drop_speed_param(
+            model=model,
+            optional_params=passed_params,
+            drop_params=True,
+            custom_llm_provider=custom_llm_provider or None,
+        )
     # if user passed in non-default kwargs for specific providers/models, pass them along
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
@@ -5756,7 +5781,7 @@ def get_model_cost_key(potential_key: str) -> str | None:
 _get_model_cost_key = get_model_cost_key
 
 
-def _get_model_info_from_model_cost(key: str) -> dict[str, Any]:
+def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
     return litellm.model_cost[key]
 
 
@@ -8525,7 +8550,7 @@ _get_bundled_model_cost_map = get_bundled_model_cost_map
 def _get_model_cost_entry_for_provider_config(
     model: str,
     provider: LlmProviders,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     candidate_keys: Final = (model, f"{provider.value}/{model}")
     for model_key in candidate_keys:
         model_info = litellm.model_cost.get(model_key)
@@ -9043,6 +9068,10 @@ class ProviderConfigManager:
             return litellm.DatabricksDecisionsConfig()
         if provider == LlmProviders.HOSTED_VLLM:
             return litellm.HostedVLLMDecisionsConfig()
+        if provider == LlmProviders.LAYA:
+            return litellm.LayaDecisionsConfig()
+        if provider == LlmProviders.BESPOKE:
+            return litellm.BespokeDecisionsConfig()
         if provider == LlmProviders.OPENAI:
             return litellm.OpenAIDecisionsConfig()
         if provider == LlmProviders.AZURE_AI:
@@ -9830,6 +9859,16 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 
             return VertexAIVideoConfig()
+        elif provider in (
+            LlmProviders.DASHSCOPE,
+            LlmProviders.QWENCLOUD,
+            LlmProviders.QWEN_AI_PLATFORM,
+        ):
+            from litellm.llms.dashscope.common_utils import (
+                get_dashscope_family_video_config,
+            )
+
+            return get_dashscope_family_video_config(provider.value)
         elif LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 

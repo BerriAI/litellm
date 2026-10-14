@@ -30,7 +30,7 @@ use crate::{
                 Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
             },
         },
-        messages::streaming::anthropic_sse_event_stream,
+        messages::streaming::event_stream as messages_event_stream,
     },
 };
 
@@ -196,7 +196,7 @@ impl BaseConfig for AnthropicConfig {
 
     fn model_response_iterator(&self, shape: StreamShape) -> Option<ChatStream> {
         Some(ChatStream::new(
-            anthropic_sse_event_stream,
+            messages_event_stream,
             ModelResponseIterator::new(shape),
         ))
     }
