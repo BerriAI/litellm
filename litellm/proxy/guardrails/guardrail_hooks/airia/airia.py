@@ -2,7 +2,6 @@ import os
 import uuid
 from collections.abc import Mapping
 from typing import (
-    TYPE_CHECKING,
     Any,  # noqa: TID251  # the only type CustomGuardrail.__init__ accepts for its open-ended kwargs
     Final,
     Literal,
@@ -14,20 +13,18 @@ from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
-    log_guardrail_information,
+    log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # the decorator is untyped upstream
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
-    get_async_httpx_client,
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # the factory's params are untyped upstream
     httpxSpecialProvider,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.guardrails.guardrail_hooks.airia import AiriaGuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
-
-if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_PATH: Final = "/v1/guardrails/litellm"
 
@@ -87,7 +84,7 @@ def _request_route(request_data: Mapping[str, object]) -> str | None:
 def _as_object(value: object) -> dict[str, object] | None:
     """`value` as a JSON object, or None. States the key type once so the checker does not see
     `dict[Unknown, Unknown]` at every read."""
-    return value if isinstance(value, dict) else None
+    return value if isinstance(value, dict) else None  # pyright: ignore[reportUnknownVariableType]  # isinstance narrows to dict[Unknown, Unknown]; JSON keys are str
 
 
 class AiriaGuardrail(CustomGuardrail):
@@ -125,7 +122,7 @@ class AiriaGuardrail(CustomGuardrail):
             raise ValueError("AiriaGuardrail requires api_key, or the AIRIA_API_KEY environment variable.")
 
         self.optional_params = kwargs
-        super().__init__(
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # parent takes untyped **kwargs
             supported_event_hooks=supported_event_hooks or [*SUPPORTED_EVENT_HOOKS],  # mutable-ok: base needs a list
             **kwargs,
         )
@@ -146,7 +143,7 @@ class AiriaGuardrail(CustomGuardrail):
         ) or str(uuid.uuid4())
 
         try:
-            response: Final = await self.async_handler.post(
+            response: Final = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # the handler's `data` param is an untyped dict upstream
                 f"{self.api_base}{GUARDRAIL_PATH}",
                 json={  # mutable-ok: httpx needs a plain dict; built once and sent
                     "input_type": input_type,
@@ -161,9 +158,10 @@ class AiriaGuardrail(CustomGuardrail):
                 headers={"Authorization": f"Bearer {self.api_key}"},  # mutable-ok: one-shot HTTP headers
             )
             response.raise_for_status()
-            body: Final = response.json()
-            if not isinstance(body, dict):
-                raise TypeError(f"expected a JSON object in the response body, got {type(body).__name__}")
+            raw_body: Final[object] = response.json()
+            body: Final = _as_object(raw_body)
+            if body is None:
+                raise TypeError(f"expected a JSON object in the response body, got {type(raw_body).__name__}")
         except Exception as error:
             verbose_proxy_logger.error(
                 "Airia guardrail could not evaluate the request (litellm_call_id=%s, input_type=%s): %s",
@@ -180,9 +178,10 @@ class AiriaGuardrail(CustomGuardrail):
         action: Final = body.get("action")
 
         if action == ACTION_BLOCKED:
+            reason: Final = body.get("blocked_reason")
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message=body.get("blocked_reason") or DEFAULT_BLOCKED_MESSAGE,
+                message=reason if isinstance(reason, str) and reason else DEFAULT_BLOCKED_MESSAGE,
                 blocked_content=True,
             )
 
@@ -233,7 +232,7 @@ class AiriaGuardrail(CustomGuardrail):
             return True
         if not isinstance(original, list) or not isinstance(rewrite, list):
             return False
-        return len(rewrite) == len(original)
+        return len(rewrite) == len(original)  # pyright: ignore[reportUnknownArgumentType]  # only the counts matter; the items are the gateway's
 
     def _blocked(self) -> GuardrailRaisedException:
         return GuardrailRaisedException(
@@ -243,9 +242,5 @@ class AiriaGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
-        from litellm.types.proxy.guardrails.guardrail_hooks.airia import (
-            AiriaGuardrailConfigModel,
-        )
-
+    def get_config_model() -> type[AiriaGuardrailConfigModel] | None:
         return AiriaGuardrailConfigModel

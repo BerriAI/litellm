@@ -3,7 +3,7 @@ from pydantic import Field
 from .base import GuardrailConfigModel
 
 
-class AiriaGuardrailConfigModel(GuardrailConfigModel):
+class AiriaGuardrailConfigModel(GuardrailConfigModel):  # pyright: ignore[reportMissingTypeArgument]  # parameterizing adds an optional_params field to the UI form
     api_base: str | None = Field(
         default=None,
         description="Base URL of the Airia AI Gateway, e.g. https://gateway.airia.ai. If not "

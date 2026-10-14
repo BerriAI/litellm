@@ -14,7 +14,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         timeout=litellm_params.timeout,
-        guardrail_name=guardrail.get("guardrail_name", ""),
+        guardrail_name=guardrail["guardrail_name"],
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

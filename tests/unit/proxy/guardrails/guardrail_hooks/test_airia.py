@@ -10,7 +10,9 @@ import pytest
 import litellm
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.guardrails.guardrail_hooks.airia.airia import AiriaGuardrail
-from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.proxy.guardrails.init_guardrails import (
+    init_guardrails_v2,  # pyright: ignore[reportUnknownVariableType]  # untyped upstream
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.airia import AiriaGuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -41,6 +43,25 @@ def _mock_response(payload: object, status_code: int = 200) -> MagicMock:
     response.json.return_value = payload
     response.raise_for_status = MagicMock()
     return response
+
+
+def _as_mock(value: object) -> MagicMock:
+    """Forget the declared type, which is the real handler's, and recover the mock that was injected."""
+    assert isinstance(value, MagicMock)
+    return value
+
+
+def _post_mock(guardrail: AiriaGuardrail) -> AsyncMock:
+    """The `post` the test injected, typed as the mock it is so call inspection stays checked."""
+    post = _as_mock(guardrail.async_handler).post
+    assert isinstance(post, AsyncMock)
+    return post
+
+
+def _timeout(guardrail: AiriaGuardrail) -> httpx.Timeout:
+    timeout = guardrail.async_handler.timeout  # pyright: ignore[reportUnknownMemberType]  # the handler's attribute is partially untyped
+    assert isinstance(timeout, httpx.Timeout)
+    return timeout
 
 
 def _inputs(**overrides: object) -> GenericGuardrailAPIInputs:
@@ -74,7 +95,7 @@ def test_airia_guardrail_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert registered[0].guardrail_name == "airia-guard"
     assert registered[0].default_on is True
     assert registered[0].event_hook == "pre_call"
-    assert registered[0].async_handler.timeout.read == 45.0
+    assert _timeout(registered[0]).read == 45.0
 
 
 def test_during_call_is_not_a_supported_event_hook() -> None:
@@ -118,8 +139,8 @@ def test_trailing_slash_is_stripped_from_api_base() -> None:
 def test_custom_timeout_from_kwargs() -> None:
     guardrail = _make_guardrail(timeout=45.0)
 
-    assert guardrail.async_handler.timeout.read == 45.0
-    assert guardrail.async_handler.timeout.connect == 5.0
+    assert _timeout(guardrail).read == 45.0
+    assert _timeout(guardrail).connect == 5.0
 
 
 def test_timeout_falls_back_to_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,7 +148,7 @@ def test_timeout_falls_back_to_environment(monkeypatch: pytest.MonkeyPatch) -> N
 
     guardrail = _make_guardrail()
 
-    assert guardrail.async_handler.timeout.read == 30.0
+    assert _timeout(guardrail).read == 30.0
 
 
 @pytest.mark.asyncio
@@ -142,7 +163,7 @@ async def test_request_payload_and_auth_header() -> None:
     )
     await guardrail.apply_guardrail(inputs=inputs, request_data={"litellm_call_id": "call-123"}, input_type="request")
 
-    call = guardrail.async_handler.post.call_args
+    call = _post_mock(guardrail).call_args
     assert call.args[0] == f"{API_BASE}/v1/guardrails/litellm"
     assert call.kwargs["headers"] == {"Authorization": f"Bearer {API_KEY}"}
 
@@ -164,7 +185,7 @@ async def test_input_type_is_forwarded_verbatim(input_type: Literal["request", "
 
     await guardrail.apply_guardrail(inputs=_inputs(), request_data={}, input_type=input_type)
 
-    assert guardrail.async_handler.post.call_args.kwargs["json"]["input_type"] == input_type
+    assert _post_mock(guardrail).call_args.kwargs["json"]["input_type"] == input_type
 
 
 @pytest.mark.asyncio
@@ -173,7 +194,7 @@ async def test_call_id_falls_back_to_a_generated_uuid() -> None:
 
     await guardrail.apply_guardrail(inputs=_inputs(), request_data={}, input_type="request")
 
-    call_id = guardrail.async_handler.post.call_args.kwargs["json"]["litellm_call_id"]
+    call_id = _post_mock(guardrail).call_args.kwargs["json"]["litellm_call_id"]
     assert uuid.UUID(call_id).version == 4
 
 
@@ -364,7 +385,7 @@ async def test_streaming_redaction_actually_reaches_the_client() -> None:
         )
 
     assembled = ""
-    async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+    async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(  # pyright: ignore[reportUnknownMemberType]  # annotates request_data as a bare dict
         user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
         response=source_stream(),
         request_data={  # mutable-ok: one-shot request_data the framework requires as a plain dict
@@ -379,7 +400,7 @@ async def test_streaming_redaction_actually_reaches_the_client() -> None:
 
     assert "[EmailAddress1]" in assembled
     assert "ada@example.com" not in assembled
-    guardrail.async_handler.post.assert_called_once()
+    _post_mock(guardrail).assert_called_once()
 
 
 def _streamed_request(route: str | None) -> dict[str, object]:
@@ -532,7 +553,7 @@ async def test_non_chat_streamed_route_releases_nothing_before_the_verdict(verdi
     guardrail: Final = _make_guardrail_with_response(verdict, event_hook="post_call", default_on=True)
 
     released: list[object] = []  # mutable-ok: what the client received before the stream was refused
-    hook: Final = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+    hook: Final = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(  # pyright: ignore[reportUnknownMemberType]  # annotates request_data as a bare dict
         user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
         response=_anthropic_messages_stream(),
         request_data={  # mutable-ok: one-shot request_data the framework requires as a plain dict
@@ -546,7 +567,7 @@ async def test_non_chat_streamed_route_releases_nothing_before_the_verdict(verdi
 
     assert excinfo.value.blocked_content is True
     assert "ada@example.com" not in "".join(c.decode() if isinstance(c, bytes) else str(c) for c in released)
-    guardrail.async_handler.post.assert_called_once()
+    _post_mock(guardrail).assert_called_once()
 
 
 def test_config_model_is_exposed() -> None:
