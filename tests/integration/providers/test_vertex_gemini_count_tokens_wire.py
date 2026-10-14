@@ -185,6 +185,88 @@ def test_count_tokens_keeps_each_text_block_in_system_instruction(gateway: Gatew
         }
 
 
+def test_count_tokens_converts_anthropic_documents_images_and_tool_turns(gateway: Gateway) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire.url)
+        body: Final[Mapping[str, JsonValue]] = {
+            "model": model,
+            "system": "Use the lookup tool.",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": "JVBERi0xLjQK",
+                            },
+                        },
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="},
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "call_1", "name": "lookup", "input": {"query": "value"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "Found it."}],
+                },
+            ],
+            "tools": [
+                {
+                    "name": "lookup",
+                    "description": "Find a record",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                }
+            ],
+        }
+        generated: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 16})
+        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body)
+        assert generated.status_code == 200, generated.text
+        assert counted.status_code == 200, counted.text
+        count_requests: Final = _count_requests(wire)
+        assert len(count_requests) == 1
+        generated_requests: Final = tuple(
+            request for request in peer.drain() if request.target.endswith(":generateContent")
+        )
+        assert len(generated_requests) == 1
+        generated_body: Final = _json_body(generated_requests[0])
+        count_body: Final = _json_body(count_requests[0])
+        assert count_body == _count_tokens_request_from_generate_content(generated_body)
+        contents: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_python(count_body["contents"])
+        assert contents[0]["parts"] == [
+            {"inline_data": {"mime_type": "application/pdf", "data": "JVBERi0xLjQK"}},
+            {"inline_data": {"mime_type": "image/png", "data": "aW1hZ2U="}},
+            {"text": " "},
+        ]
+        assert contents[1]["parts"] == [
+            {
+                "function_call": {
+                    "name": "lookup",
+                    "args": {"query": "value"},
+                    "id": "call_1",
+                },
+                "thoughtSignature": "c2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3I=",
+            }
+        ]
+        assert contents[2]["parts"] == [
+            {
+                "function_response": {
+                    "name": "lookup",
+                    "response": {"content": "Found it."},
+                    "id": "call_1",
+                }
+            }
+        ]
+
+
 def test_count_tokens_without_system_or_tools_sends_contents_only(gateway: Gateway) -> None:
     peer: Final = _GeminiPeer()
     with wire_server(peer) as wire, gateway.scenario() as scenario:

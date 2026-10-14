@@ -1,12 +1,81 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
-from litellm.types.llms.anthropic import AnthropicMessagesTextParam
+from litellm.types.llms.anthropic import (
+    AllAnthropicPassThroughMessageValues,
+    AllAnthropicToolsValues,
+    AnthropicMessagesTextParam,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AnthropicGeminiCountRequest:
+    messages: tuple[Mapping[str, object], ...]
+    tools: tuple[Mapping[str, object], ...] | None
+
+
+_ANTHROPIC_MESSAGES_ADAPTER: Final = TypeAdapter[tuple[AllAnthropicPassThroughMessageValues, ...]](
+    tuple[AllAnthropicPassThroughMessageValues, ...]
+)
+_ANTHROPIC_TOOLS_ADAPTER: Final = TypeAdapter[tuple[AllAnthropicToolsValues, ...]](tuple[AllAnthropicToolsValues, ...])
+_OPENAI_MESSAGES_ADAPTER: Final = TypeAdapter[tuple[Mapping[str, object], ...]](tuple[Mapping[str, object], ...])
+_OPENAI_TOOLS_ADAPTER: Final = TypeAdapter[tuple[Mapping[str, object], ...]](tuple[Mapping[str, object], ...])
+
+
+def _materialize_anthropic_messages(
+    messages: tuple[AllAnthropicPassThroughMessageValues, ...],
+) -> tuple[AllAnthropicPassThroughMessageValues, ...]:
+    return tuple(
+        message
+        if isinstance(message["content"], (str, list))
+        else cast(  # cast-ok: validation established content item types before iterator materialization
+            AllAnthropicPassThroughMessageValues,
+            {**message, "content": list(message["content"])},
+        )
+        for message in messages
+    )
+
+
+def convert_anthropic_gemini_count_request(
+    messages: Sequence[Mapping[str, object]] | None,
+    tools: Sequence[Mapping[str, object]] | None,
+    model: str,
+    custom_llm_provider: str,
+) -> AnthropicGeminiCountRequest | None:
+    if messages is None:
+        return None
+    try:
+        validated_messages: Final = _ANTHROPIC_MESSAGES_ADAPTER.validate_python(messages)
+        anthropic_messages: Final = _materialize_anthropic_messages(validated_messages)
+        anthropic_tools: Final = _ANTHROPIC_TOOLS_ADAPTER.validate_python(tools) if tools is not None else None
+    except ValidationError:
+        return None
+
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
+        LiteLLMAnthropicMessagesAdapter,
+    )
+
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+    openai_messages: Final = _OPENAI_MESSAGES_ADAPTER.validate_python(
+        adapter.translate_anthropic_messages_to_openai(  # pyright: ignore[reportUnknownMemberType]  # output is validated immediately
+            messages=list(anthropic_messages),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    )
+    openai_tools: Final = (
+        _OPENAI_TOOLS_ADAPTER.validate_python(
+            adapter.translate_anthropic_tools_to_openai(list(anthropic_tools), model)[0]
+        )
+        if anthropic_tools is not None
+        else None
+    )
+    return AnthropicGeminiCountRequest(messages=tuple(openai_messages), tools=openai_tools)
 
 
 class _AnthropicFunctionTool(BaseModel):

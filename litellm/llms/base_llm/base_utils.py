@@ -8,14 +8,17 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, Literal, TypeAlias
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.types.llms.anthropic import AnthropicSystemParam
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
+
+AnthropicCountRequestFormat: TypeAlias = Literal["chat", "anthropic"]
 
 
 class BaseTokenCounter(ABC):
@@ -28,7 +31,8 @@ class BaseTokenCounter(ABC):
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
         tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
+        system: AnthropicSystemParam = None,
+        request_format: AnthropicCountRequestFormat = "chat",
     ) -> TokenCountResponse | None:
         pass
 

@@ -10,9 +10,10 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
+from litellm.llms.base_llm.base_utils import AnthropicCountRequestFormat, BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.anthropic import AnthropicSystemParam
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
@@ -494,7 +495,8 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
-        system: object | None = None,
+        system: AnthropicSystemParam = None,
+        request_format: AnthropicCountRequestFormat = "chat",
     ) -> TokenCountResponse | None:
         import copy
 
@@ -502,17 +504,43 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         from litellm.llms.vertex_ai.count_tokens.context import (
             VertexGeminiCountContext,
             VertexGeminiCountContextError,
+            convert_anthropic_gemini_count_request,
             vertex_gemini_count_context,
+        )
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            gemini_convert_messages_with_history,  # pyright: ignore[reportUnknownVariableType]  # converter's optional params are untyped
+        )
+
+        anthropic_chat_request: Final = (
+            convert_anthropic_gemini_count_request(messages, tools, model_to_use, "gemini")
+            if request_format == "anthropic"
+            else None
+        )
+        resolved_messages: Final = (
+            list(anthropic_chat_request.messages) if anthropic_chat_request is not None else messages
+        )
+        resolved_tools: Final = (
+            [dict(tool) for tool in anthropic_chat_request.tools]
+            if anthropic_chat_request is not None and anthropic_chat_request.tools is not None
+            else tools
         )
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
+        resolved_contents: Final = (
+            contents
+            if contents is not None
+            else gemini_convert_messages_with_history(
+                messages=resolved_messages or [],  # pyright: ignore[reportArgumentType]  # preserve direct caller message handling
+                model=model_to_use,
+            )
+        )
         count_tokens_params: Final = {
             "model": model_to_use,
-            "contents": contents,
+            "contents": resolved_contents,
         }
         count_tokens_params_request.update(count_tokens_params)
-        count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
+        count_context: Final = vertex_gemini_count_context(system=system, tools=resolved_tools)
         match count_context:
             case VertexGeminiCountContextError(error_message=context_error):
                 return TokenCountResponse(

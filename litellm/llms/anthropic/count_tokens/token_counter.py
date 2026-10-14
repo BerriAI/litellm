@@ -4,16 +4,18 @@ Anthropic Token Counter implementation using the CountTokens API.
 
 from typing import Any, Final
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import AnthropicCountRequestFormat, BaseTokenCounter
+from litellm.types.llms.anthropic import AnthropicSystemParam
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
+_ANTHROPIC_SYSTEM_ADAPTER: Final = TypeAdapter[JsonValue](JsonValue)
 
 
 class AnthropicTokenCounter(BaseTokenCounter):
@@ -33,7 +35,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
         tools: list[dict[str, JsonValue]] | None = None,
-        system: JsonValue = None,
+        system: AnthropicSystemParam = None,
+        request_format: AnthropicCountRequestFormat = "chat",
     ) -> TokenCountResponse | None:
         """
         Count tokens using Anthropic's CountTokens API.
@@ -68,13 +71,14 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 verbose_logger.warning("No Anthropic credential found for token counting")
                 return None
 
+            system_value: Final = _ANTHROPIC_SYSTEM_ADAPTER.validate_python(system)
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
                 auth_header=auth_header,
                 api_base=api_base,
                 tools=tools,
-                system=system,
+                system=system_value,
             )
 
             if result is not None:

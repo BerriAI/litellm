@@ -5,7 +5,7 @@ from typing import Final
 import httpx
 import pytest
 import respx
-from pydantic import ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
@@ -136,6 +136,79 @@ async def test_count_payload_that_is_not_an_object_becomes_an_error_response_nam
 @pytest.mark.asyncio
 async def test_null_count_payload_falls_back_to_local_counting(monkeypatch: pytest.MonkeyPatch) -> None:
     assert await _count(monkeypatch, httpx.Response(200, content=b"null")) is None
+
+
+@pytest.mark.asyncio
+async def test_anthropic_request_format_sends_responses_input_and_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    pdf_data_url: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+    image_data_url: Final = "data:image/png;base64,aW1hZ2U="
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+                },
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="},
+                },
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "call_1", "name": "lookup", "input": {"query": "value"}}],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "Found it."}]},
+    ]
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Find a record",
+            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+        }
+    ]
+
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 17}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=messages,
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-test"}},
+            request_model="openai/gpt-4o",
+            tools=tools,
+            system="Use the lookup tool.",
+            request_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.total_tokens == 17
+    request_body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(route.calls[0].request.content)
+    assert request_body["instructions"] == "Use the lookup tool."
+    assert request_body["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "description": "Find a record",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+            "strict": False,
+        }
+    ]
+    input_items: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_python(request_body["input"])
+    user_parts: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_python(input_items[0]["content"])
+    assert user_parts == [
+        {"type": "input_file", "filename": "document.pdf", "file_data": pdf_data_url},
+        {"type": "input_image", "image_url": image_data_url},
+    ]
+    assert input_items[1]["type"] == "function_call"
+    assert input_items[1]["name"] == "lookup"
+    assert input_items[1]["call_id"] == "call_1"
+    assert input_items[2] == {"type": "function_call_output", "call_id": "call_1", "output": "Found it."}
 
 
 @pytest.mark.asyncio

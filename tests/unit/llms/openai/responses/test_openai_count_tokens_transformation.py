@@ -1,8 +1,8 @@
-
 from typing import Final
 
 import pytest
 
+from litellm.constants import PDF_DATA_URL_PREFIX
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
@@ -190,14 +190,28 @@ def test_messages_to_responses_input_basic():
         {"role": "user", "content": "How are you?"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 3
     assert input_items[0] == {"role": "user", "content": "Hello"}
     assert input_items[1] == {"role": "assistant", "content": "Hi there!"}
     assert input_items[2] == {"role": "user", "content": "How are you?"}
+    assert instructions is None
+
+
+def test_chat_pdf_image_url_maps_to_responses_input_file() -> None:
+    pdf_data_url: Final = f"{PDF_DATA_URL_PREFIX}JVBERi0xLjQK"
+
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
+        [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_data_url}}]}]
+    )
+
+    assert input_items == [
+        {
+            "role": "user",
+            "content": ({"type": "input_file", "filename": "document.pdf", "file_data": pdf_data_url},),
+        }
+    ]
     assert instructions is None
 
 
@@ -208,9 +222,7 @@ def test_messages_to_responses_input_with_system():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 1
     assert input_items[0] == {"role": "user", "content": "Hello"}
@@ -224,9 +236,7 @@ def test_messages_to_responses_input_with_developer():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 1
     assert instructions == "Be concise."
@@ -239,9 +249,7 @@ def test_messages_to_responses_input_with_tool():
         {"role": "tool", "content": "72°F", "tool_call_id": "call_123"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 2
     assert input_items[1] == {
@@ -512,10 +520,7 @@ def test_validate_request_missing_input():
 def test_get_endpoint_default():
     """Test default endpoint URL."""
     config = OpenAICountTokensConfig()
-    assert (
-        config.get_openai_count_tokens_endpoint()
-        == "https://api.openai.com/v1/responses/input_tokens"
-    )
+    assert config.get_openai_count_tokens_endpoint() == "https://api.openai.com/v1/responses/input_tokens"
 
 
 def test_get_endpoint_custom_base():

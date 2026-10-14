@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, Scenario, gateway_from_environment
+from integration._support.client import Scenario, gateway_from_environment
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -89,6 +89,7 @@ def test_google_count_tokens_maps_anthropic_tools_to_openai(counting_proxy: Owne
                 "name": "lookup",
                 "description": "Find a record",
                 "parameters": _TOOL_SCHEMA,
+                "strict": False,
             }
         ]
 
@@ -120,8 +121,73 @@ def test_messages_count_tokens_maps_anthropic_tools_to_openai(counting_proxy: Ow
                 "name": "lookup",
                 "description": "Find a record",
                 "parameters": _TOOL_SCHEMA,
+                "strict": False,
             }
         ]
+
+
+def test_messages_count_tokens_converts_anthropic_documents_images_and_tool_turns(counting_proxy: OwnedProxy) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_count_response) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire.url)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages/count_tokens",
+            {
+                "model": model,
+                "system": "Use the lookup tool.",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "application/pdf",
+                                    "data": "JVBERi0xLjQK",
+                                },
+                            },
+                            {
+                                "type": "image",
+                                "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "tool_use", "id": "call_1", "name": "lookup", "input": {"query": "value"}}
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "Found it."}],
+                    },
+                ],
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "description": "Find a record",
+                        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = _count_body(wire)
+        assert body["instructions"] == "Use the lookup tool."
+        input_items: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_python(body["input"])
+        assert input_items[0]["content"] == [
+            {
+                "type": "input_file",
+                "filename": "document.pdf",
+                "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+            },
+            {"type": "input_image", "image_url": "data:image/png;base64,aW1hZ2U="},
+        ]
+        assert input_items[1]["type"] == "function_call"
+        assert input_items[2] == {"type": "function_call_output", "call_id": "call_1", "output": "Found it."}
 
 
 def test_utils_token_counter_keeps_chat_tool_conversion(counting_proxy: OwnedProxy) -> None:

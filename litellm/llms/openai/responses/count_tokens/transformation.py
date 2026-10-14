@@ -7,7 +7,10 @@ This module handles the transformation of requests to OpenAI's /v1/responses/inp
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
+
+from litellm.constants import PDF_DATA_URL_PREFIX
 
 
 class ResponsesInputTextPart(TypedDict):
@@ -31,12 +34,24 @@ ResponsesInputPart = ResponsesInputTextPart | ResponsesInputImagePart | Response
 
 ResponsesContentRole = Literal["user", "assistant"]
 
+_CHAT_BLOCK_ADAPTER: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+
+
+def _chat_image_url_mapping(image_url: object) -> Mapping[str, object] | None:
+    if not isinstance(image_url, Mapping):
+        return None
+    try:
+        return _CHAT_BLOCK_ADAPTER.validate_python(image_url)
+    except ValidationError:
+        return None
+
 
 def _chat_image_block_to_responses_part(image_url: object) -> ResponsesInputImagePart | None:
-    url: Final = image_url.get("url") if isinstance(image_url, Mapping) else image_url
+    image_url_mapping: Final = _chat_image_url_mapping(image_url)
+    url: Final = image_url_mapping.get("url") if image_url_mapping is not None else image_url
     if not isinstance(url, str) or not url:
         return None
-    detail: Final = image_url.get("detail") if isinstance(image_url, Mapping) else None
+    detail: Final = image_url_mapping.get("detail") if image_url_mapping is not None else None
     part: Final[ResponsesInputImagePart] = {
         "type": "input_image",
         "image_url": url,
@@ -67,18 +82,27 @@ def _chat_block_to_responses_part(block: object, role: ResponsesContentRole) -> 
         return bare
     if not isinstance(block, Mapping):
         return None
-    match block.get("type"):
+    try:
+        chat_block: Final = _CHAT_BLOCK_ADAPTER.validate_python(block)
+    except ValidationError:
+        return None
+    match chat_block.get("type"):
         case "text":
-            text_value: Final = block.get("text")
+            text_value: Final = chat_block.get("text")
             text: Final[ResponsesInputTextPart] = {
                 "type": "input_text",
                 "text": text_value if isinstance(text_value, str) else "",
             }
             return text
         case "image_url" if role == "user":
-            return _chat_image_block_to_responses_part(block.get("image_url"))
+            image_url: Final = chat_block.get("image_url")
+            image_url_mapping: Final = _chat_image_url_mapping(image_url)
+            url: Final = image_url_mapping.get("url") if image_url_mapping is not None else image_url
+            if isinstance(url, str) and url.startswith(PDF_DATA_URL_PREFIX):
+                return {"type": "input_file", "filename": "document.pdf", "file_data": url}
+            return _chat_image_block_to_responses_part(image_url)
         case "file" if role == "user":
-            return _chat_file_block_to_responses_part(block.get("file"))
+            return _chat_file_block_to_responses_part(chat_block.get("file"))
         case _:
             return None
 

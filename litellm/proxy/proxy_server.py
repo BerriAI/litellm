@@ -14208,7 +14208,7 @@ async def run_thread(
 #     dependencies=[Depends(user_api_key_auth)],
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import AnthropicCountRequestFormat, BaseTokenCounter
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -14221,6 +14221,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.llms.anthropic import AnthropicSystemParam
 
 
 def _get_provider_token_counter(
@@ -14287,7 +14288,8 @@ async def _try_provider_token_count(
     deployment: dict[str, object] | None,
     request_model: str,
     tools: list | None = None,
-    system: str | None = None,
+    system: AnthropicSystemParam = None,
+    request_format: AnthropicCountRequestFormat = "chat",
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14301,6 +14303,7 @@ async def _try_provider_token_count(
             request_model=request_model,
             tools=tools,
             system=system,
+            request_format=request_format,
         )
     except httpx.HTTPStatusError as e:
         error_message: Final = getattr(e, "message", None) or str(e)
@@ -14328,13 +14331,11 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     return message
 
 
-@router.post(
-    "/utils/token_counter",
-    tags=["llm utils"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=TokenCountResponse,
-)
-async def token_counter(request: TokenCountRequest, call_endpoint: bool = False):
+async def count_request_tokens(
+    request: TokenCountRequest,
+    call_endpoint: bool = False,
+    request_format: AnthropicCountRequestFormat = "chat",
+) -> TokenCountResponse:
     """
     Args:
         request: TokenCountRequest
@@ -14403,6 +14404,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             request_model=request.model,
             tools=tools,
             system=system,
+            request_format=request_format,
         )
         if result is not None:
             return result
@@ -14451,6 +14453,16 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
         model_used=model_to_use,
         tokenizer_type=tokenizer_used,
     )
+
+
+@router.post(
+    "/utils/token_counter",
+    tags=["llm utils"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TokenCountResponse,
+)
+async def token_counter(request: TokenCountRequest, call_endpoint: bool = False):
+    return await count_request_tokens(request=request, call_endpoint=call_endpoint, request_format="chat")
 
 
 @router.get(

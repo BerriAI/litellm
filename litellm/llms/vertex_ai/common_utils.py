@@ -15,8 +15,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
-from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
+from litellm.llms.base_llm.base_utils import AnthropicCountRequestFormat, BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.anthropic import AnthropicSystemParam
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import (
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
@@ -1271,7 +1272,8 @@ class VertexAITokenCounter(BaseTokenCounter):
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
-        system: object | None = None,
+        system: AnthropicSystemParam = None,
+        request_format: AnthropicCountRequestFormat = "chat",
     ) -> TokenCountResponse | None:
         import copy
 
@@ -1346,6 +1348,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             from litellm.llms.vertex_ai.count_tokens.context import (
                 VertexGeminiCountContext,
                 VertexGeminiCountContextError,
+                convert_anthropic_gemini_count_request,
                 vertex_gemini_count_context,
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
@@ -1353,7 +1356,20 @@ class VertexAITokenCounter(BaseTokenCounter):
                 gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
             )
 
-            count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
+            anthropic_chat_request: Final = (
+                convert_anthropic_gemini_count_request(messages, tools, model_to_use, "vertex_ai")
+                if request_format == "anthropic"
+                else None
+            )
+            resolved_messages: Final = (
+                list(anthropic_chat_request.messages) if anthropic_chat_request is not None else messages
+            )
+            resolved_tools: Final = (
+                [dict(tool) for tool in anthropic_chat_request.tools]
+                if anthropic_chat_request is not None and anthropic_chat_request.tools is not None
+                else tools
+            )
+            count_context: Final = vertex_gemini_count_context(system=system, tools=resolved_tools)
             match count_context:
                 case VertexGeminiCountContextError(error_message=context_error):
                     return TokenCountResponse(
@@ -1372,7 +1388,8 @@ class VertexAITokenCounter(BaseTokenCounter):
                 contents
                 if contents is not None
                 else gemini_convert_messages_with_history(
-                    messages=messages or []  # pyright: ignore[reportArgumentType]  # preserve direct caller message handling
+                    messages=resolved_messages or [],  # pyright: ignore[reportArgumentType]  # preserve direct caller message handling
+                    model=model_to_use,
                 )
             )
             token_count_settings: Final = TypeAdapter(dict[str, object]).validate_python(count_tokens_params_request)

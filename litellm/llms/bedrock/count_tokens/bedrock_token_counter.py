@@ -10,12 +10,13 @@ from pydantic import JsonValue
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import AnthropicCountRequestFormat, BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.llms.anthropic import AnthropicSystemParam
 from litellm.types.utils import LiteLLMPydanticObjectBase, LlmProviders, TokenCountResponse
 
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
@@ -106,7 +107,8 @@ class BedrockTokenCounter(BaseTokenCounter):
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
         tools: Sequence[Mapping[str, object]] | None = None,
-        system: object | None = None,
+        system: AnthropicSystemParam = None,
+        request_format: AnthropicCountRequestFormat = "chat",
     ) -> TokenCountResponse | None:
         if not messages:
             return None

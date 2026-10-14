@@ -209,6 +209,9 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     prompt_cache_breakpoint: ReadOnly[PromptCacheBreakpoint]
 
 
+AnthropicSystemParam: TypeAlias = str | list[AnthropicMessagesTextParam] | None
+
+
 class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str

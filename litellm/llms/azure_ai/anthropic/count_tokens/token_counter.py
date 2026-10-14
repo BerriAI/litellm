@@ -11,7 +11,8 @@ from litellm._logging import verbose_logger
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import AnthropicCountRequestFormat, BaseTokenCounter
+from litellm.types.llms.anthropic import AnthropicSystemParam
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -35,7 +36,8 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
         tools: list[dict[str, JsonValue]] | None = None,
-        system: object | None = None,
+        system: AnthropicSystemParam = None,
+        request_format: AnthropicCountRequestFormat = "chat",
     ) -> TokenCountResponse | None:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.
