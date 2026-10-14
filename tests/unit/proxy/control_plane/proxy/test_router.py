@@ -35,7 +35,7 @@ def test_writes_need_proxy_write_go_out_once_and_are_audited() -> None:
     assert timed_out.status_code == 502 and "1 attempt" in timed_out.json()["detail"]
     failed = client.delete("/api/v1/dataplanes/eu/proxy/key/delete", headers=editor)
     assert (failed.status_code, failed.json()) == (400, {"error": {"message": "no such key"}})
-    trail = client.get("/api/v1/audit", headers=minter.headers(role="admin")).json()["items"]
+    trail = client.get("/api/v1/audit?dataplane=eu", headers=minter.headers(role="admin")).json()["items"]
     assert [(e["method"], e["path"], e["decision"], e["status"]) for e in trail] == [
         ("DELETE", "/key/delete", "allowed", 400),
         ("PATCH", "/team/update", "unreachable", None),
@@ -71,7 +71,10 @@ def test_audit_read_needs_its_scope_and_filters_by_actor() -> None:
     client.get("/api/v1/dataplanes/eu/proxy/key/list", headers=minter.headers("eu"))
     assert client.get("/api/v1/audit", headers=minter.headers(role=EDITOR_ROLE)).status_code == 403
     assert client.get("/api/v1/audit?actor=bob", headers=minter.headers(role="admin")).json()["items"] == []
-    assert len(client.get("/api/v1/audit?actor=alice", headers=minter.headers(role="admin")).json()["items"]) == 1
+    assert (
+        len(client.get("/api/v1/audit?actor=alice&dataplane=eu", headers=minter.headers(role="admin")).json()["items"])
+        == 1
+    )
 
 
 def test_audit_reads_are_clamped_to_the_callers_dataplane_binding() -> None:

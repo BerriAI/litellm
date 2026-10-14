@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 from urllib.parse import urlsplit
 
+from opentelemetry.sdk._logs.export import LogExporter
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter
 from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
@@ -16,6 +18,8 @@ from pydantic import AliasChoices
 
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.context import inject_trace_context
+from litellm.integrations.otel.plumbing.providers import build_log_exporter as _build_log_exporter
+from litellm.integrations.otel.plumbing.providers import build_resource as _build_resource
 from litellm.integrations.otel.plumbing.providers import build_tracer_provider
 from litellm.proxy.control_plane.audit.log import redact_path
 from litellm.proxy.control_plane.auth.rbac import Principal
@@ -237,9 +241,22 @@ def tracing_enabled(settings: ControlPlaneSettings, environ: Mapping[str, str] =
     )
 
 
+def _config(settings: ControlPlaneSettings) -> OpenTelemetryV2Config:
+    return OpenTelemetryV2Config.from_env().model_copy(update={"service_name": settings.otel_service_name})
+
+
 def build_provider(settings: ControlPlaneSettings, exporter: SpanExporter | None = None) -> TracerProvider:
-    config: Final = OpenTelemetryV2Config.from_env().model_copy(update={"service_name": settings.otel_service_name})
-    return build_tracer_provider(config, exporter=exporter, use_simple_processor=None if exporter is None else True)
+    return build_tracer_provider(
+        _config(settings), exporter=exporter, use_simple_processor=None if exporter is None else True
+    )
+
+
+def build_log_exporter(settings: ControlPlaneSettings) -> LogExporter:
+    return _build_log_exporter(_config(settings))
+
+
+def build_resource(settings: ControlPlaneSettings) -> Resource:
+    return _build_resource(_config(settings))
 
 
 def build_telemetry(settings: ControlPlaneSettings, provider: TracerProvider | None = None) -> Telemetry:

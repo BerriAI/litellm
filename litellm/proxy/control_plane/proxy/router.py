@@ -8,10 +8,21 @@ from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.proxy.control_plane.audit.dependencies import get_audit_log
-from litellm.proxy.control_plane.audit.log import AuditLog, redact_path
+from litellm.proxy.control_plane.audit.event import redact_path
+from litellm.proxy.control_plane.audit.log import AuditLog, Reservation
 from litellm.proxy.control_plane.auth.dependencies import require_scopes
 from litellm.proxy.control_plane.auth.rbac import Principal, Scope
 from litellm.proxy.control_plane.common.exceptions import ControlPlaneException, bad_gateway, forbidden, problem
+
+AUDIT_UNAVAILABLE: Final = "audit-unavailable"
+
+
+def audit_unavailable() -> ControlPlaneException:
+    return ControlPlaneException(
+        problem(AUDIT_UNAVAILABLE, "Audit Unavailable", 503, "No audit sink can record this write right now.")
+    )
+
+
 from litellm.proxy.control_plane.dataplanes.client import (
     DataplaneClient,
     DataplaneReply,
@@ -57,10 +68,38 @@ async def _forward(
     audit: AuditLog,
 ) -> JSONResponse:
     method: Final = _METHOD.validate_python(request.method)
+    reservation: Final = audit.reserve() if method in WRITE_METHODS else None
+    if method in WRITE_METHODS and reservation is None:
+        raise audit_unavailable()
+    try:
+        return await _forward_reserved(request, path, method, principal, dataplane, caller, client, audit, reservation)
+    finally:
+        if reservation is not None:
+            reservation.release()
+
+
+async def _forward_reserved(
+    request: Request,
+    path: str,
+    method: Method,
+    principal: Principal,
+    dataplane: Dataplane,
+    caller: Caller,
+    client: DataplaneClient,
+    audit: AuditLog,
+    reservation: Reservation | None,
+) -> JSONResponse:
     decision: Final = decide(path)
     if isinstance(decision, Denied):
         audit.record(
-            principal.subject, principal.email, dataplane.id, method, decision.path, "denied", detail=decision.reason
+            principal.subject,
+            principal.email,
+            dataplane.id,
+            method,
+            decision.path,
+            "denied",
+            detail=decision.reason,
+            reservation=reservation,
         )
         raise ControlPlaneException(forbidden(f"{redact_path(decision.path)}: {decision.reason}."))
     result: Final = await client.request(
@@ -78,21 +117,44 @@ async def _forward(
                 status,
                 credential,
                 detail="dataplane answered with a redirect, which the control plane never follows",
+                reservation=reservation,
             )
             raise ControlPlaneException(bad_gateway("Dataplane answered with a redirect, which is not followed."))
         case DataplaneReply(status=status, body=body, credential=credential):
             audit.record(
-                principal.subject, principal.email, dataplane.id, method, decision.path, "allowed", status, credential
+                principal.subject,
+                principal.email,
+                dataplane.id,
+                method,
+                decision.path,
+                "allowed",
+                status,
+                credential,
+                reservation=reservation,
             )
             return JSONResponse(status_code=status, content=body, headers={DATAPLANE_HEADER: dataplane.id})
         case DataplaneUnreachable(detail=detail, attempts=attempts):
             audit.record(
-                principal.subject, principal.email, dataplane.id, method, decision.path, "unreachable", detail=detail
+                principal.subject,
+                principal.email,
+                dataplane.id,
+                method,
+                decision.path,
+                "unreachable",
+                detail=detail,
+                reservation=reservation,
             )
             raise ControlPlaneException(bad_gateway(f"Dataplane unreachable after {attempts} attempt(s): {detail}"))
         case CredentialUnavailable(reason=reason):
             audit.record(
-                principal.subject, principal.email, dataplane.id, method, decision.path, "unreachable", detail=reason
+                principal.subject,
+                principal.email,
+                dataplane.id,
+                method,
+                decision.path,
+                "unreachable",
+                detail=reason,
+                reservation=reservation,
             )
             raise ControlPlaneException(bad_gateway(f"No usable credential for this dataplane: {reason}"))
 
