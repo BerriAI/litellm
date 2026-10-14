@@ -32,12 +32,27 @@ JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
 class Job(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     object: str
+    created_at: int
+    error: JsonValue
+    fine_tuned_model: str | None
+    finished_at: int | None
+    hyperparameters: dict[str, JsonValue]
     status: str
     model: str
+    organization_id: str
+    result_files: list[str]
+    seed: int
+    trained_tokens: int | None
+    training_file: str
+    validation_file: str | None
+    estimated_finish: int | None = None
+    integrations: JsonValue = None
+    metadata: JsonValue = None
+    method: JsonValue = None
 
 
 class ProxyError(BaseModel):
@@ -64,6 +79,15 @@ def _job(job_id: str, status: str, file_id: str) -> dict[str, JsonValue]:
         "training_file": file_id,
         "validation_file": None,
     }
+
+
+def _client_job(job_id: str, status: str, file_id: str) -> Job:
+    return Job.model_validate(
+        {
+            **_job(job_id, status, file_id),
+            "hyperparameters": {"batch_size": None, "learning_rate_multiplier": None, "n_epochs": 3},
+        }
+    )
 
 
 def _reply(body: Mapping[str, JsonValue]) -> Reply:
@@ -272,12 +296,15 @@ def _refused(response: httpx.Response, wire: Wire, detail: str) -> None:
 @pytest.mark.parametrize("fixture", ["rig", "default_rig"])
 def test_owner_create_returns_the_unified_job_id(fixture: str, request: pytest.FixtureRequest) -> None:
     built: Final[Rig] = request.getfixturevalue(fixture)
-    assert Job.model_validate_json(built.created_text) == Job(
-        id=_unified_job_id(built.deployment_id, built.provider_job),
-        object="fine_tuning.job",
-        status="validating_files",
-        model="gpt-4.1",
-    ), built.created_text
+    created: Final = Job.model_validate_json(built.created_text)
+    expected: Final = _client_job(
+        _unified_job_id(built.deployment_id, built.provider_job), "validating_files", built.provider_file
+    )
+    assert created.model_dump(exclude={"training_file"}) == expected.model_dump(exclude={"training_file"}), (
+        "training_file is excluded because test_managed_create_sends_the_provider_file_id_of_the_pinned_deployment "
+        "documents the known managed-create bug",
+        built.created_text,
+    )
 
 
 def test_another_key_cannot_create_with_or_cancel_the_owners_managed_ids(rig: Rig) -> None:
@@ -287,7 +314,11 @@ def test_another_key_cannot_create_with_or_cancel_the_owners_managed_ids(rig: Ri
         {"model": MANAGED_MODEL, "training_file": rig.managed_file},
         key=rig.intruder,
     )
-    _refused(created, rig.wire, "The caller does not have access to this managed file id.")
+    _refused(
+        created,
+        rig.wire,
+        f"User {rig.intruder_user} does not have access to the file {rig.managed_file}",
+    )
     cancelled: Final = rig.proxy.request("POST", f"/v1/fine_tuning/jobs/{rig.managed_job}/cancel", key=rig.intruder)
     _refused(cancelled, rig.wire, "The caller does not have access to this managed fine-tuning job id.")
 
@@ -350,6 +381,46 @@ def test_raw_provider_ids_are_refused_when_managed_files_are_required(
     assert reached == []
 
 
+def test_raw_validation_file_is_refused_when_managed_files_are_required(rig: Rig) -> None:
+    rig.wire.drain()
+    response: Final = rig.proxy.request(
+        "POST",
+        "/v1/fine_tuning/jobs",
+        {"model": MANAGED_MODEL, "training_file": rig.managed_file, "validation_file": "file-raw123"},
+        key=rig.owner,
+    )
+    reached: Final = _targets(rig.wire.drain())
+    assert response.status_code == 400, response.text
+    assert ProxyError.model_validate_json(response.text).error["message"] == (
+        "Raw provider file ids cannot be used when require_managed_files is enabled in litellm_settings. "
+        "Use the LiteLLM managed file id returned when the file was created."
+    ), response.text
+    assert reached == []
+
+
+def test_intruder_cannot_use_the_owners_managed_validation_file(rig: Rig) -> None:
+    with rig.sdk(rig.intruder) as client:
+        uploaded: Final = client.files.with_raw_response.create(
+            file=("train.jsonl", TRAINING_LINE, "application/jsonl"),
+            purpose="fine-tune",
+            extra_body={"target_model_names": MANAGED_MODEL},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        intruder_file: Final = uploaded.parse().id
+    assert _targets(rig.wire.drain()) == [("POST", "/v1/files", f"Bearer {DEPLOYMENT_KEY}")]
+    response: Final = rig.proxy.request(
+        "POST",
+        "/v1/fine_tuning/jobs",
+        {"model": MANAGED_MODEL, "training_file": intruder_file, "validation_file": rig.managed_file},
+        key=rig.intruder,
+    )
+    _refused(
+        response,
+        rig.wire,
+        f"User {rig.intruder_user} does not have access to the file {rig.managed_file}",
+    )
+
+
 def test_keys_granted_the_retrieve_route_get_the_owner_check_and_the_decoded_job_id(rig: Rig) -> None:
     with rig.proxy.scenario() as scenario:
         owner: Final = scenario.key(user_id=rig.owner_user, allowed_routes=["/v1/fine_tuning/jobs"])
@@ -365,8 +436,29 @@ def test_keys_granted_the_retrieve_route_get_the_owner_check_and_the_decoded_job
             ("GET", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}", f"Bearer {DEPLOYMENT_KEY}", b"")
         ]
         assert retrieved.status_code == 200, retrieved.text
-        assert Job.model_validate_json(retrieved.text) == Job(
-            id=rig.managed_job, object="fine_tuning.job", status="running", model="gpt-4.1"
+        assert Job.model_validate_json(retrieved.text) == _client_job(rig.managed_job, "running", rig.provider_file), (
+            retrieved.text
+        )
+
+
+def test_keys_granted_the_retrieve_route_get_default_job_ownership_and_decoded_id(default_rig: Rig) -> None:
+    with default_rig.proxy.scenario() as scenario:
+        owner: Final = scenario.key(user_id=default_rig.owner_user, allowed_routes=["/v1/fine_tuning/jobs"])
+        intruder: Final = scenario.key(user_id=default_rig.intruder_user, allowed_routes=["/v1/fine_tuning/jobs"])
+        _refused(
+            default_rig.proxy.request("GET", f"/v1/fine_tuning/jobs/{default_rig.managed_job}", key=intruder),
+            default_rig.wire,
+            f"User {default_rig.intruder_user} does not have access to the object {default_rig.managed_job}",
+        )
+        with default_rig.sdk(owner) as client:
+            retrieved: Final = client.fine_tuning.jobs.with_raw_response.retrieve(default_rig.managed_job)
+        assert [
+            (request.method, request.target, request.headers["authorization"], request.body)
+            for request in default_rig.wire.drain()
+        ] == [("GET", f"/v1/fine_tuning/jobs/{DEFAULT_PROVIDER_JOB}", f"Bearer {DEPLOYMENT_KEY}", b"")]
+        assert retrieved.status_code == 200, retrieved.text
+        assert Job.model_validate_json(retrieved.text) == _client_job(
+            default_rig.managed_job, "running", default_rig.provider_file
         ), retrieved.text
 
 
@@ -383,9 +475,9 @@ def test_owner_retrieve_reaches_the_provider_with_the_decoded_job_id(rig: Rig) -
         ("GET", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}", f"Bearer {DEPLOYMENT_KEY}", b"")
     ]
     assert retrieved.status_code == 200, retrieved.text
-    assert Job.model_validate_json(retrieved.text) == Job(
-        id=rig.managed_job, object="fine_tuning.job", status="running", model="gpt-4.1"
-    ), retrieved.text
+    assert Job.model_validate_json(retrieved.text) == _client_job(rig.managed_job, "running", rig.provider_file), (
+        retrieved.text
+    )
 
 
 def test_owner_cancel_reaches_the_provider_with_the_decoded_job_id(rig: Rig) -> None:
@@ -395,6 +487,6 @@ def test_owner_cancel_reaches_the_provider_with_the_decoded_job_id(rig: Rig) -> 
         ("POST", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}/cancel", f"Bearer {DEPLOYMENT_KEY}", b"")
     ]
     assert cancelled.status_code == 200, cancelled.text
-    assert Job.model_validate_json(cancelled.text) == Job(
-        id=rig.managed_job, object="fine_tuning.job", status="cancelled", model="gpt-4.1"
-    ), cancelled.text
+    assert Job.model_validate_json(cancelled.text) == _client_job(rig.managed_job, "cancelled", rig.provider_file), (
+        cancelled.text
+    )

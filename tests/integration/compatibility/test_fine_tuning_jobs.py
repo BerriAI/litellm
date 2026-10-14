@@ -313,7 +313,7 @@ def test_azure_create_merges_finetune_settings_and_keeps_azure_fields(rig: Rig) 
             extra_body={
                 "custom_llm_provider": "azure",
                 "hyperparameters": {"n_epochs": 3, "prompt_loss_weight": 0.01},
-                "trainingType": 1,
+                "trainingType": 2,
             },
         )
     sent: Final = _only(_drained(rig), "POST", f"/openai/fine_tuning/jobs?api-version={AZURE_API_VERSION}")
@@ -322,7 +322,7 @@ def test_azure_create_merges_finetune_settings_and_keeps_azure_fields(rig: Rig) 
         "model": "gpt-35-turbo-1106",
         "training_file": "file-abc",
         "hyperparameters": {"n_epochs": 3},
-        "trainingType": 1,
+        "trainingType": 2,
         "prompt_loss_weight": 0.01,
     }, sent.body
     assert raw.status_code == 200, raw.text
@@ -379,6 +379,24 @@ def test_cancel_reads_the_documented_custom_llm_provider_header(rig: Rig) -> Non
     assert sent.body == b""
     assert raw.status_code == 200, raw.text
     assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "cancelled"), raw.text
+
+
+def test_retrieve_reads_the_documented_custom_llm_provider_header(rig: Rig) -> None:
+    pytest.skip(
+        "BUG: retrieve ignores the documented custom-llm-provider header and returns 400"
+        " Invalid request, No litellm managed file id or custom_llm_provider provided."
+    )
+    with rig.sdk("/v1") as client:
+        raw: Final = client.fine_tuning.jobs.with_raw_response.retrieve(
+            PROVIDER_JOB, extra_headers={"custom-llm-provider": "azure"}
+        )
+    sent: Final = _only(
+        _drained(rig), "GET", f"/openai/fine_tuning/jobs/{PROVIDER_JOB}?api-version={AZURE_API_VERSION}"
+    )
+    assert sent.headers["api-key"] == AZURE_KEY
+    assert sent.body == b""
+    assert raw.status_code == 200, raw.text
+    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "running"), raw.text
 
 
 def test_managed_create_sends_the_provider_file_id_of_the_pinned_deployment(rig: Rig) -> None:
