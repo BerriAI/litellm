@@ -1580,6 +1580,32 @@ class TestBedrockRealtimeUserEventsAndUsage:
         conflict: Final = config.session_update_conflict({"type": "session.update", "session": session})
         assert (conflict is not None) == expects_conflict
 
+    def test_session_update_with_inf_max_tokens_omits_max_tokens_from_session_start(self):
+        config: Final = BedrockRealtimeConfig()
+        messages: Final = config.transform_session_update_event(
+            {"type": "session.update", "session": {"max_response_output_tokens": "inf", "modalities": ["text"]}}
+        )
+        session_start: Final = json.loads(messages[0])["event"]["sessionStart"]["inferenceConfiguration"]
+        assert "maxTokens" not in session_start
+        assert session_start["topP"] == 0.9
+        assert session_start["temperature"] == 0.7
+
+    @pytest.mark.parametrize(
+        "first_session,later_session,expects_conflict",
+        [
+            ({"modalities": ["text"]}, {"max_response_output_tokens": "inf"}, True),
+            ({"max_response_output_tokens": "inf"}, {"max_response_output_tokens": "inf"}, False),
+            ({"max_response_output_tokens": "inf"}, {"max_response_output_tokens": 2048}, True),
+        ],
+    )
+    def test_session_update_conflict_inf_max_tokens(self, first_session, later_session, expects_conflict):
+        config: Final = BedrockRealtimeConfig()
+        config.transform_session_update_event({"type": "session.update", "session": first_session})
+        assert config.prompt_started
+
+        conflict: Final = config.session_update_conflict({"type": "session.update", "session": later_session})
+        assert (conflict is not None) == expects_conflict
+
     def test_session_update_after_start_leaves_locked_attributes_unchanged(self):
         config: Final = BedrockRealtimeConfig()
         config.transform_session_update_event({"type": "session.update", "session": {"modalities": ["text"]}})

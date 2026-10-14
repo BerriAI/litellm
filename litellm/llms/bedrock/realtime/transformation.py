@@ -102,7 +102,7 @@ class BedrockLockedSessionSettings:
     voice_id: str
     output_sample_rate_hertz: int
     temperature: float
-    max_tokens: int
+    max_tokens: int | None
 
 
 class BedrockRealtimeConfig(BaseRealtimeConfig):
@@ -118,7 +118,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         # Default configuration values
         # Inference configuration
-        self.max_tokens = 1024
+        self.max_tokens: int | None = 1024
         self.top_p = 0.9
         self.temperature = 0.7
 
@@ -195,17 +195,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         Returns JSON string with session start and prompt start events.
         """
-        session_start: Final = {
-            "event": {
-                "sessionStart": {
-                    "inferenceConfiguration": {
-                        "maxTokens": self.max_tokens,
-                        "topP": self.top_p,
-                        "temperature": self.temperature,
-                    }
-                }
-            }
-        }
+        session_start: Final = {"event": {"sessionStart": {"inferenceConfiguration": self._inference_configuration()}}}
 
         prompt_start_config: Final = {
             "promptName": self.prompt_name,
@@ -310,17 +300,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             return messages
 
         # Send session start
-        session_start: Final = {
-            "event": {
-                "sessionStart": {
-                    "inferenceConfiguration": {
-                        "maxTokens": self.max_tokens,
-                        "topP": self.top_p,
-                        "temperature": self.temperature,
-                    }
-                }
-            }
-        }
+        session_start: Final = {"event": {"sessionStart": {"inferenceConfiguration": self._inference_configuration()}}}
         messages.append(json.dumps(session_start))
 
         # Send prompt start
@@ -393,6 +373,13 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         return messages
 
+    def _inference_configuration(self) -> Mapping[str, int | float]:
+        return {
+            "topP": self.top_p,
+            "temperature": self.temperature,
+            **({"maxTokens": self.max_tokens} if self.max_tokens is not None else {}),
+        }
+
     def _apply_locked_settings(
         self, session_config: Mapping[str, JsonValue], base: BedrockLockedSessionSettings
     ) -> BedrockLockedSessionSettings:
@@ -416,7 +403,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 else base.output_sample_rate_hertz
             ),
             temperature=float(temperature) if isinstance(temperature, (int, float)) else base.temperature,
-            max_tokens=int(max_output_tokens) if isinstance(max_output_tokens, int) else base.max_tokens,
+            max_tokens=None
+            if max_output_tokens == "inf"
+            else (int(max_output_tokens) if isinstance(max_output_tokens, int) else base.max_tokens),
         )
 
     def session_update_conflict(self, json_message: Mapping[str, JsonValue]) -> str | None:
