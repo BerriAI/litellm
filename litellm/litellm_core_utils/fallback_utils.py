@@ -1,3 +1,4 @@
+import json
 from typing import Final
 
 import litellm
@@ -49,15 +50,21 @@ async def async_completion_with_fallbacks(**kwargs):
 
     # Deduplicate fallbacks while preserving order
     combined_fallbacks = []
-    seen_models = set()
+    seen_fallbacks: set[str] = set()
     for fb in raw_fallbacks:
-        fb_model = fb.get("model") if isinstance(fb, dict) else (fb if isinstance(fb, str) else None)
-        if fb_model is not None:
-            if fb_model in seen_models:
-                continue
-            seen_models.add(fb_model)
-        elif fb in combined_fallbacks:
+        if isinstance(fb, dict):
+            try:
+                fb_key = json.dumps(fb, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                fb_key = str(fb)
+        elif isinstance(fb, str):
+            fb_key = fb
+        else:
+            fb_key = str(fb)
+
+        if fb_key in seen_fallbacks:
             continue
+        seen_fallbacks.add(fb_key)
         combined_fallbacks.append(fb)
 
     fallbacks: Final = [original_model] + combined_fallbacks

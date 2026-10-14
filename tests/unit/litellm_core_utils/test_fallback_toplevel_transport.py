@@ -70,3 +70,33 @@ async def test_attempted_fallbacks_header_is_1(upstream, form):
     assert upstream == ["primary"]  # fb1 served by mock_response, never reaches transport
     headers = resp._hidden_params["additional_headers"]
     assert int(headers[HDR]) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_model_distinct_api_base_fallbacks_preserved(monkeypatch):
+    recorded_endpoints: list[tuple[str | None, str | None]] = []
+    real = OpenAIChatCompletion.acompletion
+
+    async def spy(self, *args, **kwargs):
+        recorded_endpoints.append((kwargs.get("model"), kwargs.get("api_base")))
+        return await real(self, *args, **kwargs)
+
+    monkeypatch.setattr(OpenAIChatCompletion, "acompletion", spy)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    fb_eu = {"model": "openai/fb1", "api_base": "http://127.0.0.1:9/eu", "api_key": "none"}
+    fb_us = {"model": "openai/fb1", "api_base": "http://127.0.0.1:9/us", "api_key": "none"}
+
+    with pytest.raises(Exception, match="All fallback attempts failed"):
+        await async_completion_with_fallbacks(
+            model="openai/primary",
+            fallbacks=[fb_eu],
+            kwargs={"fallbacks": [fb_us]},
+            **_common(),
+        )
+
+    assert recorded_endpoints == [
+        ("primary", BASE),
+        ("fb1", "http://127.0.0.1:9/eu"),
+        ("fb1", "http://127.0.0.1:9/us"),
+    ]
