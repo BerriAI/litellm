@@ -4348,7 +4348,8 @@ _VALID_BATCH_LINE: Final = json.dumps(
         },
     }
 )
-_MALFORMED_BATCH_JSONL: Final = f"{_VALID_BATCH_LINE}\n{{not json\n".encode()
+# The blank line is skipped but still counted, so the bad record is reported as line 3.
+_MALFORMED_BATCH_JSONL: Final = f"{_VALID_BATCH_LINE}\n\n{{not json\n".encode()
 
 
 class TestMalformedBatchJsonl:
@@ -4374,7 +4375,7 @@ class TestMalformedBatchJsonl:
                 litellm_params={"s3_bucket_name": "litellm-batch-bucket"},
             )
         assert exc_info.value.status_code == 400
-        assert "line 2" in exc_info.value.message
+        assert "line 3" in exc_info.value.message
 
     def test_file_content_conversion_rejects_a_malformed_line_with_a_400(self):
         from litellm.llms.bedrock.common_utils import BedrockError
@@ -4384,7 +4385,7 @@ class TestMalformedBatchJsonl:
                 _MALFORMED_BATCH_JSONL
             )
         assert exc_info.value.status_code == 400
-        assert "line 2" in exc_info.value.message
+        assert "line 3" in exc_info.value.message
 
     def test_object_name_inference_still_falls_back_for_a_non_json_file(self):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
