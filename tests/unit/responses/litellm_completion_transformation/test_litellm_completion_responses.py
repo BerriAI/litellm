@@ -5829,6 +5829,7 @@ def test_item_marks_stay_off_a_target_without_cache_points(model: str, custom_ll
         ("zai/glm-4.6", "zai"),
         ("sap/anthropic--claude-4-sonnet", "sap"),
         ("openrouter/anthropic/claude-sonnet-4.5", "openrouter"),
+        ("openrouter/google/gemini-2.5-flash", "openrouter"),
         ("snowflake/claude-sonnet-4-5", "snowflake"),
     ],
 )
@@ -5852,14 +5853,35 @@ def test_a_block_mark_reaches_a_target_without_cache_points_as_before():
     assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
 
 
-def test_an_application_inference_profile_keeps_its_item_marks():
-    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+_APPLICATION_INFERENCE_PROFILE: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
 
+
+def test_an_application_inference_profile_keeps_its_item_marks_without_drop_params():
     messages: Final = _bridged_request(
-        {"role": "system", "content": "House rules", "cache_control": _EPHEMERAL}, model=f"bedrock/{profile}"
+        {"role": "system", "content": "House rules", "cache_control": _EPHEMERAL},
+        model=f"bedrock/{_APPLICATION_INFERENCE_PROFILE}",
     )
 
     assert messages[1] == {"role": "system", "content": "House rules", "cache_control": _EPHEMERAL}
+
+
+def test_an_application_inference_profile_gets_no_item_marks_under_drop_params():
+    messages: Final = _bridged_request(
+        {"role": "system", "content": "House rules", "cache_control": _EPHEMERAL},
+        {"role": "user", "content": "Summarize the gateway latency report."},
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "get_latency_report",
+            "arguments": "{}",
+            "cache_control": _EPHEMERAL,
+        },
+        {"type": "function_call_output", "call_id": "call_1", "output": "p50 12 ms", "cache_control": _EPHEMERAL},
+        model=f"bedrock/{_APPLICATION_INFERENCE_PROFILE}",
+        drop_params=True,
+    )
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 0
 
 
 def test_the_shared_input_transform_keeps_every_mark_for_guardrails_and_token_counting():

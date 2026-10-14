@@ -577,8 +577,15 @@ def _is_a_client_input_item(
     return isinstance(item, Mapping)
 
 
+_ITEM_TYPES_THE_BRIDGE_FORWARDS_MARKS_FROM: Final = frozenset(("function_call", "function_call_output"))
+
+
 def _item_carries_a_mark_outside_the_provisional_messages(item: object) -> bool:
-    return _is_a_client_input_item(item) and "role" not in item and bool(item.get("cache_control"))
+    return (
+        _is_a_client_input_item(item)
+        and item.get("type") in _ITEM_TYPES_THE_BRIDGE_FORWARDS_MARKS_FROM
+        and bool(item.get("cache_control"))
+    )
 
 
 def _cache_control_marks_outside_the_provisional_messages(

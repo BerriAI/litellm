@@ -53,7 +53,8 @@ from litellm.litellm_core_utils.hidden_params import (
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
+from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -280,17 +281,23 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
 
 
 _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("databricks", "dashscope", "minimax", "sap", "zai"))
-_PROVIDERS_KEEPING_CLAUDE_MESSAGE_CACHE_CONTROL: Final = frozenset(("openrouter", "snowflake"))
 
 
-def _target_keeps_item_marks(model: str, custom_llm_provider: str | None) -> bool:
+def _bedrock_target_keeps_item_marks(model: str, drop_params: bool) -> bool:
+    declared: Final = bedrock_declared_cache_point_support(model)
+    return declared is True or (declared is None and not drop_params)
+
+
+def _target_keeps_item_marks(model: str, custom_llm_provider: str | None, drop_params: bool) -> bool:
     if supports_anthropic_cache_control(model, custom_llm_provider):
         return True
     if custom_llm_provider in _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL:
         return True
-    if custom_llm_provider in _PROVIDERS_KEEPING_CLAUDE_MESSAGE_CACHE_CONTROL:
+    if custom_llm_provider == "openrouter":
+        return openrouter_model_supports_cache_control(model)
+    if custom_llm_provider == "snowflake":
         return "claude" in model.lower()
-    return custom_llm_provider == "bedrock" and bedrock_model_accepts_cache_points(model)
+    return custom_llm_provider == "bedrock" and _bedrock_target_keeps_item_marks(model, drop_params)
 
 
 def _refuses_marks_on_tool_blocks(model: str, custom_llm_provider: str | None) -> bool:
@@ -737,7 +744,10 @@ class LiteLLMCompletionResponsesConfig:
             api_base=kwargs.get("api_base"),
         )
 
-        keeps_item_marks: Final = _target_keeps_item_marks(model, custom_llm_provider)
+        request_kwargs: Final = _STR_KEY_DICT_ADAPTER.validate_python(kwargs)
+        keeps_item_marks: Final = _target_keeps_item_marks(
+            model, custom_llm_provider, drops_unsupported_params(request_kwargs.get("drop_params"))
+        )
         bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input if keeps_item_marks else without_item_cache_control(input),
             responses_api_request=responses_api_request,
@@ -749,9 +759,7 @@ class LiteLLMCompletionResponsesConfig:
                 list(
                     _request_messages_for_cache_points(
                         bridged_messages,
-                        _item_mark_rules(
-                            model, custom_llm_provider, tools, _STR_KEY_DICT_ADAPTER.validate_python(kwargs)
-                        ),
+                        _item_mark_rules(model, custom_llm_provider, tools, request_kwargs),
                     )
                 )
                 if keeps_item_marks
@@ -862,7 +870,9 @@ class LiteLLMCompletionResponsesConfig:
         requested_provider: Final = request_fields.get("custom_llm_provider")
         model: Final = str(request_fields.get("model") or "")
         provider: Final = requested_provider if isinstance(requested_provider, str) else None
-        keeps_item_marks: Final = _target_keeps_item_marks(model, provider)
+        keeps_item_marks: Final = _target_keeps_item_marks(
+            model, provider, drops_unsupported_params(request_kwargs.get("drop_params"))
+        )
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
