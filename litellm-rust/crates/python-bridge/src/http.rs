@@ -80,13 +80,13 @@ fn decode_ssl_verify(field: &Field<'_>) -> Result<Option<SslVerify>, ProjectionE
     Err(field.invalid("a Boolean, Boolean string, CA path, or None"))
 }
 
-static RESOURCES: LazyLock<litellm_core::resources::CoreResources> = LazyLock::new(|| {
-    litellm_core::resources::CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(
+static RESOURCES: LazyLock<litellm_inference::resources::CoreResources> = LazyLock::new(|| {
+    litellm_inference::resources::CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(
         PublicDnsResolver,
     ))))
 });
 
-pub(crate) fn resources() -> &'static litellm_core::resources::CoreResources {
+pub(crate) fn resources() -> &'static litellm_inference::resources::CoreResources {
     &RESOURCES
 }
 

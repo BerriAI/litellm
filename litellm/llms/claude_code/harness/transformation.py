@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import ConfigDict, TypeAdapter
+
 from litellm.harness.errors import HarnessError, OptionsMismatch
 from litellm.harness.options import ClaudeCodeOptions
 from litellm.harness.types import (
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
 
 CLAUDE_BINARY: Final = "claude"
 SYNTHETIC_MODEL: Final = "<synthetic>"
+_BLOCK: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(hide_input_in_errors=True))
 
 BASE_COMMAND: Final = ("-p", "--output-format", "stream-json", "--verbose", "--input-format", "text")
 
@@ -157,7 +160,7 @@ def _stringify_block(block: object) -> str:
     return json.dumps(block, ensure_ascii=False)
 
 
-def _message_blocks(event: Mapping[str, object]) -> Sequence[Any]:
+def _message_blocks(event: Mapping[str, object]) -> Sequence[object]:
     message: Final = event.get("message")
     content: Final = message.get("content") if isinstance(message, Mapping) else None
     if isinstance(content, str):
@@ -211,8 +214,7 @@ def _user_events(event: Mapping[str, object]) -> Sequence[Event]:
                 output=stringify_tool_output(block.get("content")),
                 is_error=bool(block.get("is_error", False)),
             )
-            for block in _message_blocks(event)
-            if _is_tool_result(block)
+            for block in map(_BLOCK.validate_python, filter(_is_tool_result, _message_blocks(event)))
         )
     )
 

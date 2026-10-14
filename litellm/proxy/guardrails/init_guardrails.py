@@ -1,4 +1,4 @@
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import litellm
 from litellm import Router
@@ -69,7 +69,7 @@ def _populate_router_guardrail_list(guardrail_list: list[Guardrail]) -> None:
     for guardrail in guardrail_list:
         guardrail_id = guardrail.get("guardrail_id")
         guardrail_name = guardrail.get("guardrail_name")
-        litellm_params: Any = guardrail.get("litellm_params", {})
+        litellm_params: object = guardrail.get("litellm_params", {})
 
         # Get the callback instance from the registry
         callback = None

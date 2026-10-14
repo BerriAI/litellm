@@ -1,6 +1,11 @@
 """Proxy-wide allow-list of what a team admin may do on the teams they administer: team-settings fields on
-/team/update, the ``projects`` permission for /project/new and /project/update, and the
-``member_key_budgets`` permission for budget fields on other members' keys via /key/update."""
+/team/update, the ``raise_max_budget`` permission that lets a team admin grow the team's ``max_budget`` (never
+above the organization's budget, never removing the cap), the ``projects`` permission for /project/new and
+/project/update, the ``member_key_budgets`` permission for budget fields on other members' keys via
+/key/update, and the ``create_member_keys`` permission for creating team keys owned by other members via
+/key/generate. A key created that way authenticates as its owner, so the owner must be an ordinary internal
+user and the key is confined to LLM API routes: the team admin who holds its secret gains no management
+authority through it."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,6 +22,8 @@ from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import (
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
+    LiteLLMKeyType,
+    LitellmUserRoles,
     UpdateKeyRequest,
     UpdateTeamRequest,
 )
@@ -25,11 +32,19 @@ TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING: Final = "team_admin_editable_team_field
 
 # TODO(LIT-5722): add the remaining team settings one per PR, each with its value-diff tests and dashboard field
 SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset({"tpm_limit", "rpm_limit", "max_budget"})
+TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION: Final = "raise_max_budget"
 TEAM_ADMIN_PROJECTS_PERMISSION: Final = "projects"
 TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION: Final = "member_key_budgets"
+TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION: Final = "create_member_keys"
+TEAM_ADMIN_MEMBER_KEY_OWNER_ROLES: Final[frozenset[str]] = frozenset(
+    {LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value}
+)
+TEAM_ADMIN_MEMBER_KEY_TYPE: Final = LiteLLMKeyType.LLM_API
 SUPPORTED_TEAM_ADMIN_PERMISSIONS: Final[frozenset[str]] = SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS | {
+    TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
     TEAM_ADMIN_PROJECTS_PERMISSION,
     TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION,
+    TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION,
 }
 
 # spend is deliberately excluded: the stored row lags the live cross-pod counter, so a value-diff gate
@@ -104,6 +119,99 @@ def team_admin_may_edit_member_key_budgets(general_settings: Mapping[str, object
     return TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION in resolve_team_admin_editable_fields(
         general_settings, frozenset({TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION})
     )
+
+
+def team_admin_may_create_member_keys(general_settings: Mapping[str, object]) -> bool:
+    return TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION in resolve_team_admin_editable_fields(
+        general_settings, frozenset({TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION})
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class TeamAdminMemberKeyCreationAllowed:
+    kind: Literal["allowed"] = "allowed"
+
+
+@dataclass(frozen=True, slots=True)
+class TeamAdminMemberKeyCreationDisabled:
+    kind: Literal["disabled"] = "disabled"
+
+
+@dataclass(frozen=True, slots=True)
+class TeamAdminMemberKeyOwnerNotPermitted:
+    owner_role: str | None
+    kind: Literal["owner_not_permitted"] = "owner_not_permitted"
+
+
+@dataclass(frozen=True, slots=True)
+class TeamAdminMemberKeyTypeNotPermitted:
+    key_type: LiteLLMKeyType
+    kind: Literal["key_type_not_permitted"] = "key_type_not_permitted"
+
+
+TeamAdminMemberKeyCreationVerdict: TypeAlias = (
+    TeamAdminMemberKeyCreationAllowed
+    | TeamAdminMemberKeyCreationDisabled
+    | TeamAdminMemberKeyOwnerNotPermitted
+    | TeamAdminMemberKeyTypeNotPermitted
+)
+
+
+def team_admin_member_key_creation_verdict(
+    general_settings: Mapping[str, object],
+    key_type: LiteLLMKeyType | None,
+    owner_role: str | None,
+) -> TeamAdminMemberKeyCreationVerdict:
+    """``owner_role`` is the stored proxy role of the member the key is for, None when they have no user row."""
+    if not team_admin_may_create_member_keys(general_settings):
+        return TeamAdminMemberKeyCreationDisabled()
+    if owner_role not in TEAM_ADMIN_MEMBER_KEY_OWNER_ROLES:
+        return TeamAdminMemberKeyOwnerNotPermitted(owner_role=owner_role)
+    if key_type not in (None, LiteLLMKeyType.DEFAULT, TEAM_ADMIN_MEMBER_KEY_TYPE):
+        return TeamAdminMemberKeyTypeNotPermitted(key_type=key_type)
+    return TeamAdminMemberKeyCreationAllowed()
+
+
+def team_admin_member_key_creation_or_raise(verdict: TeamAdminMemberKeyCreationVerdict) -> None:
+    match verdict:
+        case TeamAdminMemberKeyCreationAllowed():
+            return
+        case TeamAdminMemberKeyCreationDisabled():
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Team admins on this proxy cannot create keys for other team members. "
+                    f"Ask a proxy admin to enable '{TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION}' "
+                    f"under {_SETTINGS_LOCATION}."
+                ),
+            )
+        case TeamAdminMemberKeyOwnerNotPermitted(owner_role=owner_role):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Team admins can only create keys for team members whose proxy role is one of "
+                    f"{sorted(TEAM_ADMIN_MEMBER_KEY_OWNER_ROLES)}, not '{owner_role}'. "
+                    "Ask a proxy admin to create this key."
+                ),
+            )
+        case TeamAdminMemberKeyTypeNotPermitted(key_type=key_type):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Keys a team admin creates for another team member are always "
+                    f"'{TEAM_ADMIN_MEMBER_KEY_TYPE.value}' keys, not '{key_type.value}'."
+                ),
+            )
+        case _:
+            assert_never(verdict)
+
+
+def team_admin_may_raise_max_budget(general_settings: Mapping[str, object]) -> bool:
+    """``raise_max_budget`` only takes effect alongside ``max_budget``: a grant to raise a field the team admin
+    may not edit at all is treated as not granted."""
+    return resolve_team_admin_editable_fields(
+        general_settings, frozenset({"max_budget", TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION})
+    ) >= {"max_budget", TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION}
 
 
 def _as_object(value: object) -> Mapping[str, object]:

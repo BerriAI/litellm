@@ -405,7 +405,7 @@ async def _drive_update(kind, existing_metadata, payload):
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._refresh_cached_team",
+            "litellm.proxy.management_endpoints.team_endpoints.refresh_cached_team",
             new=AsyncMock(),
         ),
     ):

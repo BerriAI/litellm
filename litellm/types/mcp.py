@@ -4,14 +4,14 @@ import enum
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypedDict
+from pydantic import ConfigDict, Field
+from typing_extensions import ReadOnly, TypedDict
 
-from litellm.types.llms.base import HiddenParams
+from litellm.types.llms.base import HiddenParams, LiteLLMBaseModel
 
 if TYPE_CHECKING:
     import httpx2
@@ -71,7 +71,8 @@ def validate_mcp_protocol_transport(protocol_version: MCPUpstreamProtocol, trans
         raise ValueError("Modern MCP requires HTTP or stdio transport")
 
 
-MCPAdvertisedVersions = Annotated[tuple[MCPLegacyVersion, ...], Field(min_length=1)]
+MCPAdvertisedVersion: TypeAlias = MCPLegacyVersion | Literal["2026-07-28"]
+MCPAdvertisedVersions: TypeAlias = Annotated[tuple[MCPAdvertisedVersion, ...], Field(min_length=1)]
 MCPSpecVersionType = Literal[
     MCPSpecVersion.nov_2024,
     MCPSpecVersion.mar_2025,
@@ -98,7 +99,7 @@ MCPAuthType = (
 )
 
 
-class MCPPublicServer(BaseModel):
+class MCPPublicServer(LiteLLMBaseModel):
     """
     Safe params for public MCP servers
     """
@@ -113,7 +114,7 @@ class MCPPublicServer(BaseModel):
     mcp_info: dict[str, Any] | None = None
 
 
-class MCPAllowedClient(BaseModel):
+class MCPAllowedClient(LiteLLMBaseModel):
     """One entry of `general_settings.mcp_allowed_clients`."""
 
     model_config = ConfigDict(frozen=True)
@@ -129,7 +130,7 @@ class MCPAllowedClient(BaseModel):
     )
 
 
-class MCPToolSearchSettings(BaseModel):
+class MCPToolSearchSettings(LiteLLMBaseModel):
     """`litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools."""
 
     model_config = ConfigDict(frozen=True)
@@ -161,6 +162,9 @@ MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"
 
 
 class MCPCredentials(TypedDict, total=False):
+    dcr_issuer: ReadOnly[str | None]
+    dcr_server_url: ReadOnly[str | None]
+
     auth_value: str | None
     """
     Authentication value
@@ -421,7 +425,7 @@ class MCPStdioConfig(TypedDict, total=False):
     """
 
 
-class MCPPreCallRequestObject(BaseModel):
+class MCPPreCallRequestObject(LiteLLMBaseModel):
     """
     Pydantic object used for MCP pre_call_hook request validation and modification
     """
@@ -429,11 +433,13 @@ class MCPPreCallRequestObject(BaseModel):
     tool_name: str
     arguments: dict[str, Any]
     server_name: str | None = None
+    tool_description: str | None = None
+    tool_input_schema: Mapping[str, object] | None = None
     user_api_key_auth: dict[str, Any] | None = None
     hidden_params: HiddenParams = HiddenParams()
 
 
-class MCPPreCallResponseObject(BaseModel):
+class MCPPreCallResponseObject(LiteLLMBaseModel):
     """
     Pydantic object used for MCP pre_call_hook response
     """
@@ -444,7 +450,7 @@ class MCPPreCallResponseObject(BaseModel):
     hidden_params: HiddenParams = HiddenParams()
 
 
-class MCPDuringCallRequestObject(BaseModel):
+class MCPDuringCallRequestObject(LiteLLMBaseModel):
     """
     Pydantic object used for MCP during_call_hook request
     """
@@ -452,11 +458,13 @@ class MCPDuringCallRequestObject(BaseModel):
     tool_name: str
     arguments: dict[str, Any]
     server_name: str | None = None
+    tool_description: str | None = None
+    tool_input_schema: Mapping[str, object] | None = None
     start_time: float | None = None
     hidden_params: HiddenParams = HiddenParams()
 
 
-class MCPDuringCallResponseObject(BaseModel):
+class MCPDuringCallResponseObject(LiteLLMBaseModel):
     """
     Pydantic object used for MCP during_call_hook response
     """
@@ -466,7 +474,7 @@ class MCPDuringCallResponseObject(BaseModel):
     hidden_params: HiddenParams = HiddenParams()
 
 
-class MCPPostCallResponseObject(BaseModel):
+class MCPPostCallResponseObject(LiteLLMBaseModel):
     """
     Pydantic object used for MCP post_call_hook response
     """
@@ -475,7 +483,7 @@ class MCPPostCallResponseObject(BaseModel):
     hidden_params: HiddenParams
 
 
-class MCPGatewaySession(BaseModel):
+class MCPGatewaySession(LiteLLMBaseModel):
     """One live stateful Streamable HTTP session held by this proxy worker."""
 
     session_id_prefix: str
@@ -491,12 +499,12 @@ class MCPGatewaySession(BaseModel):
     in_flight_requests: int
 
 
-class MCPGatewaySessionGroupCount(BaseModel):
+class MCPGatewaySessionGroupCount(LiteLLMBaseModel):
     label: str | None = None
     count: int
 
 
-class MCPGatewaySessionsResponse(BaseModel):
+class MCPGatewaySessionsResponse(LiteLLMBaseModel):
     worker_pid: int
     total_sessions: int
     by_client: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
@@ -504,7 +512,7 @@ class MCPGatewaySessionsResponse(BaseModel):
     sessions: list[MCPGatewaySession] = Field(default_factory=list)
 
 
-class MCPGatewaySessionsTerminateResponse(BaseModel):
+class MCPGatewaySessionsTerminateResponse(LiteLLMBaseModel):
     """Stateful sessions an administrator force-closed on this proxy worker."""
 
     worker_pid: int
