@@ -150,6 +150,7 @@ from litellm.litellm_core_utils.core_helpers import (
     is_expected_client_error,
 )
 from litellm.litellm_core_utils.duration_parser import get_budget_window_start
+from litellm.litellm_core_utils.env_utils import get_env_float, get_env_int
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -4502,7 +4503,7 @@ async def _lookup_deprecated_key(
 
 # DualCache for LiteLLM_Config param_name reads.
 # Redis layer is attached in proxy_server._init_cache.
-LITELLM_CONFIG_CACHE_TTL_SECONDS: Final[int] = int(os.environ.get("LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS", "60"))
+LITELLM_CONFIG_CACHE_TTL_SECONDS: Final[int] = get_env_int("LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS", 60)
 _CONFIG_CACHE_MISS: Final[str] = "__litellm_config_param_miss__"
 
 litellm_config_cache: Final[DualCache] = DualCache(
@@ -4786,28 +4787,28 @@ class PrismaClient:
         self._db_health_watchdog_task: asyncio.Task | None = None
         self._view_setup_task: asyncio.Task[_ViewSetupOutcome] | None = None
         self._db_last_reconnect_attempt_ts: float = 0.0
-        self._db_reconnect_cooldown_seconds: int = max(1, int(os.getenv("PRISMA_RECONNECT_COOLDOWN_SECONDS", "15")))
+        self._db_reconnect_cooldown_seconds: int = max(1, get_env_int("PRISMA_RECONNECT_COOLDOWN_SECONDS", 15))
         self._db_read_only_recreate_ts: float = 0.0
         self._db_read_only_recreate_streak: int = 0
         self._db_health_watchdog_interval_seconds: int = max(
-            5, int(os.getenv("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", "30"))
+            5, get_env_int("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", 30)
         )
         self._db_health_watchdog_enabled: bool = (
             str_to_bool(os.getenv("PRISMA_HEALTH_WATCHDOG_ENABLED", "true")) is True
         )
         self._db_health_watchdog_probe_timeout_seconds: float = max(
             0.5,
-            float(os.getenv("PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS", "5.0")),
+            get_env_float("PRISMA_HEALTH_WATCHDOG_PROBE_TIMEOUT_SECONDS", 5.0),
         )
         self._db_watchdog_reconnect_timeout_seconds: float = max(
-            1.0, float(os.getenv("PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS", "30.0"))
+            1.0, get_env_float("PRISMA_WATCHDOG_RECONNECT_TIMEOUT_SECONDS", 30.0)
         )
         self._db_auth_reconnect_timeout_seconds: float = max(
-            0.5, float(os.getenv("PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS", "2.0"))
+            0.5, get_env_float("PRISMA_AUTH_RECONNECT_TIMEOUT_SECONDS", 2.0)
         )
         self._db_auth_reconnect_lock_timeout_seconds: float = max(
             0.0,
-            float(os.getenv("PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS", "0.1")),
+            get_env_float("PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS", 0.1),
         )
         self._consecutive_reconnect_failures: int = 0
         # Last generation of each read engine whose repair was attempted and
@@ -4818,7 +4819,7 @@ class PrismaClient:
         # back to a caller whose engine is still unrepaired. Bounded at two
         # entries: a client has one writer and at most one reader.
         self._failed_recreate_generations: Mapping[PrismaWrapper, int] = MappingProxyType({})
-        self._reconnect_escalation_threshold: int = max(1, int(os.getenv("PRISMA_RECONNECT_ESCALATION_THRESHOLD", "3")))
+        self._reconnect_escalation_threshold: int = max(1, get_env_int("PRISMA_RECONNECT_ESCALATION_THRESHOLD", 3))
         self._engine_pidfd: int = -1
         self._engine_pid: int = 0
         self._watching_engine: bool = False

@@ -21,6 +21,7 @@ from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.env_utils import get_env_float
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -228,8 +229,8 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         )
 
 
-AGENT_HEALTH_CHECK_TIMEOUT_SECONDS: Final = float(os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0"))
-AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS = float(os.environ.get("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", "30.0"))
+AGENT_HEALTH_CHECK_TIMEOUT_SECONDS: Final = get_env_float("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", 5.0)
+AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS: Final = get_env_float("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", 30.0)
 
 
 class _AgentHealthResult(TypedDict, total=False):

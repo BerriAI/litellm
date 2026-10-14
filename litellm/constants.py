@@ -6,6 +6,7 @@ from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import (
     get_env_float,
+    get_env_float_or_none,
     get_env_int,
     get_env_int_in_range,
     get_env_int_or_none,
@@ -138,10 +139,7 @@ HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
 # Maximum wall-clock seconds a streaming response is allowed to run.
 # Streams exceeding this duration are terminated with a Timeout error.
 # None (default) = no limit.  Set env var to a number of seconds to enable globally.
-_max_stream_duration_env: Final = os.getenv("LITELLM_MAX_STREAMING_DURATION_SECONDS", None)
-LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
-    float(_max_stream_duration_env) if _max_stream_duration_env is not None else None
-)
+LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = get_env_float_or_none("LITELLM_MAX_STREAMING_DURATION_SECONDS")
 
 # Maximum number of base64 characters to keep in logging payloads.
 # Data URIs exceeding this are replaced with a size placeholder.
@@ -370,8 +368,7 @@ AIOHTTP_NEEDS_CLEANUP_CLOSED: Final = (3, 13, 0) <= sys.version_info < (
 # WebSocket constants
 # Default to None (unlimited) to match OpenAI's official agents SDK behavior
 # https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
-_max_size_env: Final = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
-REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES: Final = int(_max_size_env) if _max_size_env is not None else None
+REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES: Final = get_env_int_or_none("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
 REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
     "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 20.0
 )
@@ -612,8 +609,11 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS: Final[float] = 6000.0
 COMPLETION_HTTP_FALLBACK_SECONDS: Final[float] = 600.0
 HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
 SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
-request_timeout: float = get_env_float("REQUEST_TIMEOUT", DEFAULT_REQUEST_TIMEOUT_SECONDS)
-request_timeout_explicitly_set: bool = "REQUEST_TIMEOUT" in os.environ
+_request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
+request_timeout: float = (
+    DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
+)
+request_timeout_explicitly_set: bool = _request_timeout_from_env is not None
 DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)  # 10 minutes
 AGENT_KILL_SWITCH_TIMEOUT_SECONDS: Final = 10.0
 AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS: Final = 2000
@@ -1711,32 +1711,10 @@ BATCH_TPD_WINDOW_SECONDS: Final = 86400
 BATCH_TPD_DESCRIPTOR_SUFFIX: Final = "_tpd"
 
 HEALTH_CHECK_TIMEOUT_SECONDS: Final = get_env_int("HEALTH_CHECK_TIMEOUT_SECONDS", 60)  # 60 seconds
-_background_health_check_max_tokens_env: Final = os.getenv("BACKGROUND_HEALTH_CHECK_MAX_TOKENS")
-try:
-    _raw_background_health_check_max_tokens: Final = (
-        _background_health_check_max_tokens_env.strip() if _background_health_check_max_tokens_env is not None else ""
-    )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS: int | None = (
-        int(_raw_background_health_check_max_tokens) if _raw_background_health_check_max_tokens else None
-    )
-except (ValueError, TypeError):
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS = None
-
-
-_background_health_check_max_tokens_reasoning_env: Final = os.getenv("BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING")
-try:
-    _raw_background_health_check_max_tokens_reasoning: Final = (
-        _background_health_check_max_tokens_reasoning_env.strip()
-        if _background_health_check_max_tokens_reasoning_env is not None
-        else ""
-    )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: int | None = (
-        int(_raw_background_health_check_max_tokens_reasoning)
-        if _raw_background_health_check_max_tokens_reasoning
-        else None
-    )
-except (ValueError, TypeError):
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING = None
+BACKGROUND_HEALTH_CHECK_MAX_TOKENS: int | None = get_env_int_or_none("BACKGROUND_HEALTH_CHECK_MAX_TOKENS")
+BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: int | None = get_env_int_or_none(
+    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING"
+)
 
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME: Final = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME: Final = "litellm-cli"
@@ -1795,8 +1773,8 @@ CLI_SSO_SESSION_CACHE_KEY_PREFIX: Final = "cli_sso_session"
 CLI_SSO_SESSION_TTL_SECONDS: Final = 600
 CLI_SESSION_KEY_PREFIX: Final = "cli-session"
 # Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
-CLI_JWT_EXPIRATION_HOURS: Final = int(
-    os.getenv("CLI_JWT_EXPIRATION_HOURS") or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS") or 24
+CLI_JWT_EXPIRATION_HOURS: Final = get_env_int(
+    "CLI_JWT_EXPIRATION_HOURS", get_env_int("LITELLM_CLI_JWT_EXPIRATION_HOURS", 24)
 )
 # Comma-separated allowlisted OIDC claim map for CLI SSO polling, e.g.
 # "employment_type->acme_employment_type,org_info.department->department"

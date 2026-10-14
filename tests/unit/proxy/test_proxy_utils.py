@@ -1,5 +1,8 @@
 import asyncio
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime
 from typing import Any, Dict, Final, List, Optional, Union
 from unittest.mock import Mock
@@ -3426,3 +3429,37 @@ async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_ou
     await evict_config_param("router_settings", cache=cache)
 
     assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None
+
+
+_PROXY_IMPORT_TIME_NUMERIC_KNOBS: Final = (
+    "LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS",
+    "LITELLM_AGENT_HEALTH_CHECK_TIMEOUT",
+    "LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT",
+)
+
+
+def _import_proxy_knobs(knob_value: str | None) -> str:
+    inherited: Final = {k: v for k, v in os.environ.items() if k not in _PROXY_IMPORT_TIME_NUMERIC_KNOBS}
+    overrides: Final = {} if knob_value is None else dict.fromkeys(_PROXY_IMPORT_TIME_NUMERIC_KNOBS, knob_value)
+    script: Final = (
+        "from litellm.proxy.utils import LITELLM_CONFIG_CACHE_TTL_SECONDS as ttl\n"
+        "from litellm.proxy.agent_endpoints import endpoints\n"
+        "print(ttl, endpoints.AGENT_HEALTH_CHECK_TIMEOUT_SECONDS, endpoints.AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS)"
+    )
+    completed: Final = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**inherited, **overrides},
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert completed.returncode == 0, completed.stderr[-2000:]
+    return completed.stdout.strip().splitlines()[-1]
+
+
+def test_proxy_modules_import_with_blank_numeric_env_values() -> None:
+    """
+    Regression: proxy modules parsed these knobs with int()/float() at import, so a blank value
+    (a Helm `value: ""`) raised ValueError and the proxy crash-looped at boot. Blank now means unset.
+    """
+    assert _import_proxy_knobs("") == _import_proxy_knobs(None)

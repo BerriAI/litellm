@@ -17,7 +17,9 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from unittest.mock import patch
 
 
-_ENV_HELPERS = frozenset({"get_env_int", "get_env_float", "get_env_int_in_range", "get_env_int_or_none"})
+_ENV_HELPERS = frozenset(
+    {"get_env_int", "get_env_float", "get_env_int_in_range", "get_env_int_or_none", "get_env_float_or_none"}
+)
 
 
 def _single_name_target(node: ast.stmt) -> str | None:
@@ -87,8 +89,10 @@ def _build_constant_env_var_map() -> dict[str, str]:
         (None, "48", 48),
         (None, None, 24),
         ("48", "72", 48),
+        ("   ", None, 24),
+        ("", "48", 48),
     ],
-    ids=("canonical-only", "alias-only", "default", "canonical-wins"),
+    ids=("canonical-only", "alias-only", "default", "canonical-wins", "blank-canonical", "blank-canonical-alias-set"),
 )
 def test_cli_jwt_expiration_hours_from_environment(
     monkeypatch: pytest.MonkeyPatch,
@@ -113,36 +117,70 @@ def test_cli_jwt_expiration_hours_from_environment(
         importlib.reload(litellm.constants)
 
 
-def _numeric_constants_read_from_env() -> dict[str, str]:
-    return {
-        name: env_var
-        for name, env_var in _build_constant_env_var_map().items()
-        if type(getattr(constants, name, None)) in (int, float)
-    }
+def _is_blank(value: object) -> bool:
+    return isinstance(value, str) and not value.strip()
 
 
-def test_constants_import_treats_blank_numeric_env_values_as_unset() -> None:
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_constants_import_treats_blank_env_values_as_unset(blank: str) -> None:
     """
     Regression: a numeric knob exported as a blank string (a Helm `value: ""` or an emptied .env
     line) raised ValueError while importing litellm.constants, so the proxy crash-looped at boot.
-    Blank now means unset, so every numeric constant keeps the value it has with the variable absent.
+    Blank now means unset, so import succeeds with every env-backed constant blank, and every
+    numeric or optional constant keeps the value it has with the variable absent.
     """
-    constant_env_vars = _numeric_constants_read_from_env()
-    assert "ROUTER_MAX_FALLBACKS" in constant_env_vars
+    constant_env_vars = _build_constant_env_var_map()
+    assert {"ROUTER_MAX_FALLBACKS", "LITELLM_MAX_STREAMING_DURATION_SECONDS"} <= constant_env_vars.keys()
     env_vars = set(constant_env_vars.values())
     try:
         with mock.patch.dict(os.environ):
             for env_var in env_vars:
                 os.environ.pop(env_var, None)
             importlib.reload(litellm.constants)
-            defaults = {name: getattr(litellm.constants, name) for name in constant_env_vars}
-        with mock.patch.dict(os.environ, {env_var: "" for env_var in env_vars}):
+            unset = {name: getattr(litellm.constants, name) for name in constant_env_vars}
+        with mock.patch.dict(os.environ, {env_var: blank for env_var in env_vars}):
             importlib.reload(litellm.constants)
             with_blank_env = {name: getattr(litellm.constants, name) for name in constant_env_vars}
     finally:
         importlib.reload(litellm.constants)
 
-    assert with_blank_env == defaults
+    numeric_or_optional = {name for name, value in unset.items() if value is None or type(value) in (int, float)}
+    changed = {
+        name: (unset[name], with_blank_env[name])
+        for name in numeric_or_optional
+        if with_blank_env[name] != unset[name] and not _is_blank(with_blank_env[name])
+    }
+    assert changed == {}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_timeout", "expected_explicit"),
+    [
+        (None, constants.DEFAULT_REQUEST_TIMEOUT_SECONDS, False),
+        ("", constants.DEFAULT_REQUEST_TIMEOUT_SECONDS, False),
+        ("  ", constants.DEFAULT_REQUEST_TIMEOUT_SECONDS, False),
+        ("fast", constants.DEFAULT_REQUEST_TIMEOUT_SECONDS, False),
+        (" 30 ", 30.0, True),
+    ],
+)
+def test_request_timeout_counts_as_explicit_only_when_it_parses(
+    monkeypatch: pytest.MonkeyPatch, raw: str | None, expected_timeout: float, expected_explicit: bool
+) -> None:
+    """
+    Regression: a blank REQUEST_TIMEOUT fell back to the 6000s sentinel but was still flagged as
+    explicitly set, so chat completion() kept the 6000s sentinel instead of its 600s fallback.
+    """
+    if raw is None:
+        monkeypatch.delenv("REQUEST_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("REQUEST_TIMEOUT", raw)
+    try:
+        importlib.reload(litellm.constants)
+        assert litellm.constants.request_timeout == expected_timeout
+        assert litellm.constants.request_timeout_explicitly_set is expected_explicit
+    finally:
+        monkeypatch.undo()
+        importlib.reload(litellm.constants)
 
 
 @pytest.fixture()
@@ -150,6 +188,7 @@ def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -159,6 +198,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -193,6 +233,7 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -216,17 +257,12 @@ def _populate_known_models_for_morph_tests(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(
         litellm,
         "models_by_provider",
-        {
-            provider: models.copy()
-            for provider, models in litellm.models_by_provider.items()
-        },
+        {provider: models.copy() for provider, models in litellm.models_by_provider.items()},
     )
     litellm.add_known_models()
 
 
-@pytest.mark.usefixtures(
-    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
-)
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests")
 def test_morph_config_get_provider_info():
     """Test that MorphChatConfig returns correct provider info."""
     config = MorphChatConfig()
@@ -247,9 +283,8 @@ def test_morph_config_get_provider_info():
     assert api_base == "https://custom.morph.com"
     assert api_key == "key"
 
-@pytest.mark.usefixtures(
-    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
-)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests")
 def test_morph_get_llm_provider():
     """Test that get_llm_provider correctly identifies morph models."""
     # Test with morph/model format
@@ -259,9 +294,8 @@ def test_morph_get_llm_provider():
     _, custom_llm_provider, _, _ = get_llm_provider("morph/morph-v3-fast")
     assert custom_llm_provider == "morph"
 
-@pytest.mark.usefixtures(
-    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
-)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests")
 def test_morph_in_provider_lists():
     """Test that morph is included in all necessary provider lists."""
     import litellm
@@ -282,9 +316,8 @@ def test_morph_in_provider_lists():
     # Check models are in model_list after initialization
     assert all(model in litellm.model_list for model in ["morph/morph-v3-large", "morph/morph-v3-fast"])
 
-@pytest.mark.usefixtures(
-    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
-)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests")
 def test_morph_supported_params():
     """Test that MorphChatConfig returns correct supported parameters."""
     config = MorphChatConfig()
@@ -298,9 +331,8 @@ def test_morph_supported_params():
 
     assert all(param in supported_params for param in expected_params)
 
-@pytest.mark.usefixtures(
-    "_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests"
-)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "_populate_known_models_for_morph_tests")
 def test_morph_custom_llm_provider():
     """Test that morph models are correctly identified."""
     config = MorphChatConfig()
