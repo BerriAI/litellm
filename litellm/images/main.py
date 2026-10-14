@@ -569,12 +569,8 @@ async def aimage_variation(
     response_format: Literal["url", "b64_json"] = "url",
     size: str | None = None,
     user: str | None = None,
-    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
-    extra_headers: dict[str, object] | None = None,
-    extra_query: dict[str, object] | None = None,
-    extra_body: dict[str, object] | None = None,
-    timeout: float | httpx.Timeout | None = None,
-    # LiteLLM specific params,
+    # LiteLLM specific params; extra_headers/extra_query/extra_body/timeout
+    # forward to image_variation through **kwargs like every other kwarg.
     custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ImageResponse:
@@ -593,6 +589,11 @@ async def aimage_variation(
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO Image Generation ###
     kwargs["async_call"] = True
+    resolved_provider: str = (
+        custom_llm_provider
+        if custom_llm_provider is not None
+        else get_llm_provider(model=model, api_base=kwargs.get("api_base", None))[1]
+    )
     try:
         # Use a partial function to pass your keyword arguments
         func: Final = partial(
@@ -603,20 +604,13 @@ async def aimage_variation(
             response_format=response_format,
             size=size,
             user=user,
-            extra_headers=extra_headers,
-            extra_query=extra_query,
-            extra_body=extra_body,
-            timeout=timeout,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_provider,
             **kwargs,
         )
 
         # Add the context to the function
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
-
-        if custom_llm_provider is None:
-            _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
@@ -631,10 +625,9 @@ async def aimage_variation(
             response = await loop.run_in_executor(None, func_with_context)
         return response
     except Exception as e:
-        custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
             model=model,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_provider or "openai",
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
