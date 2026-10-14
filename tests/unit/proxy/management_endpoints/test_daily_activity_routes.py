@@ -1356,7 +1356,9 @@ def test_export_json_stream_has_all_seeded_rows(daily_activity_client: tuple[Tes
     assert len(response.json()) == 6
 
 
-def test_user_internal_role_is_scoped_to_api_key(daily_activity_client: tuple[TestClient, _FakeRepository]) -> None:
+def test_user_internal_role_is_scoped_to_owned_api_keys(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
     client, _ = daily_activity_client
     response: Final = client.get(
         "/tag/daily/activity/aggregated",
@@ -1367,7 +1369,7 @@ def test_user_internal_role_is_scoped_to_api_key(daily_activity_client: tuple[Te
         },
     )
     assert response.status_code == 200, response.text
-    assert response.json()["metadata"]["total_spend"] == pytest.approx(3.0)
+    assert response.json()["metadata"]["total_spend"] == pytest.approx(14.0)
 
 
 def test_user_aggregate_keeps_current_day_query_semantics(
