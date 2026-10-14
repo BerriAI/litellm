@@ -4,43 +4,65 @@ Utility helpers for reading and parsing environment variables.
 
 import logging
 import os
-from collections.abc import Callable
 from typing import Final, TypeVar
 
 _NumberT: Final = TypeVar("_NumberT", int, float)
 
+# Marked before logging: the LiteLLM loggers' own filters read env knobs through these helpers, so
+# warning first would re-enter the helper from inside the log call and recurse until RecursionError.
+_reported_unparsable_values: Final[set[tuple[str, str]]] = set()  # mutable-ok: process-wide warn-once registry
 
-def _get_env_number(env_var: str, default: _NumberT, parse: Callable[[str], _NumberT]) -> _NumberT:
+
+def _warn_unparsable_once(env_var: str, raw: str, number_type: type[int] | type[float]) -> None:
+    key: Final = (env_var, raw)
+    if key in _reported_unparsable_values:
+        return
+    _reported_unparsable_values.add(key)
+    logging.getLogger("LiteLLM").warning(
+        "%s=%r is not a valid %s. Treating it as unset.", env_var, raw, number_type.__name__
+    )
+
+
+def _get_env_number_or_none(env_var: str, number_type: type[_NumberT]) -> _NumberT | None:
     raw: Final = os.getenv(env_var)
-    if raw is None:
-        return default
-    stripped: Final = raw.strip()
-    if not stripped:
-        return default
+    if raw is None or not raw.strip():
+        return None
     try:
-        return parse(stripped)
+        return number_type(raw.strip())
     except ValueError:
-        logging.getLogger("LiteLLM").warning(
-            "%s=%r is not a valid %s. Falling back to %s.", env_var, raw, type(default).__name__, default
-        )
-        return default
+        _warn_unparsable_once(env_var, raw, number_type)
+        return None
+
+
+def get_env_int_or_none(env_var: str) -> int | None:
+    """Parse an environment variable as an integer, returning None when it is unset, blank or unparsable.
+
+    Use this instead of `get_env_int` when callers must distinguish "explicitly configured"
+    from "left at the default", for example when an override should take precedence over a
+    value resolved from somewhere else.
+    """
+    return _get_env_number_or_none(env_var, int)
+
+
+def get_env_float_or_none(env_var: str) -> float | None:
+    """Float counterpart of `get_env_int_or_none`."""
+    return _get_env_number_or_none(env_var, float)
 
 
 def get_env_int(env_var: str, default: int) -> int:
-    """Parse an environment variable as an integer, falling back to default on invalid values.
+    """Parse an environment variable as an integer, falling back to default when it is unset, blank or unparsable.
 
-    Handles empty strings, whitespace, and non-numeric values gracefully
-    so that misconfiguration doesn't crash the process at import time.
+    An unparsable value is warned about once, so misconfiguration neither crashes the process at
+    import time nor goes unnoticed.
     """
-    return _get_env_number(env_var, default, int)
+    value: Final = get_env_int_or_none(env_var)
+    return default if value is None else value
 
 
 def get_env_float(env_var: str, default: float) -> float:
-    """Parse an environment variable as a float, falling back to default on invalid values.
-
-    Same contract as `get_env_int`: a blank or unparsable value means "unset".
-    """
-    return _get_env_number(env_var, default, float)
+    """Float counterpart of `get_env_int`."""
+    value: Final = get_env_float_or_none(env_var)
+    return default if value is None else value
 
 
 def get_env_int_in_range(env_var: str, default: int, minimum: int, maximum: int) -> int:
@@ -61,19 +83,3 @@ def get_env_int_in_range(env_var: str, default: int, minimum: int, maximum: int)
         default,
     )
     return default
-
-
-def get_env_int_or_none(env_var: str) -> int | None:
-    """Parse an environment variable as an integer, returning None when it is unset or unusable.
-
-    Use this instead of `get_env_int` when callers must distinguish "explicitly configured"
-    from "left at the default", for example when an override should take precedence over a
-    value resolved from somewhere else.
-    """
-    raw: Final = os.getenv(env_var)
-    if raw is None:
-        return None
-    try:
-        return int(raw.strip())
-    except (ValueError, TypeError):
-        return None
