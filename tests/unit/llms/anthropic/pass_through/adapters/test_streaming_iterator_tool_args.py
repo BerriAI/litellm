@@ -8,6 +8,7 @@ Without the fix, the AnthropicStreamWrapper silently dropped these
 arguments, causing tool_use blocks to arrive with empty input {}.
 """
 
+import asyncio
 import json
 
 from typing import List
@@ -23,7 +24,9 @@ from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Delta,
     Function,
+    ModelResponseStream,
     StreamingChoices,
+    Usage,
 )
 
 
@@ -370,3 +373,191 @@ def test_sync_stream_no_extra_delta_when_tool_args_empty():
         f"Expected exactly 1 input_json_delta (from the follow-up chunk), got {len(input_json_deltas)}"
     )
     assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
+
+
+# --- Several tool calls in one chunk (https://github.com/BerriAI/litellm/issues/44029) ---
+
+_TMP_ARGS = '{"command": "ls -d /tmp", "description": "List the /tmp directory"}'
+_VAR_ARGS = '{"command": "ls -d /var", "description": "List the /var directory"}'
+
+
+def _tool_call(index: int, arguments: str, call_id: str = None, name: str = None) -> ChatCompletionDeltaToolCall:
+    return ChatCompletionDeltaToolCall(
+        id=call_id,
+        type="function" if call_id else None,
+        function=Function(name=name, arguments=arguments),
+        index=index,
+    )
+
+
+def _stream_chunk(delta: Delta, finish_reason: str = None, usage: Usage = None) -> ModelResponseStream:
+    chunk = ModelResponseStream(choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)])
+    if usage is not None:
+        chunk.usage = usage
+    return chunk
+
+
+def _drain(chunks: list[ModelResponseStream], use_async: bool) -> list[dict]:
+    async def _agen():
+        for chunk in chunks:
+            yield chunk
+
+    if use_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_agen(), model="mistral-large-2512")
+        return asyncio.run(_collect_events_async(wrapper))
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="mistral-large-2512")
+    return _collect_events_sync(wrapper)
+
+
+def _blocks(events: list[dict]) -> list[dict]:
+    """Rebuild each content block from its start, deltas and stop events."""
+    blocks: dict = {}
+    for event in events:
+        if event.get("type") == "content_block_start":
+            assert event["index"] not in blocks, f"block {event['index']} opened twice"
+            blocks[event["index"]] = {"start": event["content_block"], "json": "", "text": "", "stopped": False}
+        elif event.get("type") == "content_block_delta":
+            block = blocks[event["index"]]
+            assert not block["stopped"], f"delta after stop on block {event['index']}"
+            block["json"] += event["delta"].get("partial_json", "")
+            block["text"] += event["delta"].get("text", "")
+        elif event.get("type") == "content_block_stop":
+            blocks[event["index"]]["stopped"] = True
+    assert list(blocks) == list(range(len(blocks))), f"block indexes not contiguous: {list(blocks)}"
+    assert all(block["stopped"] for block in blocks.values())
+    return [blocks[index] for index in sorted(blocks)]
+
+
+def _message_delta(events: list[dict]) -> dict:
+    deltas = [event for event in events if event.get("type") == "message_delta"]
+    assert len(deltas) == 1
+    last_stop = max(i for i, event in enumerate(events) if event.get("type") == "content_block_stop")
+    assert events.index(deltas[0]) > last_stop
+    return deltas[0]
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_two_complete_tool_calls_in_one_chunk_with_finish_and_usage(use_async):
+    """Mistral bundles both calls, their full arguments, finish_reason and usage into one chunk."""
+    chunk = _stream_chunk(
+        Delta(
+            role="assistant",
+            tool_calls=[
+                _tool_call(0, _TMP_ARGS, call_id="M7B4U5UJs", name="Bash"),
+                _tool_call(1, _VAR_ARGS, call_id="jWEVB6J9J", name="Read"),
+            ],
+        ),
+        finish_reason="tool_calls",
+        usage=Usage(prompt_tokens=40, completion_tokens=12, total_tokens=52),
+    )
+
+    events = _drain([chunk], use_async)
+    blocks = _blocks(events)
+
+    assert [block["start"]["type"] for block in blocks] == ["tool_use", "tool_use"]
+    assert [block["start"]["id"] for block in blocks] == ["M7B4U5UJs", "jWEVB6J9J"]
+    assert [block["start"]["name"] for block in blocks] == ["Bash", "Read"]
+    assert [json.loads(block["json"]) for block in blocks] == [json.loads(_TMP_ARGS), json.loads(_VAR_ARGS)]
+    message_delta = _message_delta(events)
+    assert message_delta["delta"]["stop_reason"] == "tool_use"
+    assert message_delta["usage"]["output_tokens"] == 12
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_text_chunk_then_chunk_with_two_tool_calls(use_async):
+    chunks = [
+        _stream_chunk(Delta(role="assistant", content="Listing both.")),
+        _stream_chunk(
+            Delta(
+                tool_calls=[
+                    _tool_call(0, _TMP_ARGS, call_id="call_a", name="Bash"),
+                    _tool_call(1, _VAR_ARGS, call_id="call_b", name="Bash"),
+                ]
+            )
+        ),
+        _stream_chunk(Delta(), finish_reason="tool_calls"),
+    ]
+
+    events = _drain(chunks, use_async)
+    blocks = _blocks(events)
+
+    assert [block["start"]["type"] for block in blocks] == ["text", "tool_use", "tool_use"]
+    assert blocks[0]["text"] == "Listing both."
+    assert [block["start"]["id"] for block in blocks[1:]] == ["call_a", "call_b"]
+    assert [json.loads(block["json"]) for block in blocks[1:]] == [json.loads(_TMP_ARGS), json.loads(_VAR_ARGS)]
+    assert _message_delta(events)["delta"]["stop_reason"] == "tool_use"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_two_calls_opened_together_then_interleaved_continuations(use_async):
+    """Anthropic blocks are sequential, so call 1 is held until call 0 can no longer grow.
+
+    Call 0 keeps streaming live; call 1's fragments are gathered by ``index`` and
+    its block is written whole once a chunk that is not a fragment arrives.
+    """
+    chunks = [
+        _stream_chunk(
+            Delta(
+                role="assistant",
+                tool_calls=[
+                    _tool_call(0, '{"command": ', call_id="call_a", name="Bash"),
+                    _tool_call(1, '{"command": ', call_id="call_b", name="Bash"),
+                ],
+            )
+        ),
+        _stream_chunk(Delta(tool_calls=[_tool_call(1, '"ls -d /var"')])),
+        _stream_chunk(Delta(tool_calls=[_tool_call(0, '"ls -d /tmp"')])),
+        _stream_chunk(Delta(tool_calls=[_tool_call(0, "}"), _tool_call(1, "}")])),
+        _stream_chunk(Delta(), finish_reason="tool_calls"),
+    ]
+
+    events = _drain(chunks, use_async)
+    blocks = _blocks(events)
+
+    assert [block["start"]["id"] for block in blocks] == ["call_a", "call_b"]
+    assert [json.loads(block["json"]) for block in blocks] == [{"command": "ls -d /tmp"}, {"command": "ls -d /var"}]
+    assert _message_delta(events)["delta"]["stop_reason"] == "tool_use"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_chunk_continuing_open_call_and_opening_next_one(use_async):
+    """Entry 0 finishes the open call, entry 1 starts a new one in the same chunk."""
+    chunks = [
+        _stream_chunk(
+            Delta(role="assistant", tool_calls=[_tool_call(0, '{"command": ', call_id="call_a", name="Bash")])
+        ),
+        _stream_chunk(
+            Delta(
+                tool_calls=[
+                    _tool_call(0, '"ls -d /tmp"}'),
+                    _tool_call(1, '{"command": ', call_id="call_b", name="Bash"),
+                ]
+            )
+        ),
+        _stream_chunk(Delta(tool_calls=[_tool_call(1, '"ls -d /var"}')])),
+        _stream_chunk(Delta(), finish_reason="tool_calls"),
+    ]
+
+    events = _drain(chunks, use_async)
+    blocks = _blocks(events)
+
+    assert [block["start"]["id"] for block in blocks] == ["call_a", "call_b"]
+    assert [json.loads(block["json"]) for block in blocks] == [{"command": "ls -d /tmp"}, {"command": "ls -d /var"}]
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_one_call_split_across_chunks_is_unchanged(use_async):
+    chunks = [
+        _stream_chunk(Delta(role="assistant", tool_calls=[_tool_call(0, "", call_id="call_a", name="Bash")])),
+        _stream_chunk(Delta(tool_calls=[_tool_call(0, '{"command": ')])),
+        _stream_chunk(Delta(tool_calls=[_tool_call(0, '"ls -d /tmp"}')])),
+        _stream_chunk(Delta(), finish_reason="tool_calls"),
+    ]
+
+    events = _drain(chunks, use_async)
+    blocks = _blocks(events)
+
+    assert [block["start"]["id"] for block in blocks] == ["call_a"]
+    assert json.loads(blocks[0]["json"]) == {"command": "ls -d /tmp"}
+    deltas = [event for event in events if event.get("type") == "content_block_delta"]
+    assert [delta["delta"]["partial_json"] for delta in deltas] == ['{"command": ', '"ls -d /tmp"}']
