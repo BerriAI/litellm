@@ -1,11 +1,12 @@
 import importlib
 import logging
-import os
+import multiprocessing
 import sys
 import threading
 from collections.abc import Callable, Sequence
 from functools import partial
 from inspect import signature
+from multiprocessing.process import BaseProcess
 from socket import socket
 from typing import Final, Literal
 
@@ -45,7 +46,6 @@ SERVER_OPTIONS: Final = TypeAdapter(ServerOptions)
 ASGI_APP: Final = TypeAdapter(ImportString[Callable[..., object]])
 LOGGER: Final = logging.getLogger("uvicorn.error")
 RELOAD_WORKER_HEALTHCHECK_SECONDS: Final = 30
-RELOADER_CHECK_SECONDS: Final = 0.5
 
 
 def multi_worker_reload_supported() -> bool:
@@ -71,11 +71,10 @@ def pool_config(options: ReloadOptions, workers: int) -> Config:
     )
 
 
-def stop_pool_when_reloader_exits(pool: Multiprocess, reloader_pid: int) -> None:
-    while not pool.should_exit.wait(RELOADER_CHECK_SECONDS):
-        if os.getppid() != reloader_pid:
-            LOGGER.info("Reloader process [%d] exited, stopping the worker pool.", reloader_pid)
-            pool.should_exit.set()
+def stop_pool_when_reloader_exits(reloader: BaseProcess, pool_should_exit: threading.Event) -> None:
+    reloader.join()
+    LOGGER.info("Reloader process [%s] exited, stopping the worker pool.", reloader.pid)
+    pool_should_exit.set()
 
 
 def _run_worker_pool(config: Config, sockets: Sequence[socket] | None) -> None:
@@ -89,7 +88,9 @@ def _run_worker_pool(config: Config, sockets: Sequence[socket] | None) -> None:
         if "target" in signature(Multiprocess).parameters
         else Multiprocess(config=config, sockets=shared_sockets)
     )
-    threading.Thread(target=stop_pool_when_reloader_exits, args=(pool, os.getppid()), daemon=True).start()
+    reloader: Final = multiprocessing.parent_process()
+    if reloader is not None:
+        threading.Thread(target=stop_pool_when_reloader_exits, args=(reloader, pool.should_exit), daemon=True).start()
     pool.run()
 
 

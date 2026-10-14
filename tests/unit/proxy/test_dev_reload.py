@@ -2,12 +2,14 @@ import contextlib
 import importlib
 import logging
 import logging.handlers
+import multiprocessing
 import os
 import re
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable
@@ -25,6 +27,7 @@ from litellm.proxy.dev_reload import (
     load_app_or_exit,
     multi_worker_reload_supported,
     pool_config,
+    stop_pool_when_reloader_exits,
 )
 
 UNCHANGED_LOGGING: Final = {"version": 1, "incremental": True}
@@ -127,6 +130,20 @@ def test_the_reload_pool_defaults_the_worker_healthcheck_and_keeps_an_explicit_o
         pool_config({**_options("app:app"), "timeout_worker_healthcheck": explicit}, workers=2).timeout_worker_healthcheck
         == explicit
     )
+
+
+def test_the_pool_is_told_to_stop_once_the_reloader_process_exits() -> None:
+    reloader: Final = multiprocessing.get_context("spawn").Process(target=time.sleep, args=(POOL_TIMEOUT_SECONDS,))
+    reloader.start()
+    pool_should_exit: Final = threading.Event()
+    threading.Thread(target=stop_pool_when_reloader_exits, args=(reloader, pool_should_exit), daemon=True).start()
+    try:
+        assert not pool_should_exit.wait(0.5)
+        reloader.kill()
+        assert pool_should_exit.wait(POOL_TIMEOUT_SECONDS)
+    finally:
+        reloader.kill()
+        reloader.join()
 
 
 def test_a_working_app_loads_as_the_module_defines_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
