@@ -5494,7 +5494,7 @@ def _replayed_messages_from(
     *,
     model: str = _CLAUDE_ON_BEDROCK,
     tools: Sequence[Mapping[str, object]] = (),
-    drop_params: bool = False,
+    **request_kwargs: object,
 ) -> Sequence[Mapping[str, object]]:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
         assert previous_response_id == "resp_marked_history"
@@ -5511,7 +5511,7 @@ def _replayed_messages_from(
             },
             instructions=None,
             session_lookup=session_lookup,
-            drop_params=drop_params,
+            request_kwargs=request_kwargs,
         )
     )
     return TypeAdapter(list[dict[str, object]]).validate_python(request["messages"])
@@ -5568,6 +5568,31 @@ def test_a_marked_tool_takes_a_slot_from_the_replayed_turns():
     )
 
     assert ["cache_control" in message for message in messages] == [False, True, True, True]
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [{"cache_control": _EPHEMERAL}, {"extra_body": {"cache_control": _EPHEMERAL}}],
+    ids=["top_level", "extra_body"],
+)
+def test_a_top_level_cache_control_takes_a_slot_from_the_replayed_turns(request_kwargs: Mapping[str, object]):
+    replayed_turns: Final = [
+        {"role": "user", "content": f"turn {index}", "cache_control": _EPHEMERAL} for index in range(3)
+    ]
+
+    messages: Final = _replayed_messages_from(
+        replayed_turns, {"role": "user", "content": "newest", "cache_control": _EPHEMERAL}, **request_kwargs
+    )
+
+    assert ["cache_control" in message for message in messages] == [False, True, True, True]
+
+
+def test_a_null_cache_control_on_the_current_turn_takes_no_slot_from_the_replayed_turns():
+    current: Final = {"role": "user", "content": [{"type": "text", "text": "newest", "cache_control": None}]}
+
+    messages: Final = _replayed_messages_from(list(_marked_turns(4)), current)
+
+    assert ["cache_control" in message for message in messages[:4]] == [True, True, True, True]
 
 
 def test_replayed_marks_a_provider_would_refuse_drop_only_under_drop_params():
@@ -5651,6 +5676,60 @@ def test_a_marked_tool_takes_a_slot_from_the_request_marks_under_drop_params():
     assert ["cache_control" in message for message in messages] == [False, False, True, True, True]
 
 
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [{"cache_control": _EPHEMERAL}, {"extra_body": {"cache_control": _EPHEMERAL}}],
+    ids=["top_level", "extra_body"],
+)
+def test_a_top_level_cache_control_takes_a_slot_from_the_request_marks_under_drop_params(
+    request_kwargs: Mapping[str, object],
+):
+    messages: Final = _bridged_request(*_marked_turns(4), drop_params=True, **request_kwargs)
+
+    assert ["cache_control" in message for message in messages] == [False, False, True, True, True]
+
+
+def test_an_item_mark_replaces_a_null_mark_on_its_last_block():
+    item: Final = {
+        "role": "user",
+        "content": [{"type": "input_text", "text": "x", "cache_control": None}],
+        "cache_control": _EPHEMERAL,
+    }
+
+    assert _bridged_request(item)[1]["content"] == [{"type": "text", "text": "x", "cache_control": _EPHEMERAL}]
+
+
+_MARKED_TOOL_ROUND_TRIP: Final = (
+    {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}", "cache_control": _EPHEMERAL},
+    {"type": "function_call_output", "call_id": "call_1", "output": "42", "cache_control": _EPHEMERAL},
+    {"role": "user", "content": "thanks", "cache_control": _EPHEMERAL},
+)
+
+
+def _marked_tool_round_trip_marks(messages: Sequence[Mapping[str, object]]) -> tuple[bool, bool, bool]:
+    tool_calls: Final = TypeAdapter(list[dict[str, object]]).validate_python(messages[1]["tool_calls"])
+    return ("cache_control" in tool_calls[0], "cache_control" in messages[2], "cache_control" in messages[3])
+
+
+def test_nova_gets_no_marks_on_tool_calls_and_results_under_drop_params():
+    nova: Final = "bedrock/us.amazon.nova-2-lite-v1:0"
+
+    assert _marked_tool_round_trip_marks(_bridged_request(*_MARKED_TOOL_ROUND_TRIP, model=nova)) == (True, True, True)
+    assert _marked_tool_round_trip_marks(_bridged_request(*_MARKED_TOOL_ROUND_TRIP, model=nova, drop_params=True)) == (
+        False,
+        False,
+        True,
+    )
+
+
+def test_claude_keeps_marks_on_tool_calls_and_results_under_drop_params():
+    assert _marked_tool_round_trip_marks(_bridged_request(*_MARKED_TOOL_ROUND_TRIP, drop_params=True)) == (
+        True,
+        True,
+        True,
+    )
+
+
 @pytest.mark.parametrize("value", [1, "ephemeral", ["ephemeral"], {"type": "forever"}])
 def test_a_cache_control_value_the_provider_would_refuse_reaches_it_as_sent_without_drop_params(value: object):
     assert _bridged_request({"role": "user", "content": "hi", "cache_control": value})[1] == {
@@ -5699,6 +5778,7 @@ def test_a_marked_developer_item_reaches_a_claude_target_as_a_marked_system_mess
         ("gemini/gemini-2.5-flash", "gemini"),
         ("mistral/mistral-small-latest", "mistral"),
         ("bedrock/meta.llama3-70b-instruct-v1:0", "bedrock"),
+        ("openrouter/openai/gpt-5", "openrouter"),
     ],
 )
 def test_item_marks_stay_off_a_target_without_cache_points(model: str, custom_llm_provider: str):
@@ -5712,6 +5792,28 @@ def test_item_marks_stay_off_a_target_without_cache_points(model: str, custom_ll
 
     assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 0
     assert messages[2] == {"role": "developer", "content": "Answer in French."}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("databricks/databricks-claude-sonnet-4", "databricks"),
+        ("dashscope/qwen-plus", "dashscope"),
+        ("minimax/MiniMax-M2", "minimax"),
+        ("zai/glm-4.6", "zai"),
+        ("sap/anthropic--claude-4-sonnet", "sap"),
+        ("openrouter/anthropic/claude-sonnet-4.5", "openrouter"),
+        ("snowflake/claude-sonnet-4-5", "snowflake"),
+    ],
+)
+def test_item_marks_reach_a_target_whose_chat_route_keeps_them(model: str, custom_llm_provider: str):
+    messages: Final = _bridged_request(
+        {"role": "system", "content": "House rules", "cache_control": _EPHEMERAL},
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert messages[1] == {"role": "system", "content": "House rules", "cache_control": _EPHEMERAL}
 
 
 def test_a_block_mark_reaches_a_target_without_cache_points_as_before():

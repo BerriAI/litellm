@@ -40,7 +40,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
-from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS
+from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
@@ -52,6 +52,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
@@ -278,18 +279,22 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     )
 
 
-def _turns_item_marks_into_cache_points(model: str, custom_llm_provider: str | None) -> bool:
+_PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("databricks", "dashscope", "minimax", "sap", "zai"))
+_PROVIDERS_KEEPING_CLAUDE_MESSAGE_CACHE_CONTROL: Final = frozenset(("openrouter", "snowflake"))
+
+
+def _target_keeps_item_marks(model: str, custom_llm_provider: str | None) -> bool:
     if supports_anthropic_cache_control(model, custom_llm_provider):
         return True
+    if custom_llm_provider in _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL:
+        return True
+    if custom_llm_provider in _PROVIDERS_KEEPING_CLAUDE_MESSAGE_CACHE_CONTROL:
+        return "claude" in model.lower()
     return custom_llm_provider == "bedrock" and bedrock_model_accepts_cache_points(model)
 
 
-def _marked_tool_count(tools: Iterable[object]) -> int:
-    return sum(
-        1
-        for tool in tools
-        if isinstance(tool, dict) and _STR_KEY_DICT_ADAPTER.validate_python(tool).get("cache_control")
-    )
+def _refuses_marks_on_tool_blocks(model: str, custom_llm_provider: str | None) -> bool:
+    return custom_llm_provider == "bedrock" and BaseAWSLLM.get_bedrock_invoke_provider(model) == "nova"
 
 
 def _with_cache_control_on_last_block(
@@ -298,7 +303,7 @@ def _with_cache_control_on_last_block(
     if cache_control is None or not blocks or not isinstance(blocks[-1], dict):
         return blocks
     last_block: Final = _STR_KEY_DICT_ADAPTER.validate_python(blocks[-1])
-    if "cache_control" in last_block:
+    if last_block.get("cache_control") is not None:
         return blocks
     return [*blocks[:-1], {**last_block, "cache_control": cache_control}]
 
@@ -324,7 +329,7 @@ def _mark_carrying_blocks(fields: Mapping[str, object]) -> Sequence[object]:
 
 
 def _block_carries_cache_control(block: object) -> bool:
-    return isinstance(block, dict) and "cache_control" in block
+    return isinstance(block, dict) and _STR_KEY_DICT_ADAPTER.validate_python(block).get("cache_control") is not None
 
 
 def _cache_control_count(message: object) -> int:
@@ -332,7 +337,7 @@ def _cache_control_count(message: object) -> int:
         return 0
     fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(message)
     block_marks: Final = sum(1 for block in _mark_carrying_blocks(fields) if _block_carries_cache_control(block))
-    return int("cache_control" in fields) + block_marks
+    return int(fields.get("cache_control") is not None) + block_marks
 
 
 _CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
@@ -412,30 +417,71 @@ def _developer_message_as_system_message(message: _MessageT) -> _MessageT:
     )
 
 
-def _request_messages_for_cache_points(
-    messages: Sequence[_MessageT], tools: Iterable[object], drop_params: bool
-) -> Sequence[_MessageT]:
+def _message_fields(message: object) -> Mapping[str, object] | None:
+    return _STR_KEY_DICT_ADAPTER.validate_python(message) if isinstance(message, dict) else None
+
+
+def _without_tool_block_marks(message: _MessageT) -> _MessageT:
+    fields: Final = _message_fields(message)
+    if fields is None:
+        return message
+    if fields.get("role") == "tool":
+        return _with_cache_control(message, _dropped_cache_control)
+    tool_calls: Final = fields.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return message
+    return cast(  # cast-ok: the same assistant message with its tool calls unmarked
+        _MessageT,
+        {
+            **fields,
+            "tool_calls": [
+                _block_with_cache_control(tool_call, _dropped_cache_control)
+                for tool_call in _OBJECT_LIST_ADAPTER.validate_python(tool_calls)
+            ],
+        },
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ItemMarkRules:
+    drop_params: bool
+    refuses_tool_block_marks: bool
+    external_marks: int
+
+    def checked(self, message: _MessageT) -> _MessageT:
+        if not self.drop_params:
+            return message
+        valid: Final = _with_cache_control(message, _validated_cache_control)
+        return _without_tool_block_marks(valid) if self.refuses_tool_block_marks else valid
+
+
+def _item_mark_rules(
+    model: str, custom_llm_provider: str | None, tools: Iterable[object], request_kwargs: Mapping[str, object]
+) -> _ItemMarkRules:
+    return _ItemMarkRules(
+        drop_params=drops_unsupported_params(request_kwargs.get("drop_params")),
+        refuses_tool_block_marks=_refuses_marks_on_tool_blocks(model, custom_llm_provider),
+        external_marks=AnthropicCacheControlHook.count_external_cache_breakpoints(
+            tools, request_kwargs.get("cache_control"), request_kwargs
+        ),
+    )
+
+
+def _request_messages_for_cache_points(messages: Sequence[_MessageT], rules: _ItemMarkRules) -> Sequence[_MessageT]:
     as_system: Final = tuple(_developer_message_as_system_message(message) for message in messages)
-    if not drop_params:
+    if not rules.drop_params:
         return as_system
-    valid_marks: Final = tuple(_with_cache_control(message, _validated_cache_control) for message in as_system)
-    return _messages_within_cache_control_limit(valid_marks, _marked_tool_count(tools))
+    return _messages_within_cache_control_limit(tuple(map(rules.checked, as_system)), rules.external_marks)
 
 
 def _replayed_messages_for_cache_points(
-    replayed_messages: Sequence[_MessageT],
-    current_messages: Sequence[object],
-    tools: Iterable[object],
-    drop_params: bool,
+    replayed_messages: Sequence[_MessageT], current_messages: Sequence[object], rules: _ItemMarkRules
 ) -> Sequence[_MessageT]:
     as_system: Final = tuple(_developer_message_as_system_message(message) for message in replayed_messages)
-    checked: Final = (
-        tuple(_with_cache_control(message, _validated_cache_control) for message in as_system)
-        if drop_params
-        else as_system
-    )
     current_marks: Final = sum(_cache_control_count(message) for message in current_messages)
-    return _messages_within_cache_control_limit(checked, current_marks + _marked_tool_count(tools))
+    return _messages_within_cache_control_limit(
+        tuple(map(rules.checked, as_system)), current_marks + rules.external_marks
+    )
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -690,9 +736,9 @@ class LiteLLMCompletionResponsesConfig:
             api_base=kwargs.get("api_base"),
         )
 
-        cache_point_target: Final = _turns_item_marks_into_cache_points(model, custom_llm_provider)
+        keeps_item_marks: Final = _target_keeps_item_marks(model, custom_llm_provider)
         bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=input if cache_point_target else without_item_cache_control(input),
+            input=input if keeps_item_marks else without_item_cache_control(input),
             responses_api_request=responses_api_request,
             replay_reasoning=True,
         )
@@ -702,11 +748,12 @@ class LiteLLMCompletionResponsesConfig:
                 list(
                     _request_messages_for_cache_points(
                         bridged_messages,
-                        tools,
-                        drops_unsupported_params(_STR_KEY_DICT_ADAPTER.validate_python(kwargs).get("drop_params")),
+                        _item_mark_rules(
+                            model, custom_llm_provider, tools, _STR_KEY_DICT_ADAPTER.validate_python(kwargs)
+                        ),
                     )
                 )
-                if cache_point_target
+                if keeps_item_marks
                 else bridged_messages
             ),
             "model": model,
@@ -805,19 +852,19 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request: dict,
         instructions: str | None,
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
-        drop_params: bool = False,
+        request_kwargs: Mapping[str, object] = MappingProxyType({}),
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """
         request_fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(litellm_completion_request)
-        provider: Final = request_fields.get("custom_llm_provider")
-        cache_point_target: Final = _turns_item_marks_into_cache_points(
-            str(request_fields.get("model") or ""), provider if isinstance(provider, str) else None
-        )
+        requested_provider: Final = request_fields.get("custom_llm_provider")
+        model: Final = str(request_fields.get("model") or "")
+        provider: Final = requested_provider if isinstance(requested_provider, str) else None
+        keeps_item_marks: Final = _target_keeps_item_marks(model, provider)
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
-            item_cache_control=cache_point_target,
+            item_cache_control=keeps_item_marks,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -830,10 +877,14 @@ class LiteLLMCompletionResponsesConfig:
             _replayed_messages_for_cache_points(
                 replayed_messages,
                 _OBJECT_LIST_ADAPTER.validate_python(_messages),
-                _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or []),
-                drop_params,
+                _item_mark_rules(
+                    model,
+                    provider,
+                    _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or []),
+                    request_kwargs,
+                ),
             )
-            if cache_point_target
+            if keeps_item_marks
             else replayed_messages
         )
         instructions_end: Final = 1 if instructions else 0

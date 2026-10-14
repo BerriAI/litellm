@@ -297,6 +297,26 @@ def test_function_call_output_mark_reaches_bedrock_as_a_tool_result_cache_point(
         assert bedrock_labels(_only_request(wire)) == [_BEDROCK_RESULT_LABEL]
 
 
+@pytest.mark.parametrize("drop_params", (False, True), ids=("as-sent", "drop-params"))
+def test_nova_tool_marks_follow_drop_params(gateway: Gateway, drop_params: bool) -> None:
+    marker: Final = new_marker()
+    with wire_server(_bedrock_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="bedrock/converse/us.amazon.nova-2-lite-v1:0",
+            api_key=PROVIDER_KEY,
+            api_base=wire.url,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint=wire.url,
+            drop_params=drop_params,
+        )
+        items: Final = _tool_items(marker, output_mark=EPHEMERAL, call_mark=EPHEMERAL)
+        answer: Final = _send(gateway, _responses(model, items, tools=[_TOOL]))
+        assert answer.status == 200, answer.text
+        labels: Final = bedrock_labels(_only_request(wire))
+    assert (_BEDROCK_RESULT_LABEL in labels) is not drop_params, labels
+    assert (len(labels) == 2) is not drop_params, labels
+
+
 def test_one_hour_mark_keeps_its_ttl_on_anthropic(gateway: Gateway) -> None:
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
@@ -429,6 +449,23 @@ def _openai_message_marks(request: Request) -> list[str]:
         for message in messages
         if "cache_control" in object_value(message)
     ]
+
+
+def _openai_block_marks(request: Request) -> list[JsonValue]:
+    return [object_value(block).get("cache_control") for block in _blocks_of(_JSON_OBJECT.validate_json(request.body))]
+
+
+def test_databricks_claude_keeps_the_item_mark_like_its_chat_route(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    reply: Final = chat_reply(f"chatcmpl-{marker}", "databricks-claude-sonnet-4", "sunny", stream=False)
+    with wire_server(answering_model_discovery(lambda request: reply)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="databricks/databricks-claude-sonnet-4", api_base=wire.url, api_key=PROVIDER_KEY
+        )
+        _assert_completed(_send(gateway, _marked_system(model, marker)))
+        posted: Final = [request for request in wire.drain() if request.method == "POST"]
+    assert [request.target for request in posted] == ["/chat/completions"], [request.target for request in posted]
+    assert _openai_block_marks(posted[0]) == [EPHEMERAL]
 
 
 def test_openai_compatible_chat_bridge_leaves_the_item_mark_off(gateway: Gateway) -> None:
@@ -681,6 +718,20 @@ def test_five_marks_keep_the_newest_four_under_drop_params(gateway: Gateway) -> 
         _assert_completed(_send(gateway, body))
         labels: Final = anthropic_labels(_only_request(wire))
     assert labels == [ASK_LABEL, _ASSISTANT_LABEL, _RESULT_LABEL, final_label(marker)]
+
+
+def test_a_top_level_mark_takes_a_slot_under_drop_params(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"anthropic/{ANTHROPIC_MODEL}", api_base=wire.url, api_key=PROVIDER_KEY, drop_params=True
+        )
+        body: Final = _responses(
+            model, _many_marks(marker, assistant_marked=False), tools=[_TOOL], cache_control=EPHEMERAL
+        )
+        _assert_completed(_send(gateway, body))
+        labels: Final = anthropic_labels(_only_request(wire))
+    assert labels == [ASK_LABEL, _RESULT_LABEL, final_label(marker), "request"]
 
 
 @pytest.mark.parametrize(

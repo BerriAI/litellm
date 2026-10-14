@@ -14,7 +14,6 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
-    drops_unsupported_params,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
@@ -112,9 +111,7 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
                 instructions=responses_api_request.get("instructions"),
-                drop_params=drops_unsupported_params(
-                    _REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params")
-                ),
+                request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
             )
 
         acompletion_args: Final = {}
