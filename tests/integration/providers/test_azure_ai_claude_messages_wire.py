@@ -44,7 +44,7 @@ def test_azure_ai_claude_messages_preserves_target_auth_beta_and_typed_response(
     gateway: Gateway, base_suffix: str, stream: bool
 ) -> None:
     identity: Final = f"msg_azure_claude_{base_suffix.strip('/') or 'base'}_{stream}"
-    api_path: Final = f"/anthropic/v1/messages"
+    api_path: Final = "/anthropic/v1/messages"
     reply_body: Final = cc.message_reply(identity, _BACKEND, _CONTENT, _USAGE)
     stream_reply: Final = cc.message_stream(identity, _BACKEND, _CONTENT, _USAGE)
     request_body_template: Final = {

@@ -593,7 +593,6 @@ def test_anthropic_messages_stream_surfaces_upstream_error_event(gateway: Gatewa
         assert len(wire.drain()) == 1
 
 
-
 def test_anthropic_messages_stream_ending_without_message_stop_surfaces_an_error_event(gateway: Gateway) -> None:
     pytest.skip("BUG: /v1/messages relays an upstream stream that closes before message_stop as a clean 200")
     message_start: Final = {
@@ -664,6 +663,7 @@ def test_anthropic_messages_stream_ending_without_message_stop_surfaces_an_error
             ),
         ), response.text
         assert len(wire.drain()) == 1
+
 
 def test_anthropic_messages_preserves_image_document_and_tool_result_blocks(gateway: Gateway) -> None:
     image_data: Final = base64.b64encode(b"synthetic png bytes").decode()

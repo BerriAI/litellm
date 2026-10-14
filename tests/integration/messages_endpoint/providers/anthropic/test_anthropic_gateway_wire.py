@@ -158,7 +158,6 @@ def test_enabled_gateway_matches_native_messages_route(enabled_gateway: Gateway,
 
     with enabled_gateway.scenario() as scenario, wire_server(respond) as wire:
         model_a: Final = scenario.model(model=f"anthropic/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
-        model_b: Final = scenario.model(model=f"anthropic/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         key: Final = scenario.key(models=[model_a])
         expected_message: Final = _MESSAGE.validate_python(
             {**_JSON_OBJECT.validate_json(cc.message_reply(identity, _BACKEND, content, usage)), "model": model_a}

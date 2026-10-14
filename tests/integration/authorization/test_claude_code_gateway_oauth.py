@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import html
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+import httpx
 import pytest
 import yaml
 from anthropic.types import Message
@@ -300,14 +302,41 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
             )
             assert verification_complete.status_code == 200, verification_complete.text
 
-            token_response: Final = enabled_gateway.client.post(
-                "/claude_code_gateway/oauth/token",
-                data={
-                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                    "device_code": authorization.device_code,
-                    "client_id": _CLIENT_ID,
-                },
+            async def poll_device_code() -> tuple[httpx.Response, ...]:
+                async with httpx.AsyncClient(
+                    base_url=str(enabled_gateway.client.base_url),
+                    timeout=30,
+                    trust_env=False,
+                ) as client:
+                    return tuple(
+                        await asyncio.gather(
+                            *(
+                                client.post(
+                                    "/claude_code_gateway/oauth/token",
+                                    data={
+                                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                                        "device_code": authorization.device_code,
+                                        "client_id": _CLIENT_ID,
+                                    },
+                                )
+                                for _ in range(8)
+                            )
+                        )
+                    )
+
+            poll_responses: Final = asyncio.run(poll_device_code())
+            successful_polls: Final = tuple(response for response in poll_responses if response.status_code == 200)
+            assert len(successful_polls) == 1, (
+                f"Expected exactly one successful device_code poll, got {len(successful_polls)} "
+                f"with statuses {tuple(response.status_code for response in poll_responses)}"
             )
+            token_response: Final = successful_polls[0]
+            losing_polls: Final = tuple(response for response in poll_responses if response is not token_response)
+            assert len(losing_polls) == 7, losing_polls
+            for losing_poll in losing_polls:
+                assert losing_poll.status_code == 400, losing_poll.text
+                assert _JSON_OBJECT.validate_json(losing_poll.content) == {"error": "expired_token"}, losing_poll.text
+
             assert token_response.status_code == 200, token_response.text
             access_token: Final = _AccessToken.model_validate_json(token_response.content)
             access_token_body: Final = _JSON_OBJECT.validate_json(token_response.content)

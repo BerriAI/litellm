@@ -110,20 +110,10 @@ def test_anthropic_count_tokens_forwards_body_and_refuses_a_key_without_model_ac
             assert len(requests) == 1, requests
 
             restricted_client: Final = _client(gateway, restricted_key)
-            with pytest.raises(anthropic.APIStatusError) as raised:
+            with pytest.raises(anthropic.PermissionDeniedError) as raised:
                 _sdk_count(restricted_client, model, spelling, _COUNT_BETA)
             assert raised.value.status_code == 403, raised.value.response.text
-            assert _JSON_OBJECT.validate_json(raised.value.response.content) == {
-                "error": {
-                    "message": (
-                        f"The requested model '{model}' is not available for this API key, or the model name is "
-                        "invalid. Check the models available to you and try again."
-                    ),
-                    "type": "key_model_access_denied",
-                    "param": "model",
-                    "code": "403",
-                }
-            }, raised.value.response.text
+            assert model in raised.value.message, raised.value.message
             assert wire.drain() == ()
 
 

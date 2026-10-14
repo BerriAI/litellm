@@ -9,7 +9,7 @@ from anthropic.types import Message
 from integration._support import claude_code as cc
 from integration._support.client import Gateway, Scenario
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "claude-sonnet-4-6"
@@ -40,9 +40,7 @@ _TOOLS: Final[list[JsonValue]] = [
     }
 ]
 _THINKING: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": 1024}
-_CONTENT: Final[tuple[dict[str, JsonValue], ...]] = (
-    {"type": "text", "text": "The record is ready."},
-)
+_CONTENT: Final[tuple[dict[str, JsonValue], ...]] = ({"type": "text", "text": "The record is ready."},)
 _USAGE: Final[dict[str, JsonValue]] = {"input_tokens": 8, "output_tokens": 4}
 
 
@@ -81,9 +79,7 @@ def _peer(
             assert form["grant_type"] == ["urn:ietf:params:oauth:grant-type:jwt-bearer"], form
             assert form["assertion"], form
             return Reply(
-                body=json.dumps(
-                    {"access_token": _VERTEX_TOKEN, "token_type": "Bearer", "expires_in": 3600}
-                ).encode()
+                body=json.dumps({"access_token": _VERTEX_TOKEN, "token_type": "Bearer", "expires_in": 3600}).encode()
             )
 
         assert request.method == "POST" and request.target == target, request.target
@@ -185,7 +181,10 @@ def test_vertex_partner_messages_uses_raw_predict_contract_and_typed_response(ga
                     )
 
             requests: Final = wire.drain()
-            assert tuple(request.target for request in requests) == ("/_oauth/token", _STREAM_TARGET if stream else _MODEL_TARGET), requests
+            assert tuple(request.target for request in requests) == (
+                "/_oauth/token",
+                _STREAM_TARGET if stream else _MODEL_TARGET,
+            ), requests
             token_request: Final = requests[0]
             assert token_request.method == "POST", token_request
             assert token_request.headers["content-type"] == "application/x-www-form-urlencoded", token_request.headers
