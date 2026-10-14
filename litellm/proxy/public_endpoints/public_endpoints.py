@@ -322,6 +322,8 @@ async def get_mcp_servers():
 async def public_skill_hub():
     """Return enabled (public) Claude Code skills — no auth required."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
+        MANIFEST_FIELDS,
+        get_installation_preference,
         get_prisma_client,
     )
     from litellm.types.proxy.claude_code_endpoints import (
@@ -352,6 +354,7 @@ async def public_skill_hub():
                     homepage=manifest.get("homepage"),
                     domain=manifest.get("domain"),
                     namespace=manifest.get("namespace"),
+                    installation_preference=get_installation_preference(MANIFEST_FIELDS.validate_python(manifest)),
                 )
             )
         return ListPluginsResponse(plugins=items, count=len(items))
