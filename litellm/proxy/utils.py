@@ -111,7 +111,7 @@ except ImportError:
     raise ImportError("backoff is not installed. Please install it via 'pip install backoff'")
 
 from fastapi import HTTPException, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 import litellm.litellm_core_utils
@@ -3356,6 +3356,7 @@ class ProxyLogging:
             original_exception=original_exception,
             error_type=error_type,
             route=user_api_key_dict.request_route,
+            team_id=user_api_key_dict.team_id,
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -3413,6 +3414,7 @@ class ProxyLogging:
         original_exception: Exception,
         error_type: ProxyErrorTypes | None = None,
         route: str | None = None,
+        team_id: str | None = None,
     ) -> bool:
         """
         Return True if the error is a Proxy Only LLM API Error
@@ -3436,6 +3438,9 @@ class ProxyLogging:
         if route is None:
             return False
         if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
+            return False
+        # Dashboard session keys poll info routes in the background; their failures are not user requests.
+        if RouteChecks.is_dashboard_session_info_route(route, team_id):
             return False
 
         return isinstance(original_exception, _PROXY_ONLY_LLM_API_ERRORS) or (error_type == ProxyErrorTypes.auth_error)
@@ -8967,6 +8972,10 @@ async def get_available_models_for_user(
     Returns:
         List of model names available to the user
     """
+    from litellm.proxy.auth.auth_checks import (
+        personal_key_team_model_access_applies,
+        personal_key_team_visible_models,
+    )
     from litellm.proxy.auth.model_checks import (
         get_complete_model_list,
         get_key_models,
@@ -9037,7 +9046,7 @@ async def get_available_models_for_user(
     granted_team_models: Final = (*team_models, *access_group_models) if team_models else team_models
 
     # Get complete model list
-    all_models: Final = get_complete_model_list(
+    complete_models: Final = get_complete_model_list(
         key_models=granted_key_models,
         team_models=granted_team_models,
         proxy_model_list=proxy_model_list,
@@ -9049,6 +9058,20 @@ async def get_available_models_for_user(
         include_model_access_groups=include_model_access_groups,
         only_model_access_groups=only_model_access_groups,
         team_id=effective_team_id,
+    )
+    all_models: Final = (
+        list(
+            await personal_key_team_visible_models(
+                models=complete_models,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        )
+        if personal_key_team_model_access_applies(user_api_key_dict)
+        else complete_models
     )
 
     agent_visible: Final = await _agent_access_group_visible_models(
@@ -9285,12 +9308,15 @@ def validate_model_access(
 _PRESERVED_NONE_FIELDS: Final[list[tuple[str, str]]] = [
     ("message", "content"),  # null when tool_calls present (issue #6677)
     ("message", "role"),  # always required by OpenAI spec
+    ("message", "refusal"),  # explicit null from provider
     ("delta", "content"),  # null in streaming chunks
 ]
+_PRESERVED_NONE_CHOICE_FIELDS: Final = ("logprobs",)  # explicit null from provider
+_PRESERVED_NONE_RESPONSE_FIELDS: Final = ("system_fingerprint",)  # explicit null from provider
 
 
 def model_dump_with_preserved_fields(
-    obj: Any,
+    obj: BaseModel,
     preserve_fields: list[str] | None = None,
     exclude_unset: bool = True,
 ) -> dict[str, object]:
@@ -9298,7 +9324,7 @@ def model_dump_with_preserved_fields(
     Serialize a Pydantic model to a dictionary while preserving specific fields
     even if they are None.
 
-    Fields listed in _PRESERVED_NONE_FIELDS are restored after
+    Explicit null values in the preserved field lists are restored after
     model_dump(exclude_none=True) strips them.
 
     Args:
@@ -9309,21 +9335,42 @@ def model_dump_with_preserved_fields(
     Returns:
         Dictionary representation with None values excluded except for preserved fields
     """
-    result: Final = obj.model_dump(exclude_none=True, exclude_unset=exclude_unset)
+    result: Final = cast(  # cast-ok: Pydantic model_dump returns serialized model fields
+        dict[str, object],
+        obj.model_dump(exclude_none=True, exclude_unset=exclude_unset),
+    )
 
-    choices: Final = result.get("choices")
+    for field_name in _PRESERVED_NONE_RESPONSE_FIELDS:
+        if field_name not in result and field_name in getattr(obj, "model_fields_set", ()):
+            result[field_name] = getattr(obj, field_name)
+
+    choices: Final = cast(  # cast-ok: model_dump serializes choices as a list of dicts
+        Sequence[dict[str, object]] | None,
+        result.get("choices"),
+    )
     if not choices:
         return result
 
-    obj_choices: Final = obj.choices
+    obj_choices: Final = cast(  # cast-ok: obj is duck-typed, choices is a list on ModelResponse
+        Sequence[object],
+        getattr(obj, "choices", ()),
+    )
     for choice_obj, choice_dict in zip(obj_choices, choices):
         for sub_object, field_name in _PRESERVED_NONE_FIELDS:
-            sub_dict = choice_dict.get(sub_object)
+            sub_dict = cast(  # cast-ok: message and delta dump as dicts
+                dict[str, object] | None, choice_dict.get(sub_object)
+            )
             if sub_dict is None:
                 continue
             if field_name not in sub_dict:
-                sub_obj = getattr(choice_obj, sub_object, None)
+                sub_obj = cast(  # cast-ok: getattr on a duck-typed choice
+                    object | None, getattr(choice_obj, sub_object, None)
+                )
                 if sub_obj is not None and hasattr(sub_obj, field_name):
                     sub_dict[field_name] = getattr(sub_obj, field_name)
+
+        for field_name in _PRESERVED_NONE_CHOICE_FIELDS:
+            if field_name not in choice_dict and hasattr(choice_obj, field_name):
+                choice_dict[field_name] = getattr(choice_obj, field_name)
 
     return result
