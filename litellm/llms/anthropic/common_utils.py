@@ -5,7 +5,7 @@ This file contains common utils for anthropic calls.
 import copy
 import json
 import re
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterator, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Literal, TypeVar
@@ -769,21 +769,23 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return list(dict.fromkeys((*primary, *normalized)))
 
     @staticmethod
+    def _model_map_hits(model: str) -> Iterator[Mapping[str, object]]:
+        """Entries the lookup candidates for ``model`` hit, live model map first, then the bundled one."""
+        from litellm.utils import get_bundled_model_cost_map
+
+        candidates: Final = AnthropicModelInfo._model_map_lookup_candidates(model)
+        for model_map in (litellm.model_cost, get_bundled_model_cost_map()):
+            yield from (model_map[cand] for cand in candidates if cand in model_map)
+
+    @staticmethod
     def _get_model_capability(model: str, key: str) -> bool | None:
         """Read boolean capability ``key`` from the model map, or None when
         no entry declares it."""
-        from litellm.utils import get_bundled_model_cost_map
-
         try:
-            candidates: Final = AnthropicModelInfo._model_map_lookup_candidates(model)
-            for model_cost in (litellm.model_cost, get_bundled_model_cost_map()):
-                for cand in candidates:
-                    value = model_cost.get(cand, {}).get(key)
-                    if isinstance(value, bool):
-                        return value
+            values: Final = (entry.get(key) for entry in AnthropicModelInfo._model_map_hits(model))
+            return next((value for value in values if isinstance(value, bool)), None)
         except Exception:
-            pass
-        return None
+            return None
 
     @staticmethod
     def _get_exact_model_capability(model: str, key: str) -> bool | None:
@@ -879,17 +881,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
     def _has_model_map_entry(model: str, custom_llm_provider: str) -> bool:
         """Whether ``model`` resolves to a real cost-map entry rather than only a fallback rule."""
-        from litellm.utils import (
-            get_bundled_model_cost_map,
-            get_model_info_helper,
-            is_generalized_model_info,
-        )
+        from litellm.utils import get_model_info_helper, is_generalized_model_info
 
-        candidates: Final = AnthropicModelInfo._model_map_lookup_candidates(model)
-        if any(
-            any(cand in model_cost for cand in candidates)
-            for model_cost in (litellm.model_cost, get_bundled_model_cost_map())
-        ):
+        if next(AnthropicModelInfo._model_map_hits(model), None) is not None:
             return True
         try:
             resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(

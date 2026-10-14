@@ -2611,6 +2611,8 @@ def test_unmapped_adaptive_claude_accepts_every_effort_level(local_model_cost_ma
         ("claude-sonnet-4-6", "anthropic"),
         ("anthropic/claude-sonnet-4-6", "anthropic"),
         ("CLAUDE-SONNET-4-6", "anthropic"),
+        ("claude-sonnet-4.6", "anthropic"),
+        ("claude-sonnet-4-6-20260219", "anthropic"),
         ("us.anthropic.claude-sonnet-4-6", "bedrock"),
         ("claude-sonnet-4-6", "vertex_ai"),
     ],
