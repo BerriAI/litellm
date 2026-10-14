@@ -6,20 +6,18 @@ from typing import Final, Literal, assert_never
 import pytest
 from integration._support.client import Gateway, Scenario, gateway_from_environment
 from integration._support.process import owned_proxy
-from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
-    ANTHROPIC_MODEL,
     ASK,
     ASK_LABEL,
-    BEDROCK_MODEL,
     CITIES,
+    CLAUDE_TARGETS,
     EPHEMERAL,
     POINTS,
-    PROVIDER_KEY,
     SYSTEM,
     SYSTEM_LABEL,
     TOOL,
+    ClaudeRoute,
     Mark,
     anthropic_labels,
     anthropic_marks,
@@ -28,6 +26,7 @@ from integration.providers._cache_control_marks_support import (
     bedrock_peer,
     call_id,
     chat_body,
+    claude_litellm_params,
     final_label,
     final_text,
     gateway_injected,
@@ -39,7 +38,7 @@ from integration.providers._cache_control_marks_support import (
 )
 from pydantic import BaseModel, ConfigDict, JsonValue
 
-Provider = Literal["anthropic", "bedrock_converse", "bedrock_invoke", "vertex_ai", "azure_ai"]
+Provider = ClaudeRoute
 Site = Literal["tool", "system", "user_part", "tool_call", "tool_result_part", "string_message"]
 
 _PROVIDERS: Final[tuple[Provider, ...]] = ("anthropic", "bedrock_converse", "bedrock_invoke", "vertex_ai", "azure_ai")
@@ -51,21 +50,6 @@ _BREAKPOINT: Final[Mapping[str, JsonValue]] = MappingProxyType({"prompt_cache_br
 _NATIVE: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache_control": EPHEMERAL})
 _CITY: Final = CITIES[0]
 _TOOL_RESULT_TEXT: Final = "sunny."
-_BEDROCK_TOKEN: Final = "synthetic-bedrock-bearer"
-_VERTEX_PROJECT: Final = "scripted-project"
-_VERTEX_LOCATION: Final = "us-east5"
-_TARGETS: Final[Mapping[Provider, str]] = MappingProxyType(
-    {
-        "anthropic": "/v1/messages",
-        "bedrock_converse": f"/model/{BEDROCK_MODEL}/converse",
-        "bedrock_invoke": f"/model/{BEDROCK_MODEL}/invoke",
-        "vertex_ai": (
-            f"/v1/projects/{_VERTEX_PROJECT}/locations/{_VERTEX_LOCATION}"
-            f"/publishers/anthropic/models/{ANTHROPIC_MODEL}:rawPredict"
-        ),
-        "azure_ai": "/anthropic/v1/messages",
-    }
-)
 _CAP_HINT: Final = "Claude accepts at most 4 cache breakpoints, found 5"
 
 
@@ -119,42 +103,8 @@ def _respond(provider: Provider, request: Request) -> Reply:
     return bedrock_peer(request) if provider == "bedrock_converse" else anthropic_peer(request)
 
 
-def _litellm_params(gateway: Gateway, wire: Wire, provider: Provider) -> dict[str, JsonValue]:
-    match provider:
-        case "anthropic":
-            return {"model": f"anthropic/{ANTHROPIC_MODEL}", "api_base": wire.url, "api_key": PROVIDER_KEY}
-        case "bedrock_converse":
-            return {
-                "model": f"bedrock/converse/{BEDROCK_MODEL}",
-                "api_key": PROVIDER_KEY,
-                "aws_region_name": "us-east-1",
-                "aws_bedrock_runtime_endpoint": wire.url,
-            }
-        case "bedrock_invoke":
-            return {
-                "model": f"bedrock/invoke/{BEDROCK_MODEL}",
-                "api_key": _BEDROCK_TOKEN,
-                "aws_region_name": "us-east-1",
-                "api_base": wire.url,
-                "aws_bedrock_runtime_endpoint": wire.url,
-            }
-        case "vertex_ai":
-            return {
-                "model": f"vertex_ai/{ANTHROPIC_MODEL}",
-                "api_base": wire.url,
-                "api_key": None,
-                "vertex_project": _VERTEX_PROJECT,
-                "vertex_location": _VERTEX_LOCATION,
-                "vertex_credentials": service_account_json(_VERTEX_PROJECT, gateway.upstream_url.rstrip("/")),
-            }
-        case "azure_ai":
-            return {"model": f"azure_ai/{ANTHROPIC_MODEL}", "api_base": wire.url, "api_key": PROVIDER_KEY}
-        case _:
-            assert_never(provider)
-
-
 def _deployment(gateway: Gateway, scenario: Scenario, wire: Wire, provider: Provider, **fields: JsonValue) -> str:
-    return scenario.model(model_info=None, **_litellm_params(gateway, wire, provider), **fields)
+    return scenario.model(model_info=None, **claude_litellm_params(gateway, wire, provider), **fields)
 
 
 def _messages(marker: str, marks: Mapping[Site, Mapping[str, JsonValue]]) -> list[JsonValue]:
@@ -226,7 +176,7 @@ def test_breakpoint_becomes_a_cache_mark_on_the_same_block(gateway: Gateway, pro
         status, _, text = post_chat(gateway, _body(model, marker, _marked((site,))))
         assert status == 200, text
         request: Final = _only_request(wire)
-    assert request.target == _TARGETS[provider], request.target
+    assert request.target == CLAUDE_TARGETS[provider], request.target
     assert b"prompt_cache_breakpoint" not in request.body, request.body
     assert _labels(provider, request) == [_expected(provider, site, marker)]
 

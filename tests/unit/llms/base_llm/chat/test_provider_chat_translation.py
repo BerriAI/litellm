@@ -750,6 +750,55 @@ def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
 
+_DEVELOPER_CACHE_MARKS: Final[Mapping[str, Mapping[str, JsonValue]]] = {
+    "cache_control": {"cache_control": {"type": "ephemeral"}},
+    "prompt_cache_breakpoint": {"prompt_cache_breakpoint": {"mode": "explicit"}},
+}
+
+
+def _marked_developer_messages(mark: str) -> list[JsonValue]:
+    return [
+        {"role": "developer", "content": "Be a good bot!", **_DEVELOPER_CACHE_MARKS[mark]},
+        {"role": "user", "content": "Hello, how are you?"},
+    ]
+
+
+def _system_cache_marks(case: _Case, body: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
+    system: Final = _mappings(body.get("system", []))
+    if case["shape"] == "bedrock_converse":
+        return tuple(block["cachePoint"] for block in system if "cachePoint" in block)
+    return tuple(block["cache_control"] for block in system if "cache_control" in block)
+
+
+@pytest.mark.parametrize("mark", tuple(_DEVELOPER_CACHE_MARKS))
+@pytest.mark.parametrize(
+    "case", _pick("anthropic_sonnet45", "bedrock_converse_haiku", "bedrock_invoke_haiku"), ids=_case_id
+)
+def test_a_developer_message_cache_mark_caches_the_claude_system_prompt(
+    case: _Case, mark: str, respx_mock: MockRouter
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(case, {"messages": _marked_developer_messages(mark)})
+    body: Final = _request_body(route)
+    assert len(_system_cache_marks(case, body)) == 1, body
+    assert b"prompt_cache_breakpoint" not in route.calls.last.request.content
+
+
+@pytest.mark.parametrize("mark", tuple(_DEVELOPER_CACHE_MARKS))
+@pytest.mark.parametrize(
+    "case",
+    _pick("groq_oss120b", "huggingface_llama", "mistral_medium", "openai_gpt4omini", "together_glm", "xai_grok3mini"),
+    ids=_case_id,
+)
+def test_a_developer_message_cache_mark_never_reaches_a_non_claude_provider(
+    case: _Case, mark: str, respx_mock: MockRouter
+) -> None:
+    route: Final = _register(case, respx_mock, f"canned-{case['id']}")
+    _complete(case, {"messages": _marked_developer_messages(mark)})
+    body: Final = _request_body(route)
+    assert _mappings(body["messages"])[0] == {"role": "system", "content": "Be a good bot!"}
+
+
 @pytest.mark.parametrize(
     "case",
     _pick(

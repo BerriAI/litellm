@@ -37,7 +37,9 @@ Each case asserts the feature actually happened, not just a 200. Coverage matrix
   or beside a ``cache_control`` on the same system part, must write the cache
   on the first call and read it on the second. On
   anthropic and Converse, a 30m breakpoint, five breakpoints and
-  ``prompt_cache_options`` under drop_params must still cache.
+  ``prompt_cache_options`` under drop_params must still cache. The same holds over
+  /v1/responses for a breakpoint on a developer or user input_text part, on a
+  string developer message or on a function_call_output.
 
 service_tier lives in test_provider_features_e2e.py.
 
@@ -73,6 +75,15 @@ from models import (
     LiteLLMParamsBody,
     PromptCacheBreakpoint,
     PromptCacheOptions,
+    ResponsesCacheMarkBody,
+    ResponsesFunctionCallItem,
+    ResponsesFunctionCallOutputItem,
+    ResponsesFunctionTool,
+    ResponsesInputItem,
+    ResponsesInputText,
+    ResponsesInputTokensDetails,
+    ResponsesMessageItem,
+    ResponsesUsage,
     RichMessage,
     TextBlock,
     TextContentPart,
@@ -82,6 +93,7 @@ from models import (
 )
 from passthrough_client import PassthroughClient
 from pydantic import BaseModel, ConfigDict
+from sdk_clients import SdkClients
 
 pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
@@ -110,9 +122,7 @@ def _cacheable_prefix() -> str:
     """A prefix long enough to clear provider minimum cacheable sizes (Haiku is
     2048 tokens), unique per run so the first call writes and the second reads."""
     marker = unique_marker()
-    body = " ".join(
-        f"Cacheable reference paragraph {index} for run {marker}." for index in range(600)
-    )
+    body = " ".join(f"Cacheable reference paragraph {index} for run {marker}." for index in range(600))
     return f"{body}\nEnd of reference material {marker}."
 
 
@@ -168,9 +178,7 @@ def _plain_cache_chat(
     )
 
 
-def _assert_cache_read_on_second_call(
-    model: str, send: Callable[[str], Result[ChatResponse]]
-) -> None:
+def _assert_cache_read_on_second_call(model: str, send: Callable[[str], Result[ChatResponse]]) -> None:
     prefix = _cacheable_prefix()
 
     first = unwrap(send(prefix))
@@ -296,9 +304,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_bedrock_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_bedrock_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-bedrock-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -322,9 +328,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_vertex_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_vertex_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-vertex-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -356,9 +360,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_anthropic_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_anthropic_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-anthropic-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -455,9 +457,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_openai_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_openai_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-openai-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -803,3 +803,178 @@ class TestPromptCacheBreakpointOnClaude:
             ],
         )
         _assert_claude_writes_then_reads_cache(client, scoped_key, body)
+
+
+ResponsesSite: TypeAlias = Literal["developer_part", "user_part", "developer_string", "function_call_output"]
+_ASK: Final = "Reply with one word."
+_RESPONSES_LOOKUP_TOOL: Final = ResponsesFunctionTool(
+    name="lookup_reference", description="Look up the reference material.", parameters={"type": "object"}
+)
+
+
+def _responses_route_param(route: ClaudeRoute) -> ParameterSet:
+    return pytest.param(
+        route, id=route, marks=pytest.mark.covers(f"llm.responses.{route}.prompt_cache_5m.nonstream.works")
+    )
+
+
+def _marked_input(text: str, ttl: Literal["30m"] | None = None) -> ResponsesInputText:
+    return ResponsesInputText(text=text, prompt_cache_breakpoint=PromptCacheBreakpoint(ttl=ttl))
+
+
+def _responses_input(site: ResponsesSite, prefix: str) -> tuple[ResponsesInputItem, ...]:
+    ask: Final = ResponsesMessageItem(role="user", content=_ASK)
+    match site:
+        case "developer_part":
+            return (ResponsesMessageItem(role="developer", content=(_marked_input(prefix),)), ask)
+        case "user_part":
+            return (ResponsesMessageItem(role="user", content=(_marked_input(prefix), ResponsesInputText(text=_ASK))),)
+        case "developer_string":
+            return (
+                ResponsesMessageItem(role="developer", content=prefix, prompt_cache_breakpoint=PromptCacheBreakpoint()),
+                ask,
+            )
+        case "function_call_output":
+            return (
+                ResponsesMessageItem(role="user", content="Look up the reference."),
+                ResponsesFunctionCallItem(call_id="call_1", name="lookup_reference", arguments="{}"),
+                ResponsesFunctionCallOutputItem(
+                    call_id="call_1", output=prefix, prompt_cache_breakpoint=PromptCacheBreakpoint()
+                ),
+            )
+
+
+def _responses_body(
+    input: tuple[ResponsesInputItem, ...], prompt_cache_options: PromptCacheOptions | None = None
+) -> ResponsesCacheMarkBody:
+    return ResponsesCacheMarkBody(
+        input=input, tools=(_RESPONSES_LOOKUP_TOOL,), prompt_cache_options=prompt_cache_options
+    )
+
+
+def _responses_usage(sdk: SdkClients, key: str, model: str, body: ResponsesCacheMarkBody) -> ResponsesUsage:
+    response: Final = sdk.openai(key).responses.create(
+        model=model, max_output_tokens=64, extra_body=body.model_dump(mode="json", exclude_none=True)
+    )
+    assert response.usage is not None, f"{model}: /v1/responses returned no usage ({response!r})"
+    return ResponsesUsage.model_validate(response.usage.model_dump())
+
+
+def _responses_cache_tokens(usage: ResponsesUsage) -> ResponsesInputTokensDetails:
+    return usage.input_tokens_details or ResponsesInputTokensDetails()
+
+
+def _assert_claude_writes_then_reads_cache_over_responses(
+    sdk: SdkClients, key: str, model: str, body: ResponsesCacheMarkBody
+) -> None:
+    first: Final = _responses_usage(sdk, key, model, body)
+    assert _responses_cache_tokens(first).cache_write_tokens, (
+        f"{model}: the first /v1/responses call on a never-seen prefix wrote no cache ({first}), "
+        "so the prompt_cache_breakpoint never reached Claude as a cache mark"
+    )
+
+    deadline: Final = time.monotonic() + 30.0
+    while True:
+        second = _responses_usage(sdk, key, model, body)
+        read_tokens = _responses_cache_tokens(second).cached_tokens or 0
+        if read_tokens > 0 or time.monotonic() >= deadline:
+            break
+        time.sleep(3.0)
+
+    assert read_tokens > 0, f"{model}: the identical second /v1/responses call read no cache ({second})"
+
+
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.RESPONSES,
+        providers=(Provider.ANTHROPIC, Provider.BEDROCK, Provider.VERTEX_AI),
+        models=(
+            CLAUDE_ANTHROPIC_MODEL,
+            CLAUDE_BEDROCK_CONVERSE_MODEL,
+            CLAUDE_BEDROCK_INVOKE_MODEL,
+            CLAUDE_VERTEX_MODEL,
+        ),
+        capabilities=(Capability.PROMPT_CACHING,),
+        mode=Mode.NONSTREAM,
+    )
+)
+class TestPromptCacheBreakpointOnClaudeOverResponses:
+    """OpenAI's ``prompt_cache_breakpoint`` in /v1/responses input sent to a Claude deployment caches the prefix it
+    marks. The drop_params-off 400s are proven by the wire tests in tests/integration, for the reason
+    ``TestPromptCacheBreakpointOnClaude`` gives."""
+
+    @pytest.mark.parametrize(
+        "route",
+        [_responses_route_param(route) for route in ("anthropic", "bedrock_converse", "bedrock_invoke", "vertex")],
+    )
+    @pytest.mark.parametrize("site", ["developer_part", "user_part", "developer_string", "function_call_output"])
+    def test_a_breakpoint_writes_then_reads_the_cache(
+        self,
+        client: PassthroughClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        sdk: SdkClients,
+        route: ClaudeRoute,
+        site: ResponsesSite,
+    ) -> None:
+        model: Final = _register_claude(client, resources, route)
+        body: Final = _responses_body(_responses_input(site, _cacheable_prefix()))
+        _assert_claude_writes_then_reads_cache_over_responses(sdk, scoped_key, model, body)
+
+    @pytest.mark.parametrize("route", [_responses_route_param(route) for route in ("anthropic", "bedrock_converse")])
+    def test_a_30m_breakpoint_still_caches(
+        self,
+        client: PassthroughClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        sdk: SdkClients,
+        route: ClaudeRoute,
+    ) -> None:
+        model: Final = _register_claude(client, resources, route)
+        body: Final = _responses_body(
+            (
+                ResponsesMessageItem(role="developer", content=(_marked_input(_cacheable_prefix(), ttl="30m"),)),
+                ResponsesMessageItem(role="user", content=_ASK),
+            )
+        )
+        _assert_claude_writes_then_reads_cache_over_responses(sdk, scoped_key, model, body)
+
+    @pytest.mark.parametrize("route", [_responses_route_param(route) for route in ("anthropic", "bedrock_converse")])
+    def test_five_breakpoints_keep_the_latest_four_under_drop_params(
+        self,
+        client: PassthroughClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        sdk: SdkClients,
+        route: ClaudeRoute,
+    ) -> None:
+        model: Final = _register_claude(client, resources, route, drop_params=True)
+        body: Final = _responses_body(
+            (
+                ResponsesMessageItem(
+                    role="user",
+                    content=(
+                        _marked_input(_cacheable_prefix()),
+                        *(_marked_input(f"Note {index}.") for index in range(4)),
+                        ResponsesInputText(text=_ASK),
+                    ),
+                ),
+            )
+        )
+        _assert_claude_writes_then_reads_cache_over_responses(sdk, scoped_key, model, body)
+
+    @pytest.mark.parametrize("route", [_responses_route_param(route) for route in ("anthropic", "bedrock_converse")])
+    def test_prompt_cache_options_are_dropped_under_drop_params(
+        self,
+        client: PassthroughClient,
+        resources: ResourceManager,
+        scoped_key: str,
+        sdk: SdkClients,
+        route: ClaudeRoute,
+    ) -> None:
+        model: Final = _register_claude(client, resources, route, drop_params=True)
+        body: Final = _responses_body(
+            _responses_input("developer_part", _cacheable_prefix()), PromptCacheOptions(mode="explicit")
+        )
+        _assert_claude_writes_then_reads_cache_over_responses(sdk, scoped_key, model, body)

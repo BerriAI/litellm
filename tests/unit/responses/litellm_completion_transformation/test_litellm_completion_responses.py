@@ -4408,6 +4408,100 @@ class TestCacheControlPreservation:
         assert len(result) == 1
         assert result[0]["cache_control"] == {"type": "ephemeral"}
 
+    @pytest.mark.parametrize(
+        ("part", "chat_type"),
+        (
+            ({"type": "input_text", "text": "long context"}, "text"),
+            ({"type": "input_image", "image_url": "https://example.com/img.png"}, "image_url"),
+            ({"type": "input_file", "file_id": "file-abc123"}, "file"),
+        ),
+    )
+    def test_prompt_cache_breakpoint_is_carried_onto_the_chat_part_beside_cache_control(
+        self, part: dict[str, str], chat_type: str
+    ) -> None:
+        breakpoint_mark: Final = {"mode": "explicit", "ttl": "30m"}
+        result: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            [{**part, "prompt_cache_breakpoint": breakpoint_mark, "cache_control": {"type": "ephemeral"}}]
+        )
+        assert isinstance(result, list)
+        assert [(block["type"], block["prompt_cache_breakpoint"], block["cache_control"]) for block in result] == [
+            (chat_type, breakpoint_mark, {"type": "ephemeral"})
+        ]
+
+    @pytest.mark.parametrize(
+        ("model", "custom_llm_provider", "carried"),
+        (
+            ("claude-haiku-5-5", "anthropic", True),
+            ("us.anthropic.claude-haiku-5-5", "bedrock", True),
+            ("databricks-claude-opus-5", "databricks", True),
+            ("databricks-meta-llama-3-3-70b-instruct", "databricks", False),
+            ("mistral-large-latest", "mistral", False),
+            ("gemini-2.5-pro", "gemini", False),
+        ),
+    )
+    def test_prompt_cache_breakpoint_reaches_the_chat_request_only_for_a_route_that_reads_it(
+        self, model: str, custom_llm_provider: str, carried: bool
+    ) -> None:
+        breakpoint_mark: Final = {"mode": "explicit"}
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=[
+                {"role": "system", "content": "Rules", "prompt_cache_breakpoint": breakpoint_mark},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Ask", "prompt_cache_breakpoint": breakpoint_mark},
+                        {"type": "input_text", "text": "More", "cache_control": {"type": "ephemeral"}},
+                    ],
+                },
+            ],
+            responses_api_request={},
+            custom_llm_provider=custom_llm_provider,
+        )
+        system, user = result["messages"]
+        expected_mark: Final = breakpoint_mark if carried else None
+        assert system.get("prompt_cache_breakpoint") == expected_mark
+        assert [part.get("prompt_cache_breakpoint") for part in user["content"]] == [expected_mark, None]
+        assert user["content"][1]["cache_control"] == {"type": "ephemeral"}
+
+    @pytest.mark.parametrize(
+        ("model", "custom_llm_provider", "carried"),
+        (
+            ("claude-haiku-5-5", "anthropic", True),
+            ("us.anthropic.claude-haiku-5-5", "bedrock", True),
+            ("gemini-2.5-pro", "gemini", False),
+            ("my-model", "hosted_vllm", False),
+        ),
+    )
+    def test_a_message_level_cache_control_reaches_the_chat_request_only_for_a_claude_route(
+        self, model: str, custom_llm_provider: str, carried: bool
+    ) -> None:
+        ephemeral: Final = {"type": "ephemeral"}
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=[
+                {"type": "message", "role": "user", "content": "Ask", "cache_control": ephemeral},
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_never_cached",
+                    "output": [{"type": "input_text", "text": "sunny", "cache_control": ephemeral}],
+                },
+            ],
+            responses_api_request={},
+            custom_llm_provider=custom_llm_provider,
+        )
+        expected_mark: Final = ephemeral if carried else None
+        assert [(message["role"], message.get("cache_control")) for message in result["messages"]] == [
+            ("user", expected_mark),
+            ("tool", expected_mark),
+        ]
+
+    def test_a_null_cache_control_on_a_part_is_still_copied_onto_the_chat_part(self) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            [{"type": "input_text", "text": "hi", "cache_control": None}]
+        )
+        assert result == [{"type": "text", "text": "hi", "cache_control": None}]
+
 
 def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
     """Bedrock Mantle returns a non-unique, index-based ``call_id`` (``call_0`` that

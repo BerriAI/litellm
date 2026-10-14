@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.base_utils import CACHE_MARK_KEYS
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -96,6 +97,8 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     Function,
+    LlmProviders,
+    LlmProvidersSet,
     Message,
     ModelResponse,
     Usage,
@@ -116,6 +119,13 @@ NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
 NamespaceTool: TypeAlias = Mapping[str, object]
 ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool
+_BridgedChatMessage: TypeAlias = (
+    AllMessageValues
+    | GenericChatCompletionMessage
+    | ChatCompletionMessageToolCall
+    | ChatCompletionResponseMessage
+    | Message
+)
 NAMESPACE_DESCRIPTION_SEPARATOR: Final = "\n\n"
 NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS: Final = frozenset({"function", "custom"})
 _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_tokens", "content_filter"]]] = (
@@ -228,6 +238,76 @@ def _attribute_fields(value: object) -> dict[str, object]:
 
 def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
+
+
+_NO_CACHE_MARKS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _cache_marks(block: Mapping[str, object]) -> Mapping[str, object]:
+    """The block's ``cache_control`` and ``prompt_cache_breakpoint``, both of which the chat transforms read off the
+    same block (the Claude ones rename the breakpoint to ``cache_control``)."""
+    return {key: block[key] for key in CACHE_MARK_KEYS if block.get(key) is not None}
+
+
+def _part_cache_marks(part: Mapping[str, object]) -> Mapping[str, object]:
+    """``_cache_marks`` for a content part, which keeps a present ``cache_control`` even when it is null."""
+    return {**_cache_marks(part), **({"cache_control": part["cache_control"]} if "cache_control" in part else {})}
+
+
+def _tool_output_cache_marks(tool_call_output: Mapping[str, object]) -> Mapping[str, object]:
+    """The marks on the output item and on the last marked part of a part-list output. The chat tool message carries
+    them at message level, since a text-only part list is flattened to a string there."""
+    output: Final = tool_call_output.get("output")
+    parts: Final = _OBJECT_LIST_ADAPTER.validate_python(output) if isinstance(output, list) else []
+    part_marks: Final = tuple(
+        _cache_marks(_STR_KEY_DICT_ADAPTER.validate_python(part)) for part in parts if isinstance(part, dict)
+    )
+    last_part_marks: Final = next((marks for marks in reversed(part_marks) if marks), _NO_CACHE_MARKS)
+    return {**last_part_marks, **_cache_marks(tool_call_output)}
+
+
+def _is_claude_chat_route(model: str, custom_llm_provider: str | None) -> bool:
+    """Only the Claude chat transforms read ``prompt_cache_breakpoint`` (renamed to ``cache_control``) and the
+    message-level marks this bridge carries. Any other bridged provider must not start receiving them."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.llms.databricks.chat.transformation import DatabricksConfig
+    from litellm.utils import ProviderConfigManager
+
+    if custom_llm_provider is None or custom_llm_provider not in LlmProvidersSet:
+        return False
+    config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders(custom_llm_provider)
+    )
+    if isinstance(config, DatabricksConfig):
+        return "claude" in model
+    return isinstance(config, (AnthropicConfig, AmazonConverseConfig))
+
+
+def _without_keys(block: Mapping[str, object], keys: frozenset[str]) -> Mapping[str, object]:
+    return {key: value for key, value in block.items() if key not in keys}
+
+
+def _part_without_prompt_cache_breakpoint(part: object) -> object:
+    if not isinstance(part, dict):
+        return part
+    return _without_keys(_STR_KEY_DICT_ADAPTER.validate_python(part), frozenset({"prompt_cache_breakpoint"}))
+
+
+def _message_for_non_claude_route(message: _BridgedChatMessage) -> _BridgedChatMessage:
+    """The message without the marks only Claude routes read: message-level ones, and ``prompt_cache_breakpoint``
+    on its parts."""
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(message)
+    content: Final = fields.get("content")
+    parts: Final = _OBJECT_LIST_ADAPTER.validate_python(content) if isinstance(content, list) else None
+    stripped_content: Final[Mapping[str, object]] = (
+        {"content": [_part_without_prompt_cache_breakpoint(part) for part in parts]} if parts is not None else {}
+    )
+    return cast(  # cast-ok: the same message with only cache mark keys removed
+        _BridgedChatMessage, {**_without_keys(fields, frozenset(CACHE_MARK_KEYS)), **stripped_content}
+    )
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -482,11 +562,16 @@ class LiteLLMCompletionResponsesConfig:
             api_base=kwargs.get("api_base"),
         )
 
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input,
+            responses_api_request=responses_api_request,
+            replay_reasoning=True,
+        )
         litellm_completion_request: dict = {
-            "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=input,
-                responses_api_request=responses_api_request,
-                replay_reasoning=True,
+            "messages": (
+                messages
+                if _is_claude_chat_route(model, custom_llm_provider)
+                else [_message_for_non_claude_route(message) for message in messages]
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
@@ -1468,12 +1553,17 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+            message: Final = GenericChatCompletionMessage(
+                role=_input_item_role(input_item),
+                content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                    content
+                ),
+            )
+            if not isinstance(content, str):
+                return [message]
             return [
-                GenericChatCompletionMessage(
-                    role=_input_item_role(input_item),
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
+                cast(  # cast-ok: a string message plus the item's message-level cache marks
+                    GenericChatCompletionMessage, {**message, **_cache_marks(input_item)}
                 )
             ]
 
@@ -1665,10 +1755,16 @@ class LiteLLMCompletionResponsesConfig:
             except Exception:
                 return str(output)
 
-        tool_output_message: Final = ChatCompletionToolMessage(
-            role="tool",
-            content=_normalize_function_call_output_to_tool_content(tool_call_output.get("output")),
-            tool_call_id=str(call_id),
+        tool_output_message: Final = cast(  # cast-ok: the tool message plus the output's message-level cache marks
+            ChatCompletionToolMessage,
+            {
+                **ChatCompletionToolMessage(
+                    role="tool",
+                    content=_normalize_function_call_output_to_tool_content(tool_call_output.get("output")),
+                    tool_call_id=str(call_id),
+                ),
+                **_tool_output_cache_marks(tool_call_output),
+            },
         )
 
         _tool_use_definition: Final = TOOL_CALLS_CACHE.get_cache(
@@ -1798,10 +1894,7 @@ class LiteLLMCompletionResponsesConfig:
         if item.get("filename"):
             file_dict["filename"] = item["filename"]
 
-        new_item: Final[dict[str, object]] = {"type": "file", "file": file_dict}
-        if "cache_control" in item:
-            new_item["cache_control"] = item["cache_control"]
-        return new_item
+        return {"type": "file", "file": file_dict, **_part_cache_marks(item)}
 
     @staticmethod
     def _transform_input_image_item_to_image_item(
@@ -1843,12 +1936,12 @@ class LiteLLMCompletionResponsesConfig:
                             LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(item)
                         )
                     elif item.get("type") == "input_image":
-                        image_block = _STR_KEY_DICT_ADAPTER.validate_python(
-                            dict(LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item))
+                        content_list.append(
+                            {
+                                **LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item),
+                                **_part_cache_marks(_STR_KEY_DICT_ADAPTER.validate_python(item)),
+                            }
                         )
-                        if "cache_control" in item:
-                            image_block["cache_control"] = item["cache_control"]
-                        content_list.append(image_block)
                     elif item.get("type") == "encrypted_content":
                         encrypted_content = item.get("encrypted_content")
                         if encrypted_content is not None:
@@ -1860,15 +1953,15 @@ class LiteLLMCompletionResponsesConfig:
                         text_value = item.get("text")
                         if text_value is None:
                             continue
-                        content_block: dict[str, object] = {
-                            "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
-                                item.get("type") or "text"
-                            ),
-                            "text": text_value,
-                        }
-                        if "cache_control" in item:
-                            content_block["cache_control"] = item["cache_control"]
-                        content_list.append(content_block)
+                        content_list.append(
+                            {
+                                "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
+                                    item.get("type") or "text"
+                                ),
+                                "text": text_value,
+                                **_part_cache_marks(_STR_KEY_DICT_ADAPTER.validate_python(item)),
+                            }
+                        )
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")

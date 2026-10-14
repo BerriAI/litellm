@@ -525,6 +525,7 @@ class ChatResponse(BaseModel):
 
 class ResponsesInputTokensDetails(BaseModel):
     cached_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 class ResponsesUsage(BaseModel):
@@ -1360,6 +1361,51 @@ class CacheControlInjectionPoint(BaseModel):
 
 class PromptCacheOptions(BaseModel):
     mode: Literal["implicit", "explicit"]
+
+
+class ResponsesInputText(BaseModel, frozen=True):
+    type: Literal["input_text"] = "input_text"
+    text: str
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = None
+
+
+class ResponsesMessageItem(BaseModel, frozen=True):
+    role: Literal["developer", "user"]
+    content: str | tuple[ResponsesInputText, ...]
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = None
+
+
+class ResponsesFunctionCallItem(BaseModel, frozen=True):
+    type: Literal["function_call"] = "function_call"
+    call_id: str
+    name: str
+    arguments: str
+
+
+class ResponsesFunctionCallOutputItem(BaseModel, frozen=True):
+    type: Literal["function_call_output"] = "function_call_output"
+    call_id: str
+    output: str
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = None
+
+
+ResponsesInputItem = ResponsesMessageItem | ResponsesFunctionCallItem | ResponsesFunctionCallOutputItem
+
+
+class ResponsesFunctionTool(BaseModel, frozen=True):
+    type: Literal["function"] = "function"
+    name: str
+    description: str
+    parameters: dict[str, str]
+
+
+class ResponsesCacheMarkBody(BaseModel, frozen=True):
+    """The /v1/responses fields the OpenAI SDK types no parameter for, sent as its ``extra_body``."""
+
+    input: tuple[ResponsesInputItem, ...]
+    tools: tuple[ResponsesFunctionTool, ...]
+    prompt_cache_options: PromptCacheOptions | None = None
+    cache: dict[str, bool] = {"no-cache": True}
 
 
 class LiteLLMParamsBody(BaseModel):

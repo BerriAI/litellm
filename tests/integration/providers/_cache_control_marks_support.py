@@ -5,12 +5,13 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, assert_never
 
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request
+from integration._support.vertex import service_account_json
+from integration._support.wire import Reply, Request, Wire
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 # https://platform.claude.com/docs/en/build-with-claude/prompt-caching (read 2026-09-28): at most 4 blocks with cache_control
@@ -21,6 +22,23 @@ BEDROCK_CACHE_CHECKPOINT_CAP: Final = 4
 ANTHROPIC_MODEL: Final = "claude-opus-5-5"
 BEDROCK_MODEL: Final = "anthropic.claude-opus-5-5"
 PROVIDER_KEY: Final = "synthetic-provider-key"
+VERTEX_PROJECT: Final = "scripted-project"
+VERTEX_LOCATION: Final = "us-east5"
+_BEDROCK_TOKEN: Final = "synthetic-bedrock-bearer"
+
+ClaudeRoute = Literal["anthropic", "bedrock_converse", "bedrock_invoke", "vertex_ai", "azure_ai"]
+CLAUDE_TARGETS: Final[Mapping[ClaudeRoute, str]] = MappingProxyType(
+    {
+        "anthropic": "/v1/messages",
+        "bedrock_converse": f"/model/{BEDROCK_MODEL}/converse",
+        "bedrock_invoke": f"/model/{BEDROCK_MODEL}/invoke",
+        "vertex_ai": (
+            f"/v1/projects/{VERTEX_PROJECT}/locations/{VERTEX_LOCATION}"
+            f"/publishers/anthropic/models/{ANTHROPIC_MODEL}:rawPredict"
+        ),
+        "azure_ai": "/anthropic/v1/messages",
+    }
+)
 SYSTEM: Final = "Use the provided tool results to answer the user."
 ASK: Final = "Look up the weather in London, Paris, and Tokyo."
 CITIES: Final = ("London", "Paris", "Tokyo")
@@ -426,6 +444,41 @@ def post_chat(gateway: Gateway, body: dict[str, JsonValue], *, key: str | None =
     response: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
     identity: Final = _JSON_OBJECT.validate_json(response.content).get("id") if response.status_code == 200 else None
     return response.status_code, str(identity), response.text
+
+
+def claude_litellm_params(gateway: Gateway, wire: Wire, route: ClaudeRoute) -> dict[str, JsonValue]:
+    """A Claude deployment on ``route`` whose provider calls all land on ``wire``"""
+    match route:
+        case "anthropic":
+            return {"model": f"anthropic/{ANTHROPIC_MODEL}", "api_base": wire.url, "api_key": PROVIDER_KEY}
+        case "bedrock_converse":
+            return {
+                "model": f"bedrock/converse/{BEDROCK_MODEL}",
+                "api_key": PROVIDER_KEY,
+                "aws_region_name": "us-east-1",
+                "aws_bedrock_runtime_endpoint": wire.url,
+            }
+        case "bedrock_invoke":
+            return {
+                "model": f"bedrock/invoke/{BEDROCK_MODEL}",
+                "api_key": _BEDROCK_TOKEN,
+                "aws_region_name": "us-east-1",
+                "api_base": wire.url,
+                "aws_bedrock_runtime_endpoint": wire.url,
+            }
+        case "vertex_ai":
+            return {
+                "model": f"vertex_ai/{ANTHROPIC_MODEL}",
+                "api_base": wire.url,
+                "api_key": None,
+                "vertex_project": VERTEX_PROJECT,
+                "vertex_location": VERTEX_LOCATION,
+                "vertex_credentials": service_account_json(VERTEX_PROJECT, gateway.upstream_url.rstrip("/")),
+            }
+        case "azure_ai":
+            return {"model": f"azure_ai/{ANTHROPIC_MODEL}", "api_base": wire.url, "api_key": PROVIDER_KEY}
+        case _:
+            assert_never(route)
 
 
 def anthropic_deployment(name: str, api_base: str, **fields: JsonValue) -> dict[str, JsonValue]:

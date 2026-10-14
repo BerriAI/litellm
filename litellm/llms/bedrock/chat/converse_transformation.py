@@ -56,6 +56,7 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role_keeping_cache_marks
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
@@ -1512,6 +1513,12 @@ class AmazonConverseConfig(BaseConfig):
         if cache_control is None:
             return ChatCompletionTextObject(type="text", text=text)
         return ChatCompletionTextObject(type="text", text=text, cache_control=cache_control)
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: overrides BaseConfig.translate_developer_role_to_system_role
+    ) -> list[AllMessageValues]:  # mutable-ok: overrides BaseConfig.translate_developer_role_to_system_role
+        return list(map_developer_role_to_system_role_keeping_cache_marks(messages))
 
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None

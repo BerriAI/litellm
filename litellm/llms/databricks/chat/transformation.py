@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import (
+    map_developer_role_to_system_role,
     type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
 )
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
@@ -495,6 +496,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             llm_provider="databricks",
         )
         return cache_marks.messages
+
+    def translate_developer_role_to_system_role(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: overrides BaseConfig.translate_developer_role_to_system_role
+    ) -> list[AllMessageValues]:  # mutable-ok: overrides BaseConfig.translate_developer_role_to_system_role
+        return map_developer_role_to_system_role(messages)
 
     def _should_fake_stream(self, optional_params: dict) -> bool:
         """

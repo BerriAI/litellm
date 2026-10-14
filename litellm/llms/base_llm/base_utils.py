@@ -6,7 +6,7 @@ import copy
 import itertools
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -14,8 +14,15 @@ from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionDeveloperMessage,
+    ChatCompletionSystemMessage,
+    ChatCompletionToolCallChunk,
+)
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
+
+CACHE_MARK_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 
 
 class BaseTokenCounter(ABC):
@@ -380,3 +387,16 @@ def map_developer_role_to_system_role(
         else:
             new_messages.append(m)
     return new_messages
+
+
+def map_developer_role_to_system_role_keeping_cache_marks(
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    """``map_developer_role_to_system_role`` for the Claude configs, keeping the developer message's other fields so
+    its ``cache_control`` or ``prompt_cache_breakpoint`` still caches the system prompt. Every other provider drops
+    both marks."""
+    return tuple(_developer_as_marked_system_message(m) if m["role"] == "developer" else m for m in messages)
+
+
+def _developer_as_marked_system_message(message: ChatCompletionDeveloperMessage) -> ChatCompletionSystemMessage:
+    return {**message, "role": "system"}
