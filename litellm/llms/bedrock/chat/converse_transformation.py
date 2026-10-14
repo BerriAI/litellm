@@ -974,7 +974,9 @@ class AmazonConverseConfig(BaseConfig):
         return result
 
     @staticmethod
-    def _native_output_schema(model: str, json_schema: dict[str, object]) -> Mapping[str, object]:
+    def _native_output_schema(model: str, json_schema: object) -> object:
+        if not isinstance(json_schema, dict):
+            return json_schema
         if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
             return shape_claude_output_schema(json_schema)
         return AmazonConverseConfig._add_additional_properties_to_schema(json_schema)

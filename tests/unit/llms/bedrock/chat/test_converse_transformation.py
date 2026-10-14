@@ -5303,8 +5303,8 @@ _SCHEMA_CLAUDE_REJECTS = {
 }
 
 
-def _converse_schema_for(model: str) -> dict:
-    response_format = {"type": "json_schema", "json_schema": {"name": "Score", "schema": _SCHEMA_CLAUDE_REJECTS}}
+def _converse_schema_json(model: str, schema: object) -> str:
+    response_format = {"type": "json_schema", "json_schema": {"name": "Score", "schema": schema}}
     result = AmazonConverseConfig()._translate_response_format_param(
         value=response_format,
         model=model,
@@ -5312,7 +5312,11 @@ def _converse_schema_for(model: str) -> dict:
         non_default_params={"response_format": response_format},
         is_thinking_enabled=False,
     )
-    return json.loads(result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+    return result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
+
+
+def _converse_schema_for(model: str) -> dict:
+    return json.loads(_converse_schema_json(model, _SCHEMA_CLAUDE_REJECTS))
 
 
 def test_claude_response_format_schema_shaped_like_anthropic_path(local_model_cost_map):
@@ -5345,6 +5349,12 @@ def test_non_claude_response_format_schema_keeps_constraints(local_model_cost_ma
 
     assert sent["properties"] == _SCHEMA_CLAUDE_REJECTS["properties"]
     assert sent["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-mythos-5-1", "qwen.qwen3-32b-v1:0"])
+@pytest.mark.parametrize("schema", [True, "not a schema"])
+def test_non_object_response_format_schema_is_forwarded_unchanged(local_model_cost_map, model: str, schema: object):
+    assert json.loads(_converse_schema_json(model, schema)) == schema
 
 
 _TOOL_PARAM = [
