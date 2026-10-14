@@ -120,7 +120,9 @@ _redact_mcp_resource_url: Final = redact_mcp_resource_url
 def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, str]) -> str:
     parsed: Final = urlparse(authorization_url)
     provider_defaults: Final = (
-        _GOOGLE_OFFLINE_ACCESS_PARAMS if parsed.hostname in _GOOGLE_AUTHORIZATION_HOSTS else MappingProxyType({})
+        _GOOGLE_OFFLINE_ACCESS_PARAMS
+        if parsed.hostname in _GOOGLE_AUTHORIZATION_HOSTS
+        else MappingProxyType[str, str]({})
     )
     merged: Final = {**provider_defaults, **dict(parse_qsl(parsed.query)), **params}
     return urlunparse(parsed._replace(query=urlencode(merged)))
