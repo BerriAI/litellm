@@ -1,0 +1,1 @@
+{"system": [{"text": "The customer's card on file is 4111 1111 1111 1111."}], "messages": [{"role": "user", "content": [{"text": "Repeat the card on file exactly, digits only with spaces, nothing else."}]}], "inferenceConfig": {"maxTokens": 60}}
