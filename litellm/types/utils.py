@@ -3695,10 +3695,12 @@ class StandardBatchLineItem(TypedDict):
 
 
 class StandardBatchLineItemsPayload(TypedDict):
-    """Every line of one finished batch, dispatched to batch_line_item_callbacks."""
+    """One part of a finished batch's lines, dispatched to batch_line_item_callbacks. A batch's lines arrive in parts
+    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines."""
 
     batch_id: ReadOnly[str]
     finished_at: ReadOnly[int]
+    part: ReadOnly[int]
     lines: ReadOnly[tuple[StandardBatchLineItem, ...]]
 
 

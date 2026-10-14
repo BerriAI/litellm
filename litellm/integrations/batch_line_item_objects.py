@@ -23,6 +23,7 @@ def _ndjson_line(line: object) -> str:
 
 
 def batch_line_items_object_name(payload: StandardBatchLineItemsPayload) -> str:
-    """batch_line_items/<finished day, UTC>/<batch id>.jsonl, the same name on every retry so a rewrite replaces it."""
+    """batch_line_items/<finished day, UTC>/<batch id>/part-<part>.jsonl, the same name on every retry so a rewrite
+    replaces it."""
     day: Final = datetime.fromtimestamp(payload["finished_at"], tz=timezone.utc).strftime("%Y-%m-%d")
-    return f"batch_line_items/{day}/{payload['batch_id'].replace('/', '_')}.jsonl"
+    return f"batch_line_items/{day}/{payload['batch_id'].replace('/', '_')}/part-{payload['part']:05d}.jsonl"

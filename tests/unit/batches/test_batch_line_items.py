@@ -1,17 +1,19 @@
 import json
 import logging
+from hashlib import sha256
 
 import pytest
 
 import litellm
 from litellm.batches.batch_line_items import (
     BatchLineItemSource,
-    build_batch_line_items,
+    batch_line_item_parts,
     dispatch_batch_line_items,
     line_item_metadata,
     without_request_and_response,
 )
 from litellm.batches.batch_utils import calculate_batch_cost_and_usage, get_file_content_as_dictionary
+from litellm.constants import BATCH_LINE_ITEMS_MAX_PART_BYTES
 from litellm.integrations.batch_line_item_objects import batch_line_items_ndjson, batch_line_items_object_name
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig, _OpenAIToVertexBatchUploadStream
@@ -20,6 +22,7 @@ from litellm.types.utils import ModelInfo, StandardBatchLineItemsPayload
 INPUT_RATE = 0.001
 OUTPUT_RATE = 0.002
 FINISHED_AT = 1791494130
+ALICE_KEY_HASH = sha256(b"sk-alice").hexdigest()
 
 
 def _jsonl(*lines: dict) -> bytes:
@@ -73,14 +76,20 @@ def _source(**overrides) -> BatchLineItemSource:
         "cost_provider": "openai",
         "model_info": ModelInfo(input_cost_per_token_batches=INPUT_RATE, output_cost_per_token_batches=OUTPUT_RATE),
         "metadata": line_item_metadata(
-            {"user_api_key_hash": "hash-alice", "user_api_key_team_id": "team-alpha", "tags": ["env:prod"]}
+            {"user_api_key_hash": ALICE_KEY_HASH, "user_api_key_team_id": "team-alpha", "tags": ["env:prod"]}
         ),
     }
     return BatchLineItemSource(**{**fields, **overrides})
 
 
+def _whole_batch(source: BatchLineItemSource, input_content: bytes, result_contents: tuple[bytes, ...]):
+    """Every line of a batch small enough for one part."""
+    (payload,) = batch_line_item_parts(source, input_content, result_contents, BATCH_LINE_ITEMS_MAX_PART_BYTES)
+    return payload
+
+
 def _payload() -> StandardBatchLineItemsPayload:
-    return build_batch_line_items(
+    return _whole_batch(
         _source(),
         _jsonl(_request("ok-1", "first question"), _request("bad-1", "second question")),
         (_jsonl(_success("ok-1", 100, 50)), _jsonl(_error("bad-1"))),
@@ -103,7 +112,7 @@ class _FailingLogger(CustomLogger):
 
 @pytest.mark.asyncio
 async def test_each_result_line_is_paired_with_the_request_that_shares_its_custom_id():
-    payload = build_batch_line_items(
+    payload = _whole_batch(
         _source(),
         _jsonl(_request("ok-1", "first"), _request("bad-1", "second"), _request("never-ran", "third")),
         (_jsonl(_success("ok-1", 100, 50)), _jsonl(_error("bad-1"))),
@@ -123,7 +132,7 @@ async def test_each_result_line_is_paired_with_the_request_that_shares_its_custo
         "model": "gpt-4o-mini",
         "custom_llm_provider": "openai",
         "metadata": {
-            "user_api_key_hash": "hash-alice",
+            "user_api_key_hash": ALICE_KEY_HASH,
             "user_api_key_alias": None,
             "user_api_key_team_id": "team-alpha",
             "user_api_key_team_alias": None,
@@ -143,7 +152,7 @@ async def test_each_result_line_is_paired_with_the_request_that_shares_its_custo
 async def test_line_costs_add_up_to_the_batch_cost_the_spend_row_records():
     outputs = _jsonl(_success("a", 100, 50), _success("b", 7, 3), _error("c"))
 
-    payload = build_batch_line_items(_source(), b"", (outputs,))
+    payload = _whole_batch(_source(), b"", (outputs,))
     aggregate = await calculate_batch_cost_and_usage(
         get_file_content_as_dictionary(outputs), "openai", model_name="gpt-4o-mini", model_info=_source().model_info
     )
@@ -165,7 +174,7 @@ async def test_anthropic_results_without_an_input_file_keep_their_status_and_usa
     }
     errored = {"custom_id": "a-2", "result": {"type": "errored", "error": {"type": "invalid_request_error"}}}
 
-    payload = build_batch_line_items(
+    payload = _whole_batch(
         _source(model="claude-sonnet-5-5", custom_llm_provider="anthropic", cost_provider="anthropic"),
         b"",
         (_jsonl(succeeded, errored),),
@@ -182,7 +191,7 @@ async def test_bedrock_lines_pair_by_record_id():
     request = {"recordId": "r-1", "modelInput": {"messages": [{"role": "user", "content": "hi"}]}}
     result = {**request, "modelOutput": {"usage": {"input_tokens": 3, "output_tokens": 2}}}
 
-    payload = build_batch_line_items(
+    payload = _whole_batch(
         _source(custom_llm_provider="bedrock", cost_provider="bedrock"), _jsonl(request), (_jsonl(result),)
     )
 
@@ -200,7 +209,7 @@ def test_vertex_lines_pair_with_the_input_row_that_carries_their_custom_id():
     vertex_rows = get_file_content_as_dictionary(vertex_input)
     assert all("custom_id" not in row for row in vertex_rows)
 
-    payload = build_batch_line_items(
+    payload = _whole_batch(
         _source(model="gemini-2.5-flash", custom_llm_provider="vertex_ai", cost_provider="vertex_ai"),
         vertex_input,
         (_jsonl(_success("vx-1", 4, 2), _success("vx-0", 3, 1)),),
@@ -227,7 +236,7 @@ def test_a_vertex_embeddings_entry_split_into_several_rows_pairs_with_none_of_th
     vertex_rows = get_file_content_as_dictionary(vertex_input)
     assert [row.get("key") for row in vertex_rows] == ["emb-1#0/2", "emb-1#1/2", None]
 
-    payload = build_batch_line_items(
+    payload = _whole_batch(
         _source(model="gemini-2.5-flash", custom_llm_provider="vertex_ai", cost_provider="vertex_ai"),
         vertex_input,
         (_jsonl(_success("emb-1", 2, 0), _success("vx-0", 3, 1)),),
@@ -242,7 +251,7 @@ def test_a_vertex_embeddings_entry_split_into_several_rows_pairs_with_none_of_th
 def test_a_vertex_input_row_without_a_custom_id_pairs_with_nothing():
     unlabeled = {"request": {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}}
 
-    payload = build_batch_line_items(
+    payload = _whole_batch(
         _source(model="gemini-2.5-flash", custom_llm_provider="vertex_ai", cost_provider="vertex_ai"),
         _jsonl(unlabeled),
         (_jsonl({**_success("x", 3, 1), "custom_id": None}),),
@@ -274,7 +283,7 @@ def test_a_vertex_input_row_without_a_custom_id_pairs_with_nothing():
     ],
 )
 def test_a_vertex_line_read_as_unknown_pairs_with_no_input_row(vertex_input):
-    payload = build_batch_line_items(
+    payload = _whole_batch(
         _source(model="gemini-2.5-flash", custom_llm_provider="vertex_ai", cost_provider="vertex_ai"),
         vertex_input,
         (_jsonl(_success("unknown", 3, 1), _success("unknown", 4, 2)),),
@@ -291,6 +300,7 @@ async def test_redaction_drops_only_the_request_and_response():
 
     assert redacted["batch_id"] == payload["batch_id"]
     assert redacted["finished_at"] == payload["finished_at"]
+    assert redacted["part"] == payload["part"]
     assert [{**line, "request": None, "response": None} for line in payload["lines"]] == list(redacted["lines"])
     assert all(line["request"] is not None for line in payload["lines"])
 
@@ -303,11 +313,65 @@ async def test_the_object_holds_one_json_line_per_batch_line_under_its_finished_
 
     assert [json.loads(line) for line in ndjson.splitlines()] == list(payload["lines"])
     assert ndjson.endswith("}\n")
-    assert batch_line_items_object_name(payload) == "batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA.jsonl"
     assert (
-        batch_line_items_object_name({**payload, "batch_id": "projects/p/locations/l/batchPredictionJobs/9"})
-        == "batch_line_items/2026-10-08/projects_p_locations_l_batchPredictionJobs_9.jsonl"
+        batch_line_items_object_name(payload)
+        == "batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA/part-00000.jsonl"
     )
+    assert (
+        batch_line_items_object_name(
+            {**payload, "batch_id": "projects/p/locations/l/batchPredictionJobs/9", "part": 12}
+        )
+        == "batch_line_items/2026-10-08/projects_p_locations_l_batchPredictionJobs_9/part-00012.jsonl"
+    )
+
+
+def _raw_size(request: dict, result: dict) -> int:
+    return len(json.dumps(request)) + len(json.dumps(result))
+
+
+@pytest.mark.parametrize(
+    "extra_bytes, parts",
+    [(0, [["a", "b"], ["c"]]), (1, [["a", "b", "c"]])],
+    ids=["closes once its raw lines reach the size", "stays open below the size"],
+)
+def test_a_part_closes_once_its_raw_request_and_result_lines_reach_the_part_size(extra_bytes, parts):
+    requests = [_request(custom_id, f"question {custom_id}") for custom_id in "abc"]
+    results = [_success(custom_id, 10, 5) for custom_id in "abc"]
+    max_part_bytes = _raw_size(requests[0], results[0]) + _raw_size(requests[1], results[1]) + extra_bytes
+
+    payloads = list(batch_line_item_parts(_source(), _jsonl(*requests), (_jsonl(*results),), max_part_bytes))
+
+    assert [payload["part"] for payload in payloads] == list(range(len(parts)))
+    assert [[line["custom_id"] for line in payload["lines"]] for payload in payloads] == parts
+    assert [line["request"] for payload in payloads for line in payload["lines"]] == requests
+
+
+def test_blank_and_unreadable_input_lines_leave_the_other_lines_paired():
+    input_content = b"\n".join(
+        [json.dumps(_request("a", "first")).encode(), b"", b"not json", json.dumps(_request("b", "second")).encode()]
+    )
+
+    payload = _whole_batch(_source(), input_content, (_jsonl(_success("a", 1, 1), _success("b", 1, 1)),))
+
+    assert [line["request"] for line in payload["lines"]] == [_request("a", "first"), _request("b", "second")]
+
+
+def test_files_with_no_readable_line_make_no_part():
+    assert list(batch_line_item_parts(_source(), b"", (b"not json\n", b""), BATCH_LINE_ITEMS_MAX_PART_BYTES)) == []
+
+
+@pytest.mark.parametrize(
+    "saved, recorded",
+    [
+        (ALICE_KEY_HASH, ALICE_KEY_HASH),
+        ("ya29.opaque-oauth2-access-token", sha256(b"ya29.opaque-oauth2-access-token").hexdigest()),
+        ("litellm_proxy_master_key", sha256(b"litellm_proxy_master_key").hexdigest()),
+        (None, None),
+    ],
+    ids=["virtual key hash", "oauth2 token", "master key alias", "nothing saved"],
+)
+def test_the_creator_credential_is_recorded_only_as_a_hash(saved, recorded):
+    assert line_item_metadata({"user_api_key_hash": saved})["user_api_key_hash"] == recorded
 
 
 def test_a_line_holding_a_lone_surrogate_is_escaped_so_the_object_still_encodes_as_utf8():

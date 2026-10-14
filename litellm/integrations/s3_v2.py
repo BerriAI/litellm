@@ -550,7 +550,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception("S3 audit log error: %s", e)
 
     async def async_log_batch_line_items(self, payload: StandardBatchLineItemsPayload) -> None:
-        """Upload the batch's lines as one NDJSON object under <s3_path>/batch_line_items/."""
+        """Upload one part of a batch's lines as an NDJSON object under <s3_path>/batch_line_items/."""
         object_name: Final = batch_line_items_object_name(payload)
         s3_path: Final = cast(str | None, self.s3_path)  # cast-ok: s3_path is set from untyped callback params
         s3_object_key: Final = (f"{s3_path.rstrip('/')}/" if s3_path else "") + object_name
@@ -559,17 +559,18 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             body=await asyncio.to_thread(batch_line_items_ndjson, payload),
             content_type="application/x-ndjson",
             s3_object_key=s3_object_key,
-            s3_object_download_filename=object_name.rsplit("/", 1)[-1],
+            s3_object_download_filename="-".join(object_name.rsplit("/", 2)[-2:]),
         )
-        # hashing a whole batch's object is CPU-bound too, so it is also prepared off the event loop
+        # hashing a large object is CPU-bound too, so it is also prepared off the event loop
         prepared_put: Final = await asyncio.to_thread(self._prepare_put, element)
         delivered: Final = await self.async_upload_data_to_s3(element, prepared_put)
         if not delivered:
             # only a log-queue flush reads and clears the drop marks, and this upload is not part of one
             self._flush_dropped.pop(id(element), None)
             verbose_logger.error(
-                "s3 logging: the %d line items of batch %s were not stored at %s",
+                "s3 logging: the %d line items of part %d of batch %s were not stored at %s",
                 len(payload["lines"]),
+                payload["part"],
                 payload["batch_id"],
                 s3_object_key,
             )

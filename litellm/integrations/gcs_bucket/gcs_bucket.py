@@ -97,7 +97,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             verbose_logger.exception("GCS Bucket logging error: %s", e)
 
     async def async_log_batch_line_items(self, payload: StandardBatchLineItemsPayload) -> None:
-        """Write the batch's lines as one NDJSON object under batch_line_items/ in the default bucket."""
+        """Write one part of a batch's lines as an NDJSON object under batch_line_items/ in the default bucket."""
         gcs_logging_config: Final = await self.get_gcs_logging_config()
         headers: Final = await self.construct_request_headers(
             vertex_instance=gcs_logging_config["vertex_instance"],

@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
+    BATCH_LINE_ITEMS_MAX_PART_BYTES,
     CLI_SESSION_KEY_PREFIX,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
@@ -738,10 +739,10 @@ class CheckBatchCost:
         model_id: str,
         batch_id: str,
         prom_logger: Optional["PrometheusLogger"],
-    ) -> tuple[str | None, str | None, bytes] | None:
+    ) -> Optional[Tuple[Optional[str], Optional[str]]]:
         """
         Fetch a completed batch's results, compute cost/usage, and emit the
-        aretrieve_batch spend log. Returns (model_name, llm_provider, output file bytes) on
+        aretrieve_batch spend log. Returns (model_name, llm_provider) on
         success, None when the job can't be routed to a deployment or when
         another pod claimed it. Raises on results-fetch or cost-computation
         failures so the caller can leave the job unprocessed and retry it on a
@@ -968,7 +969,7 @@ class CheckBatchCost:
                     api_provider=str(llm_provider) if llm_provider else None,
                 )
 
-        return model_name, str(llm_provider) if llm_provider else None, content_bytes
+        return model_name, str(llm_provider) if llm_provider else None
 
     async def _retire_unbilled_terminal_job(
         self, job: "_ManagedObjectRow", response: "LiteLLMBatch", model_id: str, batch_id: str
@@ -978,15 +979,10 @@ class CheckBatchCost:
         provider_input_file_id: Final = response.input_file_id
         if await self._finalize_unbilled_terminal_job(job, response):
             response.input_file_id = provider_input_file_id
-            self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
+            self._store_batch_line_items_in_background(job, response, model_id, batch_id, billed=False)
 
     def _store_batch_line_items_in_background(
-        self,
-        job: "_ManagedObjectRow",
-        response: "LiteLLMBatch",
-        model_id: str,
-        batch_id: str,
-        output_content: bytes,
+        self, job: "_ManagedObjectRow", response: "LiteLLMBatch", model_id: str, batch_id: str, *, billed: bool
     ) -> None:
         """Store a retired batch's lines off the poll loop, one batch at a time and only between polls, so neither
         pricing the lines nor a slow or hung bucket holds up billing or retiring the other batches. While a poll
@@ -1000,42 +996,35 @@ class CheckBatchCost:
             )
             return
         store: Final = asyncio.create_task(
-            self._store_batch_line_items_in_turn(job, response, model_id, batch_id, output_content)
+            self._store_batch_line_items_in_turn(job, response, model_id, batch_id, billed=billed)
         )
         self._line_item_stores.add(store)
         store.add_done_callback(self._line_item_stores.discard)
 
     async def _store_batch_line_items_in_turn(
-        self,
-        job: "_ManagedObjectRow",
-        response: "LiteLLMBatch",
-        model_id: str,
-        batch_id: str,
-        output_content: bytes,
+        self, job: "_ManagedObjectRow", response: "LiteLLMBatch", model_id: str, batch_id: str, *, billed: bool
     ) -> None:
         async with self._line_item_store_turn:
             await self._poll_idle.wait()
-            await self._store_batch_line_items(job, response, model_id, batch_id, output_content)
+            await self._store_batch_line_items(job, response, model_id, batch_id, billed=billed)
 
     async def _store_batch_line_items(
-        self,
-        job: "_ManagedObjectRow",
-        response: "LiteLLMBatch",
-        model_id: str,
-        batch_id: str,
-        output_content: bytes,
+        self, job: "_ManagedObjectRow", response: "LiteLLMBatch", model_id: str, batch_id: str, *, billed: bool
     ) -> None:
-        """Send every line of a finished batch to batch_line_item_callbacks. Failures are logged, never
-        raised, so the batch stays billed and retired whether or not its lines were stored."""
+        """Send every line of a finished batch to batch_line_item_callbacks, one part at a time. A billed batch's
+        output file is read again here, so nothing waiting for its turn holds a batch's files. Failures, including an
+        output file that can no longer be read, are logged and never raised, so the batch stays billed and retired
+        whether or not its lines were stored."""
         if not litellm.batch_line_item_callbacks:
             return
         from litellm.batches.batch_line_items import (
             BatchFileProvider,
             BatchLineItemSource,
-            build_batch_line_items,
+            batch_line_item_parts,
             dispatch_batch_line_items,
             line_item_metadata,
         )
+        from litellm.batches.batch_utils import fetch_batch_managed_file_content
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
         from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
 
@@ -1054,6 +1043,13 @@ class CheckBatchCost:
                 **credentials,
                 "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
             }
+            output_content: Final = (
+                await fetch_batch_managed_file_content(
+                    response.output_file_id, custom_llm_provider=cost_provider, litellm_params=file_access
+                )
+                if billed and response.output_file_id
+                else b""
+            )
             error_content: Final = await self._batch_file_content(response.error_file_id, cost_provider, file_access)
             if not output_content and not error_content:
                 return
@@ -1076,17 +1072,18 @@ class CheckBatchCost:
                 if redact_bodies
                 else await self._batch_file_content(response.input_file_id, cost_provider, file_access)
             )
-            # pricing every line of a large batch is CPU-bound, so it runs off the event loop
-            payload: Final = await asyncio.to_thread(
-                build_batch_line_items, source, input_content, (output_content, error_content)
+            parts: Final = batch_line_item_parts(
+                source, input_content, (output_content, error_content), BATCH_LINE_ITEMS_MAX_PART_BYTES
             )
-            if not payload["lines"]:
-                return
-            await dispatch_batch_line_items(payload, redact_bodies=redact_bodies)
-            verbose_proxy_logger.info(
-                f"CheckBatchCost: handed the {len(payload['lines'])} line items of batch {batch_id} "
-                "to batch_line_item_callbacks"
-            )
+            handed = 0
+            # pricing a part's lines is CPU-bound, so each part is built off the event loop
+            while (payload := await asyncio.to_thread(next, parts, None)) is not None:
+                await dispatch_batch_line_items(payload, redact_bodies=redact_bodies)
+                handed += len(payload["lines"])
+            if handed:
+                verbose_proxy_logger.info(
+                    f"CheckBatchCost: handed the {handed} line items of batch {batch_id} to batch_line_item_callbacks"
+                )
         except Exception as error:  # noqa: BLE001  # storing the lines is best effort, the batch is already billed
             verbose_proxy_logger.exception(
                 f"CheckBatchCost: the line items of batch {batch_id} (job {job.id}) were not stored: {error}"
@@ -1278,10 +1275,9 @@ class CheckBatchCost:
                     continue
                 if tracked is None:
                     continue
-                tracked_model_name, tracked_provider, output_content = tracked
 
                 # Track this job for the final metrics summary
-                processed_models.append((tracked_model_name, tracked_provider))
+                processed_models.append(tracked)
 
                 # mark the job as complete
                 try:
@@ -1301,11 +1297,8 @@ class CheckBatchCost:
                     )
                     if not self._has_batch_processed_column:
                         # nothing claimed the row, so it stays in the poll page and its lines wait for that retry
-                        del tracked, output_content
                         continue
-                self._store_batch_line_items_in_background(job, response, model_id, batch_id, output_content)
-                # release this batch's output before the next batch's output is read
-                del tracked, output_content
+                self._store_batch_line_items_in_background(job, response, model_id, batch_id, billed=True)
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
                 from litellm.proxy.openai_files_endpoints.common_utils import (

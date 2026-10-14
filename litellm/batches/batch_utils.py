@@ -617,12 +617,12 @@ def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict[str, object
     whole batch's cost accounting.
     """
     for line in iter_batch_input_lines(file_content):
-        entry = _parse_batch_output_line(line)
+        entry = parse_batch_output_line(line)
         if entry is not None:
             yield entry
 
 
-def _parse_batch_output_line(line: bytes) -> dict[str, object] | None:
+def parse_batch_output_line(line: bytes) -> dict[str, object] | None:
     try:
         parsed: Final[object] = json.loads(line)
     except ValueError as e:

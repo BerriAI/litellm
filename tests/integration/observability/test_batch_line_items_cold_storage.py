@@ -1,10 +1,11 @@
 """Finished batches write their lines to cold storage.
 
 An owned two-worker proxy lists ``s3_v2`` and ``gcs_bucket`` under ``batch_line_item_callbacks``. Once the batch-cost
-poller logs a finished batch, each sink gets one NDJSON object for the batch holding one record per line. The proxy runs
-on its own database so the shared rig's pollers never claim these batches first, and accepts JWTs signed by a local key
-next to virtual keys. Three more owned proxies list an unsupported name next to ``s3_v2``, list a null list, and
-check OAuth2 tokens against a local token info endpoint
+poller logs a finished batch, each sink gets the batch's lines as NDJSON part objects holding one record per line, a
+single part for these small batches. The proxy runs on its own database so the shared rig's pollers never claim these
+batches first, and accepts JWTs signed by a local key next to virtual keys. Four more owned proxies list an unsupported
+name next to ``s3_v2``, list a null list, check OAuth2 tokens against a local token info endpoint, and close a part
+after every line
 """
 
 import json
@@ -219,7 +220,12 @@ def _config(directory: Path, s3_url: str, line_item_callbacks: JsonValue, *, oau
 
 @contextmanager
 def _owned_rig(
-    tmp_path_factory: pytest.TempPathFactory, name: str, line_item_callbacks: JsonValue, *, oauth2: bool = False
+    tmp_path_factory: pytest.TempPathFactory,
+    name: str,
+    line_item_callbacks: JsonValue,
+    *,
+    oauth2: bool = False,
+    max_part_bytes: int | None = None,
 ) -> Iterator[Rig]:
     directory: Final = tmp_path_factory.mktemp(name)
     certificate, key = write_self_signed_cert(directory, names=("storage.googleapis.com",))
@@ -253,6 +259,7 @@ def _owned_rig(
                 "SSL_CERT_FILE": str(certificate),
                 "NO_PROXY": "127.0.0.1,localhost",
                 "no_proxy": "127.0.0.1,localhost",
+                **({"BATCH_LINE_ITEMS_MAX_PART_BYTES": str(max_part_bytes)} if max_part_bytes else {}),
             },
             config=_config(directory, s3_wire.url, line_item_callbacks, oauth2=oauth2),
             remove_environment=("DATABASE_URL_READ_REPLICA",),
@@ -282,6 +289,12 @@ def rig_with_a_null_list(tmp_path_factory: pytest.TempPathFactory) -> Iterator[R
 @pytest.fixture(scope="module")
 def rig_with_oauth2(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     with _owned_rig(tmp_path_factory, "batch-line-items-oauth2", ["s3_v2"], oauth2=True) as owned:
+        yield owned
+
+
+@pytest.fixture(scope="module")
+def rig_with_one_line_parts(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _owned_rig(tmp_path_factory, "batch-line-items-parts", ["s3_v2", "gcs_bucket"], max_part_bytes=1) as owned:
         yield owned
 
 
@@ -483,8 +496,8 @@ def _quiet_logging() -> dict[str, JsonValue]:
     }
 
 
-def _object_name(prefix: str, batch_id: str) -> str:
-    return f"{prefix}batch_line_items/{LINE_DATE}/{batch_id.replace('/', '_')}.jsonl"
+def _object_name(prefix: str, batch_id: str, part: int = 0) -> str:
+    return f"{prefix}batch_line_items/{LINE_DATE}/{batch_id.replace('/', '_')}/part-{part:05d}.jsonl"
 
 
 def _records(body: bytes) -> tuple[dict[str, JsonValue], ...]:
@@ -654,7 +667,9 @@ def test_a_batch_created_with_a_jwt_and_no_key_gets_its_lines_with_request_and_r
     ]
 
 
-def test_a_batch_created_with_an_oauth2_token_follows_its_teams_message_logging_setting(rig_with_oauth2: Rig) -> None:
+def test_a_batch_created_with_an_oauth2_token_follows_its_teams_logging_setting_and_records_only_its_hash(
+    rig_with_oauth2: Rig,
+) -> None:
     rig: Final = rig_with_oauth2
     open_team: Final = string_value(
         rig.gateway.post("/team/new", {"team_alias": f"open-{uuid.uuid4().hex[:8]}"})["team_id"]
@@ -697,6 +712,35 @@ def test_a_batch_created_with_an_oauth2_token_follows_its_teams_message_logging_
         ("oauth-quiet", None, None)
     ]
     assert b"a quiet team's oauth secret" not in rig.s3.objects()[quiet_name]
+    open_token: Final = _oauth2_token(open_team, user_id)
+    assert [record["metadata"] for record in open_records] == [
+        {**open_records[0]["metadata"], "user_api_key_hash": sha256(open_token.encode()).hexdigest()}
+    ]
+    assert open_token.encode() not in rig.s3.objects()[_object_name(f"{S3_PREFIX}/", opened.batch_id)]
+
+
+def test_a_batch_bigger_than_one_part_is_written_as_numbered_parts_holding_each_line_once(
+    rig_with_one_line_parts: Rig,
+) -> None:
+    rig: Final = rig_with_one_line_parts
+    lines: Final = Lines(
+        inputs=(_input_line("part-a", "first"), _input_line("part-b", "second"), _input_line("part-c", "third")),
+        outputs=(_success_line("part-a"), _success_line("part-b")),
+        errors=(_error_line("part-c"),),
+    )
+    batch: Final = _submit(rig, lines, {})
+    try:
+        s3_parts: Final = tuple(
+            _written(rig.s3, _object_name(f"{S3_PREFIX}/", batch.batch_id, part)) for part in range(3)
+        )
+        gcs_parts: Final = tuple(_written(rig.gcs, _object_name("", batch.batch_id, part)) for part in range(3))
+    finally:
+        delete_scenario(batch.handle)
+
+    assert [[record["custom_id"] for record in part] for part in s3_parts] == [["part-a"], ["part-b"], ["part-c"]]
+    assert [record["request"] for part in s3_parts for record in part] == list(lines.inputs)
+    assert gcs_parts == s3_parts
+    assert _object_name(f"{S3_PREFIX}/", batch.batch_id, 3) not in rig.s3.objects()
 
 
 def test_a_batch_where_every_line_failed_still_writes_its_error_lines(rig: Rig) -> None:

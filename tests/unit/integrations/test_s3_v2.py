@@ -5866,6 +5866,7 @@ def _batch_line_items_payload() -> dict:
     return {
         "batch_id": "bGl0ZWxsbV9wcm94eTtiYXRjaA",
         "finished_at": 1791494130,
+        "part": 0,
         "lines": (line, {**line, "custom_id": "ok-2"}),
     }
 
@@ -5900,8 +5901,9 @@ async def test_batch_line_items_are_one_ndjson_object_under_the_configured_path(
 
     (request,) = requests
     assert request.method == "PUT"
-    assert request.url.path == "/cold/batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA.jsonl"
+    assert request.url.path == "/cold/batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA/part-00000.jsonl"
     assert request.headers["Content-Type"] == "application/x-ndjson"
+    assert request.headers["Content-Disposition"] == 'inline; filename="bGl0ZWxsbV9wcm94eTtiYXRjaA-part-00000.jsonl"'
     assert [json.loads(line) for line in request.content.decode().splitlines()] == list(payload["lines"])
     assert logger.log_queue == []
 
@@ -5913,7 +5915,7 @@ async def test_batch_line_items_without_an_s3_path_sit_at_the_bucket_root():
     await logger.async_log_batch_line_items(_batch_line_items_payload())
 
     assert [request.url.path for request in requests] == [
-        "/batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA.jsonl"
+        "/batch_line_items/2026-10-08/bGl0ZWxsbV9wcm94eTtiYXRjaA/part-00000.jsonl"
     ]
 
 

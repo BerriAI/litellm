@@ -3324,10 +3324,19 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize", "read file-input-1", "lines"]
+        assert journal == [
+            f"read {_CLAIM_OUTPUT_FILE_ID}",
+            "claim",
+            "bill",
+            "finalize",
+            f"read {_CLAIM_OUTPUT_FILE_ID}",
+            "read file-input-1",
+            "lines",
+        ]
         (payload,) = logger.payloads
         assert payload["batch_id"] == _CLAIM_UNIFIED_BATCH_ID
         assert payload["finished_at"] == 2
+        assert payload["part"] == 0
         (line,) = payload["lines"]
         assert (line["custom_id"], line["status"]) == ("ok-1", "success")
         assert line["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
@@ -3344,14 +3353,14 @@ class TestBatchLineItemsFromThePoller:
         journal: list = []
         row, instance = self._setup(journal)
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
-        build = batch_line_items.build_batch_line_items
+        price = batch_line_items._line_item
         threads = []
 
-        def _build(*args):
+        def _price(*args):
             threads.append(threading.current_thread())
-            return build(*args)
+            return price(*args)
 
-        monkeypatch.setattr(batch_line_items, "build_batch_line_items", _build)
+        monkeypatch.setattr(batch_line_items, "_line_item", _price)
         with self._provider(journal):
             await instance.check_batch_cost()
             await self._stored(instance)
@@ -3393,7 +3402,7 @@ class TestBatchLineItemsFromThePoller:
             await instance.check_batch_cost()
             await self._stored(instance)
 
-        assert journal[-3:] == ["finalize", "read file-input-1", "lines"]
+        assert journal[-4:] == ["finalize", f"read {_CLAIM_OUTPUT_FILE_ID}", "read file-input-1", "lines"]
         ((line,),) = [payload["lines"] for payload in logger.payloads]
         assert line["request"] == json.loads(self._INPUT)
         assert line["response"] == json.loads(self._OUTPUT)
@@ -3587,10 +3596,13 @@ class TestBatchLineItemsFromThePoller:
 
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (_HungSink(),))
 
-        with self._provider(journal):
-            await asyncio.wait_for(instance.check_batch_cost(), timeout=5)
+        async def _sink_started():
             while "lines started" not in journal:
                 await asyncio.sleep(0)
+
+        with self._provider(journal):
+            await asyncio.wait_for(instance.check_batch_cost(), timeout=5)
+            await asyncio.wait_for(_sink_started(), timeout=5)
             billed_while_hung = (row.batch_processed, row.status, list(journal))
             released.set()
             await self._stored(instance)
@@ -3598,7 +3610,15 @@ class TestBatchLineItemsFromThePoller:
         assert billed_while_hung == (
             True,
             "complete",
-            [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize", "read file-input-1", "lines started"],
+            [
+                f"read {_CLAIM_OUTPUT_FILE_ID}",
+                "claim",
+                "bill",
+                "finalize",
+                f"read {_CLAIM_OUTPUT_FILE_ID}",
+                "read file-input-1",
+                "lines started",
+            ],
         )
         assert journal[-1] == "lines"
 
@@ -3637,7 +3657,7 @@ class TestBatchLineItemsFromThePoller:
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
         running: list = []
 
-        async def _store(job, response, model_id, batch_id, output_content):
+        async def _store(job, response, model_id, batch_id, *, billed):
             running.append(batch_id)
             journal.append(f"start {batch_id} with {len(running)} running")
             await asyncio.sleep(0.01)
@@ -3645,7 +3665,7 @@ class TestBatchLineItemsFromThePoller:
 
         monkeypatch.setattr(instance, "_store_batch_line_items", _store)
         for batch_id in ("batch-a", "batch-b", "batch-c"):
-            instance._store_batch_line_items_in_background(MagicMock(), MagicMock(), "model-123", batch_id, b"")
+            instance._store_batch_line_items_in_background(MagicMock(), MagicMock(), "model-123", batch_id, billed=True)
         await self._stored(instance)
 
         assert journal == [f"start batch-{name} with 1 running" for name in "abc"]
@@ -3659,10 +3679,12 @@ class TestBatchLineItemsFromThePoller:
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
 
         async def _an_earlier_batch_waits_to_store_its_lines():
-            instance._store_batch_line_items_in_background(MagicMock(), MagicMock(), "model-123", "batch-earlier", b"")
+            instance._store_batch_line_items_in_background(
+                MagicMock(), MagicMock(), "model-123", "batch-earlier", billed=True
+            )
             await asyncio.sleep(0.01)
 
-        async def _store(job, response, model_id, batch_id, output_content):
+        async def _store(job, response, model_id, batch_id, *, billed):
             journal.append(f"store {batch_id}")
 
         monkeypatch.setattr(instance, "_cleanup_stale_managed_objects", _an_earlier_batch_waits_to_store_its_lines)
@@ -3679,6 +3701,80 @@ class TestBatchLineItemsFromThePoller:
             "store batch-earlier",
             "store batch-456",
         ]
+
+    @pytest.mark.asyncio
+    async def test_an_output_file_that_cannot_be_read_again_leaves_the_batch_billed_and_stores_nothing(
+        self, monkeypatch, caplog
+    ):
+        import litellm
+        from litellm.batches import batch_utils
+        from litellm.exceptions import NotFoundError
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        fetch = batch_utils.fetch_batch_managed_file_content
+
+        async def _output_gone_after_billing(file_id, **kwargs):
+            if file_id == _CLAIM_OUTPUT_FILE_ID:
+                raise NotFoundError(message="No file found.", model="gpt-4", llm_provider="openai")
+            return await fetch(file_id, **kwargs)
+
+        monkeypatch.setattr(batch_utils, "fetch_batch_managed_file_content", _output_gone_after_billing)
+        with self._provider(journal), caplog.at_level(logging.ERROR):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
+        assert logger.payloads == []
+        assert (row.batch_processed, row.status) == (True, "complete")
+        assert f"the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_batch_bigger_than_one_part_reaches_the_callbacks_as_numbered_parts(self, monkeypatch):
+        import litellm
+        from litellm_enterprise.proxy.common_utils import check_batch_cost
+
+        journal: list = []
+        _, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        monkeypatch.setattr(check_batch_cost, "BATCH_LINE_ITEMS_MAX_PART_BYTES", 1)
+        monkeypatch.setattr(type(self), "_INPUT", self._INPUT + self._INPUT.replace(b"ok-1", b"ok-2"))
+        monkeypatch.setattr(type(self), "_OUTPUT", self._OUTPUT + self._OUTPUT.replace(b"ok-1", b"ok-2"))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert [(payload["part"], [line["custom_id"] for line in payload["lines"]]) for payload in logger.payloads] == [
+            (0, ["ok-1"]),
+            (1, ["ok-2"]),
+        ]
+        assert [payload["lines"][0]["request"]["custom_id"] for payload in logger.payloads] == ["ok-1", "ok-2"]
+
+    @pytest.mark.asyncio
+    async def test_an_oauth2_creators_token_reaches_the_callbacks_only_as_its_hash(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        row.api_key = "ya29.opaque-oauth2-access-token"
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        (payload,) = logger.payloads
+        (line,) = payload["lines"]
+        assert line["metadata"]["user_api_key_hash"] == sha256(b"ya29.opaque-oauth2-access-token").hexdigest()
+        assert line["request"] == json.loads(self._INPUT)
+        assert "ya29.opaque-oauth2-access-token" not in json.dumps(payload)
 
 
 class TestCreatorTurnedOffMessageLogging:
