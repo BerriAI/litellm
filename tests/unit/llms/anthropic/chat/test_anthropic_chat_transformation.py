@@ -8915,6 +8915,7 @@ def test_map_openai_params_answers_400_for_an_openai_tool_search_tool_it_cannot_
         )
     assert raised.value.status_code == 400
     assert "tool_search" in str(raised.value)
+    assert "drop_params: true" in str(raised.value)
 
 
 @pytest.mark.parametrize(("config", "model", "provider", "execution"), _UNRUNNABLE_TOOL_SEARCH_CASES)

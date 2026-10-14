@@ -352,7 +352,8 @@ def tools_without_unsupported_tool_search(
             message=(
                 f"{model} on {route} cannot run the OpenAI `tool_search` tool as sent. Only a server-executed "
                 "`tool_search` on a route that supports tool search becomes Anthropic's tool search. To drop it "
-                "and the `defer_loading` of the other tools, set `litellm.drop_params = True`."
+                "and the `defer_loading` of the other tools, set `litellm.drop_params=True` or for proxy:\n\n"
+                "`litellm_settings:\n drop_params: true`\n"
             ),
             status_code=400,
         )
