@@ -1,15 +1,14 @@
 """A coding-agent session as the gateway sees it. The system prompt and tool set come from this
 directory, the turns are the assistant reading files and the files coming back as tool results, and the
-files are real source files from this checkout, chosen by the request's marker. The input budget is spent
+files are real Python files from tests/e2e, chosen by the request's marker. The input budget is spent
 on turns, so a 300k request is a longer session over bigger files than a 100k one, in the wire format of
 the endpoint it goes to."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -20,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 Endpoint = Literal["chat", "responses", "messages"]
 
 CORPUS_DIR: Final = Path(__file__).resolve().parent
-REPO_ROOT: Final = CORPUS_DIR.parents[4]
+E2E_ROOT: Final = CORPUS_DIR.parents[2]
 CHARS_PER_TOKEN: Final = 4
 _FILE_BYTES: Final = (2_000, 80_000)
 _STRIDE: Final = 7919
@@ -73,12 +72,13 @@ def tool_specs() -> tuple[ToolSpec, ...]:
 
 @cache
 def corpus_files() -> tuple[Path, ...]:
-    """Source files of this checkout between 2 KB and 80 KB, in path order so every run sees the same list."""
+    """Python files under tests/e2e between 2 KB and 80 KB, in path order so every run sees the same list.
+
+    The e2e tree is what the runner image ships, so a laptop and the lane read the same files at the same sha.
+    """
     low, high = _FILE_BYTES
-    found: Final = tuple(
-        path for path in sorted((REPO_ROOT / "litellm").rglob("*.py")) if low <= path.stat().st_size <= high
-    )
-    assert found, f"no corpus files under {REPO_ROOT / 'litellm'}"
+    found: Final = tuple(path for path in sorted(E2E_ROOT.rglob("*.py")) if low <= path.stat().st_size <= high)
+    assert found, f"no corpus files under {E2E_ROOT}"
     return found
 
 
@@ -96,9 +96,9 @@ def _step(marker: str, index: int, budget_tokens: int) -> Step:
     lines: Final = tuple(path.read_text(errors="replace").splitlines())
     whole: Final = _numbered(lines, 1)
     if estimate_tokens(whole) <= budget_tokens:
-        return Step(_call_id(marker, index), str(path.relative_to(REPO_ROOT)), 1, len(lines), whole)
+        return Step(_call_id(marker, index), f"tests/e2e/{path.relative_to(E2E_ROOT)}", 1, len(lines), whole)
     keep: Final = max(1, len(lines) * budget_tokens * CHARS_PER_TOKEN // max(1, len(whole)))
-    return Step(_call_id(marker, index), str(path.relative_to(REPO_ROOT)), 1, keep, _numbered(lines[:keep], 1))
+    return Step(_call_id(marker, index), f"tests/e2e/{path.relative_to(E2E_ROOT)}", 1, keep, _numbered(lines[:keep], 1))
 
 
 def _call_id(marker: str, index: int) -> str:
