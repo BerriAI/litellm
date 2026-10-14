@@ -172,7 +172,11 @@ def _sentinel_row(row_id, team_id, model):
 
 
 class _FakeBatch:
-    """prisma's ``batch_()``: upserts queue inside the block and commit as one transaction on a clean exit."""
+    """prisma's ``batch_()``: writes queue inside the block and commit as one transaction on a clean exit.
+
+    A queued delete reaches the table as ``batch_delete_many``, kept apart from the table's own
+    ``delete_many`` the way prisma keeps batch actions apart from direct ones, so the prune's
+    assertions still see only the prune."""
 
     def __init__(self, table):
         self._table = table
@@ -181,6 +185,9 @@ class _FakeBatch:
 
     def upsert(self, where, data):
         self._queued.append((where, data))
+
+    def delete_many(self, where):
+        self._queued.append((where, None))
 
     async def __aenter__(self):
         return self
@@ -195,7 +202,10 @@ class _FakeBatch:
         )
         try:
             for where, data in self._queued:
-                await self._table.upsert(where=where, data=data)
+                if data is None:
+                    self._table.batch_delete_many(where)
+                else:
+                    await self._table.upsert(where=where, data=data)
         except Exception:
             if committed is not None:
                 self._table.rows = committed[0]
@@ -769,6 +779,19 @@ class _FakeSentinelTable:
         for k in doomed:
             del self.rows[k]
         return len(doomed)
+
+    def batch_delete_many(self, where):
+        """The batch delete of a deployment day's rows for teams its charges no longer name. Every
+        clause is honoured and an unexpected one fails, so a dropped scope cannot pass silently."""
+        assert set(where) == {"date", "api_key", "model", "team_id"}
+        kept_teams = where["team_id"]["not_in"]
+        doomed = [
+            k
+            for k in self.rows
+            if k[1] == where["date"] and k[2] == where["api_key"] and k[3] == where["model"] and k[0] not in kept_teams
+        ]
+        for k in doomed:
+            del self.rows[k]
 
     async def find_many(self, where=None):
         """Read back sentinel rows the way prisma would, honouring api_key and a date range."""
@@ -1858,6 +1881,38 @@ async def test_an_unguarded_run_writes_but_does_not_prune():
     assert table.delete_many_calls == []
     assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-gone") in table.rows
     assert ("t", DAY.isoformat(), PTU_SENTINEL_API_KEY, "dep-live") in table.rows
+
+
+@pytest.mark.asyncio
+async def test_an_unguarded_rerun_after_a_share_move_bills_the_day_to_the_new_holders_alone():
+    """Without the lock the prune is skipped, so the old holder's row has to go with the day's own
+    write, or rerunning a priced day after its shares moved bills it to the old and new holders."""
+    table = _FakeSentinelTable()
+    table.seed("team-a", DAY, "shared", 720.0)
+    table.seed("team-b", DAY, "shared", 480.0)
+    table.seed("team-b", DAY, "other", 240.0)
+    prisma = _prisma_for(
+        [
+            _model_row(
+                model_id="shared",
+                model_info={
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_shares": {"team-a": 30, "team-c": 20},
+                    "ptu_effective_from": _midnight(DAY).isoformat(),
+                },
+            )
+        ],
+        table,
+    )
+
+    await run_scheduled_ptu_rollup(prisma, target_date=DAY)
+
+    assert {key[0]: row["ptu_flat_cost"] for key, row in table.rows.items() if key[3] == "shared"} == {
+        "team-a": pytest.approx(720.0),
+        "team-c": pytest.approx(480.0),
+    }
+    assert ("team-b", DAY.isoformat(), PTU_SENTINEL_API_KEY, "other") in table.rows
 
 
 @pytest.mark.asyncio

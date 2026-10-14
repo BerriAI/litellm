@@ -63,6 +63,8 @@ def _proxy_model_table(prisma_client: "PrismaClient") -> "TableActions[prisma_mo
 class _SentinelBatchTable(Protocol):
     def upsert(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
 
+    def delete_many(self, *, where: Mapping[str, object]) -> None: ...
+
 
 class _SentinelBatch(Protocol):
     litellm_dailyteamspend: _SentinelBatchTable
@@ -286,14 +288,30 @@ def _deployment_days(charges: tuple[_PTUCharge, ...], date_str: str) -> tuple[_D
     )
 
 
+def _teams_no_longer_charged_filter(deployment_day: _DeploymentDay) -> "Mapping[str, object]":
+    """The deployment day's sentinel rows for every team its charges no longer name, as a plain
+    dict for the same reason as ``_prune_filter``."""
+    return {
+        "date": deployment_day.date_str,
+        "api_key": PTU_SENTINEL_API_KEY,
+        "model": deployment_day.charges[0].model_id,
+        "team_id": {"not_in": tuple(charge.team_id for charge in deployment_day.charges)},
+    }
+
+
 def _queue_deployment_day(table: _SentinelBatchTable, deployment_day: _DeploymentDay) -> None:
-    """Queue an idempotent upsert of one sentinel-api_key row per team on LiteLLM_DailyTeamSpend.
+    """Queue the replacement of one deployment day's sentinel-api_key rows on LiteLLM_DailyTeamSpend:
+    the rows of teams its charges no longer name go, then one row per named team is upserted.
+
+    Both land in the day's one transaction, so rerunning a priced day after its shares moved
+    bills it to the new holders alone, whether or not the run may prune.
 
     ``model`` holds the deployment id because it is part of the table's unique key and a
     rename must not move the row. ``model_group`` carries the operator-facing name, which
     is outside the key and is what the usage views display.
     """
     now: Final = datetime.now(timezone.utc)
+    table.delete_many(where=_teams_no_longer_charged_filter(deployment_day))
     for charge in deployment_day.charges:
         table.upsert(
             where={
