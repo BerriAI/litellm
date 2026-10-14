@@ -1,17 +1,22 @@
 from typing import Final, Literal
 
+from pydantic import TypeAdapter
+
+_INPUT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
 
 def _get_prompt_from_input(input_data: object, model: str) -> str:
     if isinstance(input_data, str):
         return input_data
-    if not isinstance(input_data, list):
+    if not isinstance(input_data, (list, tuple)):
         return ""
-    tokens: Final = tuple(token for token in input_data if isinstance(token, int))
-    if tokens and len(tokens) == len(input_data):
+    items: Final = _INPUT_ITEMS.validate_python(input_data)
+    tokens: Final = tuple(token for token in items if isinstance(token, int))
+    if tokens and len(tokens) == len(items):
         import litellm
 
         return str(litellm.decode(model=model, tokens=tokens))
-    return "".join(_get_prompt_from_input(item, model) for item in input_data)
+    return "".join(item for item in items if isinstance(item, str))
 
 
 def get_formatted_prompt(
@@ -53,10 +58,16 @@ def get_formatted_prompt(
     elif call_type == "text_completion":
         prompt = data["prompt"]
     elif call_type in ("embedding", "aembedding", "moderation"):
-        return _get_prompt_from_input(
-            data.get("input"),
-            model=data["model"] if "model" in data and isinstance(data["model"], str) else "",
-        )
+        if "input" not in data:
+            return ""
+        if isinstance(data["input"], str):
+            return data["input"]
+        if isinstance(data["input"], list):
+            items: Final = _INPUT_ITEMS.validate_python(data["input"])
+            model: Final = data["model"] if "model" in data and isinstance(data["model"], str) else ""
+            if any(isinstance(item, list) for item in items):
+                return "".join(_get_prompt_from_input(item, model) for item in items)
+            return _get_prompt_from_input(items, model)
     elif (
         call_type
         in (
