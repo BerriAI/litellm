@@ -56977,6 +56977,7 @@
         ]
     },
     "gemini-2.0-flash-exp-image-generation": {
+        "deprecation_date": "2025-11-14",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gemini",
         "max_input_tokens": 32768,
@@ -56997,6 +56998,7 @@
         "supports_vision": true
     },
     "gemini/gemini-2.0-flash-exp-image-generation": {
+        "deprecation_date": "2025-11-14",
         "input_cost_per_token": 0.0,
         "litellm_provider": "gemini",
         "max_input_tokens": 32768,
