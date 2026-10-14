@@ -21,7 +21,7 @@ from integration._support.client import Gateway, eventually, gateway_from_enviro
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _CLIENT_ID: Final = "scripted-cli-client"
 _CLIENT_SECRET: Final = "scripted-cli-secret"
@@ -49,9 +49,14 @@ class _DeviceAuthorization(BaseModel):
 
 
 class _AccessToken(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     access_token: str
     expires_in: int
     token_type: Literal["Bearer"]
+    refresh_token: str
+    user_id: str
+    team_id: str | None
 
 
 def _owned_config(path: Path) -> Path:
@@ -341,8 +346,17 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
             access_token: Final = _AccessToken.model_validate_json(token_response.content)
             access_token_body: Final = _JSON_OBJECT.validate_json(token_response.content)
             assert access_token_body == access_token.model_dump(), token_response.text
-            assert set(access_token_body) == {"access_token", "expires_in", "token_type"}, token_response.text
+            assert set(access_token_body) == {
+                "access_token",
+                "expires_in",
+                "token_type",
+                "refresh_token",
+                "user_id",
+                "team_id",
+            }, token_response.text
             assert access_token.token_type == "Bearer" and access_token.expires_in > 0, token_response.text
+            assert access_token.user_id == user_id, token_response.text
+            assert access_token.team_id == team_id, token_response.text
 
             second_poll: Final = enabled_gateway.client.post(
                 "/claude_code_gateway/oauth/token",
@@ -369,10 +383,10 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
                 "/claude_code_gateway/oauth/token",
                 data={"grant_type": "refresh_token"},
             )
-            assert refresh.status_code == 401, refresh.text
+            assert refresh.status_code == 400, refresh.text
             assert _JSON_OBJECT.validate_json(refresh.content) == {
-                "error": "invalid_grant",
-                "error_description": "This gateway does not issue refresh tokens; sign in again",
+                "error": "invalid_request",
+                "error_description": "refresh_token is required",
             }, refresh.text
 
             bearer_headers: Final = {
