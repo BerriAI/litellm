@@ -1349,6 +1349,48 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-discount-amount" in headers
         assert float(headers["x-litellm-response-cost-discount-amount"]) == 0.000005
 
+    def test_stream_response_headers_omit_incomplete_cost(self):
+        processing = ProxyBaseLLMRequestProcessing.__new__(ProxyBaseLLMRequestProcessing)
+        processing.data = {}
+        user = MagicMock(spec=ProxyUserAPIKeyAuth)
+        user.tpm_limit = None
+        user.rpm_limit = None
+        user.max_budget = None
+        user.spend = 0
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "test"}],
+            stream=True,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        logging_obj.set_cost_breakdown(
+            input_cost=0.0,
+            output_cost=0.0,
+            total_cost=0.001,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            original_cost=0.0,
+            margin_percent=0.1,
+            margin_total_amount=0.001,
+        )
+
+        headers = processing._stream_response_headers(
+            hidden_params={"response_cost": 0.001},
+            user_api_key_dict=user,
+            logging_obj=logging_obj,
+            version=None,
+            callback_headers={
+                "x-litellm-response-cost": "0.067",
+                "x-custom-header": "custom-value",
+            },
+        )
+
+        assert "x-litellm-call-id" in headers
+        assert headers["x-custom-header"] == "custom-value"
+        assert not any(key.startswith("x-litellm-response-cost") for key in headers)
+
     def test_get_custom_headers_without_discount_info(self):
         """
         Test that when no discount is applied, discount headers are not included.

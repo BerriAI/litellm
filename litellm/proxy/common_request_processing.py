@@ -2525,25 +2525,47 @@ class ProxyBaseLLMRequestProcessing:
         version: str | None,
         callback_headers: Mapping[str, str],
     ) -> Mapping[str, str]:
-        """The streaming response headers describing `hidden_params`' deployment."""
+        """Build stream headers without publishing a cost before the stream finishes."""
+        raw_cache_key: Final[object] = hidden_params.get("cache_key")
+        raw_api_base: Final[object] = hidden_params.get("api_base")
+        raw_fastest_response_batch_completion: Final[object] = hidden_params.get("fastest_response_batch_completion")
+        raw_additional_headers: Final[object] = hidden_params.get("additional_headers")
+        additional_headers: Final[Mapping[str, object]] = (
+            cast(Mapping[str, object], raw_additional_headers)
+            if isinstance(raw_additional_headers, Mapping)
+            else MappingProxyType({})
+        )
+        headers: Final[dict[str, str]] = cast(
+            dict[str, str],
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                call_id=logging_obj.litellm_call_id,
+                model_id=self._get_model_id_from_response(hidden_params, self.data),
+                cache_key=raw_cache_key if isinstance(raw_cache_key, str) else "",
+                api_base=raw_api_base if isinstance(raw_api_base, str) else "",
+                version=version,
+                response_cost=None,
+                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                fastest_response_batch_completion=(
+                    raw_fastest_response_batch_completion
+                    if isinstance(raw_fastest_response_batch_completion, bool)
+                    else None
+                ),
+                request_data=self.data,
+                hidden_params=hidden_params,
+                litellm_logging_obj=logging_obj,
+            ),
+        )
+        with_additional_headers: Final[dict[str, str]] = {
+            **headers,
+            **{key: str(value) for key, value in additional_headers.items() if value not in {"", None, "None"}},
+        }
+        merged_headers: Final[dict[str, str]] = {**with_additional_headers, **callback_headers}
         return MappingProxyType(
             {
-                **ProxyBaseLLMRequestProcessing.get_custom_headers(
-                    user_api_key_dict=user_api_key_dict,
-                    call_id=logging_obj.litellm_call_id,
-                    model_id=self._get_model_id_from_response(hidden_params, self.data),
-                    cache_key=hidden_params.get("cache_key") or "",
-                    api_base=hidden_params.get("api_base") or "",
-                    version=version,
-                    response_cost=hidden_params.get("response_cost") or "",
-                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                    fastest_response_batch_completion=hidden_params.get("fastest_response_batch_completion"),
-                    request_data=self.data,
-                    hidden_params=hidden_params,
-                    litellm_logging_obj=logging_obj,
-                    **(hidden_params.get("additional_headers") or MappingProxyType({})),
-                ),
-                **callback_headers,
+                key: value
+                for key, value in merged_headers.items()
+                if not key.lower().startswith("x-litellm-response-cost")
             }
         )
 
