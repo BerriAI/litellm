@@ -412,6 +412,10 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     assert len(tool_use_blocks) == 2
 
 
+_NATIVE_REDACTED_DATA: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+_CONVERSE_REDACTED_DATA: Final = base64.b64encode(_NATIVE_REDACTED_DATA.encode()).decode()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
@@ -420,7 +424,7 @@ async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(us
     in order, ahead of text and toolUse. It used to collapse into an empty unsigned reasoningText and get dropped."""
     bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
         {"reasoningText": {"text": "Let me look this up.", "signature": "sig-abc"}},
-        {"redactedContent": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"},
+        {"redactedContent": _CONVERSE_REDACTED_DATA},
     ]
     thinking_blocks: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
     assistant_text: Final = "Checking the weather."
@@ -462,6 +466,34 @@ async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(us
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+async def test_bedrock_converse_wraps_redacted_thinking_minted_outside_converse(use_async: bool, placement: str):
+    """The Anthropic API, Vertex and Bedrock Invoke return the bare ``data`` string, while Converse wants it as a
+    base64 blob. Sending it bare made Bedrock 400 with "Invalid data in redacted_thinking block" when a Router
+    model group mixed anthropic/ or bedrock/invoke/ with bedrock/converse/."""
+    redacted: Final = {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}
+    assistant_message: Final = (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [redacted]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [redacted, {"type": "text", "text": "hello"}]}
+    )
+    messages: Final = [{"role": "user", "content": "hi"}, assistant_message, {"role": "user", "content": "again"}]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [{"reasoningContent": {"redactedContent": _CONVERSE_REDACTED_DATA}}, {"text": "hello"}]
+
+
 @pytest.mark.parametrize("data", ["", "  "])
 def test_bedrock_converse_drops_redacted_thinking_with_blank_data(data: str):
     """Bedrock 400s on a blank redactedContent, so a redacted block with no payload is dropped, not sent."""
@@ -501,7 +533,7 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
 ):
     """Only Claude takes redactedContent back. Any other Converse target 400s on it, so a Claude history replayed
     there (a Router fallback or a model switch) drops the redacted block and keeps the call working."""
-    redacted: Final = {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"}
+    redacted: Final = {"type": "redacted_thinking", "data": _CONVERSE_REDACTED_DATA}
     assistant_message: Final = (
         {"role": "assistant", "content": "hello", "thinking_blocks": [redacted]}
         if placement == "thinking_blocks"

@@ -1,4 +1,5 @@
 import base64
+import binascii
 import copy
 import hashlib
 import itertools
@@ -4409,6 +4410,23 @@ def get_assistant_message_block_or_continue_message(
     raise ValueError(f"Unsupported content type: {type(content_block)}")
 
 
+def _as_converse_redacted_content(data: str) -> str:
+    """
+    Converse carries ``redactedContent`` as a base64 blob of Claude's own ``data`` string, and a Converse
+    response hands that blob back as ``data`` unchanged. The Anthropic API, Vertex and Bedrock Invoke return
+    the bare string, which Bedrock would decode into garbage and 400 on, so only those get wrapped.
+    """
+    return data if _decodes_to_base64_text(data) else base64.b64encode(data.encode()).decode()
+
+
+def _decodes_to_base64_text(data: str) -> bool:
+    try:
+        _ = base64.b64decode(base64.b64decode(data, validate=True), validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    return True
+
+
 class BedrockConverseMessagesProcessor:
     @staticmethod
     def _initial_message_setup(
@@ -4690,7 +4708,7 @@ class BedrockConverseMessagesProcessor:
     def translate_thinking_blocks_to_reasoning_content_blocks(
         thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
         *,
-        send_redacted: bool,
+        send_redacted: bool = False,
     ) -> list[BedrockContentBlock]:
         return [
             BedrockContentBlock(
@@ -4709,7 +4727,7 @@ class BedrockConverseMessagesProcessor:
     ) -> BedrockConverseReasoningContentBlock:
         match thinking_block:
             case {"type": "redacted_thinking", "data": str() as data} if send_redacted and data.strip():
-                return BedrockConverseReasoningContentBlock(redactedContent=data)
+                return BedrockConverseReasoningContentBlock(redactedContent=_as_converse_redacted_content(data))
             case {"signature": signature} if signature is not None:
                 return BedrockConverseReasoningContentBlock(
                     reasoningText=BedrockConverseReasoningTextBlock(

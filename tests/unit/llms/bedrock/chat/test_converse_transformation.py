@@ -1094,23 +1094,31 @@ _APPLICATION_PROFILE_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:applic
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize(
-    "model, litellm_params, replays_redacted",
+    "model, optional_params, litellm_params, replays_redacted",
     [
-        ("us.anthropic.claude-sonnet-4-6", {}, True),
-        ("arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6", {}, True),
-        (_APPLICATION_PROFILE_ARN, {"base_model": "anthropic.claude-sonnet-4-6"}, True),
-        (_APPLICATION_PROFILE_ARN, {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"}, True),
-        (_APPLICATION_PROFILE_ARN, {}, False),
-        (_APPLICATION_PROFILE_ARN, {"base_model": "us.amazon.nova-pro-v1:0"}, False),
-        ("us.amazon.nova-pro-v1:0", {}, False),
+        ("us.anthropic.claude-sonnet-4-6", {}, {}, True),
+        ("arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6", {}, {}, True),
+        ("anthropic.claude-sonnet-4-6", {"model_id": _APPLICATION_PROFILE_ARN}, {}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "anthropic.claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, {}, False),
+        (_APPLICATION_PROFILE_ARN, {}, {"base_model": "us.amazon.nova-pro-v1:0"}, False),
+        ("us.amazon.nova-pro-v1:0", {}, {}, False),
+        ("us.amazon.nova-pro-v1:0", {}, {"base_model": "anthropic.claude-sonnet-4-6"}, False),
     ],
 )
 async def test_transform_request_replays_redacted_thinking_only_to_claude(
-    use_async: bool, model: str, litellm_params: dict[str, str], replays_redacted: bool
+    use_async: bool,
+    model: str,
+    optional_params: dict[str, str],
+    litellm_params: dict[str, str],
+    replays_redacted: bool,
 ):
-    """An application inference profile ARN hides its model, so the deployment's ``base_model`` is what marks it as
-    Claude. Without one the redacted block is dropped the way it is for every non-Claude target."""
-    redacted_data: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    """A model id that names its model decides on its own. An application inference profile ARN hides its model,
+    so the deployment's ``base_model`` is what marks it as Claude, and without one the redacted block is dropped
+    the way it is for every non-Claude target."""
+    redacted_data: Final = base64.b64encode(b"EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP").decode()
     messages: Final = [
         {"role": "user", "content": "hi"},
         {
@@ -1121,7 +1129,9 @@ async def test_transform_request_replays_redacted_thinking_only_to_claude(
         {"role": "user", "content": "again"},
     ]
     config: Final = AmazonConverseConfig()
-    kwargs: Final = dict(model=model, messages=messages, optional_params={}, litellm_params=dict(litellm_params))
+    kwargs: Final = dict(
+        model=model, messages=messages, optional_params=dict(optional_params), litellm_params=dict(litellm_params)
+    )
 
     request: Final = (
         await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
