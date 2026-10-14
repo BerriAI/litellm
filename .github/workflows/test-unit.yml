@@ -18,62 +18,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  setup:
-    name: unit setup
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      artifact: ${{ steps.rust-bridge-artifact.outputs.name }}
-    runs-on: ubuntu-latest
-    env:
-      UV_PYTHON: "3.12"
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
-        with:
-          persist-credentials: false
-
-      - name: Detect relevant changes
-        id: changes
-        timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
-
-      - name: Set up Python
-        if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 3
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: ${{ env.UV_PYTHON }}
-
-      - name: Set up uv
-        if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 3
-        uses: ./.github/actions/setup-uv-with-retries
-        with:
-          version: "0.10.9"
-
-      - name: Build the Rust bridge
-        if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 20
-        uses: ./.github/actions/rust-bridge
-
-      - name: Upload Rust bridge artifact
-        if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 10
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
-        with:
-          name: rust-bridge-${{ github.run_id }}-${{ github.run_attempt }}
-          path: rust-bridge-dist/
-          retention-days: 1
-
-      - name: Expose the Rust bridge artifact
-        id: rust-bridge-artifact
-        if: steps.changes.outputs.decision != 'skip'
-        timeout-minutes: 1
-        env:
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: echo "name=rust-bridge-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
   rust-bridge-windows:
     name: rust-bridge-windows
     if: github.ref == 'refs/heads/main'
@@ -117,7 +61,7 @@ jobs:
         run: python3 .github/scripts/assert_ci_coverage.py --shards
   unit:
     name: ${{ matrix.shard }}
-    needs: [setup, assert-shard-coverage]
+    needs: assert-shard-coverage
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
@@ -959,12 +903,10 @@ jobs:
         timeout-minutes: 5
         uses: ./.github/actions/cache-uv-downloads
 
-      - name: Set up the Rust build
+      - name: Set up the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: ./.github/actions/rust-bridge
-        with:
-          artifact: ${{ needs.setup.outputs.artifact }}
 
       - name: Install dependencies and check schema
         if: steps.changes.outputs.decision != 'skip'
@@ -1150,7 +1092,6 @@ jobs:
             --pool forks --maxWorkers=14
   docs:
     name: docs
-    needs: setup
     permissions:
       contents: read
       pull-requests: read
@@ -1210,8 +1151,6 @@ jobs:
       - name: Set up the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
         uses: ./.github/actions/rust-bridge
-        with:
-          artifact: ${{ needs.setup.outputs.artifact }}
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
@@ -1347,7 +1286,6 @@ jobs:
         run: uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json
   redis-compat:
     name: redis-py ${{ matrix.redis-py }} compatibility
-    needs: setup
     permissions:
       contents: read
       id-token: write
@@ -1394,12 +1332,10 @@ jobs:
         timeout-minutes: 5
         uses: ./.github/actions/cache-uv-downloads
 
-      - name: Set up the Rust build
+      - name: Set up the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: ./.github/actions/rust-bridge
-        with:
-          artifact: ${{ needs.setup.outputs.artifact }}
 
       - name: Install dependencies with redis-py ${{ matrix.redis-py }}
         if: steps.changes.outputs.decision != 'skip'
@@ -1503,7 +1439,7 @@ jobs:
   unit-passed:
     name: unit passed
     permissions: {}
-    needs: [setup, assert-shard-coverage, unit, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
+    needs: [assert-shard-coverage, unit, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2

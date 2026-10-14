@@ -13,50 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  setup:
-    name: smoke setup
-    permissions:
-      contents: read
-    outputs:
-      artifact: ${{ steps.rust-bridge-artifact.outputs.name }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        timeout-minutes: 3
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-
-      - name: Set up uv
-        timeout-minutes: 3
-        uses: ./.github/actions/setup-uv-with-retries
-        with:
-          version: "0.10.9"
-
-      - name: Build the Rust bridge
-        timeout-minutes: 20
-        uses: ./.github/actions/rust-bridge
-
-      - name: Upload Rust bridge artifact
-        timeout-minutes: 10
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
-        with:
-          name: rust-bridge-${{ github.run_id }}-${{ github.run_attempt }}
-          path: rust-bridge-dist/
-          retention-days: 1
-
-      - name: Expose the Rust bridge artifact
-        id: rust-bridge-artifact
-        timeout-minutes: 1
-        env:
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-        run: echo "name=rust-bridge-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
   dashboard-build:
     name: dashboard-build
@@ -73,7 +29,6 @@ jobs:
 
   core-checks:
     name: py${{ matrix.python-version }}
-    needs: setup
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -100,8 +55,6 @@ jobs:
 
       - name: Set up the Rust bridge
         uses: ./.github/actions/rust-bridge
-        with:
-          artifact: ${{ needs.setup.outputs.artifact }}
 
       - name: Install dependencies
         run: .github/scripts/uv_sync_with_rust_bridge.sh --frozen --extra proxy --extra cli --group dev --group proxy-dev --python ${{ matrix.python-version }}
@@ -144,7 +97,6 @@ jobs:
 
   all-extras:
     name: all-extras-py${{ matrix.python-version }}
-    needs: setup
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
@@ -171,8 +123,6 @@ jobs:
 
       - name: Set up the Rust bridge
         uses: ./.github/actions/rust-bridge
-        with:
-          artifact: ${{ needs.setup.outputs.artifact }}
 
       - name: Install every extra and dependency group
         run: .github/scripts/uv_sync_with_rust_bridge.sh --frozen --all-groups --all-extras --python ${{ matrix.python-version }}
@@ -325,7 +275,7 @@ jobs:
 
   smoke-passed:
     name: smoke passed
-    needs: [setup, dashboard-build, core-checks, all-extras, windows-sdk, proxy-build-from-pip]
+    needs: [dashboard-build, core-checks, all-extras, windows-sdk, proxy-build-from-pip]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
