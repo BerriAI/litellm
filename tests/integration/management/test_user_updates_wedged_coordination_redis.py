@@ -663,7 +663,8 @@ def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gate
             seconds=10,
         )
         assert denied_peer.json() == _user_model_denied_error(model), denied_peer.text
-        _observed(upstream)
+        denied_observations: Final = _observed(upstream)
+        assert denied_observations == [], denied_observations
         for proxy in (gateway, peer):
             refused = _user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
             assert refused.json() == _user_model_denied_error(model), refused.text

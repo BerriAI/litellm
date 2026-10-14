@@ -154,6 +154,7 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
         created_org: Final = gateway.post(
             "/organization/new", {"organization_alias": f"integration-{uuid.uuid4().hex}"}
         )
+        scenario.cleanups.callback(scenario.delete_budget, string_value(created_org["budget_id"]))
         organization_id: Final = string_value(created_org["organization_id"])
         other_organization_id: Final = scenario.organization()
         member: Final = scenario.user()
