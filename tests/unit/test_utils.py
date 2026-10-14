@@ -10,10 +10,12 @@ import logging
 import os
 import queue
 import threading
-from collections.abc import Callable, Iterator, Mapping
+import time
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePath
+from types import MappingProxyType
 from typing import Final, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -3650,36 +3652,100 @@ class TestIsStreamingRequest:
         assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True
 
 
-class _SpeechSuccessLogger(CustomLogger):
+class _SpeechLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.logged_payloads: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+        self.failed_payloads: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         await self.logged_payloads.put(kwargs["standard_logging_object"])
 
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        await self.failed_payloads.put(kwargs["standard_logging_object"])
+
+
+class _SyncSpeechLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_payloads: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.logged_payloads.put(kwargs["standard_logging_object"])
+
+
+class _PausedAsyncAudio(httpx.AsyncByteStream):
+    def __init__(self, first: bytes, rest: bytes | Exception, pause_seconds: float) -> None:
+        self._first: Final = first
+        self._rest: Final = rest
+        self._pause_seconds: Final = pause_seconds
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._first
+        await asyncio.sleep(self._pause_seconds)
+        if isinstance(self._rest, Exception):
+            raise self._rest
+        yield self._rest
+
+
+class _PausedSyncAudio(httpx.SyncByteStream):
+    def __init__(self, first: bytes, rest: bytes, pause_seconds: float) -> None:
+        self._first: Final = first
+        self._rest: Final = rest
+        self._pause_seconds: Final = pause_seconds
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self._first
+        time.sleep(self._pause_seconds)
+        yield self._rest
+
+
+_SPEECH_API_BASE: Final = "http://localhost:12348"
+_SPEECH_ARGS: Final = MappingProxyType(
+    {
+        "model": "elevenlabs/eleven_multilingual_v2",
+        "input": "hello there",
+        "voice": "21m00Tcm4TlvDq8ikWAM",
+        "api_base": _SPEECH_API_BASE,
+        "api_key": "fake_elevenlabs_api_key",
+    }
+)
+
+
+def _mock_elevenlabs_audio(respx_mock: respx.MockRouter, audio: httpx.AsyncByteStream | httpx.SyncByteStream) -> None:
+    respx_mock.post(url__regex=rf"{_SPEECH_API_BASE}/v1/text-to-speech/.*").mock(
+        return_value=httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=audio)
+    )
+
+
+def _audio_summary(num_bytes: int) -> dict[str, object]:
+    return {"object": "binary", "content_type": "audio/mpeg", "num_bytes": num_bytes}
+
+
+def _logged_seconds(payload: dict[str, object]) -> float:
+    start_time, end_time = payload["startTime"], payload["endTime"]
+    assert isinstance(start_time, float) and isinstance(end_time, float)
+    return end_time - start_time
+
+
+@pytest.fixture
+def speech_logger(monkeypatch: pytest.MonkeyPatch) -> _SpeechLogger:
+    logger: Final = _SpeechLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    return logger
+
 
 @pytest.mark.usefixtures("local_model_cost_map")
 async def test_aspeech_logs_streamed_audio_like_buffered_audio(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
 ) -> None:
-    api_base: Final = "http://localhost:12348"
-    respx_mock.post(url__regex=rf"{api_base}/v1/text-to-speech/.*").mock(
+    respx_mock.post(url__regex=rf"{_SPEECH_API_BASE}/v1/text-to-speech/.*").mock(
         return_value=httpx.Response(status_code=200, content=b"audio", headers={"content-type": "audio/mpeg"})
     )
-    speech_logger: Final = _SpeechSuccessLogger()
-    monkeypatch.setattr(litellm, "callbacks", [speech_logger])
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     async def logged_speech(stream: bool) -> dict[str, object]:
-        response: Final = await litellm.aspeech(
-            model="elevenlabs/eleven_multilingual_v2",
-            input="hello there",
-            voice="21m00Tcm4TlvDq8ikWAM",
-            api_base=api_base,
-            api_key="fake_elevenlabs_api_key",
-            stream=stream,
-        )
+        response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=stream)
         assert await response.aread() == b"audio"
         return await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
 
@@ -3689,6 +3755,71 @@ async def test_aspeech_logs_streamed_audio_like_buffered_audio(
     assert streamed["status"] == "success"
     assert streamed["call_type"] == buffered["call_type"]
     assert streamed["response_cost"] == buffered["response_cost"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_is_logged_when_the_audio_ends(
+    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
+) -> None:
+    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"rest", pause_seconds=0.3))
+
+    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True)
+    assert await response.aread() == b"firstrest"
+    logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+
+    assert logged["response"] == _audio_summary(len(b"firstrest"))
+    assert _logged_seconds(logged) >= 0.3
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_logs_a_failure_when_the_upstream_breaks_mid_clip(
+    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
+) -> None:
+    _mock_elevenlabs_audio(
+        respx_mock, _PausedAsyncAudio(b"first", httpx.ReadError("upstream reset"), pause_seconds=0)
+    )
+
+    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True)
+    with pytest.raises(httpx.ReadError):
+        await response.aread()
+    await response.aclose()
+    failed: Final = await asyncio.wait_for(speech_logger.failed_payloads.get(), timeout=5)
+
+    assert failed["status"] == "failure"
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=0.5)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_closed_mid_clip_is_logged_with_the_audio_sent(
+    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
+) -> None:
+    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"never sent", pause_seconds=60))
+
+    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True)
+    audio: Final = await response.aiter_bytes()
+    assert await anext(audio) == b"first"
+    await response.aclose()
+    logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+
+    assert logged["status"] == "success"
+    assert logged["response"] == _audio_summary(len(b"first"))
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_speech_stream_is_logged_when_the_audio_ends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_elevenlabs_audio(respx_mock, _PausedSyncAudio(b"first", b"rest", pause_seconds=0.3))
+    speech_logger: Final = _SyncSpeechLogger()
+    monkeypatch.setattr(litellm, "callbacks", [speech_logger])
+
+    response: Final = litellm.speech(**_SPEECH_ARGS, stream=True)
+    assert response.read() == b"firstrest"
+    logged: Final = speech_logger.logged_payloads.get(timeout=5)
+
+    assert logged["response"] == _audio_summary(len(b"firstrest"))
+    assert _logged_seconds(logged) >= 0.3
 
 
 class TestCallbackAsyncSyncSeparation:

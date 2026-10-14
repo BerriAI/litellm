@@ -4977,6 +4977,10 @@ class Router:
 
     async def aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
         """
+        With stream=True the response comes back at the provider's headers and keeps its
+        deployment slot until it is read to the end or closed, so close a response you stop
+        reading early.
+
         Example Usage:
 
         ```

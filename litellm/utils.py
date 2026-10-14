@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
+from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream, OnEndSyncByteStream
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
@@ -221,6 +222,7 @@ from litellm.types.llms.openai import (
     ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    HttpxBinaryResponseContent,
     OpenAITextCompletionUserMessage,
     OpenAIWebSearchOptions,
 )
@@ -290,7 +292,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -1370,6 +1372,62 @@ def _dispatch_success_logging(
     )
 
 
+def _unread_speech_upstream(result: object, call_type: str) -> httpx.Response | None:
+    if call_type not in _SPEECH_CALL_TYPES or not isinstance(result, HttpxBinaryResponseContent):
+        return None
+    return result.unread_response()
+
+
+def _async_speech_end_logger(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    is_completion_with_fallbacks: bool,
+    is_litellm_internal_call: bool,
+) -> Callable[[Exception | None], Awaitable[None]]:
+    async def log_speech_end(error: Exception | None) -> None:
+        end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # matches the naive start_time the wrapper took
+        if error is None:
+            _dispatch_success_logging(
+                logging_obj=logging_obj,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                is_completion_with_fallbacks=is_completion_with_fallbacks,
+                is_litellm_internal_call=is_litellm_internal_call,
+            )
+            return
+        if is_litellm_internal_call:
+            return
+        traceback_exception: Final = "".join(traceback.format_exception(error))
+        unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
+        logging_obj.failure_handler(error, traceback_exception, start_time, end_time)
+        await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
+
+    return log_speech_end
+
+
+def _sync_speech_end_logger(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    is_litellm_internal_call: bool,
+    executor: BoundedLoggingThreadPoolExecutor,
+) -> Callable[[Exception | None], None]:
+    ctx: Final = contextvars.copy_context()
+
+    def log_speech_end(error: Exception | None) -> None:
+        end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # matches the naive start_time the wrapper took
+        if error is not None:
+            logging_obj.failure_handler(error, "".join(traceback.format_exception(error)), start_time, end_time)
+            return
+        if is_litellm_internal_call:
+            return
+        executor.submit(ctx.run, logging_obj.success_handler, result, start_time, end_time)
+
+    return log_speech_end
+
+
 def _schedule_async_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
@@ -1906,11 +1964,23 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            if not is_internal_call.get():
+            executor: Final[BoundedLoggingThreadPoolExecutor] = getattr(sys.modules[__name__], "executor")
+            unread_speech: Final = _unread_speech_upstream(result, call_type)
+            if unread_speech is not None and isinstance(unread_speech.stream, httpx.SyncByteStream):
+                unread_speech.stream = OnEndSyncByteStream(
+                    unread_speech.stream,
+                    _sync_speech_end_logger(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        is_litellm_internal_call=is_internal_call.get(),
+                        executor=executor,
+                    ),
+                )
+            elif not is_internal_call.get():
                 # Copy the current context to propagate it to the background thread
                 # This is essential for OpenTelemetry span context propagation
                 ctx: Final = contextvars.copy_context()
-                executor: Final[BoundedLoggingThreadPoolExecutor] = getattr(sys.modules[__name__], "executor")
                 executor.submit(
                     ctx.run,
                     logging_obj.success_handler,
@@ -2216,14 +2286,27 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
-            _dispatch_success_logging(
-                logging_obj=logging_obj,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                is_completion_with_fallbacks=is_completion_with_fallbacks,
-                is_litellm_internal_call=_is_litellm_internal_call,
-            )
+            unread_speech: Final = _unread_speech_upstream(result, call_type)
+            if unread_speech is not None and isinstance(unread_speech.stream, httpx.AsyncByteStream):
+                unread_speech.stream = OnEndAsyncByteStream(
+                    unread_speech.stream,
+                    _async_speech_end_logger(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                        is_litellm_internal_call=_is_litellm_internal_call,
+                    ),
+                )
+            else:
+                _dispatch_success_logging(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    is_litellm_internal_call=_is_litellm_internal_call,
+                )
 
             return result
         except Exception as e:

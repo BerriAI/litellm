@@ -158,6 +158,9 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
             return self.response.num_bytes_downloaded
         return len(content)
 
+    def unread_response(self) -> httpx.Response | None:
+        return None if self.response.is_stream_consumed else self.response
+
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
             self._hidden_params.pop("response_cost", None)
