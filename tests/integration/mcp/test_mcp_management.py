@@ -377,15 +377,27 @@ def test_create_waits_on_the_sha256_advisory_lock_for_the_identifier(gateway: Ga
         assert _servers(gateway)[identity]["server_name"] == name
 
 
-def test_create_does_not_wait_on_the_legacy_blake2b_lock_id(gateway: Gateway) -> None:
+def test_create_waits_on_the_legacy_blake2b_lock_id(gateway: Gateway) -> None:
+    """Mixed-version mutual exclusion: a pre-change worker holds only the
+    legacy blake2b lock id, so a create on this build must block on it too."""
     with mcp_peer() as peer, gateway.scenario() as scenario:
         name: Final = "mgmt" + uuid.uuid4().hex[:8]
         lock_key: Final = legacy_advisory_lock_key(f"mcp_identifier:{name.lower()}")
-        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as holder:
+        with (
+            concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool,
+            psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as holder,
+        ):
             holder.execute("SELECT pg_advisory_lock(%s::bigint)", (lock_key,))
-            response: Final = gateway.request(
-                "POST", "/v1/mcp/server", {"server_name": name, "alias": name, **peer.registration()}
+            pending: Final = pool.submit(
+                gateway.request,
+                "POST",
+                "/v1/mcp/server",
+                {"server_name": name, "alias": name, **peer.registration()},
             )
+            eventually(lambda: advisory_waiters(lock_key), lambda rows: len(rows) == 1, seconds=20)
+            assert not pending.done()
+            holder.execute("SELECT pg_advisory_unlock(%s::bigint)", (lock_key,))
+            response: Final = pending.result(timeout=30)
         assert response.status_code == 201, response.text
         identity: Final = str(response.json()["server_id"])
         scenario.cleanups.callback(forget_mcp, gateway, identity)

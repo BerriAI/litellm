@@ -665,15 +665,18 @@ async def find_mcp_server_identifier_conflict(
 
 def _mcp_identifier_lock_keys(*identifiers: str | None) -> tuple[int, ...]:
     """Deterministic advisory-lock keys for the lowercased identifiers, sorted
-    so concurrent requests for the same pair always lock in the same order."""
-    return tuple(
-        int.from_bytes(
-            hashlib.sha256(f"mcp_identifier:{normalized}".encode()).digest()[:8],
-            "big",
-            signed=True,
-        )
-        for normalized in sorted(frozenset(value.lower() for value in identifiers if value))
-    )
+    so concurrent requests for the same pair always lock in the same order.
+
+    Each identifier locks its sha256 key and then the legacy blake2b key:
+    transition window for mixed-version rolling upgrades, where pre-change
+    workers still take only the blake2b lock. Delete the legacy element once
+    main-only workers are gone."""
+    keys: list[int] = []
+    for normalized in sorted(frozenset(value.lower() for value in identifiers if value)):
+        digest: Final = f"mcp_identifier:{normalized}".encode()
+        keys.append(int.from_bytes(hashlib.sha256(digest).digest()[:8], "big", signed=True))
+        keys.append(int.from_bytes(hashlib.blake2b(digest, digest_size=8).digest(), "big", signed=True))
+    return tuple(keys)
 
 
 async def _mcp_server_write_if_identifier_free(
@@ -2421,6 +2424,20 @@ async def get_user_env_vars_bulk(
     return {row.server_id: _decode_user_env_vars(row.values_b64) for row in rows}
 
 
+def _mcp_user_env_var_lock_keys(user_id: str, server_id: str) -> tuple[int, ...]:
+    """Deterministic advisory-lock keys for the ``(user_id, server_id)`` pair.
+
+    The sha256 key comes first, then the legacy blake2b key: transition window
+    for mixed-version rolling upgrades, where pre-change workers still take
+    only the blake2b lock. Delete the legacy element once main-only workers
+    are gone."""
+    digest: Final = f"{user_id}:{server_id}".encode()
+    return (
+        int.from_bytes(hashlib.sha256(digest).digest()[:8], "big", signed=True),
+        int.from_bytes(hashlib.blake2b(digest, digest_size=8).digest(), "big", signed=True),
+    )
+
+
 async def merge_user_env_vars(
     prisma_client: PrismaClient,
     user_id: str,
@@ -2437,13 +2454,10 @@ async def merge_user_env_vars(
     so an admin retiring a user-scoped variable also clears its stored value.
     """
     allowed: Final = set(allowed_names)
-    lock_key: Final = int.from_bytes(
-        hashlib.sha256(f"{user_id}:{server_id}".encode()).digest()[:8],
-        "big",
-        signed=True,
-    )
+    lock_keys: Final = _mcp_user_env_var_lock_keys(user_id, server_id)
     async with _db_transaction_manager(prisma_client) as tx:
-        await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
+        for lock_key in lock_keys:
+            await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
         row: Final[prisma_db_models.LiteLLM_MCPUserEnvVars | None] = await tx.litellm_mcpuserenvvars.find_unique(
             where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
         )

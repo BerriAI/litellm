@@ -382,14 +382,23 @@ def test_store_waits_on_the_sha256_advisory_lock_for_the_user_and_server(gateway
         assert set_names(env_status(gateway, key, identity)) == {TOKEN: True}
 
 
-def test_store_does_not_wait_on_the_legacy_blake2b_lock_id(gateway: Gateway) -> None:
+def test_store_waits_on_the_legacy_blake2b_lock_id(gateway: Gateway) -> None:
+    """Mixed-version mutual exclusion: a pre-change worker holds only the
+    legacy blake2b lock id, so a store on this build must block on it too."""
     with mcp_peer() as peer, gateway.scenario() as scenario:
         identity: Final = register_user_var_server(scenario, peer, TOKEN)
         user: Final = scenario.user()
         key: Final = scenario.key(user_id=user, object_permission=grants(identity))
         lock_key: Final = legacy_advisory_lock_key(f"{user}:{identity}")
-        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as holder:
+        with (
+            ThreadPoolExecutor(max_workers=1) as pool,
+            psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as holder,
+        ):
             holder.execute("SELECT pg_advisory_lock(%s::bigint)", (lock_key,))
-            response: Final = store(gateway, key, identity, {TOKEN: "free-value"})
+            pending: Final = pool.submit(store, gateway, key, identity, {TOKEN: "held-value"})
+            eventually(lambda: advisory_waiters(lock_key), lambda rows: len(rows) == 1, seconds=20)
+            assert not pending.done()
+            holder.execute("SELECT pg_advisory_unlock(%s::bigint)", (lock_key,))
+            response: Final = pending.result(timeout=30)
         assert response.status_code == 200, response.text
         assert set_names(env_status(gateway, key, identity)) == {TOKEN: True}

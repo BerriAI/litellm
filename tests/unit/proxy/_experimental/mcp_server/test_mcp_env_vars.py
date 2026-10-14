@@ -869,23 +869,22 @@ def _transactional_env_vars_prisma(read_delay: float = 0.0):
     class _Tx:
         def __init__(self, store, delay):
             self._store = store
-            self._held = None
+            self._held = []
             self.litellm_mcpuserenvvars = _Table(store, delay=delay)
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *exc):
-            if self._held is not None:
-                self._held.release()
-                self._held = None
+            while self._held:
+                self._held.pop().release()
             return False
 
         async def execute_raw(self, query, *args):
             lock_key = args[0]
             lock = self._store.locks.setdefault(lock_key, asyncio.Lock())
             await lock.acquire()
-            self._held = lock
+            self._held.append(lock)
             return 1
 
     class _DB:
@@ -1660,15 +1659,34 @@ async def test_missing_user_env_vars_error_renders_in_mcp_call_tool():
 
 
 @pytest.mark.asyncio
-async def test_merge_user_env_vars_locks_the_sha256_key_for_user_and_server(env_vars_salt_key):
+async def test_merge_user_env_vars_locks_both_the_sha256_and_legacy_blake2b_keys(env_vars_salt_key):
+    """Mixed-version mutual exclusion: the merge must take the new sha256 key
+    AND the legacy blake2b key (in that fixed order) so a pre-change worker
+    still serialises against it during a rolling upgrade."""
     prisma: Final = _transactional_env_vars_prisma()
     await merge_user_env_vars(prisma, "alice", "srv-1", {"TOKEN": "x"}, allowed_names=["TOKEN"])
 
-    expected: Final = int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True)
-    assert list(prisma.db._store.locks) == [expected]
+    assert list(prisma.db._store.locks) == [
+        int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True),
+        int.from_bytes(hashlib.blake2b(b"alice:srv-1", digest_size=8).digest(), "big", signed=True),
+    ]
 
 
-def test_mcp_identifier_lock_keys_use_sha256_of_the_lowercased_identifier():
+def test_mcp_identifier_lock_keys_use_sha256_and_legacy_blake2b_of_the_lowercased_identifier():
     keys: Final = _mcp_identifier_lock_keys("Name", "name", None)
 
-    assert keys == (int.from_bytes(hashlib.sha256(b"mcp_identifier:name").digest()[:8], "big", signed=True),)
+    assert keys == (
+        int.from_bytes(hashlib.sha256(b"mcp_identifier:name").digest()[:8], "big", signed=True),
+        int.from_bytes(hashlib.blake2b(b"mcp_identifier:name", digest_size=8).digest(), "big", signed=True),
+    )
+
+
+def test_mcp_user_env_var_lock_keys_use_sha256_and_legacy_blake2b_for_user_and_server():
+    from litellm.proxy._experimental.mcp_server.db import _mcp_user_env_var_lock_keys
+
+    keys: Final = _mcp_user_env_var_lock_keys("alice", "srv-1")
+
+    assert keys == (
+        int.from_bytes(hashlib.sha256(b"alice:srv-1").digest()[:8], "big", signed=True),
+        int.from_bytes(hashlib.blake2b(b"alice:srv-1", digest_size=8).digest(), "big", signed=True),
+    )
