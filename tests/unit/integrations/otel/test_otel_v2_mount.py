@@ -17,6 +17,7 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from starlette.routing import Route  # noqa: E402
 import httpx  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from opentelemetry.instrumentation.propagators import (  # noqa: E402
@@ -295,11 +296,19 @@ def test_instrument_fastapi_app_attaches_when_gate_on(monkeypatch):
 _UPSTREAM_TRACERESPONSE = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 
 
+class _TupleHeadersApp:
+    async def __call__(self, scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": ((b"x-litellm-call-id", b"call-tuple"),)})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+
 def _traced_app(monkeypatch, tracer_provider):
+    from litellm.proxy.proxy_server import otel_unhandled_exception_handler
+
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     is_otel_v2_enabled.cache_clear()
-    monkeypatch.setattr(trace, "_TRACER_PROVIDER", tracer_provider)
     app = fastapi.FastAPI()
+    app.add_exception_handler(Exception, otel_unhandled_exception_handler)
 
     @app.get("/success")
     async def success():
@@ -323,8 +332,20 @@ def _traced_app(monkeypatch, tracer_provider):
 
     app.add_api_route("/relayed", relay_upstream)
     app.add_api_route("/relayed/health", relay_upstream)
+    app.router.routes.append(Route("/tuple-headers", _TupleHeadersApp()))
 
-    instrument_fastapi_app(app)
+    @app.get("/crash")
+    async def crash(request: fastapi.Request):
+        request.state.parent_otel_span = trace.get_current_span()
+        raise RuntimeError("unhandled")
+
+    @app.websocket("/ws")
+    async def websocket_route(websocket: fastapi.WebSocket):
+        await websocket.accept()
+        await websocket.send_text("ok")
+        await websocket.close()
+
+    instrument_fastapi_app(app, tracer_provider=tracer_provider)
     return app
 
 
@@ -341,12 +362,14 @@ def _server_spans_by_route(exporter):
 
 def test_every_traced_response_names_its_own_server_span(monkeypatch):
     provider, exporter = _exporting_provider()
-    client = TestClient(_traced_app(monkeypatch, provider))
+    client = TestClient(_traced_app(monkeypatch, provider), raise_server_exceptions=False)
 
-    responses = {path: client.get(path) for path in ("/success", "/failure", "/stream")}
+    responses = {path: client.get(path) for path in ("/success", "/failure", "/stream", "/tuple-headers", "/crash")}
 
     server_spans = _server_spans_by_route(exporter)
     assert responses["/failure"].status_code == 400
+    assert responses["/tuple-headers"].status_code == 200
+    assert responses["/crash"].status_code == 500
     assert responses["/stream"].text == "data: first\n\ndata: [DONE]\n\n"
     for path, response in responses.items():
         context = server_spans[path].context
@@ -366,7 +389,7 @@ def test_server_span_carries_the_call_id_its_response_returns(monkeypatch):
     provider, exporter = _exporting_provider()
     client = TestClient(_traced_app(monkeypatch, provider))
 
-    responses = {path: client.get(path) for path in ("/success", "/failure", "/stream", "/relayed")}
+    responses = {path: client.get(path) for path in ("/success", "/failure", "/stream", "/relayed", "/tuple-headers")}
 
     server_spans = _server_spans_by_route(exporter)
     for path, response in responses.items():
@@ -384,12 +407,22 @@ def test_traceresponse_keeps_the_caller_trace(monkeypatch):
     assert response.headers["traceresponse"].split("-")[1] == caller_trace_id
 
 
-def test_unsampled_request_reports_its_trace_as_not_sampled(monkeypatch):
-    app = _traced_app(monkeypatch, TracerProvider(sampler=ALWAYS_OFF))
+def test_unsampled_requests_get_no_traceresponse(monkeypatch):
+    client = TestClient(_traced_app(monkeypatch, TracerProvider(sampler=ALWAYS_OFF)), raise_server_exceptions=False)
 
-    response = TestClient(app).get("/success")
+    responses = [client.get(path) for path in ("/success", "/crash")]
 
-    assert response.headers["traceresponse"].endswith("-00")
+    assert [response.headers.get_list("traceresponse") for response in responses] == [[], []]
+
+
+def test_websocket_handshakes_carry_no_traceresponse(monkeypatch):
+    provider, _ = _exporting_provider()
+
+    with TestClient(_traced_app(monkeypatch, provider)).websocket_connect("/ws") as websocket:
+        assert websocket.receive_text() == "ok"
+        handshake_header_names = [name for name, _ in websocket.extra_headers or ()]
+
+    assert b"traceresponse" not in handshake_header_names
 
 
 def test_gate_off_responses_carry_no_traceresponse(monkeypatch):

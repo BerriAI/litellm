@@ -1869,7 +1869,7 @@ app = FastAPI(
 ## middleware after an application has started". See
 ## ``litellm.integrations.otel.mount`` for the full rationale; the call is a safe
 ## no-op when the gate is off or the instrumentation package is unavailable.
-from litellm.integrations.otel.mount import instrument_fastapi_app
+from litellm.integrations.otel.mount import instrument_fastapi_app, trace_response_headers
 
 instrument_fastapi_app(app)
 
@@ -2186,6 +2186,12 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
+    response: Final = await _unhandled_exception_response(request, exc)
+    response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
+    return response
+
+
+async def _unhandled_exception_response(request: Request, exc: Exception) -> Response:
     if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
         verbose_proxy_logger.warning("Database unavailable during request: %s", type(exc).__name__)
         return await openai_exception_handler(

@@ -12,6 +12,8 @@ when the feature gate is off.
 """
 
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
@@ -19,6 +21,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from opentelemetry.trace import Span, TracerProvider
 
 # Routes excluded from server-span tracing by default: high-frequency pollers and
 # static UI/docs assets, none of which are LLM traffic. Entries are substring-matched
@@ -99,7 +102,7 @@ def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: dict) -> 
         pass
 
 
-def instrument_fastapi_app(app: "FastAPI") -> None:
+def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | None" = None) -> None:
     """Attach OTel server-span instrumentation to the proxy FastAPI app.
 
     Safe no-op when the V2 gate is off or ``opentelemetry-instrumentation-fastapi``
@@ -112,11 +115,11 @@ def instrument_fastapi_app(app: "FastAPI") -> None:
     after config load (see ``proxy_startup_event``), and the proxy delegates to it.
     That way server spans and gen-ai spans share one provider and the same trace.
 
-    Once instrumented, every traced response carries the W3C ``traceresponse``
+    Once instrumented, every sampled HTTP response carries the W3C ``traceresponse``
     header naming its server span, unless the response already relays an upstream's
     ``traceresponse`` or another response propagator is already registered. The
     server span also gets ``litellm.call_id`` from the response's
-    ``x-litellm-call-id`` header.
+    ``x-litellm-call-id`` header. ``tracer_provider`` defaults to the global provider.
     """
     try:
         if not is_otel_v2_enabled():
@@ -142,6 +145,7 @@ def instrument_fastapi_app(app: "FastAPI") -> None:
         )
         FastAPIInstrumentor.instrument_app(
             app,
+            tracer_provider=tracer_provider,
             excluded_urls=excluded_urls,
             server_request_hook=_passthrough_span_name_hook,
             # Drop the ASGI "http receive"/"http send" lifecycle sub-spans: they
@@ -153,3 +157,28 @@ def instrument_fastapi_app(app: "FastAPI") -> None:
             set_global_response_propagator(UpstreamFirstTraceResponsePropagator())
     except Exception as e:
         verbose_logger.debug("Skipping OTel V2 FastAPI instrumentation: %s", e)
+
+
+def trace_response_headers(span: "Span | None") -> Mapping[str, str]:
+    """Response headers naming ``span`` for a response built outside the FastAPI instrumentation.
+
+    Starlette runs the ``Exception`` handler outside every middleware, so its 500 never reaches the response
+    propagator and the handler has to add these itself.
+    """
+    if span is None or not is_otel_v2_enabled():
+        return MappingProxyType({})
+    try:
+        from opentelemetry import trace
+        from opentelemetry.instrumentation.asgi import (  # pyright: ignore[reportMissingTypeStubs]  # the ASGI instrumentation ships no py.typed marker
+            asgi_getter,
+            asgi_setter,
+        )
+        from opentelemetry.instrumentation.propagators import get_global_response_propagator
+    except ImportError:
+        return MappingProxyType({})
+    propagator: Final = get_global_response_propagator()  # pyright: ignore[reportUnknownVariableType]  # upstream leaves inject unannotated
+    if propagator is None:
+        return MappingProxyType({})
+    start: Final[dict[str, object]] = {"type": "http.response.start"}  # mutable-ok: the propagator writes into it
+    propagator.inject(start, context=trace.set_span_in_context(span), setter=asgi_setter)  # pyright: ignore[reportUnknownMemberType]  # upstream leaves inject unannotated
+    return MappingProxyType({key: ", ".join(asgi_getter.get(start, key) or ()) for key in asgi_getter.keys(start)})  # pyright: ignore[reportUnknownMemberType]  # the ASGI instrumentation ships no py.typed marker
