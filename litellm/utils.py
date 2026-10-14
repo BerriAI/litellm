@@ -5073,6 +5073,13 @@ def get_optional_params(
             model=model,
             drop_params=bool(drop_params),
         )
+    if (litellm.drop_params or drop_params) and custom_llm_provider != "litellm_proxy":
+        litellm.AnthropicConfig.maybe_drop_speed_param(
+            model=model,
+            optional_params=passed_params,
+            drop_params=True,
+            custom_llm_provider=custom_llm_provider or None,
+        )
     # if user passed in non-default kwargs for specific providers/models, pass them along
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
