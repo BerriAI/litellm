@@ -21,7 +21,6 @@ Metric = Literal[
     "time_to_first_token_seconds",
     "memory_growth_megabytes",
 ]
-UserRole = Literal["internal_user", "internal_user_viewer", "proxy_admin", "proxy_admin_viewer"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +40,6 @@ class User:
 
     name: str
     team: str | None = None
-    role: UserRole = "internal_user"
     max_budget: float | None = None
 
 
