@@ -128,6 +128,21 @@ describe("TeamAdminSettingsForm", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ team_member_budget_duration: null }));
   });
 
+  it("shows a stored member budget that never resets as Never resets", () => {
+    renderWithProviders(
+      <TeamAdminSettingsForm
+        initialValues={{ team_member_budget: 10, team_member_budget_duration: null }}
+        editableFields={new Set(["team_member_budget_duration"])}
+        mayRaiseMaxBudget={false}
+        isSaving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("Member Default Budget Duration")).toHaveTextContent("Never resets");
+  });
+
   it("closes without saving on cancel", async () => {
     const user = userEvent.setup();
     const { onSave, onCancel } = renderForm(new Set(["tpm_limit"]));

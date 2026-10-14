@@ -163,8 +163,8 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
-    NO_TEAM_MEMBER_DEFAULTS,
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    TEAM_MEMBER_DEFAULT_FIELDS,
     TeamMemberDefaults,
     resolve_team_admin_editable_fields,
     stored_team_member_budget_id,
@@ -2369,14 +2369,20 @@ async def update_team(
         if access_role is None:
             team_access_denied()
         if access_role == "team_admin":
+            permitted: Final = resolve_team_admin_editable_fields(
+                _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+            )
+            reads_member_defaults: Final = bool(permitted) and bool(data.model_fields_set & TEAM_MEMBER_DEFAULT_FIELDS)
             data = team_admin_request_or_raise(  # rebind-ok: resent values must not reach the derived writes below
                 team_admin_edit_verdict(
                     data=data,
                     existing=existing_team,
-                    permitted=resolve_team_admin_editable_fields(
-                        _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+                    permitted=permitted,
+                    member_defaults=(
+                        await _stored_team_member_defaults(prisma_client, existing_team)
+                        if reads_member_defaults
+                        else None
                     ),
-                    member_defaults=await _stored_team_member_defaults(prisma_client, existing_team),
                 )
             )
 
@@ -4904,11 +4910,13 @@ async def validate_membership(user_api_key_dict: UserAPIKeyAuth, team_table: Lit
     )
 
 
-async def _stored_team_member_defaults(prisma_client: PrismaClient, team: LiteLLM_TeamTable) -> TeamMemberDefaults:
+async def _stored_team_member_defaults(
+    prisma_client: PrismaClient, team: LiteLLM_TeamTable
+) -> TeamMemberDefaults | None:
     budget_id: Final = stored_team_member_budget_id(team)
     if budget_id is None:
-        return NO_TEAM_MEMBER_DEFAULTS
-    return team_member_defaults(await BudgetRepository(prisma_client).find_by_id(budget_id, "budget_id"))
+        return None
+    return team_member_defaults(await BudgetRepository(prisma_client).find_by_id(budget_id))
 
 
 async def _add_team_member_budget_table(

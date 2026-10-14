@@ -5,7 +5,7 @@ above the organization's budget, never removing the cap), the ``projects`` permi
 /key/update."""
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -72,7 +72,9 @@ class TeamMemberDefaults:
     team_member_rpm_limit: int | None = None
 
 
-NO_TEAM_MEMBER_DEFAULTS: Final = TeamMemberDefaults()
+TEAM_MEMBER_DEFAULT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,9 +181,9 @@ def stored_team_member_budget_id(team: LiteLLM_TeamTable) -> str | None:
     return budget_id if isinstance(budget_id, str) else None
 
 
-def team_member_defaults(budget: LiteLLM_BudgetTable | None) -> TeamMemberDefaults:
+def team_member_defaults(budget: LiteLLM_BudgetTable | None) -> TeamMemberDefaults | None:
     if budget is None:
-        return NO_TEAM_MEMBER_DEFAULTS
+        return None
     return TeamMemberDefaults(
         team_member_budget=budget.max_budget,
         team_member_budget_duration=budget.budget_duration,
@@ -211,23 +213,35 @@ def _column_changed(
     return True
 
 
+def _member_defaults_by_field(member_defaults: TeamMemberDefaults | None) -> Mapping[str, object]:
+    stored: Final = member_defaults or TeamMemberDefaults()
+    return MappingProxyType(
+        {
+            "team_member_budget": stored.team_member_budget,
+            "team_member_budget_duration": stored.team_member_budget_duration,
+            "team_member_tpm_limit": stored.team_member_tpm_limit,
+            "team_member_rpm_limit": stored.team_member_rpm_limit,
+        }
+    )
+
+
 def changed_team_fields(
     data: UpdateTeamRequest,
     existing_row: LiteLLM_TeamTable,
-    member_defaults: TeamMemberDefaults = NO_TEAM_MEMBER_DEFAULTS,
+    member_defaults: TeamMemberDefaults | None = None,
 ) -> frozenset[str]:
     """Logical field names whose stored value the request would change.
 
     Request and stored row are compared as JSON values so both sides share one representation. Fields the
     server folds into metadata are attributed to their own name whether they arrive top-level or inside
     ``metadata``; anything else in ``metadata`` is attributed to ``metadata``. The ``team_member_*`` defaults
-    compare against the team's member budget row. Fields with no stored counterpart count as changed whenever
-    they are sent.
+    compare against the team's member budget row (``None`` when it has none, read as all null). Fields with no
+    stored counterpart count as changed whenever they are sent.
     """
     submitted: Final = _JSON_OBJECT.validate_json(data.model_dump_json(exclude_unset=True))
     existing: Final = _JSON_OBJECT.validate_json(existing_row.model_dump_json())
     column_fields: Final = frozenset(data.model_fields_set) - _NOT_COLUMNS - _METADATA_FOLDED_FIELDS
-    stored_member_defaults: Final = MappingProxyType(asdict(member_defaults))
+    stored_member_defaults: Final = _member_defaults_by_field(member_defaults)
     column_changes: Final = frozenset(
         field
         for field in column_fields
@@ -249,7 +263,7 @@ def team_admin_edit_verdict(
     data: UpdateTeamRequest,
     existing: LiteLLM_TeamTable,
     permitted: frozenset[str],
-    member_defaults: TeamMemberDefaults = NO_TEAM_MEMBER_DEFAULTS,
+    member_defaults: TeamMemberDefaults | None = None,
 ) -> TeamAdminEditVerdict:
     if not permitted:
         return TeamAdminEditingDisabled()
@@ -257,7 +271,13 @@ def team_admin_edit_verdict(
     blocked: Final = sorted(changed - permitted)
     if blocked:
         return TeamAdminFieldNotPermitted(field=blocked[0])
-    return TeamAdminEditAllowed(request=_only_changes(data, changed))
+    creates_member_budget: Final = member_defaults is None and bool(changed & TEAM_MEMBER_DEFAULT_FIELDS)
+    sent_for_new_member_budget: Final = (
+        frozenset(data.model_fields_set) & TEAM_MEMBER_DEFAULT_FIELDS & permitted
+        if creates_member_budget
+        else frozenset[str]()
+    )
+    return TeamAdminEditAllowed(request=_only_changes(data, changed | sent_for_new_member_budget))
 
 
 def team_admin_request_or_raise(verdict: TeamAdminEditVerdict) -> UpdateTeamRequest:

@@ -199,22 +199,22 @@ _MEMBER_DEFAULT_EDITS: Final = (
 
 
 class TestTeamMemberDefaultEdits:
-    @pytest.mark.parametrize("field,new,stored", _MEMBER_DEFAULT_EDITS)
-    def test_enabled_field_change_is_allowed(self, field: str, new: object, stored: object):
+    @pytest.mark.parametrize("field,new,_stored", _MEMBER_DEFAULT_EDITS)
+    def test_enabled_field_change_is_allowed(self, field: str, new: object, _stored: object):
         data: Final = UpdateTeamRequest.model_validate({"team_id": "team-1", field: new})
         verdict: Final = team_admin_edit_verdict(data, _team(), _permitted(field), _STORED_MEMBER_DEFAULTS)
         assert isinstance(verdict, TeamAdminEditAllowed)
         assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", field: new}
 
-    @pytest.mark.parametrize("field,new,stored", _MEMBER_DEFAULT_EDITS)
-    def test_change_without_the_field_enabled_names_it(self, field: str, new: object, stored: object):
+    @pytest.mark.parametrize("field,new,_stored", _MEMBER_DEFAULT_EDITS)
+    def test_change_without_the_field_enabled_names_it(self, field: str, new: object, _stored: object):
         data: Final = UpdateTeamRequest.model_validate({"team_id": "team-1", field: new})
         verdict: Final = team_admin_edit_verdict(data, _team(), _permitted("tpm_limit"), _STORED_MEMBER_DEFAULTS)
         assert verdict == TeamAdminFieldNotPermitted(field=field)
 
-    @pytest.mark.parametrize("field,new,stored", _MEMBER_DEFAULT_EDITS)
+    @pytest.mark.parametrize("field,_new,stored", _MEMBER_DEFAULT_EDITS)
     def test_resending_the_stored_value_is_dropped_without_the_field_enabled(
-        self, field: str, new: object, stored: object
+        self, field: str, _new: object, stored: object
     ):
         data: Final = UpdateTeamRequest.model_validate({"team_id": "team-1", field: stored, "tpm_limit": 6})
         verdict: Final = team_admin_edit_verdict(
@@ -232,9 +232,28 @@ class TestTeamMemberDefaultEdits:
             team_member_rpm_limit=None,
             tpm_limit=6,
         )
-        verdict: Final = team_admin_edit_verdict(data, _team(tpm_limit=5), _permitted("tpm_limit"), TeamMemberDefaults())
+        verdict: Final = team_admin_edit_verdict(data, _team(tpm_limit=5), _permitted("tpm_limit"), None)
         assert isinstance(verdict, TeamAdminEditAllowed)
         assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "tpm_limit": 6}
+
+    def test_first_member_budget_keeps_an_explicit_never_resets_duration(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", team_member_budget=5.0, team_member_budget_duration=None)
+        permitted: Final = _permitted("team_member_budget", "team_member_budget_duration")
+        verdict: Final = team_admin_edit_verdict(data, _team(budget_duration="7d"), permitted, None)
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {
+            "team_id": "team-1",
+            "team_member_budget": 5.0,
+            "team_member_budget_duration": None,
+        }
+
+    def test_first_member_budget_drops_a_duration_the_team_admin_may_not_set(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", team_member_budget=5.0, team_member_budget_duration=None)
+        verdict: Final = team_admin_edit_verdict(
+            data, _team(budget_duration="7d"), _permitted("team_member_budget"), None
+        )
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "team_member_budget": 5.0}
 
 
 class TestTeamAdminRequestOrRaise:

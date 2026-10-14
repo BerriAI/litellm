@@ -101,7 +101,7 @@ const changedValue = (
   }
   if (value === undefined) return null;
   const duration = durationOrNull(value);
-  return duration === durationOrNull(initialValue) ? null : [field, duration];
+  return initialValue !== undefined && duration === durationOrNull(initialValue) ? null : [field, duration];
 };
 
 export const teamAdminSettingsChanges = (
