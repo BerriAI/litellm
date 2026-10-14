@@ -491,13 +491,28 @@ def test_oss_requires_its_own_checkpoint(provider: str, model: str | None) -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider,model", [("laya", "english"), ("bespoke", "nimble-latest")])
-@pytest.mark.parametrize("custom_base", [False, True])
+@pytest.mark.parametrize(
+    "configured_base,server,expected_authorization",
+    [
+        (None, "{env}", "Bearer oss-env-key"),
+        ("{env}/", "{env}", "Bearer oss-env-key"),
+        ("https://another-classifier.test", "https://another-classifier.test", None),
+    ],
+)
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
-    monkeypatch: pytest.MonkeyPatch, custom_base: bool, legacy: bool, provider: str, model: str
+    monkeypatch: pytest.MonkeyPatch,
+    configured_base: str | None,
+    server: str,
+    expected_authorization: str | None,
+    legacy: bool,
+    provider: str,
+    model: str,
 ) -> None:
+    env_base: Final = f"https://{provider}.test"
+    upstream_base: Final = server.format(env=env_base)
     monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
-    monkeypatch.setenv(f"{provider.upper()}_API_BASE", f"https://{provider}.test")
+    monkeypatch.setenv(f"{provider.upper()}_API_BASE", env_base)
     monkeypatch.setenv(f"{provider.upper()}_API_KEY", "oss-env-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setitem(litellm.model_cost, f"{provider}/{model}", {"input_cost_per_token": 0.01})
@@ -511,14 +526,14 @@ async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
             "jev_classifier_config" if legacy else "opensource_classifier_config": {
                 "provider": provider,
                 "model": model,
-                **({"api_base": f"https://{provider}.test"} if custom_base else {}),
+                **({"api_base": configured_base.format(env=env_base)} if configured_base is not None else {}),
             },
             "tiers": {"SIMPLE": "cheap"},
         },
         derive_savings_baseline=False,
     )
     with respx.mock(assert_all_called=True) as upstream:
-        route: Final = upstream.post(f"https://{provider}.test/v1/systemone").respond(
+        route: Final = upstream.post(f"{upstream_base}/v1/systemone").respond(
             200,
             json={
                 "model": "laya-rl-agent" if provider == "laya" else model,
@@ -535,7 +550,7 @@ async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
     assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == (provider, model)
     assert outcome.classifier_cost == pytest.approx(0.31)
     sent: Final = route.calls.last.request
-    assert sent.headers.get("authorization") == (None if custom_base else "Bearer oss-env-key")
+    assert sent.headers.get("authorization") == expected_authorization
     assert json.loads(sent.content)["model"] == model
     assert len(recorder.calls) == 1
     assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
@@ -655,7 +670,9 @@ async def test_databricks_routes_through_ai_decide_without_a_model_field_and_acc
     assert outcome.jev_verdict.label == "SIMPLE"
     assert outcome.classifier_cost is None
     sent: Final = route.calls.last.request
-    assert sent.headers.get("authorization") == ("Bearer dapi-configured" if configured_key else "Bearer dapi-env-token")
+    assert sent.headers.get("authorization") == (
+        "Bearer dapi-configured" if configured_key else "Bearer dapi-env-token"
+    )
     assert set(json.loads(sent.content)) == {"state", "questions"}
     assert len(recorder.calls) == 1
 
