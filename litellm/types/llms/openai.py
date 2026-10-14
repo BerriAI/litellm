@@ -1950,7 +1950,10 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
     sequence_number: int
-    error: ErrorEventError
+    error: ErrorEventError | None = None
+    code: str | int | None = None
+    message: str | None = None
+    param: str | Mapping[str, object] | None = None
 
 
 class GenericEvent(BaseLiteLLMOpenAIResponseObject):
