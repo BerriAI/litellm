@@ -4663,7 +4663,9 @@ class Router:
     ) -> None:
         async def healthy_deployments() -> Sequence[object]:
             deployments, _ = await self._async_get_healthy_deployments(
-                model=model, parent_otel_span=parent_otel_span, request_kwargs=request_kwargs
+                model=model,
+                parent_otel_span=parent_otel_span,
+                request_kwargs=self._request_kwargs_if_ptu_share_holder(request_kwargs),
             )
             return deployments
 
@@ -5965,7 +5967,7 @@ class Router:
         healthy_deployments, all_deployments = await self._async_get_healthy_deployments(
             model=model_group,
             parent_otel_span=get_parent_otel_span_from_kwargs(retry_kwargs),
-            request_kwargs=initial_kwargs,
+            request_kwargs=self._request_kwargs_if_ptu_share_holder(initial_kwargs),
         )
         budget, policy_applies = self._anthropic_messages_retry_budget(_mid_stream_retry_trigger(e), initial_kwargs)
         last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
@@ -8106,7 +8108,9 @@ class Router:
             ) = await self._async_get_healthy_deployments(
                 model=kwargs.get("model") or "",
                 parent_otel_span=parent_otel_span,
-                request_kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: kwargs keys are param names
+                request_kwargs=self._request_kwargs_if_ptu_share_holder(
+                    cast(Mapping[str, object], kwargs)  # cast-ok: kwargs keys are param names
+                ),
             )
 
             # Check retry policy FIRST, before should_retry_this_error
@@ -8199,7 +8203,9 @@ class Router:
                         ) = await self._async_get_healthy_deployments(
                             model=_model,
                             parent_otel_span=parent_otel_span,
-                            request_kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: kwargs keys are param names
+                            request_kwargs=self._request_kwargs_if_ptu_share_holder(
+                                cast(Mapping[str, object], kwargs)  # cast-ok: kwargs keys are param names
+                            ),
                         )
                     else:
                         _healthy_deployments = []
@@ -12613,6 +12619,9 @@ class Router:
         if team_id not in self._ptu_share_teams():
             return None
         return self._cached_team_ptu_ceiling(team_id, model_group)
+
+    def _request_kwargs_if_ptu_share_holder(self, request_kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+        return request_kwargs if get_request_team_id(request_kwargs) in self._ptu_share_teams() else None
 
     def _collect_ptu_share_teams(self) -> frozenset[str]:
         return ptu_share_teams(self.get_model_list() or ())
