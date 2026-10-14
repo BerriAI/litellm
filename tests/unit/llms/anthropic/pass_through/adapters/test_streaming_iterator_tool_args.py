@@ -574,6 +574,83 @@ def test_next_call_opening_beside_a_fragment_of_the_open_call_waits_for_it(use_a
 
 
 @pytest.mark.parametrize("use_async", [False, True])
+def test_three_calls_in_one_chunk_come_out_in_index_order(use_async):
+    chunks = [
+        _stream_chunk(
+            Delta(
+                role="assistant",
+                tool_calls=[
+                    _tool_call(0, '{"command": "ls -d /tmp"}', call_id="call_a", name="Bash"),
+                    _tool_call(1, '{"command": "ls -d /var"}', call_id="call_b", name="Bash"),
+                    _tool_call(2, '{"command": "ls -d /etc"}', call_id="call_c", name="Bash"),
+                ],
+            )
+        ),
+        _stream_chunk(Delta(), finish_reason="tool_calls"),
+    ]
+
+    blocks = _blocks(_drain(chunks, use_async))
+
+    assert [block["start"]["id"] for block in blocks] == ["call_a", "call_b", "call_c"]
+    assert [json.loads(block["json"])["command"] for block in blocks] == ["ls -d /tmp", "ls -d /var", "ls -d /etc"]
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_held_call_is_written_when_the_stream_ends_without_a_finish_chunk(use_async):
+    chunks = [
+        _stream_chunk(
+            Delta(
+                role="assistant",
+                tool_calls=[
+                    _tool_call(0, '{"command": "ls -d /tmp"}', call_id="call_a", name="Bash"),
+                    _tool_call(1, '{"command": "ls -d /var"}', call_id="call_b", name="Bash"),
+                ],
+            )
+        ),
+    ]
+
+    events = _drain(chunks, use_async)
+    starts = [event for event in events if event.get("type") == "content_block_start"]
+    arguments = [
+        "".join(
+            event["delta"]["partial_json"]
+            for event in events
+            if event.get("type") == "content_block_delta" and event["index"] == start["index"]
+        )
+        for start in starts
+    ]
+
+    assert [start["content_block"]["id"] for start in starts] == ["call_a", "call_b"]
+    assert [json.loads(argument) for argument in arguments] == [{"command": "ls -d /tmp"}, {"command": "ls -d /var"}]
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_call_opening_alone_while_another_is_held_waits_behind_the_live_call(use_async):
+    chunks = [
+        _stream_chunk(
+            Delta(
+                role="assistant",
+                tool_calls=[
+                    _tool_call(0, '{"command": ', call_id="call_a", name="Bash"),
+                    _tool_call(1, '{"command": "ls -d /var"}', call_id="call_b", name="Bash"),
+                ],
+            )
+        ),
+        _stream_chunk(Delta(tool_calls=[_tool_call(2, '{"command": ', call_id="call_c", name="Bash")])),
+        _stream_chunk(Delta(tool_calls=[_tool_call(0, '"ls -d /tmp"}')])),
+        _stream_chunk(Delta(tool_calls=[_tool_call(2, '"ls -d /etc"}')])),
+        _stream_chunk(Delta(), finish_reason="tool_calls"),
+    ]
+
+    events = _drain(chunks, use_async)
+    blocks = _blocks(events)
+
+    assert [block["start"]["id"] for block in blocks] == ["call_a", "call_b", "call_c"]
+    assert [json.loads(block["json"])["command"] for block in blocks] == ["ls -d /tmp", "ls -d /var", "ls -d /etc"]
+    assert _message_delta(events)["delta"]["stop_reason"] == "tool_use"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
 def test_one_call_split_across_chunks_is_unchanged(use_async):
     chunks = [
         _stream_chunk(Delta(role="assistant", tool_calls=[_tool_call(0, "", call_id="call_a", name="Bash")])),

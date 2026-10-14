@@ -118,8 +118,6 @@ def _optional_int_attr(obj: object, name: str, *, default: int) -> int:
 
 @dataclass(frozen=True)
 class _ToolCallPart:
-    """One tool call's slice of a chunk: everything its entries there carry, merged."""
-
     index: int
     call_id: str | None
     call_type: str | None
@@ -138,7 +136,6 @@ class _ToolCallPart:
         )
 
     def extended(self, parts: "Sequence[_ToolCallPart]") -> "_ToolCallPart":
-        """This call with the arguments of every same-``index`` fragment in ``parts`` appended."""
         return replace(
             self, arguments=self.arguments + "".join(part.arguments for part in parts if part.index == self.index)
         )
@@ -177,11 +174,6 @@ class _CombinedChunkSplitter:
         self._sync_iter: Iterator[ModelResponseStream] | None = None
         self._async_iter: AsyncIterator[ModelResponseStream] | None = None
         self._buffer: deque[ModelResponseStream] = deque()
-        # Tool calls opened behind another call that may still be growing, keyed
-        # by ``tool_calls[].index``: the chunk they arrived in, and the call so far.
-        #
-        # Anthropic sends tool calls one after the other, but openai may interlace them. In order to
-        # translate, we need to hold onto partial openai tool calls that we haven't seen all of yet.
         self._held_calls: Mapping[int, tuple[ModelResponseStream, _ToolCallPart]] = MappingProxyType({})
         self._live_call_index: int | None = None
 
@@ -295,7 +287,6 @@ class _CombinedChunkSplitter:
 
     @staticmethod
     def _tool_call_parts(tool_calls: Sequence[object]) -> "tuple[_ToolCallPart, ...]":
-        """Merge a chunk's tool-call entries into one part per ``index``, in first-seen order."""
         indexed: Final = tuple(
             (_optional_int_attr(tool_call, "index", default=position), tool_call)
             for position, tool_call in enumerate(tool_calls)
@@ -315,7 +306,6 @@ class _CombinedChunkSplitter:
         return piece
 
     def _release_held_calls(self) -> "tuple[ModelResponseStream, ...]":
-        """Write every held call whole, one chunk each, in ``index`` order."""
         released: Final = tuple(
             self._with_tool_call(template, part, keep_role=False)
             for _, (template, part) in sorted(self._held_calls.items())
@@ -325,16 +315,10 @@ class _CombinedChunkSplitter:
         return released
 
     def _route_tool_calls(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
-        """Return ``(chunk,)``, or one chunk per tool call when it carries several.
+        """Anthropic ``tool_use`` blocks are sequential, so only the first call a chunk opens streams live.
 
-        Anthropic ``tool_use`` blocks are strictly sequential, but a provider can
-        put several calls in one chunk (Mistral sends them all, with whole
-        arguments) and keep streaming each one's arguments by ``index``. The
-        first call opened streams live. A call opened behind it is held, its
-        fragments gathered by ``index``, and written whole as soon as a chunk
-        arrives that is not a tool-call fragment (the finish chunk, text) or the
-        stream ends. Runs downstream of ``_split_by_payload_kind``, so a chunk
-        with tool calls carries no other payload.
+        Later calls are held, gather their fragments by ``index``, and are written whole on the next
+        non-tool chunk or at stream end.
         """
         choices: Final = _optional_attr_sequence(chunk, "choices")
         tool_calls: Final = (
@@ -424,7 +408,6 @@ class _CombinedChunkSplitter:
             return self._buffer.popleft()
         if self._sync_iter is None:
             self._sync_iter = iter(self._stream)
-        # A chunk whose tool calls are all held yields nothing yet, so keep pulling.
         while not self._buffer:
             try:
                 chunk = next(self._sync_iter)
