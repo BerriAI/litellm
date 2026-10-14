@@ -1181,7 +1181,13 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
 
-async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
+async def user_api_key_auth_live_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(websocket, model=None)
+
+
+async def user_api_key_auth_websocket_for_model(
+    websocket: WebSocket, model: str | None, *, close_on_auth_error: bool = True
+) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -1236,11 +1242,23 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     try:
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
+        if not close_on_auth_error:
+            raise
         if is_invalid_virtual_key_error(e):
             raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
         log_model_access_denial(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
+
+
+async def user_api_key_auth_accepted_websocket_for_model(websocket: WebSocket, model: str) -> UserAPIKeyAuth:
+    """Re-authorize an already accepted WebSocket for a model it named after the upgrade.
+
+    Runs the same key, team, member, user, project and agent checks, plus budget reservation, as
+    the upgrade does for ``?model=``, but raises auth errors without closing the socket so the
+    caller can reply with an error frame.
+    """
+    return await user_api_key_auth_websocket_for_model(websocket, model, close_on_auth_error=False)
 
 
 def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_user_params: dict) -> UserAPIKeyAuth:

@@ -5589,3 +5589,14 @@ def test_convert_response_function_tool_call_keeps_the_index_it_is_given(index: 
     )
 
     assert tool_call["index"] == index
+
+
+def test_transform_request_reads_service_tier_from_responses_api_request() -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="databricks/dbrx",
+        input="hello",
+        responses_api_request={"service_tier": "priority"},
+        custom_llm_provider="databricks",
+    )
+
+    assert result["service_tier"] == "priority"

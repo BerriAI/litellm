@@ -737,6 +737,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
+        self.vertex_ai_cache_creation_input_tokens: int = 0
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
         self.response_timing_metrics: Mapping[str, float] = {}
@@ -4950,6 +4951,15 @@ def _init_custom_logger_compatible_class(
             vantage_logger: Final = VantageLogger()
             _in_memory_loggers.append(vantage_logger)
             return vantage_logger
+        elif logging_integration == "ternary":
+            from litellm.integrations.ternary.ternary_logger import TernaryLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, TernaryLogger):
+                    return callback
+            ternary_logger: Final = TernaryLogger()
+            _in_memory_loggers.append(ternary_logger)
+            return ternary_logger
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DeepEvalLogger):
@@ -5454,6 +5464,12 @@ def get_custom_logger_compatible_class(
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, VantageLogger):
+                    return callback
+        elif logging_integration == "ternary":
+            from litellm.integrations.ternary.ternary_logger import TernaryLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, TernaryLogger):
                     return callback
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:

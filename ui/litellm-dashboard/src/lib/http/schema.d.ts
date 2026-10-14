@@ -9142,6 +9142,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/live/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: live_sessions_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_live_sessions_websocket_endpoint_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/login": {
         parameters: {
             query?: never;
@@ -10816,6 +10836,26 @@ export interface paths {
         put?: never;
         /** Image Generation */
         post: operations["image_generation_openai_deployments__model__images_generations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openai/v1/live/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: live_sessions_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_live_sessions_websocket_endpoint_get_3"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13454,9 +13494,9 @@ export interface paths {
         };
         /**
          * Get Litellm Blog Posts
-         * @description Public endpoint to get the latest LiteLLM blog posts.
+         * @description Public endpoint to get the latest LiteLLM blog posts, each with its RSS categories as ``tags``.
          *
-         *     Fetches from GitHub with a 1-hour in-process cache.
+         *     Fetches the docs RSS feed with a 1-hour in-process cache.
          *     Falls back to the bundled local backup on any failure.
          */
         get: operations["get_litellm_blog_posts_public_litellm_blog_posts_get"];
@@ -13653,31 +13693,6 @@ export interface paths {
          *     ```
          */
         get: operations["public_model_hub_facet_public_v1_model_hub__facet__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/public/whats_new": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Public Whats New
-         * @description Return the launches the dashboard Home page shows under What's new.
-         *
-         *     Serves the list bundled with this release. Set ``LITELLM_WHATS_NEW_URL`` to fetch a remote list instead,
-         *     resolved once per process on the first request and falling back to the bundled list on any failure, so an
-         *     airgapped proxy serves the bundled list without retrying. ``LITELLM_LOCAL_WHATS_NEW=True`` forces the
-         *     bundled list even when a URL is set. A restart picks up a newly published list.
-         */
-        get: operations["get_public_whats_new_public_whats_new_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -17481,6 +17496,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/telemetry/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Telemetry Reports
+         * @description Stored telemetry reports, oldest first, for installs that keep telemetry local instead of sending it.
+         *     Page with ``after=next_after&after_id=next_after_id`` until ``next_after`` is null. Another worker can commit a
+         *     report just after a newer one is exported, so resume a later export a few windows before the last cursor and skip
+         *     ids already seen
+         */
+        get: operations["export_telemetry_reports_telemetry_reports_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Telemetry Settings
+         * @description Which telemetry groups are on, whether env vars control them, where reports go and a last or sample report.
+         *     Nothing is recorded until a destination is chosen by ``LITELLM_TELEMETRY_DESTINATION`` or a saved setting
+         */
+        get: operations["get_telemetry_settings_telemetry_settings_get"];
+        /**
+         * Update Telemetry Settings
+         * @description Store the telemetry groups and destination for every worker, applied from the next report window
+         */
+        put: operations["update_telemetry_settings_telemetry_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/ui_events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Ui Event
+         * @description Count one Admin UI page view or tab click. Events are dropped unless Page navigation is on
+         */
+        post: operations["record_ui_event_telemetry_ui_events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telemetry/ui_events/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ui Events Enabled */
+        get: operations["ui_events_enabled_telemetry_ui_events_enabled_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/test": {
         parameters: {
             query?: never;
@@ -20287,6 +20387,26 @@ export interface paths {
          *     ```
          */
         post: operations["index_create_v1_indexes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/live/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: live_sessions_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_live_sessions_websocket_endpoint_get_2"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -27056,6 +27176,11 @@ export interface components {
             date: string;
             /** Description */
             description: string;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
             /** Title */
             title: string;
             /** Url */
@@ -29603,7 +29728,7 @@ export interface components {
             enable_public_model_hub: boolean;
             /**
              * Enforce Fallback Model Access
-             * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.
+             * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is True. Set False to disable fallback model access enforcement.
              */
             enforce_fallback_model_access?: boolean | null;
             /**
@@ -36627,6 +36752,11 @@ export interface components {
              */
             violation_message_template?: string | null;
             /**
+             * Wingback App Id
+             * @description Wingback external gateway integration name for request attribution (sent as additional_provider_specific_params.wingback_app_id).
+             */
+            wingback_app_id?: string | null;
+            /**
              * Xecguard Model
              * @description XecGuard scanning model identifier. Defaults to 'xecguard_v2'.
              */
@@ -37633,6 +37763,8 @@ export interface components {
             reasoning_content?: string | null;
             /** Reasoning Items */
             reasoning_items?: components["schemas"]["ChatCompletionReasoningItem"][] | null;
+            /** Refusal */
+            refusal?: string | null;
             /**
              * Role
              * @enum {string}
@@ -45295,6 +45427,16 @@ export interface components {
              */
             user_ids: string[];
         };
+        /** StoredReport */
+        StoredReport: {
+            /** Id */
+            id: string;
+            report: components["schemas"]["JsonValue"];
+            /** Window End */
+            window_end: number;
+            /** Window Start */
+            window_start: number;
+        };
         /**
          * SuccessfulKeyUpdate
          * @description Successfully updated key with its updated information
@@ -46113,6 +46255,71 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TelemetryDestination
+         * @enum {string}
+         */
+        TelemetryDestination: "local_table" | "http";
+        /**
+         * TelemetryGroup
+         * @description A telemetry group describes a group of metrics that can be toggled on/off separately. One
+         *     group may have dependencies on another.
+         * @enum {string}
+         */
+        TelemetryGroup: "heartbeat" | "request_success" | "token_info" | "request_taxonomy" | "event_details" | "instance_configuration" | "page_navigation";
+        /** TelemetryGroupInfo */
+        TelemetryGroupInfo: {
+            /** Enabled */
+            enabled: boolean;
+            group: components["schemas"]["TelemetryGroup"];
+            requires: components["schemas"]["TelemetryGroup"] | null;
+        };
+        /** TelemetryReportsResponse */
+        TelemetryReportsResponse: {
+            /** Next After */
+            next_after: number | null;
+            /** Next After Id */
+            next_after_id: string | null;
+            /** Reports */
+            reports: components["schemas"]["StoredReport"][];
+        };
+        /** TelemetrySettingsResponse */
+        TelemetrySettingsResponse: {
+            /** Available Destinations */
+            available_destinations: components["schemas"]["TelemetryDestination"][];
+            destination: components["schemas"]["TelemetryDestination"] | null;
+            /** Destination Set By Environment */
+            destination_set_by_environment: boolean;
+            /** Editable */
+            editable: boolean;
+            /** Environment Variables */
+            environment_variables: string[];
+            /** Flush Interval Seconds */
+            flush_interval_seconds: number;
+            /** Groups */
+            groups: components["schemas"]["TelemetryGroupInfo"][];
+            /** Report */
+            report: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Report Is Sample */
+            report_is_sample: boolean;
+            /** Retention Days */
+            retention_days: number;
+            /** Set By Environment */
+            set_by_environment: boolean;
+            stored_destination: components["schemas"]["TelemetryDestination"] | null;
+            /** Stored Groups */
+            stored_groups: components["schemas"]["TelemetryGroup"][] | null;
+            /** Vetoed */
+            vetoed: boolean;
+        };
+        /** TelemetrySettingsUpdate */
+        TelemetrySettingsUpdate: {
+            destination?: components["schemas"]["TelemetryDestination"] | null;
+            /** Groups */
+            groups: string[];
         };
         /**
          * TestCustomCodeGuardrailRequest
@@ -47098,6 +47305,33 @@ export interface components {
             type: "type";
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * UIAction
+         * @enum {string}
+         */
+        UIAction: "view" | "click" | "submit";
+        /** UIEventAccepted */
+        UIEventAccepted: {
+            /**
+             * Accepted
+             * @default true
+             * @constant
+             */
+            accepted: true;
+        };
+        /** UIEventBody */
+        UIEventBody: {
+            action: components["schemas"]["UIAction"];
+            /** Page */
+            page: string;
+            /** Target */
+            target?: string | null;
+        };
+        /** UIEventsEnabledResponse */
+        UIEventsEnabledResponse: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** UIField */
         UIField: {
@@ -49303,30 +49537,6 @@ export interface components {
              */
             type: "web_search" | "web_search_2025_08_26";
             user_location?: components["schemas"]["openai__types__responses__web_search_tool_param__UserLocation"] | null;
-        };
-        /**
-         * WhatsNewLaunch
-         * @description One launch card in the dashboard Home page's What's new section.
-         */
-        WhatsNewLaunch: {
-            /** Description */
-            description: string;
-            /** Href */
-            href: string;
-            /** Icon */
-            icon: string;
-            /**
-             * Published On
-             * Format: date
-             */
-            published_on: string;
-            /** Title */
-            title: string;
-        };
-        /** WhatsNewResponse */
-        WhatsNewResponse: {
-            /** Launches */
-            launches: components["schemas"]["WhatsNewLaunch"][];
         };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
@@ -62853,6 +63063,24 @@ export interface operations {
             };
         };
     };
+    websocket_live_sessions_websocket_endpoint_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     login_login_post: {
         parameters: {
             query?: never;
@@ -65461,6 +65689,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_live_sessions_websocket_endpoint_get_3: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -68744,26 +68990,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_public_whats_new_public_whats_new_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WhatsNewResponse"];
                 };
             };
         };
@@ -73290,6 +73516,147 @@ export interface operations {
             };
         };
     };
+    export_telemetry_reports_telemetry_reports_get: {
+        parameters: {
+            query?: {
+                /** @description window_end of the last report already exported */
+                after?: number;
+                /** @description id of the last report already exported */
+                after_id?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetryReportsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_telemetry_settings_telemetry_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetrySettingsResponse"];
+                };
+            };
+        };
+    };
+    update_telemetry_settings_telemetry_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelemetrySettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelemetrySettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_ui_event_telemetry_ui_events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UIEventBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UIEventAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ui_events_enabled_telemetry_ui_events_enabled_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UIEventsEnabledResponse"];
+                };
+            };
+        };
+    };
     test_endpoint_test_get: {
         parameters: {
             query?: never;
@@ -77717,6 +78084,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_live_sessions_websocket_endpoint_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
