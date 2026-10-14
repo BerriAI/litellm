@@ -1,6 +1,7 @@
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Final, NoReturn, TypeAlias
+from types import MappingProxyType
+from typing import Final, TypeVar
 
 import pytest
 
@@ -11,305 +12,274 @@ from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicRoute
 from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementationError
 
+NativeT = TypeVar("NativeT")
+
+ROUTE: Final = Route.MESSAGES
+ARGS: Final[tuple[object, ...]] = ("claude-model",)
+KWARGS: Final[Mapping[str, object]] = MappingProxyType({"stream": True, "max_tokens": 8})
+
 
 @dataclass(frozen=True, slots=True)
 class Request:
-    model: str
+    provider: str
 
 
-NativeRoute: TypeAlias = Callable[[Request], object]
-AsyncNativeRoute: TypeAlias = Callable[[Request], Awaitable[object]]
+ANTHROPIC: Final = Request(provider="anthropic")
+OPENAI: Final = Request(provider="openai")
 
 
-def failing(reason: str) -> NativeBinding[NativeRoute]:
-    bound: Final[NativeBinding[NativeRoute]] = NativeBinding("failing", validate=lambda _: None)
-    bound.override(lambda _: pytest.fail(reason))
+@dataclass(frozen=True, slots=True)
+class ServedByPython:
+    args: tuple[object, ...]
+    kwargs: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class ServedByRust:
+    request: Request
+
+
+PYTHON: Final = ServedByPython(ARGS, KWARGS)
+
+
+@dataclass(frozen=True, slots=True)
+class Case:
+    rules: Rules
+    projected: Request | None = ANTHROPIC
+    bypassed: bool = False
+    native_available: bool = True
+    has_python: bool = True
+    switch: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Outcome:
+    served: ServedByPython | ServedByRust
+    projected: bool
+
+
+class Projector:
+    def __init__(self, request: Request | None) -> None:
+        self.request: Final = request
+        self.seen: tuple[tuple[object, ...], Mapping[str, object]] | None = None
+
+    def __call__(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request | None:
+        assert self.seen is None, "a public call must be projected at most once"
+        self.seen = (args, kwargs)
+        return self.request
+
+
+def context(request: Request) -> RouteContext:
+    return RouteContext(ROUTE, provider=request.provider)
+
+
+def binding(case: Case, native: NativeT) -> NativeBinding[NativeT]:
+    bound: Final[NativeBinding[NativeT]] = NativeBinding(ROUTE.value, validate=lambda _: None)
+    bound.override(native if case.native_available else None)
     return bound
 
 
-def afailing(reason: str) -> NativeBinding[AsyncNativeRoute]:
-    bound: Final[NativeBinding[AsyncNativeRoute]] = NativeBinding("failing", validate=lambda _: None)
-    bound.override(lambda _: pytest.fail(reason))
-    return bound
+def run_sync(case: Case, projector: Projector) -> object:
+    return PublicRoute(
+        route=ROUTE,
+        request=projector,
+        context=context,
+        binding=binding(case, ServedByRust),
+        python=(lambda *args, **kwargs: ServedByPython(args, kwargs)) if case.has_python else NO_PYTHON,
+        bypass=lambda _: case.bypassed,
+    ).run(ARGS, KWARGS, rules=case.rules)
 
 
-def reject_request(reason: str) -> Callable[[tuple[object, ...], Mapping[str, object]], NoReturn]:
-    return lambda args, kwargs: pytest.fail(reason)
+async def run_async(case: Case, projector: Projector) -> object:
+    async def native(request: Request) -> ServedByRust:
+        return ServedByRust(request)
 
+    async def python(*args: object, **kwargs: object) -> ServedByPython:  # kwargs-ok: public pass-through shape
+        return ServedByPython(args, kwargs)
 
-@pytest.mark.parametrize("rules", ((), (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)))
-def test_route_without_rules_forwards_before_request_projection(rules: Rules) -> None:
-    stream: Final[Iterator[int]] = iter((1, 2))
-    route: Final = PublicRoute(
-        route=Route.CHAT_COMPLETIONS,
-        request=reject_request("Python-only routes must not project the request"),
-        context=lambda _: RouteContext(Route.CHAT_COMPLETIONS),
-        binding=failing("Python-only routes must not call native"),
-        python=lambda *args, **kwargs: stream,
-    )
-    assert route.run(("model",), {"stream": True}, rules=rules) is stream
-
-
-def test_unconditional_python_rule_prevents_later_rust_rule_projection() -> None:
-    rules: Final[Rules] = (
-        RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
-        RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),
-    )
-    expected: Final = object()
-    route: Final = PublicRoute(
-        route=Route.CHAT_COMPLETIONS,
-        request=reject_request("First-match Python rule must prevent request projection"),
-        context=lambda _: RouteContext(Route.CHAT_COMPLETIONS),
-        binding=failing("First-match Python rule must prevent native"),
-        python=lambda *args, **kwargs: expected,
-    )
-    assert route.run(("model",), {}, rules=rules) is expected
-
-
-def test_disabled_optional_rust_rule_forwards_before_projection() -> None:
-    rules: Final[Rules] = (RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),)
-    expected: Final = object()
-    route: Final = PublicRoute(
-        route=Route.OCR,
-        request=reject_request("Disabled optional Rust must not project the request"),
-        context=lambda _: RouteContext(Route.OCR),
-        binding=failing("Disabled optional Rust must not call native"),
-        python=lambda *args, **kwargs: expected,
-    )
-    configuration.rust(False)
-    try:
-        result: Final = route.run(("model",), {}, rules=rules)
-    finally:
-        configuration.rust(None)
-    assert result is expected
-
-
-def test_native_stream_result_is_not_consumed_or_wrapped() -> None:
-    request: Final = Request(model="streaming-model")
-    stream: Final[Iterator[int]] = iter((1, 2))
-    rules: Final[Rules] = (
-        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
-        RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),
-    )
-    native_binding: Final[NativeBinding[Callable[[Request], Iterator[int]]]] = NativeBinding(
-        "stream", validate=lambda _: None
-    )
-    native_binding.override(lambda value: stream if value is request else pytest.fail("native got another request"))
-    route: Final = PublicRoute(
-        route=Route.CHAT_COMPLETIONS,
-        request=lambda args, kwargs: request,
-        context=lambda value: RouteContext(Route.CHAT_COMPLETIONS, model=value.model),
-        binding=native_binding,
-        python=lambda *args, **kwargs: pytest.fail("Required native stream dispatch must not call Python"),
-    )
-    assert route.run(("streaming-model",), {"stream": True}, rules=rules) is stream
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("rules", ((), (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)))
-async def test_async_route_without_rules_preserves_async_iterator_result(rules: Rules) -> None:
-    async def chunks() -> AsyncGenerator[int, None]:
-        yield 1
-
-    stream: Final = chunks()
-
-    async def python(*args: object, **kwargs: object) -> AsyncGenerator[int, None]:  # kwargs-ok: pass-through shape
-        return stream
-
-    route: Final = AsyncPublicRoute(
-        route=Route.RESPONSES,
-        request=reject_request("Python-only routes must not project the request"),
-        context=lambda _: RouteContext(Route.RESPONSES),
-        binding=afailing("Python-only routes must not call native"),
-        python=python,
-    )
-    assert await route.arun(("model",), {"stream": True}, rules=rules) is stream
-    await stream.aclose()
-
-
-@pytest.mark.asyncio
-async def test_async_dispatch_accepts_websocket_style_none_result() -> None:
-    request: Final = Request(model="realtime-model")
-    rules: Final[Rules] = (RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),)
-
-    async def python(*args: object, **kwargs: object) -> None:  # kwargs-ok: public pass-through shape
-        pytest.fail("Required native WebSocket dispatch must not call Python")
-
-    async def native(value: Request) -> None:
-        assert value is request
-
-    native_binding: Final[NativeBinding[Callable[[Request], Awaitable[None]]]] = NativeBinding(
-        "websocket", validate=lambda _: None
-    )
-    native_binding.override(native)
-    route: Final = AsyncPublicRoute(
-        route=Route.RESPONSES,
-        request=lambda args, kwargs: request,
-        context=lambda value: RouteContext(Route.RESPONSES, model=value.model),
-        binding=native_binding,
-        python=python,
-    )
-    assert await route.arun(("realtime-model",), {}, rules=rules) is None
-
-
-def test_rules_for_other_routes_and_constrained_python_rules_skip_projection() -> None:
-    rules: Final[Rules] = (
-        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
-        RouteRule(Route.OCR, Rollout.PYTHON_ONLY, providers=frozenset({"mistral"})),
-    )
-    expected: Final = object()
-    route: Final = PublicRoute(
-        route=Route.OCR,
-        request=reject_request("Rules that cannot select Rust must not project the request"),
-        context=lambda _: RouteContext(Route.OCR),
-        binding=failing("Rules that cannot select Rust must not call native"),
-        python=lambda *args, **kwargs: expected,
-    )
-    assert route.run(("model",), {}, rules=rules) is expected
-
-
-@pytest.mark.asyncio
-async def test_async_bypass_forwards_to_python_without_native() -> None:
-    request: Final = Request(model="bypassed-model")
-    rules: Final[Rules] = (RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),)
-    expected: Final = object()
-
-    async def python(*args: object, **kwargs: object) -> object:  # kwargs-ok: public pass-through shape
-        return expected
-
-    route: Final = AsyncPublicRoute(
-        route=Route.RESPONSES,
-        request=lambda args, kwargs: request,
-        context=lambda value: RouteContext(Route.RESPONSES, model=value.model),
-        binding=afailing("Bypassed requests must not call native"),
-        python=python,
-        bypass=lambda value: value.model == "bypassed-model",
-    )
-    assert await route.arun(("bypassed-model",), {}, rules=rules) is expected
-
-
-async def run_without_python(
-    request: Request | None, native: NativeRoute, rules: Rules, *, bypass: bool = False, asynchronous: bool
-) -> object:
-    def project(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request | None:
-        return request
-
-    if not asynchronous:
-        bound: Final[NativeBinding[NativeRoute]] = NativeBinding("no_python", validate=lambda _: None)
-        bound.override(native)
-        route: Final[PublicRoute[Request, object, NoReturn]] = PublicRoute(
-            route=Route.OCR,
-            request=project,
-            context=lambda value: RouteContext(Route.OCR, model=value.model),
-            binding=bound,
-            python=NO_PYTHON,
-            bypass=lambda _: bypass,
-        )
-        return route.run(("model",), {"page": 1}, rules=rules)
-
-    async def anative(value: Request) -> object:
-        return native(value)
-
-    abound: Final[NativeBinding[AsyncNativeRoute]] = NativeBinding("no_python", validate=lambda _: None)
-    abound.override(anative)
-    aroute: Final[AsyncPublicRoute[Request, object, NoReturn]] = AsyncPublicRoute(
-        route=Route.OCR,
-        request=project,
-        context=lambda value: RouteContext(Route.OCR, model=value.model),
-        binding=abound,
-        python=NO_PYTHON,
-        bypass=lambda _: bypass,
-    )
-    return await aroute.arun(("model",), {"page": 1}, rules=rules)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", (False, True))
-@pytest.mark.parametrize("switch", (None, False))
-async def test_dispatch_without_python_hands_every_call_to_native(asynchronous: bool, switch: bool | None) -> None:
-    request: Final = Request(model="model")
-    result: Final = object()
-    configuration.rust(switch)
-    try:
-        dispatched: Final = await run_without_python(
-            request,
-            lambda value: (result, value),
-            (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),),
-            asynchronous=asynchronous,
-        )
-    finally:
-        configuration.rust(None)
-
-    assert dispatched == (result, request)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", (False, True))
-@pytest.mark.parametrize(
-    ("request_value", "bypass", "rules", "reason"),
-    (
-        (Request(model="model"), False, (), "must resolve to RUST_REQUIRED"),
-        (Request(model="model"), False, (RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),), "must resolve to RUST_REQUIRED"),
-        (None, False, (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),), "must project to a native request"),
-        (Request(model="model"), True, (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),), "bypass predicate matches"),
-    ),
-    ids=("no-rule", "opt-out-rule", "unprojectable-call", "bypassed-call"),
-)
-async def test_dispatch_without_python_never_falls_back(
-    asynchronous: bool, request_value: Request | None, bypass: bool, rules: Rules, reason: str
-) -> None:
-    with pytest.raises(NoPythonImplementationError, match=f"ocr has no Python implementation, so .*{reason}"):
-        await run_without_python(
-            request_value,
-            lambda _: pytest.fail("a misdeclared route must not reach native"),
-            rules,
-            bypass=bypass,
-            asynchronous=asynchronous,
-        )
-
-
-async def run_messages_route(rules: Rules, *, asynchronous: bool) -> object:
-    def project(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request:
-        return Request(model=str(args[0]))
-
-    def context(value: Request) -> RouteContext:
-        return RouteContext(Route.MESSAGES, model=value.model)
-
-    if not asynchronous:
-        bound: Final[NativeBinding[NativeRoute]] = NativeBinding("messages", validate=lambda _: None)
-        bound.override(lambda value: ("rust", value.model))
-        return PublicRoute(
-            route=Route.MESSAGES,
-            request=project,
-            context=context,
-            binding=bound,
-            python=lambda *args, **kwargs: ("python", args, dict(kwargs)),
-        ).run(("bound-model",), {"page": 1}, rules=rules)
-
-    async def native(value: Request) -> object:
-        return ("rust", value.model)
-
-    async def python(*args: object, **kwargs: object) -> object:  # kwargs-ok: public pass-through shape
-        return ("python", args, dict(kwargs))
-
-    abound: Final[NativeBinding[AsyncNativeRoute]] = NativeBinding("messages", validate=lambda _: None)
-    abound.override(native)
     return await AsyncPublicRoute(
-        route=Route.MESSAGES, request=project, context=context, binding=abound, python=python
-    ).arun(("bound-model",), {"page": 1}, rules=rules)
+        route=ROUTE,
+        request=projector,
+        context=context,
+        binding=binding(case, native),
+        python=python if case.has_python else NO_PYTHON,
+        bypass=lambda _: case.bypassed,
+    ).arun(ARGS, KWARGS, rules=case.rules)
+
+
+async def serve(case: Case, *, asynchronous: bool) -> Outcome:
+    projector: Final = Projector(case.projected)
+    configuration.rust(case.switch)
+    served: Final = await run_async(case, projector) if asynchronous else run_sync(case, projector)
+    assert isinstance(served, ServedByPython | ServedByRust)
+    assert projector.seen in (None, (ARGS, KWARGS)), "projection must see the public call unchanged"
+    return Outcome(served=served, projected=projector.seen is not None)
+
+
+@pytest.fixture(autouse=True)
+def clean_rust_switch(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.delenv("LITELLM_RUST", raising=False)
+    yield
+    configuration.rust(None)
+
+
+def rule(rollout: Rollout, *, route: Route = ROUTE, providers: frozenset[str] | None = None) -> RouteRule:
+    return RouteRule(route, rollout, providers=providers)
+
+
+ONLY_ANTHROPIC: Final = frozenset({"anthropic"})
+SYNC_AND_ASYNC: Final = pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", (False, True))
+@SYNC_AND_ASYNC
 @pytest.mark.parametrize(
-    ("rules", "expected"),
+    ("case", "expected"),
     (
-        ((RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),), ("rust", "bound-model")),
-        ((RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),), ("python", ("bound-model",), {"page": 1})),
+        pytest.param(Case(rules=()), Outcome(PYTHON, projected=False), id="no-rules"),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED, route=Route.OCR),)),
+            Outcome(PYTHON, projected=False),
+            id="rule-for-another-route",
+        ),
+        pytest.param(Case(rules=(rule(Rollout.PYTHON_ONLY),)), Outcome(PYTHON, projected=False), id="python-only"),
+        pytest.param(
+            Case(rules=(rule(Rollout.PYTHON_ONLY), rule(Rollout.RUST_REQUIRED))),
+            Outcome(PYTHON, projected=False),
+            id="first-match-python-shadows-rust",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED),)),
+            Outcome(ServedByRust(ANTHROPIC), projected=True),
+            id="rust-required",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED),), switch=False),
+            Outcome(ServedByRust(ANTHROPIC), projected=True),
+            id="rust-required-ignores-switch-off",
+        ),
+        pytest.param(Case(rules=(rule(Rollout.RUST_OPT_IN),)), Outcome(PYTHON, projected=False), id="opt-in-default"),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_OPT_IN),), switch=True),
+            Outcome(ServedByRust(ANTHROPIC), projected=True),
+            id="opt-in-switched-on",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_OPT_OUT),)),
+            Outcome(ServedByRust(ANTHROPIC), projected=True),
+            id="opt-out-default",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_OPT_OUT),), switch=False),
+            Outcome(PYTHON, projected=False),
+            id="opt-out-switched-off",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_OPT_OUT),), native_available=False),
+            Outcome(PYTHON, projected=True),
+            id="optional-rust-unavailable-falls-back",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED, providers=ONLY_ANTHROPIC),)),
+            Outcome(ServedByRust(ANTHROPIC), projected=True),
+            id="provider-scoped-rust-matches",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED, providers=ONLY_ANTHROPIC),), projected=OPENAI),
+            Outcome(PYTHON, projected=True),
+            id="provider-scoped-rust-misses",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.PYTHON_ONLY, providers=ONLY_ANTHROPIC),)),
+            Outcome(PYTHON, projected=False),
+            id="provider-scoped-python-cannot-select-rust",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.PYTHON_ONLY, providers=ONLY_ANTHROPIC), rule(Rollout.RUST_REQUIRED))),
+            Outcome(PYTHON, projected=True),
+            id="provider-scoped-python-carves-out-of-rust",
+        ),
+        pytest.param(
+            Case(
+                rules=(rule(Rollout.PYTHON_ONLY, providers=ONLY_ANTHROPIC), rule(Rollout.RUST_REQUIRED)),
+                projected=OPENAI,
+            ),
+            Outcome(ServedByRust(OPENAI), projected=True),
+            id="provider-scoped-python-leaves-others-on-rust",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED),), projected=None),
+            Outcome(PYTHON, projected=True),
+            id="unprojectable-call-stays-on-python",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED),), bypassed=True),
+            Outcome(PYTHON, projected=True),
+            id="bypassed-call-stays-on-python",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED),), has_python=False),
+            Outcome(ServedByRust(ANTHROPIC), projected=True),
+            id="no-python-rust-required",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED),), has_python=False, switch=False),
+            Outcome(ServedByRust(ANTHROPIC), projected=True),
+            id="no-python-ignores-switch-off",
+        ),
     ),
-    ids=("rust", "python"),
 )
-async def test_public_route_selects_a_backend_with_the_given_rules(
-    rules: Rules, expected: object, asynchronous: bool
+async def test_public_route_serves_each_call_from_the_backend_its_rules_select(
+    case: Case, expected: Outcome, asynchronous: bool
 ) -> None:
-    assert await run_messages_route(rules, asynchronous=asynchronous) == expected
+    assert await serve(case, asynchronous=asynchronous) == expected
+
+
+@pytest.mark.asyncio
+@SYNC_AND_ASYNC
+@pytest.mark.parametrize(
+    ("case", "error", "message"),
+    (
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED),), native_available=False),
+            RuntimeError,
+            "Rust messages bridge is unavailable",
+            id="required-rust-unavailable",
+        ),
+        pytest.param(
+            Case(rules=(), has_python=False),
+            NoPythonImplementationError,
+            "must resolve to RUST_REQUIRED",
+            id="no-python-no-rules",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_OPT_OUT),), has_python=False),
+            NoPythonImplementationError,
+            "must resolve to RUST_REQUIRED",
+            id="no-python-optional-rust",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED, providers=ONLY_ANTHROPIC),), projected=OPENAI, has_python=False),
+            NoPythonImplementationError,
+            "must resolve to RUST_REQUIRED",
+            id="no-python-provider-scoped-miss",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED),), projected=None, has_python=False),
+            NoPythonImplementationError,
+            "must project to a native request",
+            id="no-python-unprojectable-call",
+        ),
+        pytest.param(
+            Case(rules=(rule(Rollout.RUST_REQUIRED),), bypassed=True, has_python=False),
+            NoPythonImplementationError,
+            "bypass predicate matches",
+            id="no-python-bypassed-call",
+        ),
+    ),
+)
+async def test_public_route_fails_loudly_when_no_backend_can_serve_the_call(
+    case: Case, error: type[Exception], message: str, asynchronous: bool
+) -> None:
+    with pytest.raises(error, match=message):
+        await serve(case, asynchronous=asynchronous)
