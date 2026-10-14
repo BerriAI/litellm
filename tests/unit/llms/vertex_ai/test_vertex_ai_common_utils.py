@@ -1,15 +1,16 @@
+import time
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-
-
 from litellm.llms.vertex_ai.common_utils import (
-    _get_vertex_url,
     convert_anyof_null_to_nullable,
+    convert_vertex_datetime_to_openai_datetime,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    get_vertex_url,
     pop_vertex_request_labels,
     set_schema_property_ordering,
     supports_response_json_schema,
@@ -213,7 +214,7 @@ def test_set_schema_property_ordering_skips_non_dict_property_values():
 
 def test_build_vertex_schema():
     """Test build_vertex_schema with a sample schema"""
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     parameters = {
         "properties": {
@@ -295,7 +296,7 @@ def test_build_vertex_schema():
         "type": "object",
     }
 
-    assert _build_vertex_schema(parameters) == expected_output
+    assert build_vertex_schema(parameters) == expected_output
 
 
 def test_process_items_with_excessive_nesting():
@@ -363,7 +364,7 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
     end up with synthesized `items: {"type": "object"}` after the schema
     transform — Vertex returns INVALID_ARGUMENT otherwise.
     """
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     parameters = {
         "properties": {
@@ -378,14 +379,12 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
         "type": "object",
     }
 
-    result = _build_vertex_schema(parameters)
+    result = build_vertex_schema(parameters)
     callbacks_anyof = result["properties"]["callbacks"]["anyOf"]
     array_branches = [b for b in callbacks_anyof if b.get("type") == "array"]
     assert array_branches, "expected an array branch to remain after transform"
     for branch in array_branches:
-        assert branch.get("items") == {
-            "type": "object"
-        }, f"array branch must have items synthesized; got {branch}"
+        assert branch.get("items") == {"type": "object"}, f"array branch must have items synthesized; got {branch}"
 
 
 def test_vertex_ai_complex_response_schema():
@@ -622,7 +621,7 @@ def test_vertex_ai_complex_response_schema():
 )
 def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
     """
-    Test _get_vertex_url when vertex_location is 'global' for chat mode.
+    Test get_vertex_url when vertex_location is 'global' for chat mode.
     """
     mode = "chat"
     model = "gemini-1.5-pro-preview-0409"
@@ -636,7 +635,7 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
         "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
         side_effect=lambda model: model,
     ):
-        url, endpoint = _get_vertex_url(
+        url, endpoint = get_vertex_url(
             mode=mode,
             model=model,
             stream=stream,
@@ -1149,7 +1148,7 @@ def test_get_token_url():
     vertex_ai_location = "us-central1"
     vertex_credentials = ""
 
-    _, url = vertex_llm._get_token_and_url(
+    _, url = vertex_llm.get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
@@ -1164,7 +1163,7 @@ def test_get_token_url():
 
     print("url=", url)
 
-    _, url = vertex_llm._get_token_and_url(
+    _, url = vertex_llm.get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
@@ -1683,7 +1682,7 @@ def test_vertex_ai_google_gemini_not_detected_as_gemma_maas():
 
 def test_build_vertex_schema_empty_properties():
     """
-    Test _build_vertex_schema handles empty properties objects correctly.
+    Test build_vertex_schema handles empty properties objects correctly.
 
     This test verifies the fix for the issue where Gemini rejects schemas
     with empty properties objects like {"properties": {}, "type": "object"}.
@@ -1694,7 +1693,7 @@ def test_build_vertex_schema_empty_properties():
 
     The fix removes empty properties objects and their associated type/required fields.
     """
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     # Input: Schema with empty properties (the problematic case from real request)
     input_schema = {
@@ -1727,40 +1726,28 @@ def test_build_vertex_schema_empty_properties():
     }
 
     # Apply the transformation
-    result = _build_vertex_schema(input_schema)
+    result = build_vertex_schema(input_schema)
 
     # Verify the transformation removed empty properties
     # Navigate to the go_back schema
-    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"][
-        "go_back"
-    ]
+    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"]["go_back"]
 
     # Verify empty properties was removed
     assert "properties" not in go_back_schema, "Empty properties should be removed"
 
     # Verify type is kept as object (Gemini requires type: object even without properties)
-    assert (
-        go_back_schema.get("type") == "object"
-    ), "Type should be kept as object when properties is empty"
+    assert go_back_schema.get("type") == "object", "Type should be kept as object when properties is empty"
 
     # Verify required was also removed
-    assert (
-        "required" not in go_back_schema
-    ), "Required should be removed when properties is empty"
+    assert "required" not in go_back_schema, "Required should be removed when properties is empty"
 
     # Verify description is preserved
-    assert (
-        go_back_schema.get("description") == "Go back"
-    ), "Description should be preserved"
+    assert go_back_schema.get("description") == "Go back", "Description should be preserved"
 
     # Verify parent schema still has proper structure
     parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
-    assert (
-        parent_schema["type"] == "object"
-    ), "Parent schema should still have object type"
-    assert (
-        "go_back" in parent_schema["properties"]
-    ), "go_back should still be in parent properties"
+    assert parent_schema["type"] == "object", "Parent schema should still have object type"
+    assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"
 
 
 def test_add_object_type_schema_with_no_properties_and_no_type():
@@ -1898,3 +1885,31 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
     assert get_vertex_ai_lyria_model_info(model=model) is None
 
 
+@pytest.fixture
+def host_zone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.parametrize(
+    "host_zone", ["UTC", "America/Los_Angeles", "Asia/Kolkata", "Pacific/Kiritimati"], indirect=True
+)
+@pytest.mark.parametrize(
+    ("vertex_datetime", "utc_epoch"),
+    [
+        ("2024-12-04T21:53:12.120184Z", 1733349192),
+        ("2026-10-08T23:41:07.902Z", 1791502867),
+        ("2026-01-15T08:00:00.000000Z", 1768464000),
+        ("2026-09-09T21:39:16Z", 1788989956),
+        ("2026-10-09T08:19:53.576944123Z", 1791533993),
+    ],
+)
+@pytest.mark.usefixtures("host_zone")
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+def test_convert_vertex_datetime_to_openai_datetime_is_the_utc_epoch_on_any_host_zone(
+    vertex_datetime: str, utc_epoch: int
+) -> None:
+    assert convert_vertex_datetime_to_openai_datetime(vertex_datetime) == utc_epoch

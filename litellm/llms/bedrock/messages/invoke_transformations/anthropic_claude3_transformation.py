@@ -34,11 +34,11 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
-    is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     strip_unsupported_bedrock_invoke_output_config_keys,
+    supports_bedrock_prompt_cache_ttl,
     tools_without_eager_input_streaming,
 )
 from litellm.llms.bedrock.request_metadata import (
@@ -169,9 +169,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request: The request dictionary to modify in-place
             model: The model name to check if it supports ttl
         """
-        is_claude_4_5 = False
+        supports_ttl = False
         if model:
-            is_claude_4_5 = self._is_claude_4_5_on_bedrock(model)
+            supports_ttl = self._supports_prompt_cache_ttl(model)
 
         def _sanitize_cache_control(cache_control: dict) -> None:
             if not isinstance(cache_control, dict):
@@ -181,7 +181,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             # Remove ttl for models that don't support it
             if "ttl" in cache_control:
                 ttl: Final = cache_control["ttl"]
-                if is_claude_4_5 and ttl in ["5m", "1h"]:
+                if supports_ttl and ttl in ["5m", "1h"]:
                     return
                 cache_control.pop("ttl", None)
 
@@ -226,7 +226,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports extended thinking on Bedrock
         """
-        if AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
+        if AnthropicModelInfo.is_adaptive_thinking_model(model, "bedrock"):
             return True
 
         model_lower: Final = model.lower()
@@ -276,7 +276,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not self._supports_extended_thinking_on_bedrock(model):
             return False
 
-        is_adaptive_thinking_model: Final = AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock")
+        is_adaptive_thinking_model: Final = AnthropicModelInfo.is_adaptive_thinking_model(model, "bedrock")
 
         thinking: Final = anthropic_messages_request.get("thinking")
         if isinstance(thinking, dict):
@@ -386,19 +386,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         ]
         return any(pattern in model_lower for pattern in opus_4_5_patterns)
 
-    def _is_claude_4_5_on_bedrock(self, model: str) -> bool:
-        """
-        Check if the model is Claude 4.5 on Bedrock.
-
-        Claude Sonnet 4.5, Haiku 4.5, and Opus 4.5 support 1-hour prompt caching.
-
-        Args:
-            model: The model name
-
-        Returns:
-            True if the model is Claude 4.5
-        """
-        return is_claude_4_5_on_bedrock(model)
+    def _supports_prompt_cache_ttl(self, model: str) -> bool:
+        """Whether Bedrock accepts a ``ttl`` on prompt ``cache_control`` for ``model``."""
+        return supports_bedrock_prompt_cache_ttl(model)
 
     def _supports_tool_search_on_bedrock(self, model: str) -> bool:
         """
@@ -664,7 +654,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         path degrades ``xhigh`` -> ``max`` rather than 400-ing. Non-adaptive models
         and models without a ceiling are left untouched.
         """
-        if not AnthropicModelInfo._is_adaptive_thinking_model(model, "bedrock"):
+        if not AnthropicModelInfo.is_adaptive_thinking_model(model, "bedrock"):
             return
         effort: Final = optional_params.get("reasoning_effort")
         if not isinstance(effort, str):
@@ -778,7 +768,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm.drop_params is True
             and isinstance(remaining_output_config, dict)
             and any(key != "format" for key in remaining_output_config)
-            and not AnthropicConfig._model_supports_effort_param(model, "bedrock")
+            and not AnthropicConfig.model_supports_effort_param(model, "bedrock")
         ):
             verbose_logger.warning(
                 DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -855,8 +845,8 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     @staticmethod
     def _merge_message_start_cache_into_delta_usage(
-        delta_usage: dict[str, Any],
-        start_usage: dict[str, Any] | None,
+        delta_usage: dict[str, object],
+        start_usage: Mapping[str, object] | None,
     ) -> None:
         """
         Copy cache breakdown from message_start onto message_delta usage when
@@ -885,7 +875,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         _CACHE_FIELDS: Final = ("cache_creation_input_tokens", "cache_read_input_tokens")
         pending_delta: dict[str, Any] | None = None
-        start_usage_snapshot: dict[str, Any] | None = None
+        start_usage_snapshot: Mapping[str, object] | None = None
 
         async for chunk in completion_stream:
             if not isinstance(chunk, dict):
@@ -898,7 +888,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             chunk_type = chunk.get("type")
 
             if chunk_type == "message_start":
-                msg: dict[str, Any] = cast(dict[str, Any], chunk.get("message") or {})
+                msg: dict[str, object] = cast(dict[str, Any], chunk.get("message") or {})
                 u = msg.get("usage")
                 if isinstance(u, dict):
                     start_usage_snapshot = dict(u)

@@ -130,7 +130,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         return None
 
     @with_service_target("session_budgets")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         After a successful LLM call, increment the session spend by the response cost.
         """
@@ -271,3 +271,6 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             local_only=True,
         )
         return new_value
+
+
+PROXY_MaxBudgetPerSessionHandler: Final = _PROXY_MaxBudgetPerSessionHandler
