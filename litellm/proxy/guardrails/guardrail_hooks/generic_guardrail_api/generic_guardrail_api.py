@@ -152,22 +152,16 @@ def _extract_inbound_headers(
 
 def _structured_rows_to_write_back(
     original_rows: Sequence[AllMessageValues] | None,
-    shown_rows: Sequence[AllMessageValues] | None,
     returned_rows: Sequence[AllMessageValues],
 ) -> tuple[AllMessageValues, ...] | None:
-    """The request model drops row keys its message types do not declare, so a
-    row the server echoes back verbatim is restored to the original row object.
-    A server that echoes every row back unchanged has not rewritten anything
+    """A server that echoes every row back unchanged has not rewritten anything
     per row, so its answer is read from texts, as it was before rows could be
     returned at all."""
-    if original_rows is None or shown_rows is None or len(returned_rows) != len(original_rows):
+    if original_rows is None or len(returned_rows) != len(original_rows):
         return tuple(returned_rows)
-    if all(returned == shown for shown, returned in zip(shown_rows, returned_rows)):
+    if all(returned == original for original, returned in zip(original_rows, returned_rows)):
         return None
-    return tuple(
-        original if returned == shown else returned
-        for original, shown, returned in zip(original_rows, shown_rows, returned_rows)
-    )
+    return tuple(returned_rows)
 
 
 class GenericGuardrailAPI(CustomGuardrail):
@@ -317,8 +311,9 @@ class GenericGuardrailAPI(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         status_suffix: Final = f" http_status_code={http_status_code}" if http_status_code else ""
         verbose_proxy_logger.critical(
-            "Generic Guardrail API error (fail-open). Proceeding without guardrail.%s "
+            "Generic Guardrail API error (fail-open). Proceeding without guardrail. error_type=%s%s "
             "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
+            type(error).__name__,
             status_suffix,
             getattr(self, "guardrail_name", None),
             getattr(self, "api_base", None),
@@ -346,7 +341,6 @@ class GenericGuardrailAPI(CustomGuardrail):
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
-        shown_messages: Sequence[AllMessageValues] | None,
         guardrail_response: GenericGuardrailAPIResponse,
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed
@@ -362,7 +356,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         elif tools:
             return_inputs["tools"] = tools
         rows_to_write_back: Final = (
-            _structured_rows_to_write_back(structured_messages, shown_messages, guardrail_response.structured_messages)
+            _structured_rows_to_write_back(structured_messages, guardrail_response.structured_messages)
             if guardrail_response.structured_messages
             else None
         )
@@ -507,7 +501,6 @@ class GenericGuardrailAPI(CustomGuardrail):
                 images=images,
                 tools=tools,
                 structured_messages=structured_messages,
-                shown_messages=guardrail_request.structured_messages,
                 guardrail_response=guardrail_response,
             )
 
