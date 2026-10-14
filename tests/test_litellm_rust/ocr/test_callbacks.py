@@ -22,10 +22,14 @@ from tests.test_litellm_rust.ocr.data import (
     call_aocr,
     call_ocr,
 )
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.support.callback_recorder import (
+    RecordingLogger,
+    drain_logging,
+    request_body,
+    request_headers,
+)
 from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import request_body, request_headers
 
 pytestmark = pytest.mark.requires_rust_extension
 

@@ -3,19 +3,14 @@ from typing import Final
 
 import pytest
 
-from tests.test_litellm_rust.responses.data import RESPONSES_EVENTS, RESPONSES_RESPONSE, RESPONSES_SURFACE, STREAMING
+from tests.test_litellm_rust.responses.data import RESPONSES_EVENTS, RESPONSES_RESPONSE, STREAMING, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.callbacks import (
-    consume,
-    relaxed,
-    response_id,
-)
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
+from tests.test_litellm_rust.support.results import consume, response_id
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
-SURFACE: Final = RESPONSES_SURFACE
 STREAM: Final = ResponseSpec(body=None, events=RESPONSES_EVENTS)
 
 
@@ -32,7 +27,7 @@ async def test_stream_relays_provider_events_and_logs_success_once_after_the_las
     server.enqueue(STREAM)
     recorder: Final = RecordingLogger()
 
-    stream: Final = await SURFACE.call(server, stream=True, callbacks=[recorder])
+    stream: Final = await call(server, stream=True, callbacks=[recorder])
     assert isinstance(stream, AsyncIterator)
     first: Final = await anext(stream)
     await drain_logging()
@@ -55,7 +50,7 @@ async def test_sync_stream_relays_provider_events_and_logs_success_once(server: 
     server.enqueue(STREAM)
     recorder: Final = RecordingLogger()
 
-    stream: Final = await SURFACE.call(server, asynchronous=False, stream=True, callbacks=[recorder])
+    stream: Final = await call(server, asynchronous=False, stream=True, callbacks=[recorder])
     chunks: Final = await consume(stream)
 
     assert_served_natively(server)

@@ -8,7 +8,7 @@ import litellm
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.catalog import Route
 from litellm.types.llms.openai import ResponsesAPIResponse
-from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_SURFACE, RESPONSES_TEXT
+from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_TEXT, call
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.routing import assert_served_natively, native_route
 
@@ -51,6 +51,6 @@ async def test_continuation_ids_are_decoded_before_they_reach_the_wire(
         else original
     )
 
-    await RESPONSES_SURFACE.call(server, asynchronous=asynchronous, previous_response_id=previous)
+    await call(server, asynchronous=asynchronous, previous_response_id=previous)
 
     assert _OBJECT.validate_python(server.requests[0].body)["previous_response_id"] == original

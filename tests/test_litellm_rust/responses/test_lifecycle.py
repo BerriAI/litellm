@@ -6,7 +6,7 @@ import pytest
 import litellm
 from litellm.rust_bridge import _native
 from litellm.rust_bridge.public_call import NativeCall
-from tests.test_litellm_rust.responses.data import RESPONSES_SURFACE
+from tests.test_litellm_rust.responses.data import REQUEST
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 
@@ -23,14 +23,14 @@ async def test_unstarted_call_has_no_provider_or_callback_effects(
     monkeypatch.setattr(litellm, "max_budget", 1.0)
     monkeypatch.setattr(litellm, "_current_cost", 2.0)
     kwargs: Final = {
-        **RESPONSES_SURFACE.request,
+        **REQUEST,
         "api_key": "test-key",
         "api_base": server.base_url,
         "callbacks": [recorder],
     }
 
     base: Final = {
-        **RESPONSES_SURFACE.request,
+        **REQUEST,
         "stream": None,
         "api_key": "test-key",
         "api_base": server.base_url,

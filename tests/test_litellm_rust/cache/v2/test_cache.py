@@ -15,7 +15,7 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_RESPONSE, RESPONSES_TEXT
-from tests.test_litellm_rust.support.cache import cache_key, invoke, payload
+from tests.test_litellm_rust.cache.support import cache_key, invoke, payload
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 

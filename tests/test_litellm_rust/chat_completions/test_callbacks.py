@@ -6,11 +6,10 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import CallTypes, ModelResponse
-from tests.test_litellm_rust.chat_completions.data import CHAT_SURFACE
+from tests.test_litellm_rust.chat_completions.data import call
 from tests.test_litellm_rust.messages.data import MESSAGES_TEXT
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, request_body
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.requests import request_body
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -23,7 +22,7 @@ _OBJECT: Final = TypeAdapter(dict[str, object])
 async def test_returns_a_model_response_and_logs_success_once(server: RecordingServer, asynchronous: bool) -> None:
     recorder: Final = RecordingLogger()
 
-    result: Final = await CHAT_SURFACE.call(server, asynchronous=asynchronous, callbacks=[recorder], temperature=0.25)
+    result: Final = await call(server, asynchronous=asynchronous, callbacks=[recorder], temperature=0.25)
 
     assert_served_natively(server)
     sent: Final = server.requests[0]
@@ -44,7 +43,7 @@ async def test_pre_api_call_edits_reach_the_provider(server: RecordingServer) ->
         def log_pre_api_call(self, model: object, messages: object, kwargs: dict[str, object]) -> None:
             request_body(kwargs)["temperature"] = 0.75
 
-    await CHAT_SURFACE.call(server, callbacks=[Edit()])
+    await call(server, callbacks=[Edit()])
 
     assert _OBJECT.validate_python(server.requests[0].body)["temperature"] == 0.75
 
@@ -58,7 +57,7 @@ async def test_pre_call_deployment_hook_can_delete_keywords(server: RecordingSer
             return {name: value for name, value in kwargs.items() if name not in ("temperature", "extra_headers")}
 
     litellm.callbacks.append(DropKeywords())
-    await CHAT_SURFACE.call(server, temperature=0.25, extra_headers={"x-deleted": "remove this header"})
+    await call(server, temperature=0.25, extra_headers={"x-deleted": "remove this header"})
 
     assert_served_natively(server)
     sent: Final = server.requests[0]

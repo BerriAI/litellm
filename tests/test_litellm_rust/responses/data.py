@@ -2,7 +2,9 @@ from typing import Final
 
 import litellm
 from litellm.rust_bridge.catalog import Route
-from tests.test_litellm_rust.support.callbacks import Surface, gap
+from tests.test_litellm_rust.support.gaps import gap
+from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests.test_litellm_rust.support.routing import call_natively
 
 RESPONSES_MODEL: Final = "openai/gpt-6.1-sol"
 RESPONSES_TEXT: Final = "Hello from native Responses"
@@ -51,16 +53,22 @@ def _error(kind: str) -> dict[str, object]:
     return {"error": {"type": kind, "message": kind, "param": None, "code": None}}
 
 
-RESPONSES_SURFACE: Final = Surface(
-    route=Route.RESPONSES,
-    request={"model": RESPONSES_MODEL, "input": "Hello"},
-    response=RESPONSES_RESPONSE,
-    events=RESPONSES_EVENTS,
-    bad_request=_error("invalid_request_error"),
-    rate_limited=_error("rate_limit_exceeded"),
-    create=litellm.responses,
-    acreate=litellm.aresponses,
-)
+REQUEST: Final = {"model": RESPONSES_MODEL, "input": "Hello"}
+BAD_REQUEST: Final = _error("invalid_request_error")
+RATE_LIMITED: Final = _error("rate_limit_exceeded")
+
+
+async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: object) -> object:
+    return await call_natively(
+        Route.RESPONSES,
+        litellm.responses,
+        litellm.aresponses,
+        REQUEST,
+        server,
+        asynchronous=asynchronous,
+        **kwargs,
+    )
+
 
 SYNC_DEPLOYMENT_HOOK: Final = gap("native sync calls skip the async pre-call deployment hook")
 STREAMING: Final = gap("native Responses streaming declines to Python", raises=RuntimeError)

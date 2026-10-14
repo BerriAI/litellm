@@ -10,28 +10,21 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from tests.test_litellm_rust.responses.data import (
     BODY_HOOKS,
+    REQUEST,
     RESPONSES_EVENTS,
     RESPONSES_RESPONSE,
-    RESPONSES_SURFACE,
     STREAMING,
+    call,
 )
+from tests.test_litellm_rust.support.body_hooks import LegacyAgenticLoop, PlannedAgenticLoop, agentic_hooks
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
-from tests.test_litellm_rust.support.callbacks import (
-    CALL_ID,
-    LegacyAgenticLoop,
-    PlannedAgenticLoop,
-    agentic_hooks,
-    consume,
-    relaxed,
-    response_id,
-)
 from tests.test_litellm_rust.support.isolation import rebound
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
+from tests.test_litellm_rust.support.results import consume, response_id
+from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
-SURFACE: Final = RESPONSES_SURFACE
 STREAM: Final = ResponseSpec(body=None, events=RESPONSES_EVENTS)
 
 
@@ -56,7 +49,7 @@ async def test_body_streaming_deployment_hook_rewrites_chunks_before_delivery(se
 
     server.enqueue(STREAM)
     with rebound(litellm, "callbacks", [Rewrite()]):
-        stream: Final = await SURFACE.call(server, stream=True)
+        stream: Final = await call(server, stream=True)
         chunks: Final = await consume(stream)
 
     assert_served_natively(server)
@@ -72,7 +65,7 @@ async def test_body_planned_agentic_loop_sends_the_followup_and_replaces_the_res
     server.default_response = ResponseSpec(body={**RESPONSES_RESPONSE, "id": "followup"})
 
     with rebound(litellm, "callbacks", [loop]):
-        response: Final = await SURFACE.call(server)
+        response: Final = await call(server)
         await drain_logging()
 
     assert_served_natively(server, count=2)
@@ -94,7 +87,7 @@ async def test_body_legacy_agentic_loop_replaces_the_response(server: RecordingS
     loop: Final = LegacyAgenticLoop()
 
     with rebound(litellm, "callbacks", [loop]):
-        response: Final = await SURFACE.call(server)
+        response: Final = await call(server)
 
     assert_served_natively(server)
     assert response_id(response) == "agentic-replaced"
@@ -105,7 +98,7 @@ async def test_body_legacy_agentic_loop_replaces_the_response(server: RecordingS
 async def test_body_logging_setup_drops_a_logger_fn_from_a_supplied_logging_object(server: RecordingServer) -> None:
     observed: Final[list[object]] = []
     logging_obj: Final = Logging(
-        model=RESPONSES_SURFACE.request["model"],
+        model=REQUEST["model"],
         messages=[],
         stream=False,
         start_time=datetime.now(),
@@ -115,7 +108,7 @@ async def test_body_logging_setup_drops_a_logger_fn_from_a_supplied_logging_obje
     )
     logging_obj.update_environment_variables(litellm_params={"logger_fn": observed.append}, optional_params={})
 
-    await SURFACE.call(server, litellm_logging_obj=logging_obj)
+    await call(server, litellm_logging_obj=logging_obj)
 
     assert_served_natively(server)
     assert observed == []

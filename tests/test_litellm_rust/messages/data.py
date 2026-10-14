@@ -2,7 +2,9 @@ from typing import Final
 
 import litellm
 from litellm.rust_bridge.catalog import Route
-from tests.test_litellm_rust.support.callbacks import Surface, gap
+from tests.test_litellm_rust.support.gaps import gap
+from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests.test_litellm_rust.support.routing import call_natively
 
 MESSAGES_MODEL: Final = "anthropic/claude-sonnet-5"
 MESSAGES: Final = ({"role": "user", "content": "Hello"},)
@@ -36,20 +38,27 @@ MESSAGES_EVENTS: Final = (
     ("message_stop", {"type": "message_stop"}),
 )
 
+REQUEST: Final = {"model": MESSAGES_MODEL, "messages": list(MESSAGES), "max_tokens": 64}
+
 
 def _error(kind: str) -> dict[str, object]:
     return {"type": "error", "error": {"type": kind, "message": kind}}
 
 
-MESSAGES_SURFACE: Final = Surface(
-    route=Route.MESSAGES,
-    request={"model": MESSAGES_MODEL, "messages": list(MESSAGES), "max_tokens": 64},
-    response=MESSAGES_RESPONSE,
-    events=MESSAGES_EVENTS,
-    bad_request=_error("invalid_request_error"),
-    rate_limited=_error("rate_limit_error"),
-    create=litellm.anthropic.messages.create,
-    acreate=litellm.anthropic.messages.acreate,
-)
+BAD_REQUEST: Final = _error("invalid_request_error")
+RATE_LIMITED: Final = _error("rate_limit_error")
+
+
+async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: object) -> object:
+    return await call_natively(
+        Route.MESSAGES,
+        litellm.anthropic.messages.create,
+        litellm.anthropic.messages.acreate,
+        REQUEST,
+        server,
+        asynchronous=asynchronous,
+        **kwargs,
+    )
+
 
 BODY_HOOKS: Final = gap("native Messages does not run the handler body hooks")

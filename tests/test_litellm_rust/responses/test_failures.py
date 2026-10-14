@@ -5,7 +5,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import RateLimitError
-from tests.test_litellm_rust.responses.data import RESPONSES_SURFACE
+from tests.test_litellm_rust.responses.data import RATE_LIMITED, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
@@ -30,7 +30,7 @@ async def test_sdk_policy_rejection_precedes_resource_setup_and_is_logged_once(
     server.expected_requests = 0
 
     with pytest.raises(litellm.BudgetExceededError) as caught:
-        await RESPONSES_SURFACE.call(server, asynchronous=asynchronous, callbacks=[recorder])
+        await call(server, asynchronous=asynchronous, callbacks=[recorder])
 
     failure: Final = await recorder.wait_for_async(failure_signal(asynchronous))
     assert len(failure) == 1
@@ -45,10 +45,10 @@ async def test_provider_failure_is_terminal_and_shared_with_callbacks(
     server: RecordingServer, asynchronous: bool
 ) -> None:
     recorder: Final = RecordingLogger()
-    server.enqueue(ResponseSpec(body=RESPONSES_SURFACE.rate_limited, status=429))
+    server.enqueue(ResponseSpec(body=RATE_LIMITED, status=429))
 
     with pytest.raises(RateLimitError) as caught:
-        await RESPONSES_SURFACE.call(server, asynchronous=asynchronous, callbacks=[recorder])
+        await call(server, asynchronous=asynchronous, callbacks=[recorder])
 
     assert caught.value.status_code == 429
     assert len(server.requests) == 1
@@ -77,7 +77,7 @@ async def test_unsupported_requests_fail_before_callbacks_and_provider_io(
     server.expected_requests = 0
 
     with pytest.raises(RuntimeError, match="declined the request"):
-        await RESPONSES_SURFACE.call(server, callbacks=[recorder], **options)
+        await call(server, callbacks=[recorder], **options)
 
     assert not server.requests
     assert not recorder.events

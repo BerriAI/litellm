@@ -8,7 +8,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.models.credentials import CredentialItem
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes
-from tests.test_litellm_rust.responses.data import RESPONSES_SURFACE
+from tests.test_litellm_rust.responses.data import call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.routing import assert_served_natively
@@ -43,7 +43,7 @@ async def test_resource_setup_uses_deployment_hook_arguments(
     server.expected_requests = 0
 
     with pytest.raises(ValueError, match=r"request\.ssl_verify") as caught:
-        await RESPONSES_SURFACE.call(server, callbacks=[recorder])
+        await call(server, callbacks=[recorder])
 
     failure: Final = await recorder.wait_for_async("async_log_failure_event")
     assert len(failure) == 1
@@ -70,7 +70,7 @@ async def test_connection_settings_reach_the_provider(
     for name in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
         monkeypatch.setenv(name, server.base_url if source == "environment" else "http://127.0.0.1:1")
 
-    result: Final = await RESPONSES_SURFACE.call(
+    result: Final = await call(
         server,
         asynchronous=asynchronous,
         api_key=key if explicit else ("" if source == "empty" else None),

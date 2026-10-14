@@ -4,7 +4,7 @@ import pytest
 
 import litellm
 from litellm.rust_bridge.catalog import Route
-from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, MESSAGES_SURFACE
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, call
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.routing import assert_served_natively, native_route
 
@@ -48,7 +48,7 @@ async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(se
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
     ]
 
-    await MESSAGES_SURFACE.call(server, messages=history)
+    await call(server, messages=history)
 
     body, _ = sent(server)
     assert body["messages"] == [
@@ -60,7 +60,7 @@ async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(se
 
 @pytest.mark.asyncio
 async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(server: RecordingServer) -> None:
-    await MESSAGES_SURFACE.call(
+    await call(
         server,
         provider_specific_header=[
             {"custom_llm_provider": "anthropic, azure_ai", "extra_headers": {"x-scoped": "yes"}},
@@ -75,7 +75,7 @@ async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(serv
 
 @pytest.mark.asyncio
 async def test_scoped_headers_override_extra_headers_which_override_forwarded_headers(server: RecordingServer) -> None:
-    await MESSAGES_SURFACE.call(
+    await call(
         server,
         headers={"x-priority": "forwarded", "x-forwarded-only": "kept"},
         extra_headers={"x-priority": "extra", "x-extra-only": "kept"},
@@ -98,9 +98,9 @@ async def test_model_capabilities_are_read_from_model_cost_at_call_time(
     model: Final = f"anthropic/{CAPABILITY_MODEL}"
 
     capabilities(monkeypatch, sampling=True)
-    await MESSAGES_SURFACE.call(server, model=model, temperature=0.2, drop_params=True)
+    await call(server, model=model, temperature=0.2, drop_params=True)
     capabilities(monkeypatch, sampling=False)
-    await MESSAGES_SURFACE.call(server, model=model, temperature=0.2, drop_params=True)
+    await call(server, model=model, temperature=0.2, drop_params=True)
 
     assert_served_natively(server, count=2)
     first, second = (request.body for request in server.requests)
@@ -116,7 +116,7 @@ async def test_global_drop_params_drops_unsupported_params(
     capabilities(monkeypatch, sampling=False)
     monkeypatch.setattr(litellm, "drop_params", True)
 
-    await MESSAGES_SURFACE.call(server, model=f"anthropic/{CAPABILITY_MODEL}", top_k=5)
+    await call(server, model=f"anthropic/{CAPABILITY_MODEL}", top_k=5)
 
     body, _ = sent(server)
     assert "top_k" not in body
@@ -131,7 +131,7 @@ async def test_unsupported_params_are_rejected_before_io_without_drop_params(
     server.expected_requests = 0
 
     with pytest.raises(litellm.BadRequestError, match="top_k"):
-        await MESSAGES_SURFACE.call(server, model=f"anthropic/{CAPABILITY_MODEL}", top_k=5)
+        await call(server, model=f"anthropic/{CAPABILITY_MODEL}", top_k=5)
 
     assert server.requests == []
 

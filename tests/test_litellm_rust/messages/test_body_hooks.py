@@ -10,23 +10,15 @@ from litellm.integrations.websearch_interception.handler import WebSearchInterce
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.pass_through.messages import interceptors
 from litellm.llms.anthropic.pass_through.messages.interceptors.base import MessagesInterceptor
-from tests.test_litellm_rust.messages.data import BODY_HOOKS, MESSAGES_RESPONSE, MESSAGES_SURFACE
+from tests.test_litellm_rust.messages.data import BODY_HOOKS, MESSAGES_RESPONSE, REQUEST, call
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
-from tests.test_litellm_rust.support.callbacks import (
-    CALL_ID,
-    LegacyAgenticLoop,
-    PlannedAgenticLoop,
-    agentic_hooks,
-    relaxed,
-    response_id,
-)
+from tests.test_litellm_rust.support.body_hooks import LegacyAgenticLoop, PlannedAgenticLoop, agentic_hooks
 from tests.test_litellm_rust.support.isolation import rebound
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
+from tests.test_litellm_rust.support.results import response_id
+from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
-
-SURFACE: Final = MESSAGES_SURFACE
 
 
 @pytest.fixture
@@ -44,7 +36,7 @@ async def test_body_pre_request_hook_rewrites_the_provider_request(server: Recor
             return {**kwargs, "system": "body hook instruction"}
 
     with rebound(litellm, "callbacks", [Rewrite()]):
-        await SURFACE.call(server)
+        await call(server)
 
     assert_served_natively(server)
     assert isinstance(server.requests[0].body, dict)
@@ -66,7 +58,7 @@ async def test_body_websearch_short_circuit_answers_without_the_provider(server:
             return {**MESSAGES_RESPONSE, "id": "short-circuited"}
 
     with rebound(litellm, "callbacks", [ShortCircuit()]):
-        response: Final = await SURFACE.call(server)
+        response: Final = await call(server)
 
     assert response_id(response) == "short-circuited"
     assert server.requests == []
@@ -83,7 +75,7 @@ async def test_body_interceptor_replaces_the_provider_call(server: RecordingServ
             return {**MESSAGES_RESPONSE, "id": "intercepted"}
 
     with rebound(interceptors, "_interceptors", [Replace()]):
-        response: Final = await SURFACE.call(server)
+        response: Final = await call(server)
 
     assert response_id(response) == "intercepted"
     assert server.requests == []
@@ -97,7 +89,7 @@ async def test_body_planned_agentic_loop_sends_the_followup_and_replaces_the_res
     server.default_response = ResponseSpec(body={**MESSAGES_RESPONSE, "id": "followup"})
 
     with rebound(litellm, "callbacks", [loop]):
-        response: Final = await SURFACE.call(server)
+        response: Final = await call(server)
         await drain_logging()
 
     assert_served_natively(server, count=2)
@@ -118,7 +110,7 @@ async def test_body_legacy_agentic_loop_replaces_the_response(server: RecordingS
     loop: Final = LegacyAgenticLoop()
 
     with rebound(litellm, "callbacks", [loop]):
-        response: Final = await SURFACE.call(server)
+        response: Final = await call(server)
 
     assert_served_natively(server)
     assert response_id(response) == "agentic-replaced"
@@ -129,7 +121,7 @@ async def test_body_legacy_agentic_loop_replaces_the_response(server: RecordingS
 async def test_body_logging_setup_drops_a_logger_fn_from_a_supplied_logging_object(server: RecordingServer) -> None:
     observed: Final[list[object]] = []
     logging_obj: Final = Logging(
-        model=MESSAGES_SURFACE.request["model"],
+        model=REQUEST["model"],
         messages=[],
         stream=False,
         start_time=datetime.now(),
@@ -139,7 +131,7 @@ async def test_body_logging_setup_drops_a_logger_fn_from_a_supplied_logging_obje
     )
     logging_obj.update_environment_variables(litellm_params={"logger_fn": observed.append}, optional_params={})
 
-    await SURFACE.call(server, litellm_logging_obj=logging_obj)
+    await call(server, litellm_logging_obj=logging_obj)
 
     assert_served_natively(server)
     assert observed == []

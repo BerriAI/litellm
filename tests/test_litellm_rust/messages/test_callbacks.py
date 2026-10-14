@@ -8,23 +8,16 @@ from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.utils import StandardLoggingPayload
-from tests.test_litellm_rust.messages.data import MESSAGES_RESPONSE, MESSAGES_SURFACE
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.support.callbacks import (
-    HookRecorder,
-    gap,
-    relaxed,
-    response_id,
-    with_id,
-)
+from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, call
+from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, request_body
+from tests.test_litellm_rust.support.gaps import gap
 from tests.test_litellm_rust.support.isolation import rebound
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import request_body
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
+from tests.test_litellm_rust.support.results import response_id, with_id
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
-SURFACE: Final = MESSAGES_SURFACE
 SYNC_HANDLERS_ON_ASYNC_CALLS: Final = gap("native async calls also run the sync success and failure handlers")
 
 
@@ -54,7 +47,7 @@ async def test_success_hook_fires_the_expected_number_of_times(
     recorder: Final = HookRecorder()
 
     with rebound(litellm, "callbacks", [recorder]):
-        await SURFACE.call(server)
+        await call(server)
         await recorder.wait_for_async("async_log_success_event")
 
     assert_served_natively(server)
@@ -74,12 +67,12 @@ async def test_success_hook_fires_the_expected_number_of_times(
 async def test_failure_hook_fires_the_expected_number_of_times(
     server: RecordingServer, hook: str, expected: int
 ) -> None:
-    server.default_response = ResponseSpec(body=SURFACE.rate_limited, status=429)
+    server.default_response = ResponseSpec(body=RATE_LIMITED, status=429)
     recorder: Final = HookRecorder()
 
     with rebound(litellm, "callbacks", [recorder]):
         with pytest.raises(litellm.RateLimitError):
-            await SURFACE.call(server, metadata={"model_group_size": 1})
+            await call(server, metadata={"model_group_size": 1})
         await recorder.wait_for_async("async_log_failure_event")
 
     assert_served_natively(server)
@@ -88,12 +81,12 @@ async def test_failure_hook_fires_the_expected_number_of_times(
 
 @pytest.mark.asyncio
 async def test_failure_events_carry_the_error_raised_to_the_caller(server: RecordingServer) -> None:
-    server.default_response = ResponseSpec(body=SURFACE.bad_request, status=400)
+    server.default_response = ResponseSpec(body=BAD_REQUEST, status=400)
     recorder: Final = RecordingLogger()
 
     with rebound(litellm, "callbacks", [recorder]):
         with pytest.raises(litellm.BadRequestError) as raised:
-            await SURFACE.call(server)
+            await call(server)
         events: Final = await recorder.wait_for_async("async_log_failure_event")
 
     assert_served_natively(server)
@@ -105,7 +98,7 @@ async def test_failure_events_carry_the_error_raised_to_the_caller(server: Recor
 async def test_pre_api_call_sees_the_wire_body(server: RecordingServer) -> None:
     recorder: Final = RecordingLogger()
 
-    await SURFACE.call(server, callbacks=[recorder])
+    await call(server, callbacks=[recorder])
 
     assert_served_natively(server)
     pre_call: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
@@ -119,7 +112,7 @@ async def test_pre_api_call_edits_reach_the_provider(server: RecordingServer) ->
         def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
             request_body(kwargs)["temperature"] = 0.25
 
-    await SURFACE.call(server, callbacks=[Edit()])
+    await call(server, callbacks=[Edit()])
 
     assert_served_natively(server)
     assert isinstance(server.requests[0].body, dict)
@@ -130,7 +123,7 @@ async def test_pre_api_call_edits_reach_the_provider(server: RecordingServer) ->
 async def test_pre_api_call_sees_the_shaped_optional_params(server: RecordingServer) -> None:
     recorder: Final = RecordingLogger()
 
-    await SURFACE.call(server, callbacks=[recorder], temperature=0.2, top_k=3, drop_params=True)
+    await call(server, callbacks=[recorder], temperature=0.2, top_k=3, drop_params=True)
 
     sent: Final = server.requests[0].body
     assert isinstance(sent, dict)
@@ -159,7 +152,7 @@ async def test_logging_hook_and_redaction_edits_reach_the_async_success_event(se
     recorder: Final = Rewrite()
 
     with rebound(litellm, "callbacks", [recorder]):
-        await SURFACE.call(server)
+        await call(server)
         success: Final = await recorder.wait_for_async("async_log_success_event")
 
     assert isinstance(success[0].kwargs, dict)
@@ -176,7 +169,7 @@ async def test_pre_call_deployment_hook_rewrites_the_wire_request(server: Record
             return {**kwargs, "extra_headers": {"x-deployment-hook": "rewritten"}}
 
     with rebound(litellm, "callbacks", [Rewrite()]):
-        await SURFACE.call(server)
+        await call(server)
 
     assert_served_natively(server)
     assert server.requests[0].headers["x-deployment-hook"] == "rewritten"
@@ -191,7 +184,7 @@ async def test_pre_call_deployment_hook_can_delete_keywords(server: RecordingSer
             return {name: value for name, value in kwargs.items() if name not in ("system", "extra_headers")}
 
     with rebound(litellm, "callbacks", [DropKeywords()]):
-        await SURFACE.call(
+        await call(
             server,
             system="remove this instruction",
             extra_headers={"x-deleted": "remove this header"},
@@ -215,7 +208,7 @@ async def test_post_call_success_deployment_hook_replaces_the_response(server: R
             return with_id(response, "replaced")
 
     with rebound(litellm, "callbacks", [Replace()]):
-        response: Final = await SURFACE.call(server)
+        response: Final = await call(server)
 
     assert_served_natively(server)
     assert response_id(response) == "replaced"
@@ -227,7 +220,7 @@ async def test_a_failing_logger_does_not_fail_the_call(server: RecordingServer) 
         def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
             raise RuntimeError("logger exploded")
 
-    response: Final = await SURFACE.call(server, callbacks=[Broken()])
+    response: Final = await call(server, callbacks=[Broken()])
 
     assert_served_natively(server)
     assert response_id(response) == MESSAGES_RESPONSE["id"]
@@ -262,11 +255,11 @@ async def test_function_callback_fires_the_expected_number_of_times(
     global_list: Final = f"_async_{event}_callback" if asynchronous else f"{event}_callback"
     request_callbacks: Final = {f"{event}_callback": [registered]} if dynamic else {}
     if event == "failure":
-        server.default_response = ResponseSpec(body=SURFACE.bad_request, status=400)
+        server.default_response = ResponseSpec(body=BAD_REQUEST, status=400)
 
     with rebound(litellm, "callbacks", [recorder]), rebound(litellm, global_list, [] if dynamic else [registered]):
         try:
-            await SURFACE.call(server, **request_callbacks)
+            await call(server, **request_callbacks)
         except litellm.BadRequestError:
             assert event == "failure"
         await recorder.wait_for_async(f"async_log_{'failure' if event == 'failure' else 'success'}_event")
@@ -285,7 +278,7 @@ async def test_pre_call_rule_rejects_before_provider_io(server: RecordingServer)
 
     with rebound(litellm, "pre_call_rules", [reject]):
         with pytest.raises(litellm.APIResponseValidationError):
-            await SURFACE.call(server)
+            await call(server)
 
     assert checked == ["Hello"]
     assert server.requests == []
@@ -310,7 +303,7 @@ async def test_dataset_hook_returning_none_drops_the_record_from_the_success_sin
             flush_interval=3600,
         )
         with rebound(litellm, "callbacks", [sink, Drop()]):
-            await SURFACE.call(server)
+            await call(server)
             await datasets.wait_for_async("async_dataset_hook")
             await sink.flush_queue()
 
@@ -321,7 +314,7 @@ async def test_dataset_hook_returning_none_drops_the_record_from_the_success_sin
 async def test_sync_call_returns_the_provider_message(server: RecordingServer) -> None:
     recorder: Final = RecordingLogger()
 
-    response: Final = await SURFACE.call(server, asynchronous=False, callbacks=[recorder])
+    response: Final = await call(server, asynchronous=False, callbacks=[recorder])
 
     assert_served_natively(server)
     assert response_id(response) == MESSAGES_RESPONSE["id"]
