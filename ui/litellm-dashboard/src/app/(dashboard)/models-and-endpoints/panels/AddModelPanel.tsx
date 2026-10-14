@@ -23,11 +23,6 @@ const INITIAL_VALUES: MountedFormValues = { litellm_credential_name: null };
 
 const PREFILL_URL_PARAMS = { provider: parseAsString, litellm_model: parseAsString };
 
-const prefillMapping = (provider: string, model: string) => ({
-  public_name: model,
-  litellm_model: provider === Providers.Azure ? `azure/${model}` : model,
-});
-
 export default function AddModelPanel() {
   const { accessToken } = useAuthorized();
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: INITIAL_VALUES });
@@ -60,7 +55,6 @@ export default function AddModelPanel() {
       return;
     }
     form.setValue("model", [prefillModel]);
-    form.setValue("model_mappings", [prefillMapping(prefillProvider, prefillModel)]);
   }, [form, prefillModel, prefillProvider]);
 
   const pickedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });

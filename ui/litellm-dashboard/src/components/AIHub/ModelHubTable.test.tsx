@@ -31,11 +31,13 @@ vi.mock("@/components/networking", () => ({
 const GARDEN_COST_MAP = {
   "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
   "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+  "laya/english": { litellm_provider: "laya", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
   "claude-opus-4-8": { litellm_provider: "anthropic", mode: "chat" },
 };
 
 const ADDABLE_PROVIDER_FIELDS = [
   { provider: "TypeSafe", provider_display_name: "TypeSafe", litellm_provider: "typesafe", credential_fields: [] },
+  { provider: "Laya", provider_display_name: "Laya", litellm_provider: "laya", credential_fields: [] },
 ];
 
 vi.mock("next/navigation", () => ({
@@ -347,10 +349,25 @@ describe("ModelHubTable", () => {
       await renderHub(chatOnly);
 
       const garden = await screen.findByTestId("decision-model-garden");
-      expect(garden).toHaveTextContent("2 decision models across 2 providers");
+      expect(garden).toHaveTextContent("2 decision models across 2 providers answer on /v1/decisions");
       expect(within(garden).getByTestId("decision-model-card-typesafe/jev-latest")).toHaveTextContent("TypeSafe");
       expect(within(garden).getByTestId("decision-model-card-cloudflare/clef")).toHaveTextContent("Cloudflare");
       expect(within(garden).queryByText("claude-opus-4-8")).not.toBeInTheDocument();
+    });
+
+    it("sends a self-hosted model that does not answer on /v1/decisions to its own docs, with no Add Model link", async () => {
+      await renderHub(chatOnly);
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("1 more are self-hosted and answer on their own routes");
+      const layaCard = within(garden).getByTestId("decision-model-card-laya/english");
+      expect(within(layaCard).queryByRole("link", { name: "/v1/decisions docs" })).not.toBeInTheDocument();
+      expect(within(layaCard).getByRole("link", { name: "Self-hosted, own route" })).toHaveAttribute(
+        "href",
+        "https://docs.litellm.ai/docs/decisions#self-hosted-laya-and-nimble",
+      );
+      expect(await within(garden).findAllByRole("link", { name: "Add model" })).toHaveLength(1);
+      expect(within(layaCard).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
     });
 
     it("links each card to the decisions docs and to Add Model prefilled with that provider and model", async () => {

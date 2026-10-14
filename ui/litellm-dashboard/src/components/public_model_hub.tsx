@@ -30,6 +30,7 @@ import Navbar from "./navbar";
 import {
   agentHubPublicModelsCall,
   skillHubPublicCall,
+  getGlobalLitellmHeaderName,
   getProxyBaseUrl,
   getPublicModelHubInfo,
   getUiConfig,
@@ -49,13 +50,33 @@ import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "@/components/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
-import { displayMode } from "@/lib/decisionModels";
+import { displayMode, isDecisionMode } from "@/lib/decisionModels";
+import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import { filterBySearchTerm, rankBySearchRelevance } from "@/utils/searchUtils";
 
 interface PublicModelHubProps {
   accessToken?: string | null;
   isEmbedded?: boolean; // When true, hides navbar and adjusts layout for embedding in dashboard
 }
+
+const usageExample = (model: ModelGroupInfo): string =>
+  isDecisionMode(model.mode)
+    ? modelUsageExample(model.mode, getProxyBaseUrl(), model.model_group, getGlobalLitellmHeaderName())
+    : generateCodeSnippet({
+        apiKeySource: "custom",
+        accessToken: null,
+        apiKey: "your_api_key",
+        inputMessage: "Hello, how are you?",
+        chatHistory: [{ role: "user", content: "Hello, how are you?", isImage: false } as MessageType],
+        selectedTags: [],
+        selectedVectorStores: [],
+        selectedGuardrails: [],
+        selectedPolicies: [],
+        selectedMCPServers: [],
+        endpointType: getEndpointType(model.mode || "chat"),
+        selectedModel: model.model_group,
+        selectedSdk: "openai",
+      });
 
 function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
   return (
@@ -848,51 +869,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <div>
                     <p className="text-lg font-semibold mb-4">Usage Example</p>
                     <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
-                      <pre className="text-sm">
-                        {(() => {
-                          const codeSnippet = generateCodeSnippet({
-                            apiKeySource: "custom",
-                            accessToken: null,
-                            apiKey: "your_api_key",
-                            inputMessage: "Hello, how are you?",
-                            chatHistory: [
-                              { role: "user", content: "Hello, how are you?", isImage: false } as MessageType,
-                            ],
-                            selectedTags: [],
-                            selectedVectorStores: [],
-                            selectedGuardrails: [],
-                            selectedPolicies: [],
-                            selectedMCPServers: [],
-                            endpointType: getEndpointType(selectedModel.mode || "chat"),
-                            selectedModel: selectedModel.model_group,
-                            selectedSdk: "openai",
-                          });
-                          return codeSnippet;
-                        })()}
-                      </pre>
+                      <pre className="text-sm">{usageExample(selectedModel)}</pre>
                     </div>
                     <div className="mt-2 text-right">
                       <button
-                        onClick={() => {
-                          const codeSnippet = generateCodeSnippet({
-                            apiKeySource: "custom",
-                            accessToken: null,
-                            apiKey: "your_api_key",
-                            inputMessage: "Hello, how are you?",
-                            chatHistory: [
-                              { role: "user", content: "Hello, how are you?", isImage: false } as MessageType,
-                            ],
-                            selectedTags: [],
-                            selectedVectorStores: [],
-                            selectedGuardrails: [],
-                            selectedPolicies: [],
-                            selectedMCPServers: [],
-                            endpointType: getEndpointType(selectedModel.mode || "chat"),
-                            selectedModel: selectedModel.model_group,
-                            selectedSdk: "openai",
-                          });
-                          copyToClipboard(codeSnippet);
-                        }}
+                        onClick={() => copyToClipboard(usageExample(selectedModel))}
                         className="text-sm text-info hover:text-info/80 cursor-pointer"
                       >
                         Copy to clipboard

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const DECISIONS_DOCS_URL = "https://docs.litellm.ai/docs/decisions";
 export const DECISIONS_PROVIDERS_DOCS_URL = `${DECISIONS_DOCS_URL}#supported-providers`;
+export const DECISIONS_SELF_HOSTED_DOCS_URL = `${DECISIONS_DOCS_URL}#self-hosted-laya-and-nimble`;
 export const SYSTEM_ONE_PLAYGROUND_ROUTE = "playground?tab=system-one";
 
 const DECISION_ENDPOINTS: ReadonlySet<string> = new Set(["/v1/decisions", "/v1/systemone"]);
@@ -64,16 +65,39 @@ export function buildDecisionCatalog(costMap: unknown): DecisionCatalog {
   return { models: new Set(decisionEntries.map(([key]) => key)), providers };
 }
 
+export type DecisionRoute = "decisions" | "self-hosted";
+
 export interface DecisionGardenModel {
   readonly model: string;
   readonly provider: string;
+  readonly route: DecisionRoute;
 }
+
+const decisionRoute = (entry: CostMapEntry): DecisionRoute =>
+  (entry.supported_endpoints ?? ["/v1/decisions"]).includes("/v1/decisions") ? "decisions" : "self-hosted";
+
+const shortestNameFirst = (a: DecisionGardenModel, b: DecisionGardenModel): number =>
+  a.model.length - b.model.length || a.model.localeCompare(b.model);
+
+const rankedRow = (row: DecisionGardenModel, index: number, rows: readonly DecisionGardenModel[]) => ({
+  row,
+  selfHosted: Number(row.route === "self-hosted"),
+  rankInProvider: rows.slice(0, index).filter((earlier) => earlier.provider === row.provider).length,
+});
 
 export const buildDecisionGarden = (costMap: unknown): readonly DecisionGardenModel[] =>
   parsedEntries(costMap)
     .filter(([, entry]) => isDecisionMode(entry.mode))
-    .map(([key, entry]) => ({ model: key, provider: entry.litellm_provider }))
-    .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
+    .map(([key, entry]) => ({ model: key, provider: entry.litellm_provider, route: decisionRoute(entry) }))
+    .toSorted(shortestNameFirst)
+    .map(rankedRow)
+    .toSorted(
+      (a, b) =>
+        a.selfHosted - b.selfHosted ||
+        a.rankInProvider - b.rankInProvider ||
+        a.row.provider.localeCompare(b.row.provider),
+    )
+    .map(({ row }) => row);
 
 export const isDecisionSelection = (
   catalog: DecisionCatalog,

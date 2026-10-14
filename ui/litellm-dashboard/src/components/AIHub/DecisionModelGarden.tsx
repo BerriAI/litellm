@@ -7,7 +7,12 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { DECISIONS_DOCS_URL, DecisionGardenModel, buildDecisionGarden } from "@/lib/decisionModels";
+import {
+  DECISIONS_DOCS_URL,
+  DECISIONS_SELF_HOSTED_DOCS_URL,
+  DecisionGardenModel,
+  buildDecisionGarden,
+} from "@/lib/decisionModels";
 import { uiHref } from "@/utils/uiHref";
 
 const PREVIEW_COUNT = 8;
@@ -38,12 +43,12 @@ function DecisionModelCard({ row, canAddModels }: DecisionModelCardProps) {
       </code>
       <div className="mt-auto flex items-center justify-between gap-2">
         <a
-          href={DECISIONS_DOCS_URL}
+          href={row.route === "decisions" ? DECISIONS_DOCS_URL : DECISIONS_SELF_HOSTED_DOCS_URL}
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs text-muted-foreground underline"
         >
-          /v1/decisions docs
+          {row.route === "decisions" ? "/v1/decisions docs" : "Self-hosted, own route"}
         </a>
         {canAddModels && (
           <Button size="xs" variant="outline" nativeButton={false} role="link" render={<a href={addModelHref(row)} />}>
@@ -74,7 +79,9 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ canAddModels 
     return null;
   }
 
-  const providerCount = new Set(rows.map((row) => row.provider)).size;
+  const routedRows = rows.filter((row) => row.route === "decisions");
+  const routedProviderCount = new Set(routedRows.map((row) => row.provider)).size;
+  const selfHostedCount = rows.length - routedRows.length;
   const visibleRows = showAll ? rows : rows.slice(0, PREVIEW_COUNT);
 
   return (
@@ -86,8 +93,9 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ canAddModels 
         <div className="min-w-0 flex-1">
           <h3 className="m-0 text-base font-semibold text-foreground">Decision models LiteLLM supports</h3>
           <p className="m-0 mt-0.5 text-sm text-muted-foreground">
-            {rows.length} decision models across {providerCount} providers. Add one to this proxy and call it at{" "}
-            <code>/v1/decisions</code>.
+            {routedRows.length} decision models across {routedProviderCount} providers answer on{" "}
+            <code>/v1/decisions</code> once added to this proxy.
+            {selfHostedCount > 0 && ` ${selfHostedCount} more are self-hosted and answer on their own routes.`}
           </p>
         </div>
         <Button
@@ -106,7 +114,7 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ canAddModels 
           <DecisionModelCard
             key={row.model}
             row={row}
-            canAddModels={canAddModels && addableProviders.has(row.provider)}
+            canAddModels={canAddModels && row.route === "decisions" && addableProviders.has(row.provider)}
           />
         ))}
       </div>

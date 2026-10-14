@@ -57,12 +57,40 @@ describe("expandModeFilterValues", () => {
 describe("buildDecisionGarden", () => {
   const garden = buildDecisionGarden(COST_MAP);
 
-  it("lists each decision-mode model once with its provider, sorted by provider then model", () => {
+  it("lists each decision-mode model once, one per provider before any provider's second", () => {
     expect(garden).toEqual([
-      { model: "cloudflare/clef", provider: "cloudflare" },
-      { model: "perplexity/pplx-decider-v1-27b", provider: "perplexity" },
-      { model: "typesafe/jev-latest", provider: "typesafe" },
-      { model: "typesafe/jev-preview", provider: "typesafe" },
+      { model: "cloudflare/clef", provider: "cloudflare", route: "decisions" },
+      { model: "perplexity/pplx-decider-v1-27b", provider: "perplexity", route: "decisions" },
+      { model: "typesafe/jev-latest", provider: "typesafe", route: "decisions" },
+      { model: "typesafe/jev-preview", provider: "typesafe", route: "decisions" },
+    ]);
+  });
+
+  it("puts self-hosted models that only serve their own route after every /v1/decisions model", () => {
+    const rows = buildDecisionGarden({
+      "aaa/self-hosted": { litellm_provider: "aaa", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
+      "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
+      "zzz/decider": { litellm_provider: "zzz", mode: "evaluation", supported_endpoints: ["/v1/decisions"] },
+    });
+    expect(rows.map((row) => [row.model, row.route])).toEqual([
+      ["typesafe/jev-latest", "decisions"],
+      ["zzz/decider", "decisions"],
+      ["typesafe/jev-preview", "decisions"],
+      ["aaa/self-hosted", "self-hosted"],
+    ]);
+  });
+
+  it("shows a provider's shortest model name first, so an alias outranks its long twin", () => {
+    const rows = buildDecisionGarden({
+      "cloudflare/@cf/cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+      "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+      "databricks/ai_decide": { litellm_provider: "databricks", mode: "evaluation" },
+    });
+    expect(rows.map((row) => row.model)).toEqual([
+      "cloudflare/clef",
+      "databricks/ai_decide",
+      "cloudflare/@cf/cloudflare/clef",
     ]);
   });
 

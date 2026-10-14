@@ -301,6 +301,26 @@ describe("PublicModelHub", () => {
     await waitFor(() => expect(lastModelQuery()["filter[mode][in]"]).toBe("evaluation,decisions"));
   });
 
+  it("shows a decision model's usage example on /v1/systemone instead of chat completions", async () => {
+    respondWith([model({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" })]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "jev-latest" }));
+
+    const example = (await screen.findByText(/\/v1\/systemone/)).closest("pre");
+    expect(example).toHaveTextContent('"model": "jev-latest"');
+    expect(example).not.toHaveTextContent("chat.completions");
+  });
+
+  it("keeps the chat completions usage example for a chat model", async () => {
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "gpt-4" }));
+
+    const example = (await screen.findByText(/chat\.completions\.create/)).closest("pre");
+    expect(example).toHaveTextContent('model="gpt-4"');
+  });
+
   it("filters by several providers at once, and returns to the first page", async () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);
