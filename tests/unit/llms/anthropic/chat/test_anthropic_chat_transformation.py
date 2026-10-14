@@ -4317,6 +4317,71 @@ def test_calculate_usage_service_tier_defaults_to_none():
     assert usage.service_tier is None
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
+@pytest.mark.parametrize(
+    ("openai_tier", "anthropic_tier"),
+    [("auto", "auto"), ("default", "standard_only"), ("standard_only", "standard_only")],
+)
+def test_service_tier_reaches_anthropic_request_body(provider, openai_tier, anthropic_tier):
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-6", custom_llm_provider=provider, service_tier=openai_tier
+    )
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["service_tier"] == anthropic_tier
+
+
+@pytest.mark.parametrize("tier", ["flex", "priority", "fast", "scale"])
+def test_service_tier_without_anthropic_equivalent_raises_with_drop_params_hint(monkeypatch, tier):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as exc_info:
+        litellm.utils.get_optional_params(
+            model="claude-sonnet-4-6", custom_llm_provider="anthropic", service_tier=tier
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_service_tier_without_anthropic_equivalent_dropped_with_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-6", custom_llm_provider="anthropic", service_tier="flex", drop_params=True
+    )
+
+    assert "service_tier" not in optional_params
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("bedrock", "invoke/us.anthropic.claude-sonnet-4-6"), ("vertex_ai", "claude-sonnet-4-6")],
+)
+def test_service_tier_still_rejected_for_claude_hosts_that_400_on_it(monkeypatch, provider, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="service_tier"):
+        litellm.utils.get_optional_params(model=model, custom_llm_provider=provider, service_tier="auto")
+
+
+def test_bedrock_invoke_service_tier_opt_in_is_sent_untranslated():
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="invoke/us.anthropic.claude-sonnet-4-6",
+        custom_llm_provider="bedrock",
+        service_tier="default",
+        allowed_openai_params=["service_tier"],
+    )
+
+    assert optional_params["service_tier"] == "default"
+
+
 def test_fast_mode_parameter_in_supported_params():
     """
     Test that 'speed' is in the list of supported OpenAI params.
@@ -8190,6 +8255,15 @@ def test_metadata_user_id_from_litellm_params_strips_extras():
         litellm_params={"metadata": {"user_id": "abc123", "trace_id": "xyz"}},
     )
     assert data.get("metadata") == {"user_id": "abc123"}
+
+
+@pytest.mark.parametrize("user_id", [12345, {"id": "abc123"}, ["abc123"]])
+def test_metadata_non_string_user_id_is_skipped_instead_of_raising(user_id):
+    data: Final = _make_transform_request(
+        optional_params={},
+        litellm_params={"metadata": {"user_id": user_id}},
+    )
+    assert "metadata" not in data
 
 
 def test_metadata_filter_applies_to_vertex_anthropic():
