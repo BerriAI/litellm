@@ -208,6 +208,8 @@ database:
       name: litellm-writer-secret
       usernameKey: username
       passwordKey: password
+      hostKey: "" # Secret key containing the writer database host
+      urlKey: "" # Secret key containing the complete writer database URL
     # libpq sslmode / sslrootcert applied to the writer and reader URLs (Prisma and the
     # in-container PgBouncer); e.g. verify-full with /etc/ssl/certs/ca-certificates.crt for AWS RDS.
     # sslRootCert on its own implies sslMode verify-full
@@ -229,6 +231,8 @@ database:
       name: litellm-reader-secret
       usernameKey: username
       passwordKey: password
+      hostKey: "" # Secret key containing the reader database host
+      urlKey: "" # Secret key containing the complete reader database URL
 
   # In-container connection pool (PgBouncer, transaction mode) shared by every
   # gateway worker in the pod. Without it each of the `gateway.numWorkers`
@@ -274,6 +278,8 @@ redis:
   passwordSecret:
     name: "" # Leave empty for auth-less Redis
     passwordKey: password
+    hostKey: "" # Secret key containing the Redis host
+    urlKey: "" # Secret key containing the complete Redis URL
 
 # ---------- gateway (LLM data plane) ----------
 gateway:
