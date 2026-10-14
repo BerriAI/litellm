@@ -1,6 +1,8 @@
 import base64
 import json
+import threading
 import uuid
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Final
 from urllib.parse import quote
@@ -105,9 +107,18 @@ _INVOKE_STREAM_FRAMES: Final = (
 )
 
 
+_GATED_STREAM_TARGETS: Final = (f"/model/{_MODEL_ID}/converse-stream", "-direct-")
+_BEDROCK_STREAM_GATE: Final = threading.Event()
+
+
 def _full_body_peer(request: Request) -> Reply:
     if request.target.endswith("/converse-stream"):
-        return Reply(chunks=_CONVERSE_STREAM_FRAMES, content_type=_EVENT_STREAM)
+        gated: Final = any(marker in request.target for marker in _GATED_STREAM_TARGETS)
+        return Reply(
+            chunks=_CONVERSE_STREAM_FRAMES,
+            content_type=_EVENT_STREAM,
+            gate_after_first=_BEDROCK_STREAM_GATE if gated else None,
+        )
     if request.target.endswith("/invoke-with-response-stream"):
         return Reply(chunks=_INVOKE_STREAM_FRAMES, content_type=_EVENT_STREAM)
     if request.target.endswith("/converse"):
@@ -130,6 +141,16 @@ def _boto3_runtime(gateway: Gateway, key: str):  # noqa: ANN202 - boto3 clients 
 
     client.meta.events.register("before-send.bedrock-runtime.*", bearer)
     return client
+
+
+def _events_read_before_the_upstream_finishes(open_stream: Callable[[], Iterable[object]]) -> tuple[object, ...]:
+    _BEDROCK_STREAM_GATE.clear()
+    events: Final = iter(open_stream())
+    try:
+        first: Final = next(events)
+    finally:
+        _BEDROCK_STREAM_GATE.set()
+    return (first, *events)
 
 
 def _assert_signed_with_the_deployment_key(request: Request, key: str) -> None:
@@ -194,6 +215,12 @@ def test_boto3_converse_invoke_and_stream_methods_forward_full_bodies_for_deploy
             profile_invoke_stream: Final = runtime.invoke_model_with_response_stream(
                 modelId=profile_arn, body=json.dumps(_INVOKE_BODY)
             )
+            router_converse_stream: Final = _events_read_before_the_upstream_finishes(
+                lambda: runtime.converse_stream(modelId=router_name, **_CONVERSE_BODY)["stream"]
+            )
+            router_invoke_stream: Final = runtime.invoke_model_with_response_stream(
+                modelId=router_name, body=json.dumps(_INVOKE_BODY)
+            )
             assert tuple(
                 {name: reply[name] for name in _CONVERSE_REPLY} for reply in (router_converse, profile_converse)
             ) == (_CONVERSE_REPLY, _CONVERSE_REPLY), (router_converse, profile_converse)
@@ -210,6 +237,8 @@ def test_boto3_converse_invoke_and_stream_methods_forward_full_bodies_for_deploy
                 [json.loads(event["chunk"]["bytes"]) for event in response["body"]]
                 for response in (raw_invoke_stream, profile_invoke_stream)
             ] == [[_INVOKE_REPLY], [_INVOKE_REPLY]], (raw_invoke_stream, profile_invoke_stream)
+            assert list(router_converse_stream) == expected_converse_events, router_converse_stream
+            assert [json.loads(event["chunk"]["bytes"]) for event in router_invoke_stream["body"]] == [_INVOKE_REPLY]
 
             received: Final = wire.drain()
             encoded_arn: Final = quote(profile_arn, safe=":")
@@ -222,6 +251,8 @@ def test_boto3_converse_invoke_and_stream_methods_forward_full_bodies_for_deploy
                 ("POST", f"/model/{encoded_arn}/converse-stream"),
                 ("POST", f"/model/{raw_id}/invoke-with-response-stream"),
                 ("POST", f"/model/{encoded_arn}/invoke-with-response-stream"),
+                ("POST", f"/model/{_MODEL_ID}/converse-stream"),
+                ("POST", f"/model/{_MODEL_ID}/invoke-with-response-stream"),
             ], received
             assert tuple(json.loads(request.body) for request in received) == (
                 _CONVERSE_BODY,
@@ -231,6 +262,8 @@ def test_boto3_converse_invoke_and_stream_methods_forward_full_bodies_for_deploy
                 _CONVERSE_BODY,
                 _CONVERSE_BODY,
                 _INVOKE_BODY,
+                _INVOKE_BODY,
+                _CONVERSE_BODY,
                 _INVOKE_BODY,
             ), tuple(request.body for request in received)
             for request in received:
@@ -286,16 +319,31 @@ def test_boto3_direct_raw_model_ids_forward_full_bodies(gateway: Gateway, tmp_pa
             runtime: Final = _boto3_runtime(candidate, key)
             direct_converse: Final = runtime.converse(modelId=direct_raw_id, **_CONVERSE_BODY)
             direct_invoke: Final = runtime.invoke_model(modelId=direct_raw_id, body=json.dumps(_INVOKE_BODY))
+            direct_converse_stream: Final = _events_read_before_the_upstream_finishes(
+                lambda: runtime.converse_stream(modelId=direct_raw_id, **_CONVERSE_BODY)["stream"]
+            )
+            direct_invoke_stream: Final = runtime.invoke_model_with_response_stream(
+                modelId=direct_raw_id, body=json.dumps(_INVOKE_BODY)
+            )
             assert {name: direct_converse[name] for name in _CONVERSE_REPLY} == _CONVERSE_REPLY, direct_converse
             assert json.loads(direct_invoke["body"].read()) == _INVOKE_REPLY, direct_invoke
+            assert list(direct_converse_stream) == [{kind: payload} for kind, payload in _EVENTS], (
+                direct_converse_stream
+            )
+            assert [json.loads(event["chunk"]["bytes"]) for event in direct_invoke_stream["body"]] == [_INVOKE_REPLY]
 
             received: Final = wire.drain()
             assert [(request.method, request.target) for request in received] == [
                 ("POST", f"/model/{direct_raw_id}/converse"),
                 ("POST", f"/model/{direct_raw_id}/invoke"),
+                ("POST", f"/model/{direct_raw_id}/converse-stream"),
+                ("POST", f"/model/{direct_raw_id}/invoke-with-response-stream"),
             ], received
-            assert tuple(json.loads(request.body) for request in received) == (_CONVERSE_BODY, _INVOKE_BODY), tuple(
-                request.body for request in received
-            )
+            assert tuple(json.loads(request.body) for request in received) == (
+                _CONVERSE_BODY,
+                _INVOKE_BODY,
+                _CONVERSE_BODY,
+                _INVOKE_BODY,
+            ), tuple(request.body for request in received)
             for request in received:
                 _assert_signed_with_the_deployment_key(request, key)

@@ -1,15 +1,16 @@
 import gzip
 import json
+import threading
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qsl, urlsplit
 
-from google import genai
-from google.genai import types
 import httpx
 import pytest
 import yaml
+from google import genai
+from google.genai import types
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
@@ -268,9 +269,7 @@ def test_gemini_streaming_passthrough_request_tags_reach_spend_log(gateway: Gate
             raw_tags: Final = row["request_tags"]
             request_tags: Final = json.loads(raw_tags) if isinstance(raw_tags, str) else raw_tags
             policy_tags: Final = [
-                tag
-                for tag in request_tags
-                if not (isinstance(tag, str) and tag.startswith("User-Agent: "))
+                tag for tag in request_tags if not (isinstance(tag, str) and tag.startswith("User-Agent: "))
             ]
             assert policy_tags == ["gemini-js-sdk", "pass-through-endpoint"], row
             assert row["call_type"] == "pass_through_endpoint", row
@@ -838,13 +837,17 @@ _ASSISTANTS_PAGE: Final[dict[str, JsonValue]] = {
 }
 
 
+_RESPONSE_STREAM_GATE: Final = threading.Event()
+_RESPONSE_STREAM_GATE.set()
+
+
 def _openai_peer(request: Request) -> Reply:
     if request.target.startswith("/v1/assistants"):
         return Reply(body=json.dumps(_ASSISTANTS_PAGE).encode())
     if request.target == "/v1/chat/completions":
         return Reply(body=json.dumps(_CHAT_REPLY).encode())
     if json.loads(request.body).get("stream") is True:
-        return Reply(chunks=_RESPONSE_SSE, content_type="text/event-stream")
+        return Reply(chunks=_RESPONSE_SSE, content_type="text/event-stream", gate_after_first=_RESPONSE_STREAM_GATE)
     return Reply(body=json.dumps(_RESPONSE_OBJECT).encode())
 
 
@@ -951,16 +954,23 @@ def test_openai_passthrough_sdk_success_on_both_aliases_forwards_the_native_requ
                         assert response.id == "resp_scripted", response
                         _assert_openai_sdk_request(wire, sent, key, "POST", "/v1/responses", _OPENAI_RESPONSES_BODY)
                     elif surface == "responses-stream":
-                        events: Final = tuple(
-                            sdk.responses.create(
-                                model="gpt-4o-mini",
-                                input="hi",
-                                store=False,
-                                user="end-user-1",
-                                temperature=0.2,
-                                stream=True,
+                        _RESPONSE_STREAM_GATE.clear()
+                        try:
+                            stream: Final = iter(
+                                sdk.responses.create(
+                                    model="gpt-4o-mini",
+                                    input="hi",
+                                    store=False,
+                                    user="end-user-1",
+                                    temperature=0.2,
+                                    stream=True,
+                                )
                             )
-                        )
+                            first_event: Final = next(stream)
+                        finally:
+                            _RESPONSE_STREAM_GATE.set()
+                        assert first_event.type == _RESPONSE_EVENTS[0]["type"], first_event
+                        events: Final = (first_event, *stream)
                         streamed_text: Final = "".join(
                             event.delta for event in events if event.type == "response.output_text.delta"
                         )

@@ -109,6 +109,14 @@ def oauth_proxy(rig: Gateway, wire: Wire, tmp_path_factory: pytest.TempPathFacto
         yield owned
 
 
+@pytest.fixture(scope="module")
+def credentialless_proxy(rig: Gateway, wire: Wire, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("anthropic-passthrough-credentialless")
+    overrides: Final = {"ANTHROPIC_API_BASE": wire.url, "ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": ""}
+    with owned_proxy(rig, directory, overrides, config=_config(directory), workers=2) as owned:
+        yield owned
+
+
 def _sdk(proxy: Gateway, key: str, sent: list[httpx.Request]) -> anthropic.Anthropic:
     return anthropic.Anthropic(
         api_key=key,
@@ -268,6 +276,44 @@ def test_claude_code_bearer_stream_merges_caller_beta_with_the_credential_beta(
         ), upstream.headers
         assert upstream.headers["x-app"] == "cli", upstream.headers
         _assert_virtual_key_absent(upstream, key)
+
+
+@pytest.mark.parametrize(
+    ("credential_header", "credential"),
+    [("authorization", "Bearer caller-anthropic-oauth-token"), ("x-api-key", "caller-anthropic-api-key")],
+    ids=["caller-oauth-token", "caller-api-key"],
+)
+def test_credentialless_proxy_forwards_the_caller_anthropic_credential_and_never_the_virtual_key(
+    credentialless_proxy: Gateway, wire: Wire, credential_header: str, credential: str
+) -> None:
+    body: Final[dict[str, JsonValue]] = {
+        "model": _MODEL,
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    with (
+        credentialless_proxy.scenario() as scenario,
+        httpx.Client(base_url=str(credentialless_proxy.client.base_url), timeout=30, trust_env=False) as client,
+    ):
+        key: Final = scenario.key()
+        response: Final = client.post(
+            "/anthropic/v1/messages", json=body, headers={"x-litellm-api-key": key, credential_header: credential}
+        )
+        assert response.status_code == 200, response.text
+        message: Final = anthropic.types.Message.model_validate_json(response.content)
+        assert message.model_dump(exclude_none=True) == anthropic.types.Message.model_validate(_MESSAGE).model_dump(
+            exclude_none=True
+        ), response.text
+        upstream: Final = _only_upstream_request(wire)
+        assert _JSON_OBJECT.validate_json(upstream.body) == body, upstream.body
+        assert upstream.headers[credential_header] == credential, upstream.headers
+        assert {"authorization", "x-api-key"} & set(upstream.headers) == {credential_header}, upstream.headers
+        _assert_virtual_key_absent(upstream, key)
+
+        refused: Final = client.post("/anthropic/v1/messages", json=body, headers={"x-litellm-api-key": key})
+        assert refused.status_code == 401, refused.text
+        assert "The LiteLLM virtual key is not forwarded to Anthropic" in refused.text, refused.text
+        assert wire.drain() == ()
 
 
 def test_anthropic_sdk_metadata_user_id_reaches_upstream(api_key_proxy: Gateway, wire: Wire) -> None:

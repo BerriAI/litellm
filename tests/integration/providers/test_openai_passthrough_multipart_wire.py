@@ -123,66 +123,85 @@ def _sdk(proxy: Gateway, key: str, prefix: str) -> OpenAI:
     )
 
 
-@pytest.mark.parametrize("stream", [False, True], ids=["stream-false", "stream-true"])
+def _image_edit_files(
+    stream: bool, image_field: str, mask_field: str
+) -> list[tuple[str, tuple[str | None, str | bytes] | tuple[str, bytes, str]]]:
+    return [
+        ("model", (None, "gpt-image-1")),
+        ("prompt", (None, "make them match")),
+        ("n", (None, "2")),
+        ("stream", (None, "true" if stream else "false")),
+        (image_field, ("a.png", _PNG_A, "image/png")),
+        (image_field, ("b.png", _PNG_B, "image/png")),
+        (mask_field, ("m.png", _MASK, "image/png")),
+    ]
+
+
+def _expected_image_edit_parts(stream: bool, image_field: str, mask_field: str) -> tuple[Part, ...]:
+    return (
+        ("model", None, None, b"gpt-image-1"),
+        ("prompt", None, None, b"make them match"),
+        ("n", None, None, b"2"),
+        ("stream", None, None, b"true" if stream else b"false"),
+        (image_field, "a.png", "image/png", _PNG_A),
+        (image_field, "b.png", "image/png", _PNG_B),
+        (mask_field, "m.png", "image/png", _MASK),
+    )
+
+
+@pytest.mark.parametrize(
+    ("image_field", "mask_field"),
+    [("image[]", "mask"), ("image", "mask"), ("image[]", "mask[]")],
+    ids=["bracketed-images", "plain-repeated-images", "bracketed-mask"],
+)
 def test_curl_image_edit_forwards_repeated_image_parts_mask_and_string_typed_fields(
-    proxy: Gateway, wire: Wire, stream: bool
+    proxy: Gateway, wire: Wire, image_field: str, mask_field: str
 ) -> None:
-    if stream:
-        pytest.skip("BUG: multipart image edits with stream=true do not relay the SSE response incrementally")
     with proxy.scenario() as scenario:
-        key: Final = scenario.key()
-        files: Final = [
-            ("model", (None, "gpt-image-1")),
-            ("prompt", (None, "make them match")),
-            ("n", (None, "2")),
-            ("stream", (None, "true" if stream else "false")),
-            ("image[]", ("a.png", _PNG_A, "image/png")),
-            ("image[]", ("b.png", _PNG_B, "image/png")),
-            ("mask", ("m.png", _MASK, "image/png")),
-        ]
-        if stream:
-            _IMAGE_STREAM_GATE.clear()
-            with proxy.client.stream(
-                "POST",
-                "/openai/v1/images/edits",
-                headers={"Authorization": f"Bearer {key}"},
-                files=files,
-            ) as response:
-                raw: Final = iter(response.iter_raw())
-                try:
-                    assert response.status_code == 200, response.status_code
-                    assert response.headers.get("content-type") == "text/event-stream", response.headers
-                    first_frame: Final = next(
-                        dropwhile(
-                            lambda buffered: b"\n\n" not in buffered,
-                            accumulate(raw, lambda buffered, chunk: buffered + chunk, initial=b""),
-                        )
-                    )
-                    assert first_frame == _IMAGE_STREAM_FRAMES[0], first_frame
-                finally:
-                    _IMAGE_STREAM_GATE.set()
-                streamed: Final = first_frame + b"".join(raw)
-                assert streamed == b"".join(_IMAGE_STREAM_FRAMES), streamed
-        else:
-            response: Final = proxy.client.post(
-                "/openai/v1/images/edits",
-                headers={"Authorization": f"Bearer {key}"},
-                files=files,
-            )
-            assert response.status_code == 200, response.text
-            assert _ImageResponse.model_validate_json(response.content).data == (_Image(b64_json=_EDITED),), (
-                response.text
-            )
+        response: Final = proxy.client.post(
+            "/openai/v1/images/edits",
+            headers={"Authorization": f"Bearer {scenario.key()}"},
+            files=_image_edit_files(False, image_field, mask_field),
+        )
+        assert response.status_code == 200, response.text
+        assert _ImageResponse.model_validate_json(response.content).data == (_Image(b64_json=_EDITED),), response.text
         upstream: Final = _only_upstream(wire, "/v1/images/edits")
-        assert _parts(upstream.headers["content-type"], upstream.body) == (
-            ("model", None, None, b"gpt-image-1"),
-            ("prompt", None, None, b"make them match"),
-            ("n", None, None, b"2"),
-            ("stream", None, None, b"true" if stream else b"false"),
-            ("image[]", "a.png", "image/png", _PNG_A),
-            ("image[]", "b.png", "image/png", _PNG_B),
-            ("mask", "m.png", "image/png", _MASK),
+        assert _parts(upstream.headers["content-type"], upstream.body) == _expected_image_edit_parts(
+            False, image_field, mask_field
         ), upstream.body
+
+
+def test_curl_streaming_image_edit_relays_each_sse_frame_as_the_upstream_sends_it(proxy: Gateway, wire: Wire) -> None:
+    pytest.skip("BUG: multipart image edits with stream=true do not relay the SSE response incrementally")
+    _IMAGE_STREAM_GATE.clear()
+    with (
+        proxy.scenario() as scenario,
+        proxy.client.stream(
+            "POST",
+            "/openai/v1/images/edits",
+            headers={"Authorization": f"Bearer {scenario.key()}"},
+            files=_image_edit_files(True, "image[]", "mask"),
+        ) as response,
+    ):
+        raw: Final = iter(response.iter_raw())
+        try:
+            assert response.status_code == 200, response.status_code
+            assert response.headers.get("content-type") == "text/event-stream", response.headers
+            first_frame: Final = next(
+                dropwhile(
+                    lambda buffered: b"\n\n" not in buffered,
+                    accumulate(raw, lambda buffered, chunk: buffered + chunk, initial=b""),
+                )
+            )
+            assert first_frame == _IMAGE_STREAM_FRAMES[0], first_frame
+        finally:
+            _IMAGE_STREAM_GATE.set()
+        streamed: Final = first_frame + b"".join(raw)
+        assert streamed == b"".join(_IMAGE_STREAM_FRAMES), streamed
+    upstream: Final = _only_upstream(wire, "/v1/images/edits")
+    assert _parts(upstream.headers["content-type"], upstream.body) == _expected_image_edit_parts(
+        True, "image[]", "mask"
+    )
 
 
 def test_sdk_image_edit_with_two_images_reaches_upstream_as_two_file_parts(proxy: Gateway, wire: Wire) -> None:

@@ -8,6 +8,7 @@ import threading
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import accumulate, dropwhile
 from pathlib import Path
 from queue import Empty, SimpleQueue
 from typing import Final
@@ -78,6 +79,10 @@ _CLAUDE_EVENTS: Final[tuple[dict[str, JsonValue], ...]] = (
 _CLAUDE_SSE: Final = tuple(
     f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in _CLAUDE_EVENTS
 )
+
+
+_VERTEX_STREAM_GATE: Final = threading.Event()
+_VERTEX_STREAM_GATE.set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,8 +171,8 @@ def _vertex_peer(request: Request) -> Reply:
         if ":streamGenerateContent" in request.target:
             return Reply(chunks=_GEMINI_SSE, content_type="text/event-stream")
         return Reply(body=json.dumps(_GEMINI_REPLY).encode())
-    if ":streamRawPredict" in request.target:
-        return Reply(chunks=_CLAUDE_SSE, content_type="text/event-stream")
+    if ":streamRawPredict" in request.target or request.target.endswith(":rawPredict?alt=sse"):
+        return Reply(chunks=_CLAUDE_SSE, content_type="text/event-stream", gate_after_first=_VERTEX_STREAM_GATE)
     return Reply(body=json.dumps(_CLAUDE_REPLY).encode())
 
 
@@ -396,6 +401,48 @@ def test_anthropic_vertex_sdk_partner_call_on_the_global_location_reaches_upstre
         _assert_minted_token_and_no_virtual_key(upstream, key)
 
 
+@pytest.mark.parametrize("alias", ["/vertex_ai", "/vertex-ai"])
+@pytest.mark.parametrize("action", ["rawPredict", "streamRawPredict"])
+def test_vertex_partner_stream_body_adds_the_sse_query_and_relays_each_frame_before_the_upstream_finishes(
+    rig: _Rig, alias: str, action: str
+) -> None:
+    model_path: Final = f"/v1/projects/{_PROJECT}/locations/global/publishers/anthropic/models/claude-sonnet-4-5"
+    body: Final[dict[str, JsonValue]] = {
+        "anthropic_version": "vertex-2023-10-16",
+        "max_tokens": 64,
+        "stream": True,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    with rig.proxy.scenario() as scenario:
+        key: Final = scenario.key()
+        _VERTEX_STREAM_GATE.clear()
+        with rig.proxy.client.stream(
+            "POST", f"{alias}{model_path}:{action}", json=body, headers={"Authorization": f"Bearer {key}"}
+        ) as response:
+            raw: Final = iter(response.iter_raw())
+            try:
+                assert response.status_code == 200, response.status_code
+                first_frame: Final = next(
+                    dropwhile(
+                        lambda buffered: b"\n\n" not in buffered,
+                        accumulate(raw, lambda buffered, chunk: buffered + chunk, initial=b""),
+                    ),
+                    b"",
+                )
+                assert first_frame == _CLAUDE_SSE[0], first_frame
+            finally:
+                _VERTEX_STREAM_GATE.set()
+            streamed: Final = first_frame + b"".join(raw)
+        assert streamed == b"".join(_CLAUDE_SSE), streamed
+        received: Final = rig.vertex.drain()
+        assert [(request.method, request.target) for request in received] == [
+            ("POST", f"{model_path}:{action}?alt=sse")
+        ], received
+        assert rig.tunnel.drain() == [_GLOBAL]
+        assert _JSON_OBJECT.validate_json(received[0].body) == body, received[0].body
+        _assert_minted_token_and_no_virtual_key(received[0], key)
+
+
 def test_credential_less_vertex_project_forwards_the_caller_google_token_and_strips_the_virtual_key(
     rig: _Rig,
 ) -> None:
@@ -434,6 +481,7 @@ def test_credential_less_vertex_project_forwards_the_caller_bearer_token_when_th
     model_path: Final = "/v1/projects/byo-project/locations/us-east5/publishers/anthropic/models/claude-byo"
     with rig.proxy.scenario() as scenario:
         key: Final = scenario.key()
+        second_key: Final = scenario.key()
         body: Final[dict[str, JsonValue]] = {
             "anthropic_version": "vertex-2023-10-16",
             "max_tokens": 64,
@@ -445,19 +493,24 @@ def test_credential_less_vertex_project_forwards_the_caller_bearer_token_when_th
             headers={
                 "x-litellm-api-key": f"Bearer {key}",
                 "Authorization": f"Bearer {_CALLER_GOOGLE_TOKEN}",
+                "api-key": second_key,
+                "x-caller-echo": key,
+                "x-caller-trace": "trace-1",
             },
         )
         assert response.status_code == 200, response.text
         assert response.json() == _CLAUDE_REPLY, response.text
         received: Final = rig.vertex.drain()
-        assert [(request.method, request.target) for request in received] == [
-            ("POST", f"{model_path}:rawPredict")
-        ], received
+        assert [(request.method, request.target) for request in received] == [("POST", f"{model_path}:rawPredict")], (
+            received
+        )
         assert rig.tunnel.drain() == [_BYO]
         upstream: Final = received[0]
         assert upstream.headers["authorization"] == f"Bearer {_CALLER_GOOGLE_TOKEN}", upstream.headers
         assert {name: value for name, value in upstream.headers.items() if key in value} == {}, upstream.headers
+        assert {name: value for name, value in upstream.headers.items() if second_key in value} == {}, upstream.headers
         assert "x-litellm-api-key" not in upstream.headers, upstream.headers
         assert "x-goog-api-key" not in upstream.headers, upstream.headers
+        assert upstream.headers["x-caller-trace"] == "trace-1", upstream.headers
         assert key not in upstream.target, upstream.target
         assert _JSON_OBJECT.validate_json(upstream.body) == body, upstream.body

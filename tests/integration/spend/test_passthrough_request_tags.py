@@ -594,6 +594,29 @@ def test_configured_endpoint_forwards_json_multipart_and_query_and_an_update_kee
         ], locked_request
         assert locked_request[0].headers["x-static"] == "static-v2", locked_request[0].headers
         assert "authorization" not in locked_request[0].headers, locked_request[0].headers
+        refused_after_update: Final = candidate.request("GET", path)
+        assert refused_after_update.status_code == 405, refused_after_update.text
+        keyed_form: Final = candidate.client.post(
+            path,
+            headers={"Authorization": f"Bearer {candidate.key}"},
+            files=[
+                ("tag", (None, "first")),
+                ("tag", (None, "second")),
+                ("file", ("one.bin", b"\x00one", "application/octet-stream")),
+                ("file", ("two.bin", b"\x00two", "application/octet-stream")),
+            ],
+        )
+        assert keyed_form.status_code == 200, keyed_form.text
+        locked_form: Final = wire.drain()
+        assert [(request.method, request.target) for request in locked_form] == [
+            ("POST", "/v2?api-version=2024-01-01")
+        ], locked_form
+        assert _multipart_parts(locked_form[0].headers["content-type"], locked_form[0].body) == [
+            ("tag", None, b"first"),
+            ("tag", None, b"second"),
+            ("file", "one.bin", b"\x00one"),
+            ("file", "two.bin", b"\x00two"),
+        ], locked_form[0].body
 
 
 def test_renaming_a_subpath_endpoint_moves_both_routes_keeps_stored_fields_and_never_forwards_caller_headers(
