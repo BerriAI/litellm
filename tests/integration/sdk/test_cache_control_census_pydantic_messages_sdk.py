@@ -2,6 +2,7 @@ import json
 from collections.abc import Callable
 from typing import Final
 
+import pytest
 from integration._support.openai_wire import responses_reply
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
@@ -12,13 +13,16 @@ from integration.providers._cache_control_marks_support import (
     PROVIDER_KEY,
     SYSTEM,
     TOOL,
+    UNMAPPED_BEDROCK_ARN,
     anthropic_labels,
     anthropic_peer,
     ask,
+    bedrock_peer,
     call_id,
     client_marked,
     final_text,
     new_marker,
+    sent_without_cache_points,
 )
 from openai.types.responses import FunctionTool
 from pydantic import JsonValue
@@ -117,3 +121,41 @@ def test_injection_points_leave_an_sdk_typed_function_tool_request_as_it_is_with
         with_points_received: Final = len(wire.drain())
     assert with_points == without_points
     assert with_points_received == without_points_received
+
+
+def _shaped_input(shape: str, marker: str) -> object:
+    system: Final = {"role": "system", "content": SYSTEM, "cache_control": EPHEMERAL}
+    marked: Final = {"type": "message", "role": "user", "content": final_text(marker), "cache_control": EPHEMERAL}
+    match shape:
+        case "string":
+            return final_text(marker)
+        case "list":
+            return [system, marked]
+        case "tuple":
+            return (system, marked)
+        case _:
+            return marked
+
+
+@pytest.mark.parametrize("shape", ("string", "list", "tuple", "object"))
+def test_each_input_shape_reads_the_same_whether_or_not_the_route_keeps_item_marks(shape: str) -> None:
+    kept_marker, stripped_marker = new_marker(), new_marker()
+    with wire_server(bedrock_peer) as wire:
+        request: Final[dict[str, object]] = {
+            "model": f"bedrock/converse/{UNMAPPED_BEDROCK_ARN}",
+            "instructions": SYSTEM,
+            "max_output_tokens": 64,
+            "api_base": wire.url,
+            "api_key": PROVIDER_KEY,
+            "aws_region_name": "us-east-1",
+            "aws_bedrock_runtime_endpoint": wire.url,
+            "num_retries": 0,
+        }
+        kept: Final = _outcome(lambda: litellm.responses(input=_shaped_input(shape, kept_marker), **request))  # pyright: ignore[reportArgumentType]  # the shapes a caller can pass, unvalidated
+        kept_sent: Final = sent_without_cache_points(wire.drain(), kept_marker)
+        stripped: Final = _outcome(
+            lambda: litellm.responses(input=_shaped_input(shape, stripped_marker), drop_params=True, **request)  # pyright: ignore[reportArgumentType]  # the shapes a caller can pass, unvalidated
+        )
+        stripped_sent: Final = sent_without_cache_points(wire.drain(), stripped_marker)
+    assert stripped == kept
+    assert stripped_sent == kept_sent

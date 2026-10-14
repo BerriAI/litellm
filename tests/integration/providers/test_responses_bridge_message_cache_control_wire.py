@@ -24,6 +24,7 @@ from integration.providers._cache_control_marks_support import (
     PROVIDER_KEY,
     SYSTEM,
     SYSTEM_LABEL,
+    UNMAPPED_BEDROCK_ARN,
     anthropic_labels,
     anthropic_marks,
     anthropic_peer,
@@ -36,6 +37,7 @@ from integration.providers._cache_control_marks_support import (
     marker_of,
     new_marker,
     responses_body,
+    sent_without_cache_points,
     tool_use_label,
 )
 from openai.types.responses import ResponseInputParam
@@ -176,6 +178,17 @@ def _bedrock_deployment(scenario: Scenario, wire: Wire, route: str = "converse")
         api_base=wire.url,
         aws_region_name="us-east-1",
         aws_bedrock_runtime_endpoint=wire.url,
+    )
+
+
+def _unmapped_arn_deployment(scenario: Scenario, wire: Wire, **fields: JsonValue) -> str:
+    return scenario.model(
+        model=f"bedrock/converse/{UNMAPPED_BEDROCK_ARN}",
+        api_key=PROVIDER_KEY,
+        api_base=wire.url,
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint=wire.url,
+        **fields,
     )
 
 
@@ -989,14 +1002,7 @@ def test_unmapped_bedrock_arn_keeps_the_item_mark_unless_drop_params(
 ) -> None:
     marker: Final = new_marker()
     with wire_server(_bedrock_peer) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model="bedrock/converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/scripted",
-            api_key=PROVIDER_KEY,
-            api_base=wire.url,
-            aws_region_name="us-east-1",
-            aws_bedrock_runtime_endpoint=wire.url,
-            drop_params=drop_params,
-        )
+        model: Final = _unmapped_arn_deployment(scenario, wire, drop_params=drop_params)
         answer: Final = _send(gateway, _marked_system(model, marker))
         assert answer.status == 200, answer.text
         assert bedrock_labels(_only_request(wire)) == expected
@@ -1115,3 +1121,99 @@ def test_input_tokens_counts_marked_items_without_their_marks(gateway: Gateway) 
     }
     assert counted.target.endswith("/count_tokens"), counted.target
     assert anthropic_labels(counted) == []
+
+
+_INPUT_SHAPES: Final = ("string", "list", "object")
+
+
+def _shaped_input(shape: str, marker: str) -> JsonValue:
+    marked: Final = _item("user", final_text(marker))
+    match shape:
+        case "string":
+            return final_text(marker)
+        case "list":
+            return [_item("system", SYSTEM), marked]
+        case _:
+            return {"type": "message", **marked}
+
+
+def _shaped_body(model: str, shape: str, marker: str, **fields: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "model": model,
+        "max_output_tokens": 64,
+        "instructions": SYSTEM,
+        "input": _shaped_input(shape, marker),
+        **fields,
+    }
+
+
+def _error_message(answer: _Answer) -> JsonValue:
+    if answer.status == 200:
+        return None
+    return object_value(_JSON_OBJECT.validate_json(answer.text)["error"]).get("message")
+
+
+@pytest.mark.parametrize("shape", _INPUT_SHAPES)
+def test_each_input_shape_reads_the_same_whether_or_not_the_route_keeps_item_marks(
+    gateway: Gateway, shape: str
+) -> None:
+    kept_marker, stripped_marker = new_marker(), new_marker()
+    with wire_server(_bedrock_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _unmapped_arn_deployment(scenario, wire)
+        kept: Final = _send(gateway, _shaped_body(model, shape, kept_marker))
+        kept_sent: Final = sent_without_cache_points(wire.drain(), kept_marker)
+        stripped: Final = _send(gateway, _shaped_body(model, shape, stripped_marker, drop_params=True))
+        stripped_sent: Final = sent_without_cache_points(wire.drain(), stripped_marker)
+    assert (stripped.status, _error_message(stripped)) == (kept.status, _error_message(kept)), (
+        kept.text,
+        stripped.text,
+    )
+    assert stripped_sent == kept_sent
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=("json", "stream"))
+def test_object_input_on_a_mark_stripping_route_is_served(gateway: Gateway, stream: bool) -> None:
+    marker: Final = new_marker()
+    reply: Final = chat_reply(f"chatcmpl-{marker}", "gpt-5.4", "sunny", stream=stream)
+    with wire_server(answering_model_discovery(lambda request: reply)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=_OPENAI_COMPATIBLE, api_base=f"{wire.url}/v1", api_key=PROVIDER_KEY, use_chat_completions_api=True
+        )
+        _assert_completed(_send(gateway, _shaped_body(model, "object", marker, stream=stream)), stream=stream)
+        posted: Final = [request for request in wire.drain() if request.method == "POST"]
+    assert [request.target for request in posted] == ["/v1/chat/completions"], [request.target for request in posted]
+    assert _openai_message_marks(posted[0]) == []
+
+
+@pytest.mark.parametrize("shape", _INPUT_SHAPES)
+def test_input_tokens_reads_each_input_shape_without_item_marks(gateway: Gateway, shape: str) -> None:
+    marker: Final = new_marker()
+    with wire_server(_count_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire)
+        body: Final = {
+            key: value for key, value in _shaped_body(model, shape, marker).items() if key != "max_output_tokens"
+        }
+        response: Final = gateway.request("POST", "/v1/responses/input_tokens", body)
+        counted: Final = wire.drain()
+    assert response.status_code == 200, response.text
+    assert _JSON_OBJECT.validate_json(response.text) == {
+        "object": "response.input_tokens",
+        "input_tokens": _COUNTED_TOKENS,
+    }
+    assert [anthropic_labels(request) for request in counted] == [[]]
+
+
+@pytest.mark.parametrize("shape", _INPUT_SHAPES)
+def test_project_input_token_limit_reads_each_input_shape(gateway: Gateway, shape: str) -> None:
+    marker: Final = new_marker()
+    reply: Final = chat_reply(f"chatcmpl-{marker}", "gpt-5.4", "sunny", stream=False)
+    with wire_server(answering_model_discovery(lambda request: reply)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=_OPENAI_COMPATIBLE, api_base=f"{wire.url}/v1", api_key=PROVIDER_KEY, use_chat_completions_api=True
+        )
+        team: Final = scenario.team()
+        key: Final = scenario.key(team_id=team, project_id=scenario.project(team, model_itpm_limit={model: 1_000_000}))
+        _assert_completed(_send(gateway, _shaped_body(model, shape, marker), key=key))
+        posted: Final = [request for request in wire.drain() if request.method == "POST"]
+    assert [request.target for request in posted] == ["/v1/chat/completions"], [request.target for request in posted]
+    assert _openai_message_marks(posted[0]) == []
