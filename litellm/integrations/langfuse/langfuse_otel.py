@@ -218,9 +218,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                                     }
                                 )
                     elif item_type == "message":
-                        output_items_data.append(
-                            LangfuseOtelLogger._message_observation_output(item)
-                        )
+                        output_items_data.append(LangfuseOtelLogger._message_observation_output(item))
                     elif item_type == "function_call":
                         arguments_str = getattr(item, "arguments", "{}")
                         arguments_obj = (
