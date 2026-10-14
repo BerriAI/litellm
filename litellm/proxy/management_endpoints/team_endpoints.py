@@ -40,6 +40,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -115,7 +116,10 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    evict_and_broadcast,
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -473,7 +477,7 @@ async def refresh_cached_team(
     proxy_logging_obj: ProxyLogging,
 ) -> None:
     """
-    Refresh the in-memory cached team object after a DB write.
+    Refresh the cached team object after a DB write and broadcast invalidations to other instances.
 
     Every endpoint that mutates `litellm_teamtable` must call this so the
     cached `LiteLLM_TeamTableCachedObj` used by `common_checks` stays in
@@ -486,12 +490,19 @@ async def refresh_cached_team(
     via `model_dump()` to match the cache shape `_cache_team_object`
     expects.
     """
+    team_table: Final = LiteLLM_TeamTableCachedObj.model_validate(team_row.model_dump())
     await cache_team_object(
         team_id=team_row.team_id,
-        team_table=LiteLLM_TeamTableCachedObj.model_validate(team_row.model_dump()),
+        team_table=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    batches: Final = active_request_redis_batches()
+    if batches is not None:
+        await batches.flush_all()
+    await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
+    if team_table.team_alias is not None:
+        await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
 
 
 _refresh_cached_team: Final = refresh_cached_team
