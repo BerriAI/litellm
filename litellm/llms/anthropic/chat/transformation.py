@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -35,7 +35,13 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     place_mid_conversation_system,
     split_leading_system_run,
 )
-from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.llms.base_llm.base_utils import (
+    ResponseFormatSchema,
+    as_json_object,
+    response_format_schema,
+    type_to_response_format_param,
+    unwrap_response_format_envelope,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
@@ -1746,7 +1752,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         else:
             _input_schema.update(cast(AnthropicInputSchema, json_schema))
 
-        _tool: Final = AnthropicMessagesTool(name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema)
+        _tool: Final = AnthropicMessagesTool(
+            name=RESPONSE_FORMAT_TOOL_NAME,
+            input_schema=_input_schema,
+        )
         return _tool
 
     def should_strip_billing_metadata(self) -> bool:
@@ -2199,6 +2208,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         json_mode: bool | None,
         tool_calls: list[ChatCompletionToolCallChunk],
+        response_format_schema: ResponseFormatSchema | None = None,
     ) -> tuple[
         LitellmMessage | None,
         list[ChatCompletionToolCallChunk],
@@ -2218,11 +2228,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             json_tool: Final = tool_calls[json_indices[0]]
             if json_tool.get("function", {}).get("arguments") is None:
                 return None, tool_calls, None
-            _message: Final = AnthropicConfig.convert_tool_response_to_message(tool_calls=[json_tool])
+            _message: Final = AnthropicConfig.convert_tool_response_to_message(
+                tool_calls=[json_tool], response_format_schema=response_format_schema
+            )
             return _message, [], None
 
         first_json: Final = tool_calls[json_indices[0]]
-        json_msg: Final = AnthropicConfig.convert_tool_response_to_message([first_json])
+        json_msg: Final = AnthropicConfig.convert_tool_response_to_message(
+            [first_json], response_format_schema=response_format_schema
+        )
         extra_content: Final[str | None] = json_msg.content if json_msg is not None else None
         filtered_tools: Final = [t for i, t in enumerate(tool_calls) if i not in json_indices]
         return None, filtered_tools, extra_content
@@ -2658,6 +2672,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         prefix_prompt: str | None = None,
         speed: str | None = None,
         tool_name_reverse_map: dict[str, str] | None = None,
+        response_format_schema: ResponseFormatSchema | None = None,
     ):
         if "error" in completion_response:
             response_headers: Final = getattr(raw_response, "headers", None)
@@ -2713,6 +2728,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         json_mode_message, tool_calls_for_message, json_extra_content = self._resolve_json_mode_non_streaming(
             json_mode=json_mode,
             tool_calls=tool_calls,
+            response_format_schema=response_format_schema,
         )
         merged_text = text_content or ""
         if json_extra_content:
@@ -2823,12 +2839,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             prefix_prompt=prefix_prompt,
             speed=speed,
             tool_name_reverse_map=tool_name_reverse_map,
+            response_format_schema=JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None,
         )
         return model_response
 
     @staticmethod
     def _convert_tool_response_to_message(
         tool_calls: list[ChatCompletionToolCallChunk],
+        response_format_schema: ResponseFormatSchema | None = None,
     ) -> LitellmMessage | None:
         """
         In JSON mode, Anthropic API returns JSON schema as a tool call, we need to convert it to a message to follow the OpenAI format
@@ -2836,28 +2854,32 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         ## HANDLE JSON MODE - anthropic returns single function call
         json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
+        if json_mode_content_str is None:
+            return None
         try:
-            if json_mode_content_str is not None:
-                args: Final = json.loads(json_mode_content_str)
-                if isinstance(args, dict) and (values := args.get("values")) is not None:
-                    _message = litellm.Message(content=json.dumps(values))
-                    return _message
-                else:
-                    # a lot of the times the `values` key is not present in the tool response
-                    # relevant issue: https://github.com/BerriAI/litellm/issues/6741
-                    _message = litellm.Message(content=json.dumps(args))
-                    return _message
-        except json.JSONDecodeError:
+            payload: Final[object] = json.loads(json_mode_content_str)
+        except (json.JSONDecodeError, RecursionError):
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)
-        return None
+        if response_format_schema is not None:
+            return litellm.Message(
+                content=json.dumps(
+                    unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
+                )
+            )
+        # a lot of the times the `values` key is not present in the tool response
+        # relevant issue: https://github.com/BerriAI/litellm/issues/6741
+        payload_object: Final = as_json_object(payload)
+        values: Final = None if payload_object is None else payload_object.get("values")
+        return litellm.Message(content=json.dumps(payload if values is None else values))
 
     @classmethod
     def convert_tool_response_to_message(
         cls,
         tool_calls: list[ChatCompletionToolCallChunk],  # mutable-ok: mirrors override contract
+        response_format_schema: ResponseFormatSchema | None = None,
     ) -> LitellmMessage | None:
-        return cls._convert_tool_response_to_message(tool_calls)
+        return cls._convert_tool_response_to_message(tool_calls, response_format_schema)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return AnthropicError(
@@ -2865,6 +2887,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             message=error_message,
             headers=cast(httpx.Headers, headers),
         )
+
+
+_REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+class JsonModeRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tools: object = None
+
+    def tool_schema(self) -> ResponseFormatSchema | None:
+        try:
+            tools: Final = _REQUEST_TOOLS.validate_python(self.tools)
+        except ValidationError:
+            return None
+        json_tool: Final = next((tool for tool in tools if tool.get("name") == RESPONSE_FORMAT_TOOL_NAME), None)
+        return None if json_tool is None else response_format_schema(json_tool.get("input_schema"))
 
 
 def _valid_user_id(user_id: str) -> bool:

@@ -1547,6 +1547,31 @@ class MCPRequestHandler:
         return SecretStr(authorization[len("bearer ") :]) if authorization.lower().startswith("bearer ") else None
 
     @staticmethod
+    def get_guardrail_bearer_token(headers: Headers, auth: UserAPIKeyAuth) -> SecretStr | None:
+        from litellm.proxy._experimental.mcp_server.utils import (
+            _custom_litellm_key_header_name,  # pyright: ignore[reportPrivateUsage]  # reuse the shared credential-header setting
+        )
+
+        bearer: Final = MCPRequestHandler.get_incoming_bearer_token(headers)
+        if bearer is None:
+            return None
+        value: Final = bearer.get_secret_value()
+        if MCPRequestHandler._is_gateway_admission_credential(value):
+            return None
+        if MCPRequestHandler._is_caller_admission_key(
+            value, auth.api_key
+        ) or MCPRequestHandler._is_caller_admission_key(hash_token(value), auth.api_key):
+            return None
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            auth,
+            custom_key_header_name=_custom_litellm_key_header_name(),
+        )
+        if not auth.jwt_claims and MCPRequestHandler._is_caller_admission_key(value, admitted_credential):
+            return None
+        return bearer
+
+    @staticmethod
     def get_oauth2_headers_from_headers(headers: Headers) -> dict[str, str]:
         """
         Get the oauth2 headers from the request headers.

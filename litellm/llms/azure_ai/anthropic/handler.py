@@ -11,6 +11,7 @@ import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -163,6 +164,9 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     logging_obj=logging_obj,
                     timeout=timeout,
                     json_mode=json_mode,
+                    response_format_schema=(
+                        JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None
+                    ),
                 )
                 from litellm.llms.anthropic.common_utils import (
                     process_anthropic_headers,

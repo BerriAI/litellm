@@ -26,6 +26,7 @@ import promptguardLogo from "../../../../../public/assets/logos/promptguard.svg"
 import qohashLogo from "../../../../../public/assets/logos/qohash.jpg";
 import repelloAiLogo from "../../../../../public/assets/logos/repelloai.png";
 import straikerLogo from "../../../../../public/assets/logos/straiker.svg";
+import wingbackLogo from "../../../../../public/assets/logos/wingback.png";
 import xecguardLogo from "../../../../../public/assets/logos/xecguard.svg";
 import zscalerLogo from "../../../../../public/assets/logos/zscaler.svg";
 
@@ -323,6 +324,7 @@ export const guardrailLogoMap = {
   "Microsoft Agent 365": microsoftAzureLogo.src,
   "LLM Shield Proxy": llmShieldProxyLogo.src,
   "Conduct Guard": conductLogo.src,
+  Wingback: wingbackLogo.src,
   "Decision Model": litellmLogo.src,
 } satisfies Record<string, string>;
 
