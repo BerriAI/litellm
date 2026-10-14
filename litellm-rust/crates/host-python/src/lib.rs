@@ -18,6 +18,8 @@ mod native;
 mod owned;
 mod runtime;
 mod services;
+#[cfg(unix)]
+mod wake;
 
 pub use argument::{effective_py_args, lookup, present};
 pub use binding::PythonBinding;

@@ -39,6 +39,10 @@ async def consume_native(count):
     stream = await native_stream(count)
     return [chunk async for chunk in stream]
 
+async def consume_channel(count):
+    stream = await native_channel_stream(count)
+    return [chunk async for chunk in stream]
+
 async def deliver_one(value):
     future = loop.create_future()
     requests.put((value, future))
@@ -50,6 +54,11 @@ async def consume_floor(count):
 def measure_native(count):
     start = time.perf_counter_ns()
     loop.run_until_complete(consume_native(count))
+    return time.perf_counter_ns() - start
+
+def measure_channel(count):
+    start = time.perf_counter_ns()
+    loop.run_until_complete(consume_channel(count))
     return time.perf_counter_ns() - start
 
 def measure_floor(count):
@@ -92,6 +101,11 @@ def finish():
             .expect("floor measurement should exist")
             .expect("floor measurement should be set")
             .unbind();
+        let measure_channel = namespace
+            .get_item("measure_channel")
+            .expect("channel measurement should exist")
+            .expect("channel measurement should be set")
+            .unbind();
         let start_spinner = namespace
             .get_item("start_spinner")
             .expect("spinner starter should exist")
@@ -111,6 +125,7 @@ def finish():
         let mut group = c.benchmark_group("stream_delivery");
         group.throughput(Throughput::Elements(CHUNKS as u64));
         bench_measurement(&mut group, py, "native_stream", &measure_native);
+        bench_measurement(&mut group, py, "native_channel_stream", &measure_channel);
         bench_measurement(&mut group, py, "call_soon_threadsafe_floor", &measure_floor);
 
         let native_spinner = start_spinner
@@ -127,6 +142,22 @@ def finish():
         stop_spinner
             .bind(py)
             .call1((native_spinner,))
+            .expect("spinner should stop");
+
+        let channel_spinner = start_spinner
+            .bind(py)
+            .call0()
+            .expect("spinner should start")
+            .unbind();
+        bench_measurement(
+            &mut group,
+            py,
+            "native_channel_stream_gil_contended",
+            &measure_channel,
+        );
+        stop_spinner
+            .bind(py)
+            .call1((channel_spinner,))
             .expect("spinner should stop");
 
         let floor_spinner = start_spinner

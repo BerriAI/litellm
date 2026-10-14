@@ -4,6 +4,14 @@ mod streaming;
 use pyo3::{prelude::*, types::PyDict};
 use rstest::rstest;
 
+fn run_scenario(py: Python<'_>, source: &str) {
+    let namespace = PyDict::new(py);
+    streaming::install(py, &namespace).expect("stream helper should install");
+    let source = std::ffi::CString::new(source).expect("scenario source has no null bytes");
+    py.run(source.as_c_str(), Some(&namespace), Some(&namespace))
+        .expect("stream scenario should pass");
+}
+
 #[rstest]
 fn stream_chunks_do_not_allocate_an_asyncio_future_each() {
     Python::initialize();
@@ -60,4 +68,97 @@ sixty_four_chunk_futures = count_futures(64)
             "future allocations grew from {one_chunk_futures} to {sixty_four_chunk_futures}"
         );
     });
+}
+
+#[rstest]
+#[case::concurrent_streams(
+    r#"
+import asyncio
+
+async def consume(count):
+    stream = await native_stream(count)
+    return [chunk async for chunk in stream]
+
+async def main():
+    first, second = await asyncio.gather(consume(16), consume(16))
+    assert first == list(range(16))
+    assert second == list(range(16))
+
+asyncio.run(main())
+"#
+)]
+#[case::cancel_pending_stream(
+    r#"
+import asyncio
+
+async def consume(count):
+    stream = await native_stream(count)
+    return [chunk async for chunk in stream]
+
+async def main():
+    task = asyncio.create_task(consume(64))
+    await asyncio.sleep(0)
+    assert not task.done()
+    task.cancel("test cancellation")
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("consumer task was not cancelled")
+    assert await consume(4) == list(range(4))
+
+asyncio.run(main())
+"#
+)]
+#[case::add_reader_unavailable(
+    r#"
+import asyncio
+
+async def consume(count):
+    stream = await native_stream(count)
+    return [chunk async for chunk in stream]
+
+class NoReaderLoop(asyncio.SelectorEventLoop):
+    def add_reader(self, fd, callback, *args):
+        raise NotImplementedError
+
+loop = NoReaderLoop()
+try:
+    assert loop.run_until_complete(consume(8)) == list(range(8))
+finally:
+    loop.close()
+"#
+)]
+#[case::sequential_asyncio_runs(
+    r#"
+import asyncio
+
+async def consume(count):
+    stream = await native_stream(count)
+    return [chunk async for chunk in stream]
+
+assert asyncio.run(consume(8)) == list(range(8))
+assert asyncio.run(consume(8)) == list(range(8))
+"#
+)]
+#[case::mapped_error_after_pending(
+    r#"
+import asyncio
+
+async def main():
+    stream = await native_error_stream()
+    try:
+        await anext(stream)
+    except RuntimeError as error:
+        assert str(error) == "synthetic streaming error"
+    else:
+        raise AssertionError("stream error was not raised")
+
+asyncio.run(main())
+"#
+)]
+fn streams_preserve_pending_step_behavior(#[case] source: &str) {
+    Python::initialize();
+    Python::attach(|py| run_scenario(py, source));
 }

@@ -171,11 +171,23 @@ where
     T: Send,
     F: Future<Output = PyResult<T>> + Send,
 {
+    poll_with_waker(py, future, Waker::noop())
+}
+
+pub(crate) fn poll_with_waker<T, F>(
+    py: Python<'_>,
+    future: Pin<&mut F>,
+    waker: &Waker,
+) -> PyResult<Poll<T>>
+where
+    T: Send,
+    F: Future<Output = PyResult<T>> + Send + ?Sized,
+{
     let runtime = runtime()?;
     let result = release_gil(py, || {
         let _runtime = runtime.enter();
         std::panic::catch_unwind(AssertUnwindSafe(|| {
-            future.poll(&mut Context::from_waker(Waker::noop()))
+            future.poll(&mut Context::from_waker(waker))
         }))
         .map_err(panic_to_pyerr)
     })?;

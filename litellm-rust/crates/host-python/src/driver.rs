@@ -680,6 +680,7 @@ where
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.binding.traverse(visit)?;
         self.hooks.traverse(visit)?;
+        self.native.traverse(visit)?;
         visit.call(&self.arguments)?;
         visit.call(&self.interrupted)?;
         match &self.stage {

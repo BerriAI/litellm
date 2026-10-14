@@ -122,13 +122,79 @@ fn native_stream(py: Python<'_>, chunks: usize) -> PyResult<Py<PyAny>> {
     )
 }
 
+#[pyfunction]
+fn native_channel_stream(py: Python<'_>, chunks: usize) -> PyResult<Py<PyAny>> {
+    let arguments = PyDict::new(py);
+    arguments.set_item("chunks", chunks)?;
+    run_call(
+        py,
+        |_, _, chunks| {
+            Ok(hosted_call(chunks, None, |chunks, _, _, _| async move {
+                let (tx, receiver) = tokio::sync::mpsc::channel(1);
+                tokio::spawn(async move {
+                    for chunk in 0..chunks {
+                        tokio::task::yield_now().await;
+                        if tx.send(chunk).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                Ok(CallOutput::Stream {
+                    head: (),
+                    chunks: Box::pin(stream::unfold(receiver, |mut receiver| async move {
+                        receiver.recv().await.map(|chunk| (Ok(chunk), receiver))
+                    })),
+                })
+            }))
+        },
+        StreamingBinding,
+        HookChain::new(),
+        arguments.unbind(),
+        CallOptions::new(true, lifecycle_binding),
+    )
+}
+
+#[pyfunction]
+fn native_error_stream(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let arguments = PyDict::new(py);
+    arguments.set_item("chunks", 0)?;
+    run_call(
+        py,
+        |_, _, _| {
+            Ok(hosted_call(0, None, |_, _, _, _| async move {
+                Ok(CallOutput::Stream {
+                    head: (),
+                    chunks: Box::pin(stream::once(async move {
+                        tokio::task::yield_now().await;
+                        Err(StreamingError)
+                    })),
+                })
+            }))
+        },
+        StreamingBinding,
+        HookChain::new(),
+        arguments.unbind(),
+        CallOptions::new(true, lifecycle_binding),
+    )
+}
+
 pub fn install(py: Python<'_>, namespace: &Bound<'_, PyDict>) -> PyResult<()> {
     py.import("sys")?
         .getattr("modules")?
         .set_item(LIFECYCLE_MODULE, compile_lifecycle(py)?)?;
     let module = PyModule::new(py, "streaming_test")?;
     module.add_function(pyo3::wrap_pyfunction!(native_stream, &module)?)?;
+    module.add_function(pyo3::wrap_pyfunction!(native_channel_stream, &module)?)?;
+    module.add_function(pyo3::wrap_pyfunction!(native_error_stream, &module)?)?;
     namespace.set_item("native_stream", module.getattr("native_stream")?)?;
+    namespace.set_item(
+        "native_channel_stream",
+        module.getattr("native_channel_stream")?,
+    )?;
+    namespace.set_item(
+        "native_error_stream",
+        module.getattr("native_error_stream")?,
+    )?;
     Ok(())
 }
 
