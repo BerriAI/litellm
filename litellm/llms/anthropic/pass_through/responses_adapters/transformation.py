@@ -74,8 +74,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
         from litellm.responses.utils import ResponseAPILoggingUtils
 
-        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(raw_usage)
-        return LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage(chat_usage)
+        chat_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
+        return LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage(chat_usage)
 
     # ------------------------------------------------------------------ #
     # Request translation: Anthropic -> Responses API                     #
@@ -131,12 +131,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def _tool_result_output_value(
         output_text: str,
         file_parts: tuple[dict[str, str], ...],  # mutable-ok: json content parts
+        tool_result: Mapping[str, object],
     ) -> str | list[dict[str, str]]:  # mutable-ok: API message payload
-        """Plain string output, or a part list when document file parts are present."""
-        if not file_parts:
-            return output_text
+        """Plain string output, or a part list when document file parts or a cache breakpoint are present.
+
+        OpenAI reads a breakpoint only on a part, so a marked result ends on a part that carries it.
+        """
+        prompt_cache_breakpoint: Final = tool_result.get("prompt_cache_breakpoint")
         text_parts: Final = [{"type": "input_text", "text": output_text}] if output_text else []
-        return [*text_parts, *file_parts]
+        parts: Final = [*text_parts, *file_parts]
+        if not parts or (not file_parts and prompt_cache_breakpoint is None):
+            return output_text
+        return [*parts[:-1], with_prompt_cache_breakpoint(parts[-1], prompt_cache_breakpoint)]
 
     @staticmethod
     def _translate_midturn_system_content_to_responses(
@@ -327,7 +333,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 {
                                     "type": "function_call_output",
                                     "call_id": tool_use_id,
-                                    "output": self._tool_result_output_value(output_text, tool_file_parts),
+                                    "output": self._tool_result_output_value(output_text, tool_file_parts, block),
                                 }
                             )
                     if tool_image_parts:

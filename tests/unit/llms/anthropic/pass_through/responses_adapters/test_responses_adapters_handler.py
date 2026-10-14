@@ -2,6 +2,7 @@ import datetime
 import json
 import os
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
     _build_responses_kwargs,
 )
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
@@ -29,6 +31,18 @@ RESPONSES_SSE_BODY = (
     b'"parallel_tool_calls":true,"tool_choice":"auto","tools":[],'
     b'"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}\n\n'
 )
+
+
+def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="azure/gpt-5.6-luna",
+        extra_kwargs={"custom_llm_provider": "azure", **{key: True for key in CONVERTED_STREAM_KEYS}},
+    )
+
+    assert not converted_stream_requested(responses_kwargs)
+    assert responses_kwargs["custom_llm_provider"] == "azure"
 
 
 def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():
@@ -186,3 +200,76 @@ async def test_streaming_hands_the_logging_object_the_message_id_the_caller_is_s
     message_start = next(e for e in events if e["type"] == "message_start")
     assert message_start["message"]["id"].startswith("msg_")
     assert logging_obj.streamed_anthropic_message_id == message_start["message"]["id"]
+
+
+OPENAI_API: Final = {"custom_llm_provider": "openai", "api_base": "https://api.openai.com/v1"}
+OTHER_HOST: Final = {"custom_llm_provider": "openai", "api_base": "https://gateway.example/v1"}
+EPHEMERAL: Final = {"type": "ephemeral"}
+
+
+def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> dict[str, object]:
+    mark: Final = {} if cache_control is None else {"cache_control": cache_control}
+    return {
+        "max_tokens": 1024,
+        "system": [{"type": "text", "text": "Be concise."}, {"type": "text", "text": "Be helpful.", **mark}],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "look", **mark}, {"type": "text", "text": "now"}]}
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "extra_kwargs",
+    [
+        pytest.param(OPENAI_API, id="api.openai.com"),
+        pytest.param({**OTHER_HOST, "prompt_cache_options": {"mode": "implicit"}}, id="other-host-opted-in"),
+    ],
+)
+def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_the_same_block(
+    extra_kwargs: dict[str, object],
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs=extra_kwargs,
+        **_request_with_client_cache_marks({**EPHEMERAL, "ttl": "1h"}),
+    )
+
+    assert "instructions" not in responses_kwargs
+    assert responses_kwargs["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": {"mode": "explicit"}},
+            ],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "look", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "input_text", "text": "now"},
+            ],
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "extra_kwargs"),
+    [
+        pytest.param("openai/gpt-5.5", OPENAI_API, id="model-older-than-gpt-5.6"),
+        pytest.param("openai/gpt-5.6", OTHER_HOST, id="other-host-not-opted-in"),
+    ],
+)
+def test_client_cache_control_changes_nothing_for_a_deployment_that_does_not_read_prompt_cache_breakpoint(
+    model: str, extra_kwargs: dict[str, object]
+) -> None:
+    marked: Final = _build_responses_kwargs(
+        model=model, extra_kwargs=extra_kwargs, **_request_with_client_cache_marks(EPHEMERAL)
+    )
+    unmarked: Final = _build_responses_kwargs(
+        model=model, extra_kwargs=extra_kwargs, **_request_with_client_cache_marks(None)
+    )
+
+    assert marked == unmarked

@@ -163,7 +163,7 @@ class AnthropicTextConfig(BaseConfig):
             if param == "stream" and value is True:
                 optional_params["stream"] = value
             if param == "stop" and (isinstance(value, str) or isinstance(value, list)):
-                _value = litellm.AnthropicConfig()._map_stop_sequences(value)
+                _value = litellm.AnthropicConfig().map_stop_sequences(value)
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
             if param == "temperature":
@@ -231,6 +231,13 @@ class AnthropicTextConfig(BaseConfig):
     @staticmethod
     def _is_anthropic_text_model(model: str) -> bool:
         return model == "claude-2" or model == "claude-instant-1"
+
+    @classmethod
+    def is_anthropic_text_model(
+        cls,
+        model: str,
+    ) -> bool:
+        return cls._is_anthropic_text_model(model)
 
     def _get_anthropic_text_prompt_from_messages(self, messages: list[AllMessageValues], model: str) -> str:
         custom_prompt_dict: Final = litellm.custom_prompt_dict

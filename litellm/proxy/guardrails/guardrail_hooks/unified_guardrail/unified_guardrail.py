@@ -11,14 +11,14 @@ import contextlib
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast, runtime_checkable
 
 import anyio
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.cost_calculator import _infer_call_type
+from litellm.cost_calculator import infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
@@ -51,6 +51,22 @@ A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
 GUARDRAIL_NAME: Final = "unified_llm_guardrails"
 
 _RequestData: TypeAlias = dict[str, object]
+
+
+@runtime_checkable
+class RequestAttachmentScanner(Protocol):
+    async def async_scan_request_attachments(
+        self,
+        data: _RequestData,
+        call_type: CallTypesLiteral,
+    ) -> None: ...
+
+
+async def _scan_request_attachments(
+    guardrail: CustomGuardrail, data: _RequestData, call_type: CallTypesLiteral
+) -> None:
+    if isinstance(guardrail, RequestAttachmentScanner) and hasattr(type(guardrail), "async_scan_request_attachments"):
+        await guardrail.async_scan_request_attachments(data=data, call_type=call_type)
 
 
 class _EndpointTranslation(Protocol):
@@ -96,7 +112,7 @@ def resolve_endpoint_translation(
         route_call_types[0].value
         if route_call_types
         else (
-            _infer_call_type(call_type=None, completion_response=first_response_item)
+            infer_call_type(call_type=None, completion_response=first_response_item)
             if first_response_item is not None
             else None
         )
@@ -251,6 +267,8 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
+        await _scan_request_attachments(guardrail_to_apply, data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
+
         data = await endpoint_translation.process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
@@ -340,7 +358,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             if call_types is not None and len(call_types) > 0:
                 call_type = call_types[0]
         if call_type is None:
-            call_type = _infer_call_type(call_type=None, completion_response=response)
+            call_type = infer_call_type(call_type=None, completion_response=response)
 
         if call_type is None:
             litellm_logging_obj: Final = data.get("litellm_logging_obj")
@@ -1213,7 +1231,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                         call_type = call_types[0].value
 
                 if call_type is None:
-                    call_type = _infer_call_type(call_type=None, completion_response=item)
+                    call_type = infer_call_type(call_type=None, completion_response=item)
 
                 # If call type not supported, just pass through all chunks
                 if call_type is None or CallTypes(call_type) not in mappings:

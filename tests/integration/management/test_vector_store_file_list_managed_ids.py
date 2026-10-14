@@ -2,7 +2,6 @@ import base64
 import hashlib
 import json
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Generator, Mapping
@@ -1282,11 +1281,11 @@ def test_worker_sigkill_mid_burst_leaves_the_sibling_mapping_ids(gateway: Gatewa
                 held_by: Final = MappingProxyType({pid: _open_connections_to(pid, wire.url) for pid in workers})
                 assert sum(held_by.values()) == 20, held_by
                 victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                victim: Final = psutil.Process(victim_pid)
-                victim.suspend()
-                victim.send_signal(signal.SIGKILL)
-                release.set()
-                served: Final = tuple(result for future in burst if (result := future.result()) is not None)
+                with owned.replacing_worker(victim_pid) as kill:
+                    kill.freeze()
+                    kill()
+                    release.set()
+                    served: Final = tuple(result for future in burst if (result := future.result()) is not None)
             assert held_by[survivor_pid] >= 1, held_by
             assert len(served) == held_by[survivor_pid], (held_by, len(served))
             for response in served:

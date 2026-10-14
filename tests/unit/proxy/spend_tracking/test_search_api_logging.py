@@ -18,7 +18,7 @@ import litellm
 from litellm import Router
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.spend_tracking.spend_management_endpoints import view_spend_logs
 from litellm.proxy.utils import ProxyLogging, hash_token, update_spend
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
@@ -129,7 +129,7 @@ async def test_search_api_logging_and_cost_tracking(prisma_client):
         setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
         # Call the track_cost_callback directly to simulate what happens after a search
-        proxy_db_logger = _ProxyDBLogger()
+        proxy_db_logger = ProxyDBLogger()
 
         # Simulate the kwargs that would be passed from the search endpoint
         request_id = "search_test_123"

@@ -134,11 +134,11 @@ def test_short_secrets_are_fully_masked():
     masker = SensitiveDataMasker()
 
     # Boundary: exactly 8 chars previously returned verbatim.
-    assert masker._mask_value("abcd1234") == "********"
+    assert masker.mask_value("abcd1234") == "********"
     # Below threshold previously hit the early return and leaked verbatim.
-    assert masker._mask_value("sk-12") == "*****"
+    assert masker.mask_value("sk-12") == "*****"
     # Values above the threshold must still partially reveal, not over-mask.
-    assert masker._mask_value("abcd12345") == "abcd*2345"
+    assert masker.mask_value("abcd12345") == "abcd*2345"
 
     masked = masker.mask_dict({"redis_password": "pass1234", "api_key": "sk-7a"})
     assert masked["redis_password"] == "********"
@@ -155,10 +155,10 @@ def test_mask_short_values_false_keeps_short_values_readable():
     masker = SensitiveDataMasker(visible_prefix=50, visible_suffix=0, mask_short_values=False)
 
     short = "Test exception for structure validation"
-    assert masker._mask_value(short) == short
+    assert masker.mask_value(short) == short
 
     long_value = "x" * 60
-    masked = masker._mask_value(long_value)
+    masked = masker.mask_value(long_value)
     assert masked.startswith("x" * 50)
     assert masked.endswith("*" * 10)
     assert len(masked) == 60

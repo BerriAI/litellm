@@ -1,6 +1,4 @@
-import os
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -186,14 +184,15 @@ def test_killed_worker_leaves_the_sibling_serving_hidden_free_aliases(rig: Alias
             )
             settle_candidate(candidate, rig.hidden_free, key, 200, seconds=120)
             settle_candidate(candidate, rig.hidden_paid, key, BUDGET_EXCEEDED, seconds=120)
-            os.kill(workers[0], signal.SIGKILL)
-            eventually(
-                lambda: _tolerant_status(candidate, rig.hidden_free, key, "kill-probe-" + uuid.uuid4().hex),
-                lambda found: found == 200,
-                seconds=60,
-            )
-            assert chat_statuses(candidate, rig.hidden_free, key, 8) == {200}
-            assert chat_statuses(candidate, rig.hidden_paid, key, 8) == {BUDGET_EXCEEDED}
+            with owned.replacing_worker(workers[0]) as kill:
+                kill()
+                eventually(
+                    lambda: _tolerant_status(candidate, rig.hidden_free, key, "kill-probe-" + uuid.uuid4().hex),
+                    lambda found: found == 200,
+                    seconds=60,
+                )
+                assert chat_statuses(candidate, rig.hidden_free, key, 8) == {200}
+                assert chat_statuses(candidate, rig.hidden_paid, key, 8) == {BUDGET_EXCEEDED}
             eventually(
                 lambda: _worker_startups(owned.log),
                 lambda found: len(found[0]) == 3 and found[1] == 3,
