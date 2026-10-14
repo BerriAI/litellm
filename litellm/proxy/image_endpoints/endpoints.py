@@ -1,9 +1,9 @@
 import asyncio
 import io
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, get_type_hints
+from typing import Final, cast, get_type_hints  # noqa: TID251  # cast narrows the untyped proxy_server module globals to base_process_llm_request's declared parameter types
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -407,7 +407,7 @@ async def image_edit_api(
     dependencies=[Depends(user_api_key_auth)],
     responses={200: {"model": ImageResponse}},
     openapi_extra=dict[str, object](_IMAGE_VARIATION_OPENAPI_EXTRA),
-    response_class=ORJSONResponse,
+    response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # azure compatible endpoint mirrors image_edit_api's response class
 )  # azure compatible endpoint
 async def image_variation_api(  # noqa: ANN201  # response type mirrors image_edit_api (provider-dependent)
     request: Request,
@@ -424,22 +424,24 @@ async def image_variation_api(  # noqa: ANN201  # response type mirrors image_ed
     ```
     """
     from litellm.proxy.proxy_server import (
-        general_settings,
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
         llm_router,
         proxy_config,
         proxy_logging_obj,
-        read_request_body,
-        select_data_generator,
-        user_api_base,
+        read_request_body,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
+        select_data_generator,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
+        user_api_base,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
         user_max_tokens,
-        user_model,
+        user_model,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
         user_request_timeout,
-        user_temperature,
+        user_temperature,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
         version,
     )
 
     form_fields: Final = coerce_numeric_form_fields(
-        parsed_body=await read_request_body(request=request),
+        parsed_body=cast(
+            "Mapping[str, object]", await read_request_body(request=request)
+        ),
         numeric_fields=IMAGE_VARIATION_NUMERIC_FORM_FIELDS,
     )
     data: Final = {
@@ -465,15 +467,17 @@ async def image_variation_api(  # noqa: ANN201  # response type mirrors image_ed
             route_type="aimage_variation",
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
-            general_settings=general_settings,
+            general_settings=cast("dict[str, object]", general_settings),
             proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
+            select_data_generator=cast(
+                "Callable[..., object] | None", select_data_generator
+            ),
             model=model,
-            user_model=user_model,
-            user_temperature=user_temperature,
+            user_model=cast("str | None", user_model),
+            user_temperature=cast("float | None", user_temperature),
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
+            user_api_base=cast("str | None", user_api_base),
             version=version,
         )
     except Exception as e:  # noqa: BLE001  # provider-agnostic error surfacing mirrors image_edit_api

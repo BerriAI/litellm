@@ -2092,7 +2092,7 @@ class Router:
         )
         self.afile_list = self.factory_function(litellm.afile_list, call_type="alist_files")
         self.aimage_edit = self.factory_function(litellm.aimage_edit, call_type="aimage_edit")
-        self.aimage_variation = self.factory_function(litellm.aimage_variation, call_type="aimage_variation")
+        self.aimage_variation = self.factory_function(litellm.aimage_variation, call_type="aimage_variation")  # pyright: ignore[reportUnknownMemberType]  # the @client-wrapped litellm helpers are partially untyped; same registration shape as aimage_edit above
         self.allm_passthrough_route = self.factory_function(
             litellm.allm_passthrough_route, call_type="allm_passthrough_route"
         )

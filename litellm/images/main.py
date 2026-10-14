@@ -562,31 +562,60 @@ def image_generation(
 
 
 @client
-async def aimage_variation(*args, **kwargs) -> ImageResponse:
+async def aimage_variation(
+    image: FileTypes,
+    model: str = "dall-e-2",  # set to dall-e-2 by default - like OpenAI.
+    n: int = 1,
+    response_format: Literal["url", "b64_json"] = "url",
+    size: str | None = None,
+    user: str | None = None,
+    # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    # LiteLLM specific params,
+    custom_llm_provider: str | None = None,
+    **kwargs,
+) -> ImageResponse:
     """
     Asynchronously calls the `image_variation` function with the given arguments and keyword arguments.
 
     Parameters:
-    - `args` (tuple): Positional arguments to be passed to the `image_variation` function.
-    - `kwargs` (dict): Keyword arguments to be passed to the `image_variation` function.
+    - `image` (FileTypes): The image to use as a basis for the variation.
+    - `model` (str): The model to use for the variation.
+    - `n` (int): The number of variations to generate.
 
     Returns:
     - `response` (Any): The response returned by the `image_variation` function.
     """
+    local_vars: Final = locals()
     loop: Final = asyncio.get_event_loop()
-    model: Final = kwargs.get("model", None)
-    custom_llm_provider = kwargs.get("custom_llm_provider", None)
     ### PASS ARGS TO Image Generation ###
     kwargs["async_call"] = True
     try:
         # Use a partial function to pass your keyword arguments
-        func: Final = partial(image_variation, *args, **kwargs)
+        func: Final = partial(
+            image_variation,
+            image=image,
+            model=model,
+            n=n,
+            response_format=response_format,
+            size=size,
+            user=user,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
 
         # Add the context to the function
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        if custom_llm_provider is None and model is not None:
+        if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
         # Await normally
@@ -607,7 +636,7 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
-            completion_kwargs=args,
+            completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
 
