@@ -156,7 +156,7 @@ class _AcreateNamedParams(TypedDict, total=False):
 
 class _AsearchNamedParams(TypedDict, total=False):
     max_results: ReadOnly[int | None]
-    search_domain_filter: ReadOnly[list[str] | None]
+    search_domain_filter: ReadOnly[list[str] | None]  # mutable-ok: asearch takes list[str]
     max_tokens_per_page: ReadOnly[int | None]
     country: ReadOnly[str | None]
     api_key: ReadOnly[str | None]
@@ -508,7 +508,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             kwargs[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
         deployment_domain_filter: Final = _web_search_domain_filter(tools)
         if deployment_domain_filter is not None:
-            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = deployment_domain_filter
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = deployment_domain_filter  # rebind-ok: hook returns kwargs
 
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools: Final = []
@@ -685,7 +685,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         requested_tools: Final[_RequestToolsView] = {"tools": tools}
         domain_filter: Final = _web_search_domain_filter(requested_tools["tools"])
         if domain_filter is not None:
-            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filter
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filter  # rebind-ok: this hook returns the kwargs it edits
 
         # Convert native web search tools to LiteLLM standard
         converted_tools: Final[list[dict[str, object]]] = []
@@ -1577,7 +1577,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         search_provider: str | None,
         configured_search_kwargs: Mapping[str, object],
         domains: WebSearchDomainFilter | None,
-    ) -> list[str] | None:
+    ) -> list[str] | None:  # mutable-ok: passed to litellm.asearch's list[str] search_domain_filter
         """
         The client's ``allowed_domains`` hosts to send as ``search_domain_filter``, or None.
 
