@@ -2357,3 +2357,85 @@ def test_cached_responses_stream_sync_hit_triggers_success_callbacks(monkeypatch
     litellm.cache.async_add_cache.assert_not_called()
     litellm.cache.add_cache.assert_not_called()
     litellm.cache = original_cache
+
+
+def _answer_with_text_and_tool_call() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_synthetic",
+        created_at=0,
+        status="completed",
+        model="gpt-6-luna",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_synthetic",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Checking the weather.", "annotations": []}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_synthetic",
+                "call_id": "call_weather",
+                "name": "get_weather",
+                "arguments": '{"city":"Berlin"}',
+                "status": "completed",
+            },
+        ],
+        usage=ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+    )
+
+
+def test_faked_stream_bridged_to_chat_sends_tool_arguments_once():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=_answer_with_text_and_tool_call(), logging_obj=None, chunk_size=5
+    )
+    chunks: Final = tuple(
+        OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter(events), sync_stream=True)
+    )
+    tool_call_deltas: Final = tuple(
+        tool_call
+        for chunk in chunks
+        for tool_call in (chunk.choices[0].delta.tool_calls or ())  # comprehension-ok: flattening each chunk's tool calls
+    )
+    joined_arguments: Final = "".join(tool_call.function.arguments or "" for tool_call in tool_call_deltas)
+    joined_text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+    assert {tool_call.index for tool_call in tool_call_deltas} == {0}
+    assert json.loads(joined_arguments) == {"city": "Berlin"}
+    assert joined_text == "Checking the weather."
+
+
+def test_faked_stream_read_by_openai_sdk_accumulates_each_value_once():
+    import openai
+
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=_answer_with_text_and_tool_call(), logging_obj=None, chunk_size=5
+    )
+    sse_body: Final = b"".join(
+        f"event: {event.type}\ndata: {event.model_dump_json(exclude_none=True)}\n\n".encode() for event in events
+    )
+    client: Final = openai.OpenAI(
+        api_key="sk-test",
+        base_url="http://synthetic.test/v1",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
+            )
+        ),
+    )
+
+    with client.responses.stream(model="gpt-6-luna", input="Weather in Berlin?") as stream:
+        streamed: Final = tuple(stream)
+
+    text_snapshots: Final = tuple(event.snapshot for event in streamed if event.type == "response.output_text.delta")
+    argument_snapshots: Final = tuple(
+        event.snapshot for event in streamed if event.type == "response.function_call_arguments.delta"
+    )
+    assert text_snapshots[-1] == "Checking the weather."
+    assert json.loads(argument_snapshots[-1]) == {"city": "Berlin"}
