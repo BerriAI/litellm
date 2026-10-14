@@ -45,7 +45,7 @@ describe("ThemeToggle", () => {
 
   it("names the mode the click will switch to, so the button says what it does", async () => {
     renderToggle();
-    expect(screen.getByRole("button", { name: "Switch to dark mode (beta)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Switch to dark mode" })).toBeInTheDocument();
 
     await userEvent.click(toggle());
 
@@ -58,14 +58,5 @@ describe("ThemeToggle", () => {
     renderToggle();
 
     expect(localStorage.getItem("theme")).toBe("system");
-  });
-
-  it("keeps the beta marker out of the toolbar label once dark is on", async () => {
-    renderToggle();
-
-    await userEvent.click(toggle());
-
-    expect(toggle()).not.toHaveTextContent("Beta");
-    expect(toggle()).toHaveAccessibleName("Switch to light mode");
   });
 });

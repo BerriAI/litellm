@@ -142,7 +142,7 @@ def encode_video_id_in_response(response: object, fallback_model: str | None) ->
     return response
 
 
-def encode_character_id_in_response(response: Any, custom_llm_provider: str, model_id: str | None) -> Any:
+def encode_character_id_in_response(response: Any, custom_llm_provider: str, model_id: str | None) -> object:
     if isinstance(response, dict) and response.get("id"):
         response["id"] = encode_character_id_with_provider(
             character_id=response["id"],

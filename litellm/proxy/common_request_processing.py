@@ -27,7 +27,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
@@ -122,6 +122,7 @@ from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
     route_request,
 )
+from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -558,6 +559,7 @@ def _stream_usage_tracking_updates(
     }
 
 
+@runtime_checkable
 class _UpstreamHttpResponse(Protocol):
     @property
     def status_code(self) -> int: ...
@@ -570,6 +572,11 @@ class _UpstreamHttpResponse(Protocol):
 
 def _as_upstream_response(response: _UpstreamHttpResponse) -> _UpstreamHttpResponse:
     return response
+
+
+_UPSTREAM_RESPONSE: Final = TypeAdapter(
+    _UpstreamHttpResponse, config=ConfigDict(arbitrary_types_allowed=True, hide_input_in_errors=True)
+)
 
 
 class _ReadsHeaderValues(Protocol):
@@ -2263,7 +2270,9 @@ class ProxyBaseLLMRequestProcessing:
                 if alias_target is not None:
                     self.data["model"] = alias_target
 
-        self.data["litellm_call_id"] = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+        litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+        self.data["litellm_call_id"] = litellm_call_id
+        bind_telemetry_call_id(litellm_call_id)
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
@@ -2569,7 +2578,7 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     def _response_cost_from_logging_obj(
         *,
-        response: Any,
+        response: object,
         logging_obj: LiteLLMLoggingObj,
     ) -> float | str:
         """
@@ -2625,7 +2634,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
-    ) -> Any:
+    ) -> object:
         """Run the request, sending SSE keepalives while the upstream is still silent.
 
         Everything below this point, the upstream call included, happens before the
@@ -3268,7 +3277,7 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(result, Response):
             return result
 
-        upstream: Final = _as_upstream_response(result)
+        upstream: Final = _UPSTREAM_RESPONSE.validate_python(result)
         content: Final = await upstream.aread()
         return Response(
             content=content,
