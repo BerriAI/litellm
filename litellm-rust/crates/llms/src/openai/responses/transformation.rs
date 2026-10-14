@@ -1,5 +1,5 @@
 use litellm_llms_types::formats::responses::{
-    ResponsesApiResponse, streaming_websocket::ResponsesWsEvent,
+    ResponsesApiResponse, streaming::ResponsesStreamEvent,
 };
 use serde_json::{Map, Value};
 
@@ -34,7 +34,7 @@ impl ResponsesWebSocketProviderConfig for OpenAiResponsesApiConfig {
 
     fn transform_ws_request(
         &self,
-        event: &ResponsesWsEvent,
+        event: &ResponsesStreamEvent,
         model: &str,
     ) -> Result<ResponsesWsTransformResult, Error> {
         Ok(ResponsesWsTransformResult::passthrough(enforce_model(
@@ -44,7 +44,7 @@ impl ResponsesWebSocketProviderConfig for OpenAiResponsesApiConfig {
 
     fn transform_ws_response(
         &self,
-        event: &ResponsesWsEvent,
+        event: &ResponsesStreamEvent,
         _model: &str,
     ) -> Result<ResponsesWsTransformResult, Error> {
         Ok(ResponsesWsTransformResult::passthrough(event.clone()))
@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn openai_config_is_native_and_enforces_model() {
-        let event: ResponsesWsEvent =
+        let event: ResponsesStreamEvent =
             serde_json::from_value(serde_json::json!({"type":"response.create"}))
                 .expect("valid event");
         let result = OPENAI_RESPONSES_WS_CONFIG

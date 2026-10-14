@@ -3,7 +3,9 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 """
 
 import copy
+import io
 import json
+import re
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
@@ -20,11 +22,16 @@ from litellm.anthropic_beta_headers_manager import (
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
+from litellm.llms.base_llm.base_utils import (
+    RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
+    ResponseFormatSchema,
+    response_format_envelope_contents,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
@@ -52,12 +59,12 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     Usage,
-    _generate_id,
+    generate_id,
 )
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
-from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig
+from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -67,6 +74,67 @@ if TYPE_CHECKING:
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
     return json.loads(payload)
+
+
+_EnvelopeVerdict = Literal["undecided", "pass_through", "hold"]
+_FIRST_OBJECT_KEY: Final = re.compile(r'^\s*\{\s*"((?:[^"\\]|\\.)*)"\s*:')
+_OBJECT_KEY_PREFIX: Final = re.compile(r'^\s*(?:\{\s*(?:"(?:[^"\\]|\\.)*\\?(?:"\s*)?)?)?$')
+_ENVELOPE_NAME_KEY_PATTERN: Final = "|".join(sorted(RESPONSE_FORMAT_ENVELOPE_NAME_KEYS))
+_FIRST_NAME_VALUE: Final = re.compile(r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATTERN + r')"\s*:\s*"((?:[^"\\]|\\.)*)"')
+_NAME_VALUE_PREFIX: Final = re.compile(
+    r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATTERN + r')"\s*:\s*(?:"(?:[^"\\]|\\.)*\\?)?$'
+)
+_STRING_VALUE_THEN_KEY: Final = re.compile(r'^"(?:[^"\\]|\\.)*"\s*,\s*"((?:[^"\\]|\\.)*)"\s*:')
+_UNDECIDED_PREFIX_LIMIT: Final = 4096
+
+
+def _key_after_a_string_verdict(string_value_start: str, schema: ResponseFormatSchema) -> _EnvelopeVerdict:
+    next_key: Final = _STRING_VALUE_THEN_KEY.match(string_value_start)
+    if next_key is None:
+        return "undecided"
+    return "pass_through" if next_key.group(1) in schema.property_names else "hold"
+
+
+def _first_value_verdict(after_first_key: str, schema: ResponseFormatSchema) -> _EnvelopeVerdict:
+    value_start: Final = after_first_key.lstrip()
+    if not value_start:
+        return "undecided"
+    if value_start.startswith("{"):
+        return "hold"
+    if value_start.startswith('"') and schema.required_names:
+        return _key_after_a_string_verdict(value_start, schema)
+    return "pass_through"
+
+
+def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+    first_key: Final = _FIRST_OBJECT_KEY.match(buffered_json)
+    if first_key is None:
+        return "undecided" if _OBJECT_KEY_PREFIX.match(buffered_json) else "pass_through"
+    if first_key.group(1) in RESPONSE_FORMAT_ENVELOPE_NAME_KEYS:
+        first_value: Final = _FIRST_NAME_VALUE.match(buffered_json)
+        if first_value is not None and first_value.group(1) == tool_name:
+            return "hold"
+        if first_value is None and _NAME_VALUE_PREFIX.match(buffered_json):
+            return "undecided"
+    if first_key.group(1) in schema.property_names or not schema.property_names or schema.accepts_a_lone_undeclared_key:
+        return "pass_through"
+    return _first_value_verdict(buffered_json[first_key.end() :], schema)
+
+
+def _held_answer(held: str, schema: ResponseFormatSchema) -> str:
+    try:
+        payload: Final[object] = json.loads(held)
+    except (json.JSONDecodeError, RecursionError):
+        return held
+    contents: Final = response_format_envelope_contents(payload, schema, RESPONSE_FORMAT_TOOL_NAME)
+    return held if contents is None else json.dumps(contents)
+
+
+def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+    verdict: Final = _prefix_verdict(buffered_json, schema, tool_name)
+    if verdict == "undecided" and len(buffered_json) > _UNDECIDED_PREFIX_LIMIT:
+        return "hold"
+    return verdict
 
 
 async def make_call(
@@ -81,6 +149,7 @@ async def make_call(
     json_mode: bool,
     speed: str | None = None,
     tool_name_reverse_map: dict[str, str] | None = None,
+    response_format_schema: ResponseFormatSchema | None = None,
 ) -> tuple["ModelResponseIterator", httpx.Headers]:
     if client is None:
         client = litellm.module_level_aclient
@@ -116,6 +185,7 @@ async def make_call(
         json_mode=json_mode,
         speed=speed,
         tool_name_reverse_map=tool_name_reverse_map,
+        response_format_schema=response_format_schema,
     )
 
     # LOGGING
@@ -141,6 +211,7 @@ def make_sync_call(
     json_mode: bool,
     speed: str | None = None,
     tool_name_reverse_map: dict[str, str] | None = None,
+    response_format_schema: ResponseFormatSchema | None = None,
 ) -> tuple["ModelResponseIterator", httpx.Headers]:
     if client is None:
         client = litellm.module_level_client  # re-use a module level client
@@ -184,6 +255,7 @@ def make_sync_call(
         json_mode=json_mode,
         speed=speed,
         tool_name_reverse_map=tool_name_reverse_map,
+        response_format_schema=response_format_schema,
     )
 
     # LOGGING
@@ -240,6 +312,9 @@ class AnthropicChatCompletion(BaseLLM):
             speed=optional_params.get("speed") if optional_params else None,
             tool_name_reverse_map=(
                 litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY) if isinstance(litellm_params, dict) else None
+            ),
+            response_format_schema=(
+                JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode and optional_params else None
             ),
         )
         streamwrapper: Final = CustomStreamWrapper(
@@ -485,6 +560,9 @@ class AnthropicChatCompletion(BaseLLM):
                         if isinstance(litellm_params, dict)
                         else None
                     ),
+                    response_format_schema=(
+                        JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None
+                    ),
                 )
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
@@ -496,7 +574,7 @@ class AnthropicChatCompletion(BaseLLM):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(params={"timeout": timeout})
+                    client = get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 
@@ -550,6 +628,7 @@ class ModelResponseIterator:
         json_mode: bool | None = False,
         speed: str | None = None,
         tool_name_reverse_map: dict[str, str] | None = None,
+        response_format_schema: ResponseFormatSchema | None = None,
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -566,13 +645,16 @@ class ModelResponseIterator:
         # common case (no '/' or other invalid chars in any tool name).
         self.tool_name_reverse_map: dict[str, str] = tool_name_reverse_map or {}
         # Generate response ID once per stream to match OpenAI-compatible behavior
-        self.response_id = _generate_id()
+        self.response_id = generate_id()
         self.served_model: str | None = None
 
         # Track if we're currently streaming a response_format tool
         self.is_response_format_tool: bool = False
         # Track if we've converted any response_format tools (affects finish_reason)
         self.converted_response_format_tool: bool = False
+        self.response_format_schema = response_format_schema
+        self._response_format_buffer: io.StringIO = io.StringIO()
+        self._response_format_verdict: _EnvelopeVerdict = "undecided"
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
@@ -702,17 +784,7 @@ class ModelResponseIterator:
 
             signature: Final = content_block["delta"].get("signature")
             if isinstance(signature, str) and signature:
-                thinking_blocks = [
-                    ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking="".join(
-                            cast(str, block["delta"].get("thinking"))
-                            for block in self.content_blocks
-                            if isinstance(block["delta"].get("thinking"), str)
-                        ),
-                        signature=signature,
-                    )
-                ]
+                thinking_blocks = [ChatCompletionThinkingBlock(type="thinking", thinking="", signature=signature)]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
                 if reasoning_content is None:
                     reasoning_content = ""
@@ -965,6 +1037,8 @@ class ModelResponseIterator:
                             except (json.JSONDecodeError, TypeError):
                                 pass
                         self._current_server_tool_id = None
+                if self.is_response_format_tool:
+                    text = self._flush_response_format_buffer()
                 # Reset response_format tool tracking when block stops
                 self.is_response_format_tool = False
                 # Reset current content block type
@@ -1082,9 +1156,13 @@ class ModelResponseIterator:
             tool_name: Final = tool_use.get("function", {}).get("name", "")
             self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
 
+        if self.is_response_format_tool and self.response_format_schema is not None:
+            self.converted_response_format_tool = True
+            return self._stream_response_format_fragment(tool_use, self.response_format_schema), None
+
         # Convert tool to content if we're tracking a response_format tool
         if self.is_response_format_tool:
-            message: Final = AnthropicConfig._convert_tool_response_to_message(tool_calls=[tool_use])
+            message: Final = AnthropicConfig.convert_tool_response_to_message(tool_calls=[tool_use])
             if message is not None:
                 text = message.content or ""
                 tool_use = None
@@ -1092,6 +1170,31 @@ class ModelResponseIterator:
                 self.converted_response_format_tool = True
 
         return text, tool_use
+
+    def _stream_response_format_fragment(
+        self, tool_use: ChatCompletionToolCallChunk, schema: ResponseFormatSchema
+    ) -> str:
+        if tool_use.get("id") is not None:
+            self._response_format_buffer = io.StringIO()
+            self._response_format_verdict = "undecided"
+            return ""
+        fragment: Final = tool_use.get("function", {}).get("arguments") or ""
+        if self._response_format_verdict == "pass_through":
+            return fragment
+        self._response_format_buffer.write(fragment)
+        if self._response_format_verdict == "hold":
+            return ""
+        buffered: Final = self._response_format_buffer.getvalue()
+        self._response_format_verdict = _envelope_verdict(buffered, schema, RESPONSE_FORMAT_TOOL_NAME)
+        return buffered if self._response_format_verdict == "pass_through" else ""
+
+    def _flush_response_format_buffer(self) -> str:
+        if self.response_format_schema is None or self._response_format_verdict == "pass_through":
+            return ""
+        held: Final = self._response_format_buffer.getvalue()
+        self._response_format_buffer = io.StringIO()
+        self._response_format_verdict = "undecided"
+        return _held_answer(held, self.response_format_schema) if held else ""
 
     def _handle_message_delta(self, chunk: dict) -> tuple[str, Usage | None, dict[str, Any] | None]:
         """
