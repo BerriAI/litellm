@@ -29,6 +29,16 @@ from .base_cache import BaseCache
 DEFAULT_MAX_SIZE_IN_MEMORY: Final = 200
 
 
+def _seconds(requested: str | float) -> float | None:
+    try:
+        seconds: Final = float(requested)
+    except OverflowError:
+        return -math.inf if isinstance(requested, int) and requested < 0 else math.inf
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(seconds) else seconds
+
+
 class InMemoryCache(BaseCache):
     def __init__(
         self,
@@ -187,13 +197,8 @@ class InMemoryCache(BaseCache):
         self.cache_dict[key] = value
 
     def _ttl_seconds(self, requested: str | float | None) -> float:
-        if requested is None:
-            return self.default_ttl
-        try:
-            seconds: Final = float(requested)
-        except (TypeError, ValueError):
-            return self.default_ttl
-        return self.default_ttl if math.isnan(seconds) else seconds
+        seconds: Final = None if requested is None else _seconds(requested)
+        return self.default_ttl if seconds is None else seconds
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -201,10 +206,10 @@ class InMemoryCache(BaseCache):
     def refresh_ttl(self, key: str, ttl: float) -> bool:
         now: Final = self._clock()
         self._prune_heap_roots(now)
-        expiry: Final = now + float(ttl)
-        if key not in self.cache_dict or math.isnan(expiry):
+        seconds: Final = _seconds(ttl)
+        if seconds is None or key not in self.cache_dict or self._is_key_expired(key):
             return False
-        self.ttl_dict[key] = expiry
+        self.ttl_dict[key] = now + seconds
         return True
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):

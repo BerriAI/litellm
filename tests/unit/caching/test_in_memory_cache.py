@@ -293,6 +293,40 @@ def test_in_memory_cache_refresh_ttl_extends_a_live_key_and_rejects_an_absent_or
     assert cache.get_cache("live") is None
 
 
+def test_in_memory_cache_refresh_ttl_does_not_bring_back_a_key_whose_shortened_deadline_passed() -> None:
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(clock=clock)
+    cache.set_cache("pin", "v", ttl=600)
+    cache.set_cache("other", "v", ttl=100)
+    clock.return_value = 1.0
+    assert cache.refresh_ttl("pin", 5) is True
+    clock.return_value = 10.0
+    assert cache.refresh_ttl("pin", 600) is False
+    assert cache.get_cache("pin") is None
+    assert cache.get_cache("other") == "v"
+
+
+def test_in_memory_cache_an_integer_ttl_past_float_range_never_expires_and_its_negative_expires_at_once() -> None:
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=10, default_ttl=60, clock=clock)
+    cache.set_cache("forever", "v", ttl=10**400)
+    cache.set_cache("gone", "v", ttl=-(10**400))
+    assert cache.get_cache("gone") is None
+    clock.return_value = 1e300
+    cache.set_cache("later", "v", ttl=600)
+    assert cache.get_cache("forever") == "v"
+
+
+def test_in_memory_cache_refresh_ttl_past_float_range_keeps_the_key_with_no_deadline() -> None:
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=10, default_ttl=60, clock=clock)
+    cache.set_cache("pin", "v", ttl=60)
+    assert cache.refresh_ttl("pin", 10**400) is True
+    clock.return_value = 1e300
+    cache.set_cache("later", "v", ttl=600)
+    assert cache.get_cache("pin") == "v"
+
+
 def test_in_memory_cache_repeated_refresh_ttl_keeps_the_heap_bounded() -> None:
     clock: Final = MagicMock(return_value=0.0)
     cache: Final = InMemoryCache(max_size_in_memory=10, clock=clock)

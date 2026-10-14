@@ -1110,6 +1110,21 @@ async def test_dual_cache_async_get_cache_redis_first_serves_the_local_copy_whil
     assert await cache.async_get_cache_redis_first("pin") == "local"
 
 
+class _GarbledRedis(_UnreachableRedis):
+    def init_async_client(self):
+        client = MagicMock()
+        client.get = AsyncMock(return_value=b"not{valid")
+        return client
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_treats_an_undecodable_redis_value_as_a_miss():
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_GarbledRedis())
+    await cache.in_memory_cache.async_set_cache("pin", "local")
+    assert await cache.async_get_cache_redis_first("pin") is None
+    assert await cache.in_memory_cache.async_get_cache("pin") is None
+
+
 class _RedisThatGoesDown(_RecordingRedis):
     def __init__(self, values: dict[str, object]) -> None:
         super().__init__(values)

@@ -1675,19 +1675,19 @@ async def test_async_get_cache_reports_an_undecodable_value_as_a_failed_read(
 
 
 @pytest.mark.asyncio
-async def test_async_get_cache_or_raise_reports_an_undecodable_value_as_a_failed_read(
+async def test_async_get_cache_or_raise_reads_an_undecodable_value_as_a_miss(
     get_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
 ):
     cache, service_logger = get_cache_with_service_logger
     client = MagicMock()
     client.get = AsyncMock(return_value=b"not json and not a literal")
 
-    with patch.object(cache, "init_async_client", return_value=client), pytest.raises((SyntaxError, ValueError)):
-        await cache.async_get_cache_or_raise("lit9316")
+    with patch.object(cache, "init_async_client", return_value=client):
+        assert await cache.async_get_cache_or_raise("lit9316") is None
     await asyncio.sleep(0.05)
 
-    assert service_logger.mock_testing_async_failure_hook == 1
-    assert service_logger.mock_testing_async_success_hook == 0
+    assert service_logger.mock_testing_async_success_hook == 1
+    assert service_logger.mock_testing_async_failure_hook == 0
 
 
 

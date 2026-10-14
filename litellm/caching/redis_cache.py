@@ -336,6 +336,9 @@ class RedisCircuitBreaker:
 
 
 _RedisCallResult = TypeVar("_RedisCallResult")
+_Decoded = TypeVar("_Decoded")
+
+_UNDECODABLE_VALUE_ERRORS: Final = (ValueError, TypeError, SyntaxError, MemoryError, RecursionError)
 
 
 _swallowed_redis_failures: Final[ContextVar[int]] = ContextVar("litellm_swallowed_redis_failures", default=0)
@@ -1718,7 +1721,9 @@ class RedisCache(BaseCache):
         commands: Final = self._async_commands()
         namespaced_key: Final = self.check_and_fix_namespace(key=key)
         try:
-            return await self._async_get_reporting_to_service_hooks(commands, namespaced_key, parent_otel_span)
+            return await self._async_get_reporting_to_service_hooks(
+                commands, namespaced_key, parent_otel_span, self._get_cache_logic
+            )
         except Exception as e:
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
             _record_swallowed_redis_failure(self._circuit_breaker, e)
@@ -1727,18 +1732,28 @@ class RedisCache(BaseCache):
     async def async_get_cache_or_raise(self, key: str, parent_otel_span: Span | None = None) -> object:
         """GET that raises on a Redis failure, so a caller can tell a failed read from a miss."""
         return await self._async_get_reporting_to_service_hooks(
-            self._async_commands(), self.check_and_fix_namespace(key=key), parent_otel_span
+            self._async_commands(), self.check_and_fix_namespace(key=key), parent_otel_span, self._decode_or_miss
         )
 
-    async def _async_get_reporting_to_service_hooks(  # noqa: ANN202  # a named return retypes async_get_cache for every caller
-        self, commands: _AsyncRedisCommands, namespaced_key: str, parent_otel_span: Span | None
-    ):
+    def _decode_or_miss(self, cached_response: bytes | str | None) -> object:
+        try:
+            return self._get_cache_logic(cached_response=cached_response)
+        except _UNDECODABLE_VALUE_ERRORS:
+            return None
+
+    async def _async_get_reporting_to_service_hooks(
+        self,
+        commands: _AsyncRedisCommands,
+        namespaced_key: str,
+        parent_otel_span: Span | None,
+        decode: Callable[[bytes | str | None], _Decoded],
+    ) -> _Decoded:
         start_time: Final = time.time()
         try:
             print_verbose(f"Get Async Redis Cache: key: {namespaced_key}")
             cached_response: Final = await commands.get(namespaced_key)
             print_verbose("Got Async Redis Cache: key: %s, cached_response %s", namespaced_key, cached_response)
-            decoded: Final = self._get_cache_logic(cached_response=cached_response)
+            decoded: Final = decode(cached_response)
         except Exception as e:
             failed_at: Final = time.time()
             asyncio.create_task(

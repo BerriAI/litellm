@@ -842,7 +842,7 @@ def test_a_response_cache_hit_does_not_resurrect_a_pin_deleted_in_redis(rig: Rig
     assert _pin(rig.cache, rig.pin_prefix + session) == _pinned(COMPLEX_MODEL, "COMPLEX")
 
 
-def _cached_chat(gateway: Gateway, token: str, ttl: str) -> Outcome:
+def _cached_chat(gateway: Gateway, token: str, ttl: JsonValue) -> Outcome:
     body: Final = {
         "model": SIMPLE_MODEL,
         "messages": [{"role": "user", "content": f"hello {token}"}],
@@ -857,9 +857,23 @@ def _cached_chat(gateway: Gateway, token: str, ttl: str) -> Outcome:
     return Outcome(string_value(payload["id"]), string_value(payload["model"]))
 
 
-@pytest.mark.parametrize("ttl", ("nan", "not-a-number", "inf", "600"), ids=("nan", "unparseable", "infinite", "finite"))
+REQUEST_TTLS: Final[tuple[tuple[str, JsonValue], ...]] = (
+    ("nan", "nan"),
+    ("unparseable", "not-a-number"),
+    ("infinite", "inf"),
+    ("finite", "600"),
+    ("list", [60]),
+    ("empty", ""),
+    ("5kb", "x" * 5120),
+    ("null", None),
+    ("integer", 60),
+    ("float-overflowing-integer", 10**400),
+)
+
+
+@pytest.mark.parametrize("ttl", tuple(ttl for _, ttl in REQUEST_TTLS), ids=tuple(name for name, _ in REQUEST_TTLS))
 def test_a_request_ttl_that_is_not_a_finite_number_still_serves_the_repeat_from_the_cache(
-    rig: Rig, ttl: str, record_property: Recorder
+    rig: Rig, ttl: JsonValue, record_property: Recorder
 ) -> None:
     first, _ = _workers(rig.owned)
     token: Final = _token()
@@ -870,8 +884,8 @@ def test_a_request_ttl_that_is_not_a_finite_number_still_serves_the_repeat_from_
         afterwards: Final = tuple(_cached_chat(rig.owned.gateway, later, str(PIN_TTL_SECONDS)) for _ in range(2))
     posts: Final = _posts(rig.simple)
     record_property("response_ids", " ".join(outcome.identity for outcome in (*repeated, *afterwards)))
-    assert sum(token.encode() in request.body for request in posts) == 1, (ttl, len(posts))
-    assert sum(later.encode() in request.body for request in posts) == 1, (ttl, len(posts))
+    assert sum(token.encode() in request.body for request in posts) == 1, len(posts)
+    assert sum(later.encode() in request.body for request in posts) == 1, len(posts)
     assert {outcome.model for outcome in (*repeated, *afterwards)} == {SIMPLE_MODEL}, (repeated, afterwards)
 
 
@@ -971,6 +985,23 @@ def test_without_redis_the_pin_lives_in_worker_memory(tmp_path: Path, record_pro
             ("complex", 0),
         ), steps
         assert steps[3].outcome.model == steps[2].outcome.model != steps[0].outcome.model, steps
+        _record(record_property, *steps)
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_a_session_ttl_past_float_range_keeps_the_pin_in_worker_memory(tmp_path: Path, record_property: Recorder) -> None:
+    with _own_rig(
+        tmp_path, None, 1, WorkerHealthcheck.STRICT, {}, router_extras={"session_affinity_ttl_seconds": 10**400}
+    ) as (owned, judge, simple, complex_tier, router):
+        wires: Final = (judge, simple, complex_tier)
+        session: Final = _session()
+        script: Final[Script] = (("simple", _token()), ("continue", _token()), ("continue", _token()))
+        steps: Final = tuple(_own_step(owned, wires, router, session, script[: index + 1], None) for index in range(3))
+        assert tuple((step.tier, step.judge_posts) for step in steps) == (
+            ("simple", 1),
+            ("simple", 0),
+            ("simple", 0),
+        ), steps
         _record(record_property, *steps)
 
 
