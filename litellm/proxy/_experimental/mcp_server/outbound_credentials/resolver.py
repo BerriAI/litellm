@@ -293,9 +293,9 @@ class UpstreamCredentialProvider:
                     }
                     return await self._token_endpoint.fetch(
                         config.resource_token_endpoint,
-                        config.client_id,
+                        config.resource_client.client_id,
                         leg2_params,
-                        config.client_auth,
+                        config.resource_client.client_auth,
                     )
 
         match await self._exchanged_tokens.get_or_compute(slot, _exchange, fingerprint=fingerprint):
@@ -418,10 +418,10 @@ def _id_jag_fingerprint(subject_token: str, server_id: str, config: IdJagConfig)
     Stored beside the bearer and compared on every read, so a rotated assertion or an edited server
     config reads as a miss and re-mints instead of serving a bearer authorized under the old policy.
 
-    Every exchange parameter derives from the config (endpoints, audience, resource, scopes, client
-    auth), so a server update that changes any of them must change the key; otherwise the old bearer,
-    authorized under the old policy, keeps being served until its TTL. Everything is hashed, so no
-    secret is held in the key.
+    Every exchange parameter derives from the config (endpoints, audience, resource, scopes, and both
+    client identities and auth methods), so a server update that changes any of them must change the
+    key; otherwise the old bearer, authorized under the old policy, keeps being served until its TTL.
+    Everything is hashed, so no secret is held in the key.
     """
     material: Final = "\x00".join(
         (
@@ -431,6 +431,8 @@ def _id_jag_fingerprint(subject_token: str, server_id: str, config: IdJagConfig)
             config.resource_token_endpoint,
             config.client_id,
             _client_auth_fingerprint(config.client_auth),
+            config.resource_client.client_id,
+            _client_auth_fingerprint(config.resource_client.client_auth),
             config.subject_token_type,
             config.audience or "",
             config.resource or "",
