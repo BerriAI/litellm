@@ -584,10 +584,126 @@ func TestTeamMemberModelMaxBudgetAliasesAreEquivalent(t *testing.T) {
 
 func TestTeamMemberModelMaxBudgetRejectsUnknownFields(t *testing.T) {
 	schema := ResourceLiteLLMTeam().Schema["team_member_model_max_budget"]
-	if _, errs := schema.ValidateFunc(`{"claude-opus": {"limit": 400}}`, "team_member_model_max_budget"); len(errs) == 0 {
-		t.Fatalf("expected an unknown budget field to be rejected")
+	for _, bad := range []string{
+		`{"claude-opus": {"limit": 400}}`,
+		`{"claude-opus": {"budget_limit": 400, "time_period": "1d", "tpm_limit": 1000}}`,
+		`{"claude-opus": {"budget_limit": 400, "time_period": "1d", "rpm_limit": 10}}`,
+	} {
+		if _, errs := schema.ValidateFunc(bad, "team_member_model_max_budget"); len(errs) == 0 {
+			t.Errorf("expected %s to be rejected", bad)
+		}
 	}
 	if _, errs := schema.ValidateFunc(`{"claude-opus": {"budget_limit": 400, "time_period": "1d"}}`, "team_member_model_max_budget"); len(errs) != 0 {
 		t.Fatalf("valid config rejected: %v", errs)
+	}
+}
+
+func TestTeamCreateOmitsTeamMemberModelMaxBudgetWhenUnset(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{"team_alias": "eng"})
+	if err := resourceLiteLLMTeamCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if got, ok := captured["team_member_model_max_budget"]; ok {
+		t.Fatalf("payload team_member_model_max_budget = %v, want key absent", got)
+	}
+}
+
+func TestTeamCreateOmitsEmptyTeamMemberModelMaxBudget(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{
+		"team_alias":                   "eng",
+		"team_member_model_max_budget": `{}`,
+	})
+	if err := resourceLiteLLMTeamCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if got, ok := captured["team_member_model_max_budget"]; ok {
+		t.Fatalf("payload team_member_model_max_budget = %v, want key absent so no empty member budget row is created", got)
+	}
+}
+
+func teamUpdateData(t *testing.T, prior, config map[string]interface{}) *schema.ResourceData {
+	t.Helper()
+	res := ResourceLiteLLMTeam()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, prior)
+	priorData.SetId("team-1")
+	state := priorData.State()
+	diff, err := res.Diff(context.Background(), state, terraform.NewResourceConfigRaw(config), nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(state, diff)
+	if err != nil {
+		t.Fatalf("data failed: %v", err)
+	}
+	return d
+}
+
+func TestTeamUpdateSendsChangedTeamMemberModelMaxBudget(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
+	defer srv.Close()
+
+	d := teamUpdateData(t,
+		map[string]interface{}{"team_alias": "eng", "team_member_model_max_budget": `{"claude-opus": {"budget_limit": 400, "time_period": "1d"}}`},
+		map[string]interface{}{"team_alias": "eng", "team_member_model_max_budget": `{"claude-opus": {"budget_limit": 300, "time_period": "1d"}}`},
+	)
+	if err := resourceLiteLLMTeamUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	want := map[string]interface{}{"claude-opus": map[string]interface{}{"budget_limit": 300.0, "time_period": "1d"}}
+	if got := captured["team_member_model_max_budget"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("payload team_member_model_max_budget = %v, want %v", got, want)
+	}
+}
+
+func TestTeamUpdateSendsMemberBudgetWithPerModelBudget(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
+	defer srv.Close()
+
+	d := teamUpdateData(t,
+		map[string]interface{}{"team_alias": "eng"},
+		map[string]interface{}{
+			"team_alias":                   "eng",
+			"team_member_budget":           500.0,
+			"team_member_budget_duration":  "1d",
+			"team_member_model_max_budget": `{"claude-opus": {"budget_limit": 400, "time_period": "1d"}}`,
+		},
+	)
+	if err := resourceLiteLLMTeamUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if got := captured["team_member_budget"]; got != 500.0 {
+		t.Errorf("payload team_member_budget = %v, want 500", got)
+	}
+	if got := captured["team_member_budget_duration"]; got != "1d" {
+		t.Errorf("payload team_member_budget_duration = %v, want 1d", got)
+	}
+	want := map[string]interface{}{"claude-opus": map[string]interface{}{"budget_limit": 400.0, "time_period": "1d"}}
+	if got := captured["team_member_model_max_budget"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("payload team_member_model_max_budget = %v, want %v", got, want)
+	}
+}
+
+func TestTeamReadWithoutMemberBudgetTableLeavesFieldEmpty(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{"team_alias": "eng"})
+	d.SetId("team-1")
+	if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read returned error: %v", err)
+	}
+	if got := d.Get("team_member_model_max_budget").(string); got != "" {
+		t.Errorf("team_member_model_max_budget = %q, want empty", got)
 	}
 }

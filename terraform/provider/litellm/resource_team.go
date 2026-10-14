@@ -139,9 +139,9 @@ func ResourceLiteLLMTeam() *schema.Resource {
 			"team_member_model_max_budget": {
 				Type:             schema.TypeString,
 				Optional:         true,
-				ValidateFunc:     validateKeyModelMaxBudget,
+				ValidateFunc:     validateTeamMemberModelMaxBudget,
 				DiffSuppressFunc: teamMemberModelMaxBudgetEquivalent,
-				Description:      "JSON string of per-model budgets applied to every team member (e.g. '{\"claude-opus\": {\"budget_limit\": 400, \"time_period\": \"1d\"}}'). Requires a LiteLLM Enterprise license on the proxy",
+				Description:      "JSON string of per-model budgets applied to every team member (e.g. '{\"claude-opus\": {\"budget_limit\": 400, \"time_period\": \"1d\"}}'). Each entry takes budget_limit (or max_budget) and time_period (or budget_duration). Caps match the model name on the request, so behind a router alias the cap must be keyed on the alias, not the model the router picks. Requires a LiteLLM Enterprise license and a proxy that includes https://github.com/BerriAI/litellm/pull/43887; older proxies drop the value, so every plan shows a diff",
 			},
 			"model_rpm_limit": {
 				Type:     schema.TypeMap,
@@ -375,6 +375,33 @@ func resourceLiteLLMTeamDelete(d *schema.ResourceData, m interface{}) error {
 	return nil
 }
 
+// The proxy rejects tpm_limit/rpm_limit on team budgets, so only spend fields are allowed here.
+var teamMemberModelBudgetFields = map[string]bool{
+	"budget_limit":    true,
+	"max_budget":      true,
+	"time_period":     true,
+	"budget_duration": true,
+}
+
+func validateTeamMemberModelMaxBudget(v interface{}, k string) ([]string, []error) {
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(v.(string)), &parsed); err != nil || parsed == nil {
+		return nil, []error{fmt.Errorf("%q must be a JSON object keyed by model name, got %s", k, v)}
+	}
+	for model, cfg := range parsed {
+		var budget map[string]json.RawMessage
+		if err := json.Unmarshal(cfg, &budget); err != nil || len(budget) == 0 {
+			return nil, []error{fmt.Errorf("%q[%q] must be a budget object such as {\"budget_limit\": 400, \"time_period\": \"1d\"}, got %s", k, model, cfg)}
+		}
+		for field := range budget {
+			if !teamMemberModelBudgetFields[field] {
+				return nil, []error{fmt.Errorf("%q[%q] has unsupported field %q; team member budgets accept budget_limit, max_budget, time_period and budget_duration only", k, model, field)}
+			}
+		}
+	}
+	return nil, nil
+}
+
 // The proxy stores budget_limit/time_period as max_budget/budget_duration, so both spellings must compare equal.
 var modelBudgetFieldAliases = map[string]string{
 	"budget_limit": "max_budget",
@@ -457,9 +484,12 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 		teamData["tags"] = v
 	}
 
-	// An empty object clears the member budgets; the proxy treats a missing field as "leave unchanged".
-	if v, ok := d.GetOk("team_member_model_max_budget"); ok || d.HasChange("team_member_model_max_budget") {
-		teamData["team_member_model_max_budget"] = parseKeyModelMaxBudget(v.(string))
+	// The proxy treats a missing field as "leave unchanged", so an empty map is sent only to clear a value that was set.
+	memberModelMaxBudget := parseKeyModelMaxBudget(d.Get("team_member_model_max_budget").(string))
+	if len(memberModelMaxBudget) > 0 {
+		teamData["team_member_model_max_budget"] = memberModelMaxBudget
+	} else if old, _ := d.GetChange("team_member_model_max_budget"); len(parseKeyModelMaxBudget(old.(string))) > 0 {
+		teamData["team_member_model_max_budget"] = memberModelMaxBudget
 	}
 
 	if metadata := buildTeamMetadata(d); metadata != nil {
