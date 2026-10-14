@@ -6,7 +6,7 @@ from typing import Final, Literal
 
 import httpx
 import pytest
-from integration._support.client import Gateway, Scenario, object_value, string_value
+from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
@@ -925,7 +925,11 @@ def test_policy_attachment_tag_scope_matches_only_tagged_requests(
     tag_spelling: Literal["metadata_tags", "header", "top_level_tags"],
 ) -> None:
     with (
-        wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
+        wire_server(
+            lambda _request: Reply(
+                body=json.dumps({**_PROVIDER_RESPONSE, "id": f"chatcmpl-{uuid.uuid4().hex}"}).encode()
+            )
+        ) as provider,
         wire_server(
             lambda _request: Reply(body=b'{"action":"GUARDRAIL_INTERVENED","texts":["masked integration prompt"]}')
         ) as guardrail,
@@ -971,6 +975,8 @@ def test_policy_attachment_tag_scope_matches_only_tagged_requests(
         assert rows == [{"policy_name": policy_name, "tags": [f"{prefix}-*"], "is_default": False}]
 
         tag: Final = f"{prefix}-prod"
+        unmatched_tag: Final = f"unmatched-{uuid.uuid4().hex}"
+        header_tags: Final = [unmatched_tag, tag]
         tagged_body: Final[dict[str, JsonValue]] = {
             "model": model,
             "messages": [{"role": "user", "content": _PROMPT}],
@@ -982,11 +988,27 @@ def test_policy_attachment_tag_scope_matches_only_tagged_requests(
             "/v1/chat/completions",
             tagged_body,
             key=key,
-            headers={"x-litellm-tags": tag} if tag_spelling == "header" else None,
+            headers={"x-litellm-tags": ", ".join(header_tags)} if tag_spelling == "header" else None,
         )
         assert tagged.status_code == 200, tagged.text
         _ChatResponse.model_validate_json(tagged.content)
+        tagged_id: Final = string_value(object_value(tagged.json())["id"])
         assert tagged.headers.get("x-litellm-applied-policies") == policy_name, tagged.text
+        spend_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE request_id=%s AND status=%s',
+                (tagged_id, "success"),
+            ),
+            lambda rows: len(rows) == 1,
+            seconds=60,
+        )
+        expected_request_tags: Final = header_tags if tag_spelling == "header" else [tag]
+        persisted_caller_tags: Final = [
+            request_tag for request_tag in spend_rows[0]["request_tags"] if not request_tag.startswith("User-Agent: ")
+        ]
+        assert persisted_caller_tags == expected_request_tags, (
+            f"{tag_spelling} request tags should be persisted in caller order, excluding proxy-added User-Agent tags"
+        )
         tagged_guardrail_requests: Final = guardrail.drain()
         assert len(tagged_guardrail_requests) == 1
         _assert_guardrail_request(tagged_guardrail_requests[0], _PROMPT, model, key, response=tagged)
