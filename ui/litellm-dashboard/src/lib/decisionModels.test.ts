@@ -7,6 +7,7 @@ import {
   expandModeFilterValues,
   isDecisionMode,
   isDecisionSelection,
+  parseProxyDecisionProviders,
 } from "./decisionModels";
 
 const COST_MAP = {
@@ -55,7 +56,7 @@ describe("expandModeFilterValues", () => {
 });
 
 describe("buildDecisionGarden", () => {
-  const garden = buildDecisionGarden(COST_MAP);
+  const garden = buildDecisionGarden(COST_MAP, null);
 
   it("lists each decision-mode model once, one per provider before any provider's second", () => {
     expect(garden).toEqual([
@@ -67,12 +68,15 @@ describe("buildDecisionGarden", () => {
   });
 
   it("puts self-hosted models that only serve their own route after every /v1/decisions model", () => {
-    const rows = buildDecisionGarden({
-      "aaa/self-hosted": { litellm_provider: "aaa", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
-      "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
-      "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
-      "zzz/decider": { litellm_provider: "zzz", mode: "evaluation", supported_endpoints: ["/v1/decisions"] },
-    });
+    const rows = buildDecisionGarden(
+      {
+        "aaa/self-hosted": { litellm_provider: "aaa", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+        "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
+        "zzz/decider": { litellm_provider: "zzz", mode: "evaluation", supported_endpoints: ["/v1/decisions"] },
+      },
+      null,
+    );
     expect(rows.map((row) => [row.model, row.route])).toEqual([
       ["typesafe/jev-latest", "decisions"],
       ["zzz/decider", "decisions"],
@@ -82,11 +86,14 @@ describe("buildDecisionGarden", () => {
   });
 
   it("shows a provider's shortest model name first, so an alias outranks its long twin", () => {
-    const rows = buildDecisionGarden({
-      "cloudflare/@cf/cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
-      "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
-      "databricks/ai_decide": { litellm_provider: "databricks", mode: "evaluation" },
-    });
+    const rows = buildDecisionGarden(
+      {
+        "cloudflare/@cf/cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+        "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+        "databricks/ai_decide": { litellm_provider: "databricks", mode: "evaluation" },
+      },
+      null,
+    );
     expect(rows.map((row) => row.model)).toEqual([
       "cloudflare/clef",
       "databricks/ai_decide",
@@ -99,9 +106,35 @@ describe("buildDecisionGarden", () => {
     expect(garden.map((row) => row.model)).not.toContain("systemone-only");
   });
 
+  it("marks a model from a provider this proxy cannot serve on /v1/decisions as needing a newer LiteLLM, last", () => {
+    const rows = buildDecisionGarden(
+      {
+        "aaa/self-hosted": { litellm_provider: "aaa", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
+        "newvendor/decider": { litellm_provider: "newvendor", mode: "evaluation" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      },
+      new Set(["typesafe"]),
+    );
+    expect(rows.map((row) => [row.model, row.route])).toEqual([
+      ["typesafe/jev-latest", "decisions"],
+      ["aaa/self-hosted", "self-hosted"],
+      ["newvendor/decider", "needs-upgrade"],
+    ]);
+  });
+
   it("is empty for a missing or malformed cost map", () => {
-    expect(buildDecisionGarden(undefined)).toEqual([]);
-    expect(buildDecisionGarden("not a map")).toEqual([]);
+    expect(buildDecisionGarden(undefined, null)).toEqual([]);
+    expect(buildDecisionGarden("not a map", null)).toEqual([]);
+  });
+});
+
+describe("parseProxyDecisionProviders", () => {
+  it("reads the decision providers this proxy serves, and nothing from a response without them", () => {
+    expect(parseProxyDecisionProviders({ decision_model_providers: ["typesafe", "cloudflare"] })).toEqual(
+      new Set(["typesafe", "cloudflare"]),
+    );
+    expect(parseProxyDecisionProviders({ supported_modes: ["pre_call"] })).toBeNull();
+    expect(parseProxyDecisionProviders(undefined)).toBeNull();
   });
 });
 

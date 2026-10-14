@@ -65,7 +65,16 @@ export function buildDecisionCatalog(costMap: unknown): DecisionCatalog {
   return { models: new Set(decisionEntries.map(([key]) => key)), providers };
 }
 
-export type DecisionRoute = "decisions" | "self-hosted";
+export type DecisionRoute = "decisions" | "self-hosted" | "needs-upgrade";
+
+const ROUTE_ORDER: Readonly<Record<DecisionRoute, number>> = { decisions: 0, "self-hosted": 1, "needs-upgrade": 2 };
+
+const proxyDecisionProvidersSchema = z.object({ decision_model_providers: z.array(z.string()) });
+
+export const parseProxyDecisionProviders = (settings: unknown): ReadonlySet<string> | null => {
+  const parsed = proxyDecisionProvidersSchema.safeParse(settings);
+  return parsed.success ? new Set(parsed.data.decision_model_providers) : null;
+};
 
 export interface DecisionGardenModel {
   readonly model: string;
@@ -73,27 +82,38 @@ export interface DecisionGardenModel {
   readonly route: DecisionRoute;
 }
 
-const decisionRoute = (entry: CostMapEntry): DecisionRoute =>
-  (entry.supported_endpoints ?? ["/v1/decisions"]).includes("/v1/decisions") ? "decisions" : "self-hosted";
+const decisionRoute = (entry: CostMapEntry, proxyProviders: ReadonlySet<string> | null): DecisionRoute => {
+  if (!(entry.supported_endpoints ?? ["/v1/decisions"]).includes("/v1/decisions")) {
+    return "self-hosted";
+  }
+  return proxyProviders === null || proxyProviders.has(entry.litellm_provider) ? "decisions" : "needs-upgrade";
+};
 
 const shortestNameFirst = (a: DecisionGardenModel, b: DecisionGardenModel): number =>
   a.model.length - b.model.length || a.model.localeCompare(b.model);
 
 const rankedRow = (row: DecisionGardenModel, index: number, rows: readonly DecisionGardenModel[]) => ({
   row,
-  selfHosted: Number(row.route === "self-hosted"),
+  routeOrder: ROUTE_ORDER[row.route],
   rankInProvider: rows.slice(0, index).filter((earlier) => earlier.provider === row.provider).length,
 });
 
-export const buildDecisionGarden = (costMap: unknown): readonly DecisionGardenModel[] =>
+export const buildDecisionGarden = (
+  costMap: unknown,
+  proxyProviders: ReadonlySet<string> | null,
+): readonly DecisionGardenModel[] =>
   parsedEntries(costMap)
     .filter(([, entry]) => isDecisionMode(entry.mode))
-    .map(([key, entry]) => ({ model: key, provider: entry.litellm_provider, route: decisionRoute(entry) }))
+    .map(([key, entry]) => ({
+      model: key,
+      provider: entry.litellm_provider,
+      route: decisionRoute(entry, proxyProviders),
+    }))
     .toSorted(shortestNameFirst)
     .map(rankedRow)
     .toSorted(
       (a, b) =>
-        a.selfHosted - b.selfHosted ||
+        a.routeOrder - b.routeOrder ||
         a.rankInProvider - b.rankInProvider ||
         a.row.provider.localeCompare(b.row.provider),
     )

@@ -66,6 +66,22 @@ function isMCPHubVisibilityDisabled(isLoading: boolean, servers: readonly MCPSer
   return isLoading || servers === null;
 }
 
+function modelTableEmptyState(
+  models: readonly ModelHubData[],
+  showsDecisionGarden: boolean,
+  selectedMode: string,
+): { title: string; body: string } {
+  if (showsDecisionGarden && selectedMode === DECISIONS_MODE && !models.some((model) => isDecisionMode(model.mode))) {
+    return {
+      title: "No decision models on this proxy yet",
+      body: "The decision models LiteLLM supports are listed below.",
+    };
+  }
+  return models.length > 0
+    ? { title: "No matching models", body: "Adjust the filters to see more models." }
+    : { title: "No models yet", body: "Models added to this proxy will appear here." };
+}
+
 function HubEmptyState({ title, body }: { title: string; body: string }) {
   return (
     <div className="flex flex-col items-center gap-1 py-6">
@@ -509,14 +525,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     isLoading={loading}
                     loadingMessage="Loading models…"
                     noDataMessage={
-                      <HubEmptyState
-                        title={modelHubData?.length ? "No matching models" : "No models yet"}
-                        body={
-                          modelHubData?.length
-                            ? "Adjust the filters to see more models."
-                            : "Models added to this proxy will appear here."
-                        }
-                      />
+                      <HubEmptyState {...modelTableEmptyState(modelHubData ?? [], showDecisionGarden, selectedMode)} />
                     }
                     size="compact"
                   />
@@ -528,7 +537,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </p>
                 </div>
 
-                {showDecisionGarden && <DecisionModelGarden canAddModels={canAddModels} />}
+                {showDecisionGarden && <DecisionModelGarden accessToken={accessToken} canAddModels={canAddModels} />}
               </TabsContent>
 
               {/* Agent Hub Tab */}

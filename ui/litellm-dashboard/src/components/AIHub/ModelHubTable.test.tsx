@@ -26,11 +26,13 @@ vi.mock("@/components/networking", () => ({
   getClaudeCodePluginsList: vi.fn(() => Promise.resolve({ plugins: [] })),
   modelCostMap: vi.fn(() => Promise.resolve({})),
   getProviderCreateMetadata: vi.fn(() => Promise.resolve([])),
+  getGuardrailUISettings: vi.fn(() => Promise.resolve({})),
 }));
 
 const GARDEN_COST_MAP = {
   "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
   "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+  "newvendor/decider": { litellm_provider: "newvendor", mode: "evaluation" },
   "laya/english": { litellm_provider: "laya", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
   "claude-opus-4-8": { litellm_provider: "anthropic", mode: "chat" },
 };
@@ -318,11 +320,24 @@ describe("ModelHubTable", () => {
   describe("decision model garden", () => {
     const renderHub = async (
       models: { model_group: string; providers: string[]; mode: string }[],
-      { userRole = "Admin", canAddModels = true }: { userRole?: string; canAddModels?: boolean } = {},
+      {
+        userRole = "Admin",
+        canAddModels = true,
+        loadProxySettings = async () => ({ decision_model_providers: ["typesafe", "cloudflare"] }),
+      }: { userRole?: string; canAddModels?: boolean; loadProxySettings?: () => Promise<unknown> } = {},
     ) => {
       vi.mocked(networking.modelHubCall).mockResolvedValue({ data: models });
       vi.mocked(networking.modelCostMap).mockResolvedValue(GARDEN_COST_MAP);
-      vi.mocked(networking.getProviderCreateMetadata).mockResolvedValue(ADDABLE_PROVIDER_FIELDS);
+      vi.mocked(networking.getProviderCreateMetadata).mockResolvedValue([
+        ...ADDABLE_PROVIDER_FIELDS,
+        {
+          provider: "NewVendor",
+          provider_display_name: "NewVendor",
+          litellm_provider: "newvendor",
+          credential_fields: [],
+        },
+      ]);
+      vi.mocked(networking.getGuardrailUISettings).mockImplementation(loadProxySettings);
       vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
       vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
       vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
@@ -386,7 +401,34 @@ describe("ModelHubTable", () => {
       );
     });
 
-    it("offers a decisions mode option that keeps the garden and hides the chat rows", async () => {
+    it("labels a model whose provider this proxy cannot serve on /v1/decisions, with no Add Model and no count", async () => {
+      await renderHub(chatOnly);
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("2 decision models across 2 providers answer on /v1/decisions");
+      expect(garden).toHaveTextContent("1 more need a newer LiteLLM version");
+      const newCard = within(garden).getByTestId("decision-model-card-newvendor/decider");
+      expect(within(newCard).getByRole("link", { name: "Needs a newer LiteLLM" })).toHaveAttribute(
+        "href",
+        "https://docs.litellm.ai/docs/decisions#supported-providers",
+      );
+      expect(await within(garden).findAllByRole("link", { name: "Add model" })).toHaveLength(1);
+      expect(within(newCard).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+    });
+
+    it("falls back to the cost map alone when this proxy's decision provider list cannot be read", async () => {
+      await renderHub(chatOnly, {
+        loadProxySettings: async () => {
+          throw new Error("Failed to get guardrail UI settings");
+        },
+      });
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("3 decision models across 3 providers answer on /v1/decisions");
+      expect(garden).not.toHaveTextContent("need a newer LiteLLM version");
+    });
+
+    it("offers a decisions mode option that keeps the garden, hides the chat rows, and points at the garden", async () => {
       const { user, modeSelect } = await renderHub(chatOnly);
       await screen.findByTestId("decision-model-garden");
 
@@ -396,6 +438,8 @@ describe("ModelHubTable", () => {
       expect(screen.getByTestId("decision-model-garden")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "claude-opus-4-8" })).not.toBeInTheDocument();
       expect(screen.getByText("Showing 0 of 1 models")).toBeInTheDocument();
+      expect(screen.getByText("No decision models on this proxy yet")).toBeInTheDocument();
+      expect(screen.queryByText("Adjust the filters to see more models.")).not.toBeInTheDocument();
     });
 
     it("hides the garden while a non-decision mode is selected", async () => {
