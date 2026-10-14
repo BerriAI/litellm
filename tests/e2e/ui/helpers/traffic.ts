@@ -4,9 +4,6 @@ import { APIRequestContext, APIResponse, expect } from "@playwright/test";
 export const CHAT_MODEL_A = "fake-openai-gpt-4";
 export const CHAT_MODEL_B = "fake-anthropic-claude";
 
-/** The Decisions model in fixtures/config.yml, answered by the mock LLM server's /v1/systemone route. */
-export const DECISIONS_MODEL = "fake-decisions-model";
-
 /** The deployment each of those models routes to, as spend logs and usage breakdowns name it. */
 export const DEPLOYMENT_MODEL_A = "openai/fake-gpt-4";
 export const DEPLOYMENT_MODEL_B = "openai/fake-claude";
