@@ -1,7 +1,8 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, ClassVar, Final, cast
+from typing import Any, ClassVar, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -69,6 +70,8 @@ def messages_carry_output_config(messages: Sequence[object]) -> bool:
 
 
 _NESTED_BLOCK_FIELDS: Final = frozenset({"content", "source"})
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 def _without_prompt_cache_breakpoint(node: object) -> object:
@@ -76,11 +79,10 @@ def _without_prompt_cache_breakpoint(node: object) -> object:
     ``content`` or ``source`` (a document's ``source.content`` holds blocks too). Tool inputs and
     schemas are caller data, so they are left alone."""
     if isinstance(node, list):
-        items: Final = cast("list[object]", node)  # cast-ok: each item is parsed on its own
-        return [_without_prompt_cache_breakpoint(item) for item in items]
+        return [_without_prompt_cache_breakpoint(item) for item in _OBJECT_LIST.validate_python(node)]
     if not isinstance(node, Mapping):
         return node
-    fields: Final = cast("Mapping[str, object]", node)  # cast-ok: JSON object keys are strings
+    fields: Final = _JSON_OBJECT.validate_python(node)
     return {
         key: _without_prompt_cache_breakpoint(value) if key in _NESTED_BLOCK_FIELDS else value
         for key, value in fields.items()
