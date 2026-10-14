@@ -68,7 +68,7 @@ export function LiteAdminHomeComposer({
           ))}
         </div>
         <div className="ml-auto flex min-w-0 max-w-full items-center gap-2">
-          <div className="w-48 min-w-0 text-muted-foreground">{modelPicker}</div>
+          <div className="w-64 min-w-0 text-muted-foreground">{modelPicker}</div>
           {isLoading && onCancel ? (
             <Button type="button" size="icon-sm" aria-label="Stop request" onClick={onCancel}>
               <Square className="size-3.5 fill-current" />
