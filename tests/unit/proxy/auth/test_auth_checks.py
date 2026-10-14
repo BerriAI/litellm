@@ -2169,3 +2169,31 @@ def test_is_mcp_discovery_request(route, request_body, expected):
     from litellm.proxy.auth.auth_checks import is_mcp_discovery_request
 
     assert is_mcp_discovery_request(route=route, request_body=request_body) is expected
+
+
+@pytest.mark.asyncio
+async def test_get_skill_names_from_access_groups_reads_cached_group_rows():
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import cache_access_object, get_skill_names_from_access_groups
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    for group_id, skills in (("group-a", ["skill-a", "shared"]), ("group-b", ["skill-b", "shared"])):
+        await cache_access_object(
+            access_group_id=group_id,
+            access_group_table=LiteLLM_AccessGroupTable(
+                access_group_id=group_id, access_group_name=group_id, access_skill_names=skills
+            ),
+            user_api_key_cache=cache,
+        )
+    untouched_prisma = MagicMock()
+    untouched_prisma.db.litellm_accessgrouptable.find_unique = AsyncMock(
+        side_effect=AssertionError("cache hit must not reach the DB")
+    )
+
+    assert await get_skill_names_from_access_groups(
+        access_group_ids=("group-a", "group-b"),
+        prisma_client=untouched_prisma,
+        user_api_key_cache=cache,
+        proxy_logging_obj=MagicMock(),
+    ) == frozenset({"skill-a", "skill-b", "shared"})
