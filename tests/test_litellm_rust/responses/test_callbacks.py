@@ -46,9 +46,17 @@ async def test_inference_success_callback_contract(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", BACKENDS)
-@pytest.mark.parametrize("hook", FAILURE_HOOKS)
-async def test_inference_failure_callback_contract(recording_server: RecordingServer, native: bool, hook: str) -> None:
-    await assert_failure_contract(recording_server, "responses", native, hook)
+@pytest.mark.parametrize(
+    "hook,asynchronous",
+    (
+        *(pytest.param(hook, True, id=f"async-{hook}") for hook in FAILURE_HOOKS),
+        pytest.param("log_failure_event", False, id="sync-log_failure_event"),
+    ),
+)
+async def test_inference_failure_callback_contract(
+    recording_server: RecordingServer, native: bool, hook: str, asynchronous: bool
+) -> None:
+    await assert_failure_contract(recording_server, "responses", native, hook, asynchronous)
 
 
 @pytest.mark.asyncio

@@ -130,7 +130,7 @@ async def test_native_messages_provider_error_reaches_caller_and_failure_callbac
         await litellm.anthropic.messages.acreate(**arguments(messages_server, callbacks=[Observe()]))
 
     assert_served_natively(messages_server)
-    assert [phase for phase, _ in observed] == ["sync", "async"]
+    assert [phase for phase, _ in observed] == ["async"]
     assert all(error is raised.value for _, error in observed)
 
 

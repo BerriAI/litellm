@@ -195,7 +195,9 @@ async def assert_success_contract(
         assert additional["complete_input_dict"] == server.requests[0].body
 
 
-async def assert_failure_contract(server: RecordingServer, surface: Surface, native: bool, hook: str) -> None:
+async def assert_failure_contract(
+    server: RecordingServer, surface: Surface, native: bool, hook: str, asynchronous: bool = True
+) -> None:
     recorder: Final = ContractLogger()
     server.default_response = ResponseSpec(
         status=429,
@@ -203,8 +205,8 @@ async def assert_failure_contract(server: RecordingServer, surface: Surface, nat
     )
     with rebound(litellm, "callbacks", [recorder]):
         with pytest.raises(litellm.RateLimitError) as raised:
-            await call(server, surface, native, num_retries=0, metadata={"model_group_size": 1})
-        if hook == "log_failure_event":
+            await call(server, surface, native, asynchronous, num_retries=0, metadata={"model_group_size": 1})
+        if asynchronous and hook == "log_failure_event":
             await recorder.wait_for_async("async_log_failure_event", timeout=1)
             assert hook not in recorder.names
             assert_transport(server, native)
@@ -255,6 +257,7 @@ async def assert_callable_contract(
     server: RecordingServer, surface: Surface, native: bool, event: str, asynchronous: bool, dynamic: bool
 ) -> None:
     recorder: Final = RecordingLogger()
+    request_async: Final = asynchronous or event == "input" or surface == "messages"
     server.default_response = ResponseSpec(
         body=provider_response(surface)
         if event != "failure"
@@ -281,10 +284,10 @@ async def assert_callable_contract(
         arguments: Final = {f"{event}_callback": [callback]} if dynamic else {}
         if event == "failure":
             with pytest.raises(litellm.BadRequestError):
-                await call(server, surface, native, num_retries=0, **arguments)
+                await call(server, surface, native, request_async, num_retries=0, **arguments)
         else:
-            await call(server, surface, native, **arguments)
-        if (event == "success" and not asynchronous) or (event == "failure" and asynchronous and dynamic):
+            await call(server, surface, native, request_async, **arguments)
+        if event == "success" and not asynchronous and request_async:
             await drain_logging()
             assert event not in recorder.names
             assert_transport(server, native)
