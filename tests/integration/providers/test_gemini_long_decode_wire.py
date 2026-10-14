@@ -1538,6 +1538,56 @@ def test_later_request_citing_a_source_with_no_offsets_returns_what_one_request_
         assert len(wire.drain()) == 2
 
 
+_FIRST_BYTE_SOURCE: Final = _Source("dann der", "https://example.com/dann")
+
+
+def _cited_from_first_byte(text: str, source: _Source, spelling: Spelling) -> dict[str, JsonValue]:
+    assert text.startswith(source.phrase), text
+    end: Final = len(source.phrase.encode())
+    return {
+        "citationMetadata": {spelling: [{"endIndex": end, "uri": source.uri}]},
+        "urlContextMetadata": {
+            "urlMetadata": [{"retrievedUrl": source.uri, "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS"}]
+        },
+        "groundingMetadata": {
+            "groundingChunks": [{"web": {"uri": source.uri, "title": source.phrase}}],
+            "groundingSupports": [{"segment": {"endIndex": end, "text": source.phrase}, "groundingChunkIndices": [0]}],
+        },
+    }
+
+
+@pytest.mark.parametrize(("provider", "endpoint", "stream", "spelling"), _unplaced_cells())
+def test_later_request_span_from_its_first_byte_with_no_start_index_points_where_one_request_for_the_whole_answer_does(
+    gateway: Gateway, provider: Provider, endpoint: Endpoint, stream: bool, spelling: Spelling
+) -> None:
+    chained: Final = upstream(
+        _citing(f"first-{uuid.uuid4().hex}", _CITED_OPENING, _opening_metadata(spelling), None),
+        _citing(
+            f"second-{uuid.uuid4().hex}",
+            _CITED_CLOSING,
+            _cited_from_first_byte(_CITED_CLOSING.text, _FIRST_BYTE_SOURCE, spelling),
+            None,
+        ),
+    )
+    in_one_request: Final = upstream(
+        _citing(
+            f"plain-{uuid.uuid4().hex}",
+            _CITED_WHOLE,
+            _cited_metadata(_CITED_WHOLE.text, (_OPENING_SOURCE, _FIRST_BYTE_SOURCE), spelling),
+            None,
+        )
+    )
+    with wire_server(chained) as wire, wire_server(in_one_request) as twin_wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        twin: Final = register(gateway, scenario, provider, twin_wire)
+        continued: Final = _carried(endpoint, stream, post(gateway, endpoint, request_body(endpoint, model, stream)))
+        alone: Final = _carried(endpoint, stream, post(gateway, endpoint, request_body(endpoint, twin, stream)))
+        assert alone.answer == _CITED_WHOLE.text and len(alone.annotations) == 2, alone
+        assert endpoint != "chat" or (len(alone.citations), len(alone.retrieved)) == (2, 2), alone
+        assert continued == alone, (continued, alone)
+        assert len(wire.drain()) == 2
+
+
 OddMetadata = Literal["citations_null", "citations_empty", "url_context_null", "url_context_empty", "both_missing"]
 
 _ODD_METADATA: Final[Mapping[OddMetadata, Mapping[str, JsonValue]]] = MappingProxyType(
