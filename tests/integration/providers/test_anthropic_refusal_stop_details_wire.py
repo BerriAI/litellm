@@ -1192,25 +1192,32 @@ class JsonModeCase:
     fixture: str
     streamed_text: str
     message_text: str
-    finish_reason: str
+    streamed_finish_reason: str
+    message_finish_reason: str
     requested: Literal["json_tool", "native"]
 
 
 _JSON_MODE_CASES: Final[Mapping[str, JsonModeCase]] = {
     "anthropic_native": JsonModeCase(
-        "anthropic_native", "partial", DOCS_PARTIAL_TEXT, DOCS_PARTIAL_TEXT, "content_filter", "native"
+        "anthropic_native",
+        "partial",
+        DOCS_PARTIAL_TEXT,
+        DOCS_PARTIAL_TEXT,
+        "content_filter",
+        "content_filter",
+        "native",
     ),
     "anthropic_tool_declared": JsonModeCase(
-        "anthropic_tool", "jsontool", DECLARED_PARTIAL_JSON, _JSON_ANSWER, "stop", "json_tool"
+        "anthropic_tool", "jsontool", DECLARED_PARTIAL_JSON, _JSON_ANSWER, "content_filter", "stop", "json_tool"
     ),
     "anthropic_tool_enveloped": JsonModeCase(
-        "anthropic_tool", "jsonheld", ENVELOPED_PARTIAL_JSON, _JSON_ANSWER, "stop", "json_tool"
+        "anthropic_tool", "jsonheld", ENVELOPED_PARTIAL_JSON, _JSON_ANSWER, "content_filter", "stop", "json_tool"
     ),
     "bedrock_invoke_declared": JsonModeCase(
-        "bedrock_invoke", "jsontool", DECLARED_PARTIAL_JSON, _JSON_ANSWER, "stop", "json_tool"
+        "bedrock_invoke", "jsontool", DECLARED_PARTIAL_JSON, _JSON_ANSWER, "content_filter", "stop", "json_tool"
     ),
     "bedrock_invoke_enveloped": JsonModeCase(
-        "bedrock_invoke", "jsonheld", ENVELOPED_PARTIAL_JSON, _JSON_ANSWER, "stop", "json_tool"
+        "bedrock_invoke", "jsonheld", ENVELOPED_PARTIAL_JSON, _JSON_ANSWER, "content_filter", "stop", "json_tool"
     ),
 }
 
@@ -1263,7 +1270,7 @@ def test_json_mode_refusal_relays_the_docs_stop_details_through_the_response_for
             streamed: Final = (_streamed_text(chunks), _finish_reasons(chunks), _relayed_in(chunks))
             assert streamed == (
                 expected.streamed_text,
-                (expected.finish_reason,),
+                (expected.streamed_finish_reason,),
                 ((_DELTA_FIELDS, REFUSAL_FIELDS),),
             ), chunks
         else:
@@ -1271,7 +1278,7 @@ def test_json_mode_refusal_relays_the_docs_stop_details_through_the_response_for
             answered: Final = (_message_text(body), _choice(body)["finish_reason"], relayed(body))
             assert answered == (
                 expected.message_text,
-                expected.finish_reason,
+                expected.message_finish_reason,
                 ((_CHAT_FIELDS, REFUSAL_FIELDS),),
             ), body
         logged: Final = _logged_response(rig, key)
