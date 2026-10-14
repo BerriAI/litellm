@@ -359,9 +359,7 @@ class _Member:
     key: str
 
 
-def _member(
-    scenario: Scenario, *models: str, router_settings: Mapping[str, JsonValue] | None = None
-) -> _Member:
+def _member(scenario: Scenario, *models: str, router_settings: Mapping[str, JsonValue] | None = None) -> _Member:
     team: Final = scenario.team(models=list(models))
     user: Final = scenario.member(team)
     return _Member(
@@ -1144,9 +1142,7 @@ def test_provider_errors_reach_the_caller_and_other_models_keep_mapping(
 ) -> None:
     message: Final = f"provider refused listing {uuid.uuid4().hex[:8]}"
     with _rig(gateway, listing=_error_listing(status, message)) as failing, _rig(gateway, "a.txt") as healthy:
-        member: Final = _member(
-            failing.scenario, failing.model, healthy.model, router_settings={"num_retries": 2}
-        )
+        member: Final = _member(failing.scenario, failing.model, healthy.model, router_settings={"num_retries": 2})
         managed_a: Final = healthy.upload(member.key, "a.txt")
         failed: Final = failing.list(member.key, {"model": failing.model}, {"x-litellm-num-retries": "0"})
         assert failed.status_code == status, failed.text
@@ -1162,9 +1158,7 @@ def test_provider_errors_reach_the_caller_and_other_models_keep_mapping(
 
 def test_non_json_provider_body_is_an_error_response_and_other_models_keep_mapping(gateway: Gateway) -> None:
     with _rig(gateway, listing=_html_listing()) as failing, _rig(gateway, "a.txt") as healthy:
-        member: Final = _member(
-            failing.scenario, failing.model, healthy.model, router_settings={"num_retries": 2}
-        )
+        member: Final = _member(failing.scenario, failing.model, healthy.model, router_settings={"num_retries": 2})
         managed_a: Final = healthy.upload(member.key, "a.txt")
         failed: Final = failing.list(member.key, {"model": failing.model}, {"x-litellm-num-retries": "0"})
         assert failed.status_code == 500, failed.text
