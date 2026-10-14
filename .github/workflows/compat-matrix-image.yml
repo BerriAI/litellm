@@ -26,17 +26,24 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build the Render cron image
-        run: docker build -f tests/e2e/claude_code/cron_vm/Dockerfile -t compat-matrix:${{ github.sha }} tests/e2e
-
-      - name: Resolve and install the Claude Code CLI as the cron user
+      - name: Install the pinned uv the cron image ships
+        env:
+          UV_VERSION: 0.10.9
+          UV_SHA256: 20d79708222611fa540b5c9ed84f352bcd3937740e51aacc0f8b15b271c57594
         run: |
-          docker run --rm compat-matrix:${{ github.sha }} bash -c '
-            set -euo pipefail
-            whoami
-            gh --version
-            uv --version
-            version="$(uv run --no-project --python 3.12 python /opt/litellm/tests/e2e/claude_code/pr_gate_version_resolver.py)"
-            /opt/litellm/tests/e2e/claude_code/cron_vm/install_claude_code.sh "${version}" /tmp/claude-cli
-            /tmp/claude-cli/claude --version
-          '
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/uv.tar.gz" "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${UV_SHA256}  $RUNNER_TEMP/uv.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/uv.tar.gz" -C "$RUNNER_TEMP/bin" --strip-components=1 uv-x86_64-unknown-linux-gnu/uv
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve and install the Claude Code CLI as an unprivileged user
+        run: |
+          set -euo pipefail
+          whoami
+          gh --version
+          uv --version
+          version="$(uv run --no-project --python 3.12 python tests/e2e/claude_code/pr_gate_version_resolver.py)"
+          tests/e2e/claude_code/cron_vm/install_claude_code.sh "${version}" "$RUNNER_TEMP/claude-cli"
+          "$RUNNER_TEMP/claude-cli/claude" --version
