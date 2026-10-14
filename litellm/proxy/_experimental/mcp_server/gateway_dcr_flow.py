@@ -141,10 +141,16 @@ every session-token claim set. Four 256-character ASCII URIs seal to roughly 1.5
 the encoded client_id is checked against its own cap before registration succeeds.
 VS Code registers four callbacks for its web and desktop environments."""
 
-MAX_STATE_LENGTH: Final = 1024
-"""Bound on the client ``state`` sealed into the flow cookie and echoed on the auth-code
-redirect. An unbounded ``state`` can push the sealed cookie past the browser's ~4KB cap
-(silently dropped, breaking the flow); spec clients send a short opaque value."""
+MAX_STATE_LENGTH: Final = 2048
+"""Coarse bound on the client ``state`` sealed into the flow cookie and echoed on the
+auth-code redirect. RFC 6749 sets no limit and real clients send long opaque values
+(Gemini web sends ~1.1KB), so this only rejects clearly abusive input; the sealed cookie
+itself is checked against ``MAX_FLOW_COOKIE_BYTES``."""
+
+MAX_FLOW_COOKIE_BYTES: Final = 4000
+"""Bound on the flow cookie's name plus sealed value. Browsers drop cookies over ~4096
+bytes silently, which would break the flow at the connect page with an opaque "unknown or
+expired connect flow", so an oversized authorize request is rejected up front instead."""
 
 MIN_CODE_VERIFIER_LENGTH: Final = 43
 MAX_CODE_VERIFIER_LENGTH: Final = 128
@@ -610,8 +616,11 @@ def aggregate_authorize(
         upstream_scopes=upstream_scopes,
     )
     connect_url: Final = _append_query_params(f"{base_url}/ui/connect", (("connect_flow", handle),))
+    sealed_flow: Final = _seal(_UNPREFIXED, flow)
+    if _flow_cookie_too_large(handle, sealed_flow):
+        return _flow_cookie_too_large_error()
     response: Final = RedirectResponse(connect_url, status_code=303)
-    _set_flow_cookie(response, request, handle, flow)
+    _set_flow_cookie(response, request, handle, sealed_flow)
     return response
 
 
@@ -656,6 +665,9 @@ async def native_client_authorize(
         resource_server_id=None,
         audience=PROXY_API_AUDIENCE,
     )
+    sealed_flow: Final = _seal(_UNPREFIXED, flow)
+    if _flow_cookie_too_large(handle, sealed_flow):
+        return _flow_cookie_too_large_error()
     page: Final = render_native_client_consent_page(
         client_origin=_origin_only(redirect_uri),
         user_id=session_user_id,
@@ -664,7 +676,7 @@ async def native_client_authorize(
         complete_url=f"{base_url}/authorize/complete",
     )
     response: Final = HTMLResponse(page, headers=_CONSENT_PAGE_HEADERS)
-    _set_flow_cookie(response, request, handle, flow)
+    _set_flow_cookie(response, request, handle, sealed_flow)
     return response
 
 
@@ -786,11 +798,19 @@ def _new_connect_flow(
     )
 
 
-def _set_flow_cookie(response: Response, request: Request, handle: str, flow: _ConnectFlow) -> None:
+def _flow_cookie_too_large(handle: str, sealed_flow: str) -> bool:
+    return len(_flow_cookie_name(handle)) + len(sealed_flow) > MAX_FLOW_COOKIE_BYTES
+
+
+def _flow_cookie_too_large_error() -> Response:
+    return _oauth_error(400, "invalid_request", "authorization request is too large (shorten state or client_id)")
+
+
+def _set_flow_cookie(response: Response, request: Request, handle: str, sealed_flow: str) -> None:
     path, secure = _cookie_path_and_secure(request)
     response.set_cookie(
         key=_flow_cookie_name(handle),
-        value=_seal(_UNPREFIXED, flow),
+        value=sealed_flow,
         max_age=CONNECT_FLOW_TTL_SECONDS,
         path=path,
         secure=secure,

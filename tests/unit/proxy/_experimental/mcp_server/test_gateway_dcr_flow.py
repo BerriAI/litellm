@@ -21,6 +21,8 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     GATEWAY_AUTH_CODE_TTL_SECONDS,
     MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS,
     MAX_CLIENT_ID_LENGTH,
+    MAX_FLOW_COOKIE_BYTES,
+    MAX_STATE_LENGTH,
     SUBJECT_TOKEN_TYPES,
     TOKEN_EXCHANGE_GRANT_TYPE,
     ConsentTeam,
@@ -616,7 +618,7 @@ async def test_authorize_rejects_over_long_state():
         request=_request(query=f"client_id={client_id}"),
         client_id=client_id,
         redirect_uri=REDIRECT_URI,
-        state="s" * 2000,
+        state="s" * (MAX_STATE_LENGTH + 1),
         code_challenge=CODE_CHALLENGE,
         code_challenge_method="S256",
         response_type="code",
@@ -624,6 +626,41 @@ async def test_authorize_rejects_over_long_state():
     )
     assert response.status_code == 400
     assert json.loads(response.body)["error"] == "invalid_request"
+
+
+def _authorize_with_state(client_id, redirect_uri, state):
+    return aggregate_authorize(
+        request=_request(query=f"client_id={client_id}"),
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        state=state,
+        code_challenge=CODE_CHALLENGE,
+        code_challenge_method="S256",
+        response_type="code",
+        session_user_id="u1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorize_accepts_long_opaque_state_from_gemini():
+    """Gemini web sends a ~1.1KB opaque state (#46414); RFC 6749 sets no limit on it."""
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = _authorize_with_state(client_id, REDIRECT_URI, "s" * 1112)
+    assert response.status_code == 303
+    flow_cookie = next(header.decode() for name, header in response.raw_headers if name == b"set-cookie")
+    name_and_value = flow_cookie.split(";", 1)[0]
+    assert len(name_and_value) - 1 <= MAX_FLOW_COOKIE_BYTES
+
+
+@pytest.mark.asyncio
+async def test_authorize_rejects_request_whose_flow_cookie_would_exceed_browser_limit():
+    """A within-cap state plus a maximal registration must not set a cookie the browser
+    would silently drop; the request is rejected up front instead."""
+    client_id = (await _register(list(MAX_LENGTH_REDIRECT_URIS)))["client_id"]
+    response = _authorize_with_state(client_id, MAX_LENGTH_REDIRECT_URIS[0], "s" * MAX_STATE_LENGTH)
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_request"
+    assert not any(name == b"set-cookie" for name, _ in response.raw_headers)
 
 
 @pytest.mark.asyncio
