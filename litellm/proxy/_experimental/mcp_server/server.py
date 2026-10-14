@@ -30,6 +30,7 @@ from litellm.constants import (
     MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH,
     MCP_PEEKED_BODY_SCOPE_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -130,6 +131,7 @@ _MCP_ROUTING_PEEK_MAX_BYTES: Final = 4096
 _MCP_TRANSPORT_SPAN_SCOPE_KEY: Final = "litellm_otel_transport_span"
 _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
@@ -1291,8 +1293,8 @@ if MCP_AVAILABLE:
         if not body:
             return False
         try:
-            data: Final = json.loads(body)
-            return isinstance(data, dict) and data.get("method") == "initialize"
+            data: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(body)))
+            return data is not None and data.get("method") == "initialize"
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
             return False
 
@@ -2417,9 +2419,9 @@ if MCP_AVAILABLE:
             request_method: Final = (scope.get("method") or "").upper()
             if body and request_method == "POST":
                 try:
-                    _peeked: Final = json.loads(body)
+                    _peeked: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(body)))
                     if (
-                        isinstance(_peeked, dict)
+                        _peeked is not None
                         and _peeked.get("jsonrpc") == "2.0"
                         and "id" in _peeked
                         and "method" not in _peeked

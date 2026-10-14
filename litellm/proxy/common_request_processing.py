@@ -747,6 +747,7 @@ async def _resolve_per_request_model_group_alias(
 
 
 _REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
+_DECODED_JSON: Final = TypeAdapter(object)
 _ROUTER_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
@@ -4297,7 +4298,7 @@ class ProxyBaseLLMRequestProcessing:
                 if stripped_ln.startswith("data:"):
                     json_part = stripped_ln.split("data:", 1)[1].strip()
                     if json_part and json_part != "[DONE]":
-                        obj: object = json.loads(json_part)
+                        obj: object = _DECODED_JSON.validate_python(json.loads(json_part))
                         if not isinstance(obj, dict):
                             return None
                         maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(

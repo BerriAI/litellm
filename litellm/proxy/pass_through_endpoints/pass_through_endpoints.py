@@ -159,6 +159,7 @@ router: Final = APIRouter()
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
+_DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 
 # Global registry to track registered pass-through routes and prevent memory leaks
@@ -2322,7 +2323,7 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     if setup_model_rewriter is None:
         return text_data
     try:
-        message: Final[object] = json.loads(text_data)
+        message: Final[object] = _DECODED_JSON.validate_python(json.loads(text_data))
     except json.JSONDecodeError:
         return text_data
     if not isinstance(message, dict):
@@ -2357,7 +2358,9 @@ def _resolved_vertex_live_setup(
 
 def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
     try:
-        decoded: Final[object] = json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+        decoded: Final[object] = _DECODED_JSON.validate_python(
+            json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+        )
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return decoded if isinstance(decoded, dict) else None
@@ -2586,7 +2589,7 @@ async def websocket_passthrough_request(
                                     endpoint,
                                 )
                                 try:
-                                    client_message = json.loads(text_data)
+                                    client_message = _DECODED_JSON.validate_python(json.loads(text_data))
                                     if isinstance(client_message, dict) and "setup" in client_message:
                                         setup_data = client_message["setup"]
                                         verbose_proxy_logger.debug(

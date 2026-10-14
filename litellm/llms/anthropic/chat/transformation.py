@@ -388,7 +388,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         # Include caller information if present (for programmatic tool calling)
         if "caller" in anthropic_tool_content:
-            tool_call["caller"] = cast(dict[str, Any], anthropic_tool_content["caller"])
+            tool_call["caller"] = cast(dict[str, object], anthropic_tool_content["caller"])
         return tool_call
 
     @staticmethod
@@ -1489,8 +1489,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def map_openai_context_management_to_anthropic(
-        context_management: list[dict[str, Any]] | dict[str, Any],
-    ) -> dict[str, Any] | None:
+        context_management: Sequence[Mapping[str, object]] | dict[str, object],
+    ) -> dict[str, object] | None:
         """
         OpenAI format: [{"type": "compaction", "compact_threshold": 200000}]
         Anthropic format: {
@@ -1514,7 +1514,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # If in OpenAI format (list), transform to Anthropic format
         if isinstance(context_management, list):
-            anthropic_edits: Final = []
+            anthropic_edits: Final[list[dict[str, object]]] = []
             for entry in context_management:
                 if not isinstance(entry, dict):
                     continue
@@ -2552,7 +2552,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         code_by_id: Final[dict[str, str]] = {}
         for tc in tool_calls:
             try:
-                args: object = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                args: object = _DECODED_JSON.validate_python(json.loads(tc.get("function", {}).get("arguments", "{}")))
                 if not isinstance(args, Mapping):
                     continue
                 call_id = tc.get("id")
@@ -2857,7 +2857,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if json_mode_content_str is None:
             return None
         try:
-            payload: Final[object] = json.loads(json_mode_content_str)
+            payload: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
         except (json.JSONDecodeError, RecursionError):
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)
@@ -2889,6 +2889,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 

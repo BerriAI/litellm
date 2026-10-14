@@ -85,6 +85,7 @@ from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJE
 _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialHeaders)
 
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
+_DECODED_JSON: Final = TypeAdapter(object)
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
     {"cookie", "proxy-authorization"}
 )
@@ -500,7 +501,7 @@ def _normalized_metadata_object(field: str, value: object) -> Mapping[str, objec
     """
     if isinstance(value, dict):
         return value
-    if isinstance(value, str) and isinstance((parsed := safe_json_loads(value)), dict):
+    if isinstance(value, str) and isinstance((parsed := _DECODED_JSON.validate_python(safe_json_loads(value))), dict):
         return parsed
     raise _invalid_metadata_type_error(field=field, value=value)
 

@@ -56,6 +56,7 @@ else:
 
 _VERTEX_INTERACTIONS_PATH: Final = re.compile(r"/projects/[^/]+/locations/[^/]+/interactions/?$")
 _INTERACTIONS_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
@@ -245,7 +246,7 @@ class VertexPassthroughLoggingHandler:
                 url_route
             )
 
-            _json_response: Final = httpx_response.json()
+            _json_response: Final = _DECODED_JSON.validate_python(httpx_response.json())
 
             litellm_prediction_response = ModelResponse()
 

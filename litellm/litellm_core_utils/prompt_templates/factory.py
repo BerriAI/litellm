@@ -22,7 +22,7 @@ from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import anthropic_system_messages
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client, header_value
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import CachePointBlock
@@ -3283,7 +3283,7 @@ def _load_image_from_url(image_url):
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
-        content_type: Final = response.headers.get("content-type")
+        content_type: Final = header_value(response.headers, "content-type")
         if not content_type or "image" not in content_type:
             raise ValueError(f"URL does not point to a valid image (content-type: {content_type})")
 
@@ -3485,7 +3485,7 @@ class BedrockImageProcessor:
     @staticmethod
     def _post_call_image_processing(response: httpx.Response, image_url: str = "") -> tuple[str, str]:
         # Check the response's content type to ensure it is an image
-        content_type: str | None = response.headers.get("content-type")
+        content_type: str | None = header_value(response.headers, "content-type")
 
         # Use helper function to infer content type with fallback logic
         content_type = infer_content_type_from_url_and_content(
