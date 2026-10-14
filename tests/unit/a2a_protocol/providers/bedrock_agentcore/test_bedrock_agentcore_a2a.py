@@ -618,3 +618,53 @@ class TestHandlerIntegration:
                 api_base=None,
             )
             assert result is not None
+
+
+class TestStreamingContentType:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response_headers, expected_events",
+        [
+            ([("content-type", "application/json")], [{"jsonrpc": "2.0", "id": "req-001", "result": {}}]),
+            (
+                [("Content-Type", "Application/JSON; charset=utf-8")],
+                [{"jsonrpc": "2.0", "id": "req-001", "result": {}}],
+            ),
+            (
+                [("content-type", "text/plain"), ("CONTENT-TYPE", "application/json")],
+                [{"jsonrpc": "2.0", "id": "req-001", "result": {}}],
+            ),
+            (
+                [("content-type", "application/json"), ("content-type", "text/event-stream")],
+                [{"jsonrpc": "2.0", "id": "req-001", "result": {}}],
+            ),
+            ([], []),
+            ([("content-type", "")], []),
+            ([("content-type", "text/event-stream")], []),
+            ([("x-content-type", "application/json")], []),
+            ([("content-type", "application"), ("content-type", "/json")], []),
+        ],
+    )
+    async def test_streaming_reads_a_single_json_body_only_when_the_content_type_says_json(
+        self, httpx_transport, response_headers, expected_events
+    ):
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(
+                    200, headers=response_headers, content=b'{"jsonrpc": "2.0", "id": "req-001", "result": {}}'
+                )
+            )
+            events = [
+                event
+                async for event in BedrockAgentCoreA2AConfig().handle_streaming(
+                    request_id="req-001",
+                    params=SAMPLE_PARAMS,
+                    litellm_params=SAMPLE_LITELLM_PARAMS,
+                )
+            ]
+
+        assert events == expected_events

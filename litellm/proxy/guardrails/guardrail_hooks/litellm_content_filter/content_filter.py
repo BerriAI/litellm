@@ -42,6 +42,7 @@ from litellm.types.utils import (
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
+    Message,
     ModelResponse,
     ModelResponseStream,
 )
@@ -1516,7 +1517,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     @staticmethod
     def _describe_image_response_content(response: ModelResponse) -> str | None:
         choice = response.choices[0]
-        message = getattr(choice, "message", None)
+        message: Final[Message | None] = getattr(choice, "message", None)
         if message and getattr(message, "content", None):
             return message.content
         return None
