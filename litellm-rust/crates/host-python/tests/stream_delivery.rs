@@ -130,6 +130,32 @@ finally:
     loop.close()
 "#
 )]
+#[case::add_reader_unavailable_reuses_loop(
+    r#"
+import asyncio
+
+async def consume(count):
+    stream = await native_stream(count)
+    return [chunk async for chunk in stream]
+
+class NoReaderLoop(asyncio.SelectorEventLoop):
+    def __init__(self):
+        super().__init__()
+        self.reader_attempts = 0
+
+    def add_reader(self, fd, callback, *args):
+        self.reader_attempts += 1
+        raise NotImplementedError
+
+loop = NoReaderLoop()
+try:
+    assert loop.run_until_complete(consume(8)) == list(range(8))
+    assert loop.run_until_complete(consume(4)) == list(range(4))
+    assert loop.reader_attempts == 1
+finally:
+    loop.close()
+"#
+)]
 #[case::sequential_asyncio_runs(
     r#"
 import asyncio

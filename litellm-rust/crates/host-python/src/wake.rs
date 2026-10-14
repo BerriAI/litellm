@@ -188,13 +188,24 @@ impl LoopDispatcher {
                 })
                 .collect::<Vec<_>>()
         };
+        let mut first_error = None;
         for (id, step) in woken {
-            if NativeStep::advance(step.bind(py), py)? {
-                let removed = slf.borrow_mut().waiting.remove(&id);
-                drop(removed);
+            match NativeStep::advance(step.bind(py), py) {
+                Ok(true) => {
+                    let removed = slf.borrow_mut().waiting.remove(&id);
+                    drop(removed);
+                }
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    let removed = slf.borrow_mut().waiting.remove(&id);
+                    drop(removed);
+                }
+                Ok(false) => {}
             }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
@@ -235,6 +246,7 @@ impl LoopDispatcher {
 
 thread_local! {
     static DISPATCHERS: RefCell<Vec<Py<LoopDispatcher>>> = const { RefCell::new(Vec::new()) };
+    static UNSUPPORTED_LOOPS: RefCell<Vec<Py<PyAny>>> = const { RefCell::new(Vec::new()) };
 }
 
 pub(crate) fn dispatcher_for(
@@ -256,6 +268,11 @@ pub(crate) fn dispatcher_for(
     });
     if let Some(dispatcher) = known {
         return Ok(Some(dispatcher));
+    }
+    let unsupported = UNSUPPORTED_LOOPS
+        .with_borrow(|loops| loops.iter().any(|loop_| loop_.bind(py).is(event_loop)));
+    if unsupported {
+        return Ok(None);
     }
     prune_closed_loops(py)?;
 
@@ -279,6 +296,9 @@ pub(crate) fn dispatcher_for(
     let drain = dispatcher.bind(py).getattr("_drain")?;
     if let Err(error) = event_loop.call_method1("add_reader", (descriptor, drain)) {
         if error.is_instance_of::<PyNotImplementedError>(py) {
+            UNSUPPORTED_LOOPS.with_borrow_mut(|loops| {
+                loops.push(event_loop.clone().unbind());
+            });
             return Ok(None);
         }
         return Err(error);
@@ -294,15 +314,30 @@ fn prune_closed_loops(py: Python<'_>) -> PyResult<()> {
             .map(|dispatcher| dispatcher.clone_ref(py))
             .collect::<Vec<_>>()
     });
-    let mut closed = Vec::new();
+    let mut closed_dispatchers = Vec::new();
     for dispatcher in &known {
         let event_loop = dispatcher.bind(py).borrow().event_loop.clone_ref(py);
         if event_loop.bind(py).call_method0("is_closed")?.is_truthy()? {
-            closed.push(dispatcher.as_ptr());
+            closed_dispatchers.push(dispatcher.as_ptr());
         }
     }
     DISPATCHERS.with_borrow_mut(|dispatchers| {
-        dispatchers.retain(|dispatcher| !closed.contains(&dispatcher.as_ptr()));
+        dispatchers.retain(|dispatcher| !closed_dispatchers.contains(&dispatcher.as_ptr()));
+    });
+    let unsupported = UNSUPPORTED_LOOPS.with_borrow(|loops| {
+        loops
+            .iter()
+            .map(|event_loop| event_loop.clone_ref(py))
+            .collect::<Vec<_>>()
+    });
+    let mut closed_loops = Vec::new();
+    for event_loop in &unsupported {
+        if event_loop.bind(py).call_method0("is_closed")?.is_truthy()? {
+            closed_loops.push(event_loop.as_ptr());
+        }
+    }
+    UNSUPPORTED_LOOPS.with_borrow_mut(|loops| {
+        loops.retain(|event_loop| !closed_loops.contains(&event_loop.as_ptr()));
     });
     Ok(())
 }
