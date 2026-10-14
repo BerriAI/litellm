@@ -24,6 +24,8 @@ from litellm.proxy.control_plane.settings import ControlPlaneSettings
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from opentelemetry.sdk._logs.export import LogRecordExporter
+    from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SpanExporter
 
@@ -275,19 +277,34 @@ def tracing_enabled(settings: ControlPlaneSettings, environ: Mapping[str, str] =
     )
 
 
+def _config(settings: ControlPlaneSettings) -> OpenTelemetryV2Config:
+    return OpenTelemetryV2Config.from_env().model_copy(update={"service_name": settings.otel_service_name})
+
+
 def build_provider(settings: ControlPlaneSettings, exporter: SpanExporter | None = None) -> TracerProvider:
     from opentelemetry.sdk.trace import SpanProcessor
 
     from litellm.integrations.otel.plumbing.providers import build_tracer_provider
 
-    config: Final = OpenTelemetryV2Config.from_env().model_copy(update={"service_name": settings.otel_service_name})
     return build_tracer_provider(
-        config,
+        _config(settings),
         exporter=exporter,
         baggage_processor=SpanProcessor(),
         use_simple_processor=None if exporter is None else True,
         console_default=exporter is None,
     )
+
+
+def build_log_exporter(settings: ControlPlaneSettings) -> LogRecordExporter:
+    from litellm.integrations.otel.plumbing.providers import build_log_exporter as build_provider_log_exporter
+
+    return build_provider_log_exporter(_config(settings))
+
+
+def build_resource(settings: ControlPlaneSettings) -> Resource:
+    from litellm.integrations.otel.plumbing.providers import build_resource as build_provider_resource
+
+    return build_provider_resource(_config(settings))
 
 
 def build_telemetry(

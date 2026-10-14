@@ -5,9 +5,11 @@ from typing import Final
 import jwt
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from pydantic import SecretStr
 
 from litellm.proxy.control_plane.app import LicenseRequired, create_app
+from litellm.proxy.control_plane.audit.pipeline import Batch, Delivered, DeliveryResult
 from litellm.proxy.control_plane.auth.dependencies import get_token_verifier
 from litellm.proxy.control_plane.auth.jwt import PyJwkClientLookup, SessionTokenCodec, build_token_verifier
 from litellm.proxy.control_plane.auth.login import LOCKOUT_FAILURES, LoginService, LoginThrottle
@@ -27,6 +29,24 @@ class Licensed:
 class Unlicensed:
     def is_premium(self) -> bool:
         return False
+
+
+class BrokenCloseSink:
+    name: Final = "broken"
+
+    async def deliver(self, batch: Batch) -> DeliveryResult:
+        return Delivered(len(batch))
+
+    async def close(self) -> None:
+        raise RuntimeError("sink refused to close")
+
+
+class ShutdownCounter(SpanProcessor):  # mutable-ok: counts provider shutdowns for assertions
+    def __init__(self) -> None:
+        self.shutdowns = 0
+
+    def shutdown(self) -> None:
+        self.shutdowns += 1
 
 
 def _settings(**overrides: object) -> ControlPlaneSettings:
@@ -114,6 +134,17 @@ def test_garbage_bearer_is_401() -> None:
     response: Final = _client().get("/api/v1/auth/me", headers=_bearer("nope"))
     assert response.status_code == 401
     assert response.json()["detail"] == "Invalid bearer credentials."
+
+
+def test_missing_and_non_bearer_credentials_are_audited_as_authentication_failures() -> None:
+    client: Final = _client()
+    assert client.get("/api/v1/auth/me").status_code == 401
+    assert client.get("/api/v1/auth/me", headers={"Authorization": "Basic dTpw"}).status_code == 401
+    records: Final = client.get("/api/v1/audit/ocsf", headers=_bearer(MASTER_KEY)).json()["items"]
+    assert [(record["class_uid"], record["actor"]["user"]["uid"], record["status_detail"]) for record in records] == [
+        (3002, "anonymous", "missing bearer"),
+        (3002, "anonymous", "missing bearer"),
+    ]
 
 
 def test_master_key_is_a_fleet_wide_cp_admin() -> None:
@@ -257,3 +288,13 @@ def test_a_role_granting_an_unknown_scope_fails_startup() -> None:
 def test_a_role_inheriting_an_unknown_role_fails_startup() -> None:
     with pytest.raises(InvalidRolePolicy, match="inherits unknown role 'ghost'"):
         build_container(_settings(roles={"x": {"inherits": ["ghost"]}}))
+
+
+def test_tracing_shuts_down_even_when_an_audit_sink_fails_to_close() -> None:
+    counter: Final = ShutdownCounter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(counter)
+    container: Final = build_container(_settings(), tracer_provider=provider, audit_sinks=(BrokenCloseSink(),))
+    with TestClient(create_app(container, Licensed())):
+        pass
+    assert counter.shutdowns == 1

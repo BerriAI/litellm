@@ -939,6 +939,39 @@ def test_traces_endpoint_alone_creates_an_otlp_http_exporter_spec():
     assert spec.kind == "otlp_http" and spec.traces_endpoint == endpoint
 
 
+@pytest.mark.parametrize("env_name", ("OTEL_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"))
+def test_logs_endpoint_alias_alone_posts_to_the_configured_url(
+    monkeypatch: pytest.MonkeyPatch,
+    otlp_collector: tuple[str, list[str]],
+    env_name: str,
+) -> None:
+    base_url, received_paths = otlp_collector
+    for var in (
+        "OTEL_EXPORTER",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv(env_name, f"{base_url}/services/collector/logs")
+
+    config: Final = OpenTelemetryV2Config.from_env()
+    assert config.exporter == "otlp_http" and config.logs_endpoint == f"{base_url}/services/collector/logs"
+    logger_provider: Final = providers.build_logger_provider(
+        config,
+        log_exporter=providers.build_log_exporter(config),
+    )
+    logger_provider.get_logger("endpoint-test").emit(body="logs-endpoint")
+    assert logger_provider.force_flush()
+    logger_provider.shutdown()
+
+    assert received_paths == ["/services/collector/logs"]
+
+
 def test_traces_endpoint_env_posts_to_the_configured_url_verbatim(monkeypatch, otlp_collector):
     base_url, received_paths = otlp_collector
     for var in ("OTEL_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_ENDPOINT"):
@@ -1043,6 +1076,31 @@ def test_build_log_exporter_variants():
     )
     http_exporter = providers.build_log_exporter(OpenTelemetryV2Config(exporter="otlp_http", endpoint="http://h:4318"))
     assert "OTLPLogExporter" in type(http_exporter).__name__
+
+
+def test_grpc_log_exporter_uses_the_base_endpoint_without_an_http_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter as GRPCLogExporter
+
+    for env_name in (
+        "OTEL_EXPORTER",
+        "OTEL_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://host:4317")
+
+    config: Final = OpenTelemetryV2Config.from_env()
+    exporter: Final = providers.build_log_exporter(config)
+    try:
+        assert isinstance(exporter, GRPCLogExporter)
+        assert exporter._endpoint == "host:4317"
+    finally:
+        exporter.shutdown()
 
 
 def test_build_logger_provider_picks_processor_by_exporter_kind():
