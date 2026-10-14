@@ -2,6 +2,7 @@ import json
 import re
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -16,6 +17,8 @@ _CALLER_ONLY_STREAM_OPTIONS: Final = frozenset({"continuous_usage_stats"})
 _SSE_FRAME_END: Final = re.compile(rb"\r\n\r\n|\n\n|\r\r")
 _SSE_DATA_FIELD: Final = b"data:"
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_INJECTION_OFF: Final[Mapping[str, object]] = MappingProxyType({"always_include_stream_usage": False})
+_DEFAULT_INJECTION: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class _RelayedChoice(LiteLLMBaseModel):
@@ -72,17 +75,31 @@ def _forwarded_stream_options(stream_options: object, strips_usage: bool) -> obj
     return {key: value for key, value in caller_options.items() if key not in _CALLER_ONLY_STREAM_OPTIONS}
 
 
+def _relay_settings(general_settings: Mapping[str, object]) -> Mapping[str, object]:
+    return _INJECTION_OFF if general_settings.get("always_include_stream_usage") is False else _DEFAULT_INJECTION
+
+
+def _forwards_stream_options_as_sent(request_body: Mapping[str, object]) -> bool:
+    stream_options: Final = request_body.get("stream_options")
+    if stream_options is None:
+        return False
+    if not isinstance(stream_options, Mapping):
+        return True
+    include_usage: Final = _JSON_OBJECT_ADAPTER.validate_python(stream_options).get("include_usage", False)
+    return not isinstance(include_usage, bool)
+
+
 def stream_usage_relay(
     endpoint: str,
     request_body: Mapping[str, object],
     general_settings: Mapping[str, object],
     supports_stream_options: Callable[[], bool],
 ) -> StreamUsageRelay:
-    if not _relays_usage_frames(endpoint):
+    if not _relays_usage_frames(endpoint) or _forwards_stream_options_as_sent(request_body):
         return StreamUsageRelay(body=request_body, strips_usage=False)
     updates: Final = stream_usage_tracking_updates(
         data=request_body,
-        general_settings=general_settings,
+        general_settings=_relay_settings(general_settings),
         route_type=CallTypes.acompletion.value,
         supports_stream_options=supports_stream_options,
     )

@@ -96,7 +96,34 @@ class TestStreamUsageRelay:
         )
 
         assert by_default.body == always.body == {**body, "stream_options": {"include_usage": True}}
-        assert (by_default.strips_usage, always.strips_usage) == (True, False)
+        assert (by_default.strips_usage, always.strips_usage) == (True, True)
+
+    def test_turning_stream_usage_off_relays_the_stream_untouched(self):
+        body = {"model": MODEL, "messages": [], "stream": True}
+
+        relay = stream_usage_relay(
+            endpoint="chat/completions",
+            request_body=body,
+            general_settings={"always_include_stream_usage": False},
+            supports_stream_options=lambda: True,
+        )
+
+        assert relay.body == body
+        assert relay.strips_usage is False
+
+    @pytest.mark.parametrize(
+        "stream_options",
+        [True, "include_usage", ["include_usage"], {"include_usage": "true"}, {"include_usage": 1}],
+    )
+    def test_stream_options_the_proxy_cannot_read_reach_the_server_as_the_caller_sent_them(self, stream_options):
+        body = {"model": MODEL, "messages": [], "stream": True, "stream_options": stream_options}
+
+        relay = stream_usage_relay(
+            endpoint="chat/completions", request_body=body, general_settings={}, supports_stream_options=lambda: True
+        )
+
+        assert relay.body == body
+        assert relay.strips_usage is False
 
     def test_continuous_usage_stats_alone_is_not_turned_into_per_chunk_usage(self):
         body = {"model": MODEL, "messages": [], "stream": True, "stream_options": {"continuous_usage_stats": True}}

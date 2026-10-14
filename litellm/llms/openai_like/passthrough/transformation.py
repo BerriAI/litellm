@@ -34,29 +34,44 @@ def _count_text_tokens(model: str, text: str, count_response_tokens: bool = Fals
     )
 
 
-class RelayedRequest(LiteLLMBaseModel):
+class RelayedChatRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     messages: Sequence[Mapping[str, object]] | None = None
+
+
+class RelayedTextRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     prompt: RelayedPrompt | None = None
 
 
-class RelayedCallDetails(LiteLLMBaseModel):
+class RelayedChatCall(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    request_data: RelayedRequest | None = None
+    request_data: RelayedChatRequest | None = None
 
 
-def _relayed_request(litellm_logging_obj: Logging) -> RelayedRequest | None:
-    try:
-        return RelayedCallDetails.model_validate(litellm_logging_obj.model_call_details).request_data
-    except ValidationError:
-        return None
+class RelayedTextCall(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    request_data: RelayedTextRequest | None = None
 
 
 def relayed_messages(litellm_logging_obj: Logging) -> Sequence[Mapping[str, object]] | None:
-    request: Final = _relayed_request(litellm_logging_obj)
+    try:
+        request: Final = RelayedChatCall.model_validate(litellm_logging_obj.model_call_details).request_data
+    except ValidationError:
+        return None
     return request.messages if request else None
+
+
+def _relayed_prompt(litellm_logging_obj: Logging) -> RelayedPrompt | None:
+    try:
+        request: Final = RelayedTextCall.model_validate(litellm_logging_obj.model_call_details).request_data
+    except ValidationError:
+        return None
+    return request.prompt if request else None
 
 
 class RelayedTextChoice(LiteLLMBaseModel):
@@ -178,7 +193,7 @@ def logged_text_completion_stream(
         for index, own in itertools.groupby(sorted(deltas, key=_delta_index), key=_delta_index)
     )
     reported_usage: Final = next((chunk.usage for chunk in reversed(chunks) if chunk.usage is not None), None)
-    request: Final = _relayed_request(logging_obj)
+    prompt: Final = _relayed_prompt(logging_obj)
     logging_obj.call_type = TEXT_COMPLETION_RELAY_SHAPE.call_type.value  # rebind-ok: the relay's logging object starts as the generic passthrough call and learns its real call type from the relayed shape
     return TextCompletionResponse(
         id=head.id,
@@ -187,11 +202,7 @@ def logged_text_completion_stream(
         choices=[
             TextChoices(index=choice.index, text=choice.text, finish_reason=choice.finish_reason) for choice in choices
         ],
-        usage=(
-            reported_usage
-            if reported_usage is not None
-            else _counted_text_usage(model, request.prompt if request else None, choices)
-        ),
+        usage=(reported_usage if reported_usage is not None else _counted_text_usage(model, prompt, choices)),
     )
 
 

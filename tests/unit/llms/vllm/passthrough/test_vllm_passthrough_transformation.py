@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.vllm.passthrough.transformation import VLLMPassthroughConfig
 
@@ -14,7 +15,7 @@ PROMPT = "The capital of France is"
 USAGE = {"prompt_tokens": 34, "completion_tokens": 4, "total_tokens": 38}
 
 
-def _relay_logging_obj(endpoint: str, request_data: dict) -> Logging:
+def _relay_logging_obj(endpoint: str, request_data: dict, callbacks: list[CustomLogger] | None = None) -> Logging:
     logging_obj = Logging(
         model=MODEL,
         messages=[],
@@ -23,6 +24,7 @@ def _relay_logging_obj(endpoint: str, request_data: dict) -> Logging:
         start_time=datetime(2025, 1, 1),
         litellm_call_id="call-1",
         function_id="fn-1",
+        dynamic_async_success_callbacks=callbacks,
     )
     logging_obj.update_environment_variables(
         model=MODEL,
@@ -144,6 +146,71 @@ async def test_a_relayed_text_completion_is_logged_with_the_usage_vllm_reported(
     assert payload["id"] == "cmpl-vllm-4"
     assert payload["response"]["choices"][0]["text"] == " Paris."
     assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (34, 4, 38)
+
+
+class _ResponseRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.responses: list[object] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.responses.append(response_obj)
+
+
+@pytest.mark.asyncio
+async def test_a_success_callback_gets_the_text_completion_vllm_relayed_as_a_parsed_response():
+    recorder = _ResponseRecorder()
+    logging_obj = _relay_logging_obj("v1/completions", {"model": MODEL, "prompt": PROMPT}, callbacks=[recorder])
+    body = {
+        "id": "cmpl-vllm-8",
+        "object": "text_completion",
+        "created": 1,
+        "model": MODEL,
+        "choices": [{"index": 0, "text": " Paris.", "finish_reason": "stop"}],
+        "usage": USAGE,
+    }
+
+    await logging_obj.async_success_handler(result=_relayed_json("v1/completions", body))
+
+    [response] = recorder.responses
+    assert (response.id, response.choices[0].text, response.usage.prompt_tokens) == ("cmpl-vllm-8", " Paris.", 34)
+
+
+@pytest.mark.parametrize(
+    "path, request_data, body",
+    [
+        (
+            "v1/completions",
+            {"model": MODEL, "prompt": PROMPT},
+            {
+                "id": "cmpl-vllm-7",
+                "object": "text_completion",
+                "created": 1,
+                "model": MODEL,
+                "choices": [{"index": 0, "text": " Paris.", "finish_reason": "stop"}],
+                "usage": USAGE,
+            },
+        ),
+        (
+            "v1/embeddings",
+            {"model": MODEL, "input": [PROMPT]},
+            {
+                "object": "list",
+                "model": MODEL,
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "usage": {"prompt_tokens": 34, "total_tokens": 34},
+            },
+        ),
+    ],
+)
+def test_the_sync_and_async_success_handlers_both_read_the_usage_from_one_relayed_body(path, request_data, body):
+    logging_obj = _relay_logging_obj(path, request_data)
+    relayed = _relayed_json(path, body)
+
+    sync_handler_view = logging_obj.normalize_logging_result(result=relayed)
+    async_handler_view = logging_obj.normalize_logging_result(result=relayed)
+
+    assert [view.usage.prompt_tokens for view in (sync_handler_view, async_handler_view)] == [34, 34]
 
 
 @pytest.mark.asyncio
