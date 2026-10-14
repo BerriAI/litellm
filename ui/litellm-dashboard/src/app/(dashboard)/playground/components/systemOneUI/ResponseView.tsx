@@ -223,7 +223,7 @@ export default function ResponseView({
   if (!response) {
     return (
       <Card className="gap-0 py-0">
-        <CardHeader className="flex min-h-12 flex-row items-center border-b px-4 py-2">
+        <CardHeader className="flex min-h-12 flex-row items-center border-b px-4 py-2 [.border-b]:pb-2">
           <CardTitle className="text-sm font-medium">Response</CardTitle>
         </CardHeader>
         <CardContent className="flex min-h-[360px] flex-col items-center justify-center gap-3 p-4 text-center">
@@ -240,7 +240,7 @@ export default function ResponseView({
 
   return (
     <Card className="gap-0 overflow-hidden py-0 wrap-anywhere">
-      <CardHeader className="flex min-h-12 flex-row flex-wrap items-center justify-between gap-2 border-b px-4 py-2">
+      <CardHeader className="flex min-h-12 flex-row flex-wrap items-center justify-between gap-2 border-b px-4 py-2 [.border-b]:pb-2">
         <CardTitle className="text-sm font-medium">{view === "curl" ? "Response JSON" : "Response"}</CardTitle>
         <div className="flex flex-wrap items-center gap-1.5">
           {latencyMs !== undefined && (
