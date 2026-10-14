@@ -116,7 +116,11 @@ class AgentSearchIndex:
         if isinstance(scores, EmbeddingFailed):
             return AgentSearchEmbeddingFailed(reason=scores.reason)
         ranked: Final = sorted(
-            (AgentSearchHit(agent=agent, score=score) for agent, score in zip(agents, scores, strict=True)),
+            (
+                AgentSearchHit(agent=agent, score=score)
+                for agent, score in zip(agents, scores, strict=True)
+                if score is not None
+            ),
             key=lambda hit: hit.score,
             reverse=True,
         )
