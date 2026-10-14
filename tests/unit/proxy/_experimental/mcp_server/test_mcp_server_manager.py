@@ -21294,3 +21294,30 @@ class TestMCPUpstreamRateLimitRetry:
 
         assert exc_info.value.fault == ServerListFault(tag="upstream_error", status_code=429)
         assert list_tools_page.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_stdio_server_serves_no_skills(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp import MCPError
+    from mcp.types import INVALID_PARAMS, PaginatedRequestParams
+
+    from litellm.proxy._experimental.mcp_server.skills import GetSkillRequestParams, ListSkillsRequest, ListSkillsResult
+
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="stdio-skills",
+        name="stdio_skills",
+        transport=MCPTransport.stdio,
+        command="python",
+        args=["server.py"],
+    )
+    first: Final = await manager.get_optional_catalog_page(server, ListSkillsRequest(), None)
+    assert first == ListSkillsResult(skills=())
+    with pytest.raises(RuntimeError, match="Upstream catalog is unavailable"):
+        await manager.get_optional_catalog_page(
+            server, ListSkillsRequest(params=PaginatedRequestParams(cursor="next")), None
+        )
+    with pytest.raises(MCPError, match="No skill is served") as missing:
+        await manager.get_skill_from_server(server, GetSkillRequestParams(uri="skill://stdio/SKILL.md"), None)
+    assert missing.value.error.code == INVALID_PARAMS

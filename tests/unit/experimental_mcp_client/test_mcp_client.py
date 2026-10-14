@@ -4987,6 +4987,7 @@ async def test_persistent_session_releases_the_current_requests_scope_response(s
             session.close()
             await asyncio.wait_for(session.wait_closed(), 5)
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_callback", [False, True])
 async def test_tool_progress_preserves_message_and_legacy_callback(legacy_callback: bool) -> None:
@@ -5105,3 +5106,73 @@ async def test_notification_callback_keeps_stream_errors_separate_from_protocol_
             await _receive_session_message(failure, stream_error=stream_error, on_notification=receiver)
     assert stream_error.result() is first
     receiver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("advertised", [True, False])
+async def test_skills_requests_reach_only_an_upstream_that_advertises_the_extension(advertised: bool) -> None:
+    from mcp.types import PaginatedRequestParams
+
+    from litellm.proxy._experimental.mcp_server.skills import (
+        SKILLS_EXTENSION,
+        GetSkillRequestParams,
+        ListSkillsRequest,
+        ListSkillsResult,
+    )
+
+    skill: Final = {
+        "uri": "skill://billing/refunds/SKILL.md",
+        "frontmatter": {"name": "refunds"},
+        "resources": [{"uri": "skill://billing/refunds/SKILL.md", "digest": "sha256:abc", "size": 3}],
+    }
+    observed: Final[list[tuple[str, dict[str, object] | None]]] = []  # mutable-ok: records upstream calls
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(405)
+        try:
+            payload: Final = JSONRPCRequest.model_validate_json(request.content)
+        except ValidationError:
+            return httpx2.Response(202)
+        observed.append((payload.method, payload.params))
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                        "capabilities": {"resources": {}, "extensions": {SKILLS_EXTENSION: {}} if advertised else {}},
+                        "serverInfo": {"name": "skills", "version": "1"},
+                    },
+                },
+            )
+        result: Final = (
+            {"skills": [skill], "nextCursor": "upstream-next"} if payload.method == "skills/list" else {"skill": skill}
+        )
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+    client: Final = _MockTransportClient(respond, server_url="https://upstream.example.com/mcp")
+    page: Final = await client.list_page(ListSkillsRequest(params=PaginatedRequestParams(cursor=None)))
+    assert isinstance(page, ListSkillsResult)
+    initialize: Final = next(params for method, params in observed if method == "initialize")
+    assert initialize is not None
+    assert SKILLS_EXTENSION in initialize["capabilities"]["extensions"]
+    if advertised:
+        fetched = await client.get_skill(GetSkillRequestParams(uri=skill["uri"]))
+        assert page.model_dump(mode="json", by_alias=True, exclude_none=True)["skills"] == [skill]
+        assert page.next_cursor == "upstream-next"
+        assert fetched.skill.model_dump(mode="json", by_alias=True, exclude_none=True) == skill
+        assert [method for method, _ in observed if method.startswith("skills/")] == ["skills/list", "skills/get"]
+        get_params: Final = next(params for method, params in observed if method == "skills/get")
+        assert get_params is not None and get_params["uri"] == skill["uri"]
+        return
+    with pytest.raises(MCPError) as missing:
+        await client.get_skill(GetSkillRequestParams(uri=skill["uri"]))
+    with pytest.raises(MCPError, match="start a fresh listing") as stale:
+        await client.list_page(ListSkillsRequest(params=PaginatedRequestParams(cursor="upstream-next")))
+    assert stale.value.error.code == -32602
+    assert page.skills == () and page.next_cursor is None
+    assert missing.value.error.code == -32602
+    assert not [method for method, _ in observed if method.startswith("skills/")]
