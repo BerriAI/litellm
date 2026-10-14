@@ -486,6 +486,9 @@ function Invoke-LiteLLMQuickstart {
           if ($json -and $json.PSObject.Properties['com.docker.compose.project']) { $o.Project = "$($json.'com.docker.compose.project')" }
         } catch { <# unreadable labels: treat it as a plain container #> }
       }
+      # Whoever started the container set this label, so anything Compose would
+      # not accept as a project name is treated as no project.
+      if ($o.Project -cnotmatch '^[a-z0-9][a-z0-9_-]*$') { $o.Project = '' }
       if (-not $o.Project) {
         $o.Owner = "the $engineName container $name"; $o.FreeIt = "$engine stop $name"; $o.FreeArgs = @('stop', $name)
       } else {

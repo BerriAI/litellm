@@ -340,14 +340,16 @@ port_free() {
 # frees it, and OWNER_KIND to container or process. All stay empty when the
 # holder cannot be named, such as another user's process.
 port_owner() {
-  OWNER='' FREE_IT='' OWNER_KIND='' OWNER_PROJECT=''
+  OWNER='' FREE_IT='' OWNER_KIND='' OWNER_PROJECT='' OWNER_NAME=''
   name="$("$ENGINE" ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -E "[:]$1->" | head -n 1 | cut -d ' ' -f 1)"
   if [ -n "$name" ]; then
-    OWNER_KIND=container
+    OWNER_KIND=container OWNER_NAME="$name"
     OWNER_PROJECT="$("$ENGINE" inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$name" 2>/dev/null)" ||
       OWNER_PROJECT=''
+    # Whoever started the container set this label, so anything Compose would
+    # not accept as a project name is treated as no project.
     case "$OWNER_PROJECT" in
-      '' | '<no value>') OWNER_PROJECT='' OWNER="the $ENGINE_NAME container $name" FREE_IT="$ENGINE stop $name" ;;
+      '' | [!a-z0-9]* | *[!a-z0-9_-]*) OWNER_PROJECT='' OWNER="the $ENGINE_NAME container $name" FREE_IT="$ENGINE stop $name" ;;
       litellm-gateway*) OWNER="another LiteLLM quickstart install ($ENGINE_NAME project $OWNER_PROJECT)" ;;
       *) OWNER="the $ENGINE_NAME container $name (project $OWNER_PROJECT)" ;;
     esac
@@ -605,6 +607,15 @@ gateway_version() {
     grep -o '"version": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
 }
 
+# Stops the container port_owner found, or its whole Compose project.
+stop_owner() {
+  if [ -n "$OWNER_PROJECT" ]; then
+    "$ENGINE" compose -p "$OWNER_PROJECT" stop
+  else
+    "$ENGINE" stop "$OWNER_NAME"
+  fi
+}
+
 # Before starting: if something else holds the port, say what and how to free it.
 check_port() {
   if is_running || port_free "$PORT"; then return 0; fi
@@ -614,8 +625,7 @@ check_port() {
     case "$OWNER_PROJECT" in litellm-gateway*) pick=1 ;; esac
     menu "Port $PORT is in use by $OWNER. Stop it and start this one?" "$pick" \
       "Yes, stop it${tab}$FREE_IT" "No"
-    # shellcheck disable=SC2086 # FREE_IT is a command and its arguments
-    if [ "$CHOICE" = 1 ] && spin "Stopping it" "" $FREE_IT; then
+    if [ "$CHOICE" = 1 ] && spin "Stopping it" "" stop_owner; then
       step "Stopped $OWNER"
       return 0
     fi
