@@ -288,30 +288,31 @@ def _deployment_days(charges: tuple[_PTUCharge, ...], date_str: str) -> tuple[_D
     )
 
 
-def _teams_no_longer_charged_filter(deployment_day: _DeploymentDay) -> "Mapping[str, object]":
-    """The deployment day's sentinel rows for every team its charges no longer name, as a plain
-    dict for the same reason as ``_prune_filter``."""
+def _deployment_day_rows_filter(deployment_day: _DeploymentDay) -> "Mapping[str, object]":
+    """Every sentinel row of the deployment day, whichever team it bills, as a plain dict for the
+    same reason as ``_prune_filter``."""
     return {
         "date": deployment_day.date_str,
         "api_key": PTU_SENTINEL_API_KEY,
-        "model": deployment_day.charges[0].model_id,
-        "team_id": {"not_in": tuple(charge.team_id for charge in deployment_day.charges)},
+        "model": deployment_day.model_id,
     }
 
 
 def _queue_deployment_day(table: _SentinelBatchTable, deployment_day: _DeploymentDay) -> None:
     """Queue the replacement of one deployment day's sentinel-api_key rows on LiteLLM_DailyTeamSpend:
-    the rows of teams its charges no longer name go, then one row per named team is upserted.
+    the day's rows go, then one row per charged team is upserted.
 
     Both land in the day's one transaction, so rerunning a priced day after its shares moved
-    bills it to the new holders alone, whether or not the run may prune.
+    bills it to the new holders alone, whether or not the run may prune. The delete is scoped
+    by the day and deployment rather than by the teams no longer charged, since a share map
+    names any number of teams and a negated team list would be an unbounded ``NOT IN``.
 
     ``model`` holds the deployment id because it is part of the table's unique key and a
     rename must not move the row. ``model_group`` carries the operator-facing name, which
     is outside the key and is what the usage views display.
     """
     now: Final = datetime.now(timezone.utc)
-    table.delete_many(where=_teams_no_longer_charged_filter(deployment_day))
+    table.delete_many(where=_deployment_day_rows_filter(deployment_day))
     for charge in deployment_day.charges:
         table.upsert(
             where={

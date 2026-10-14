@@ -781,14 +781,11 @@ class _FakeSentinelTable:
         return len(doomed)
 
     def batch_delete_many(self, where):
-        """The batch delete of a deployment day's rows for teams its charges no longer name. Every
-        clause is honoured and an unexpected one fails, so a dropped scope cannot pass silently."""
-        assert set(where) == {"date", "api_key", "model", "team_id"}
-        kept_teams = where["team_id"]["not_in"]
+        """The batch delete of a deployment day's rows. Every clause is honoured and an unexpected
+        one fails, so a dropped scope cannot pass silently."""
+        assert set(where) == {"date", "api_key", "model"}
         doomed = [
-            k
-            for k in self.rows
-            if k[1] == where["date"] and k[2] == where["api_key"] and k[3] == where["model"] and k[0] not in kept_teams
+            k for k in self.rows if k[1] == where["date"] and k[2] == where["api_key"] and k[3] == where["model"]
         ]
         for k in doomed:
             del self.rows[k]
