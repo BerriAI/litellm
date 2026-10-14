@@ -514,7 +514,7 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
 
 
 def _resolved_a_specific_chain(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    fallbacks: Sequence[Mapping[str, list[str]]],
     result: tuple[list[str] | None, int | None],  # mutable-ok: mirrors get_fallback_model_group's contract
 ) -> bool:
     resolved, generic_idx = result
@@ -524,7 +524,7 @@ def _resolved_a_specific_chain(
 
 
 def get_fallback_model_group_for_lookup_groups(
-    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    fallbacks: Sequence[Mapping[str, list[str]]],
     lookup_groups: tuple[str, ...],
 ) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
     """
@@ -538,7 +538,9 @@ def get_fallback_model_group_for_lookup_groups(
     return next((result for result in results if result[0] is not None), (None, None))
 
 
-def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
+def get_fallback_model_group(
+    fallbacks: Sequence[Mapping[str, list[str]]], model_group: str
+) -> tuple[list[str] | None, int | None]:
     """
     Returns:
     - fallback_model_group: List[str] of fallback model groups. example: ["gpt-4", "gpt-3.5-turbo"]
