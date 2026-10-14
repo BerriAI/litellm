@@ -1,8 +1,10 @@
 import aiohttp as aiohttp_aiohttp_handler, asyncio, importlib, litellm
 import concurrent.futures
+import contextlib
 import itertools
 import socket
 import sys
+from collections.abc import AsyncIterator
 from typing import Final
 
 import aiohttp
@@ -19,7 +21,7 @@ from litellm.llms.custom_httpx.aiohttp_transport import (
     LiteLLMAiohttpTransport,
 )
 from aiohttp import ClientSession
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -1285,35 +1287,72 @@ async def _read_one_request(reader: asyncio.StreamReader) -> None:
     await reader.readexactly(body_length)
 
 
-@pytest.mark.asyncio
-async def test_server_disconnect_before_response_is_retried_on_a_fresh_connection() -> None:
+@contextlib.asynccontextmanager
+async def _upstream_that_cuts_the_first_connection(
+    status_line: bytes, body: bytes
+) -> AsyncIterator[tuple[str, "itertools.count[int]"]]:
     """A load balancer that drops an idle keepalive connection answers the next
-    request with a clean close and no response. The request must be resent on a
-    new connection instead of failing the caller."""
+    request with a clean close and no response. The first connection here is cut
+    that way, and later ones get the reply, with a pause before the body so a
+    streamed read has to go back to the socket after post() returns."""
     attempts: Final = itertools.count(1)
-    body: Final = b'{"ok": true}'
 
     async def cut_first_then_answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         await _read_one_request(reader)
         if next(attempts) > 1:
             writer.write(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
-                b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
+                b"HTTP/1.1 %s\r\nContent-Type: application/json\r\nConnection: close\r\n"
+                b"Content-Length: %d\r\n\r\n" % (status_line, len(body))
             )
+            await writer.drain()
+            await asyncio.sleep(0.2)
+            writer.write(body)
             await writer.drain()
         writer.close()
         await writer.wait_closed()
 
     server: Final = await asyncio.start_server(cut_first_then_answer, "127.0.0.1", 0)
-    port: Final = server.sockets[0].getsockname()[1]
-    handler: Final = AsyncHTTPHandler(timeout=5.0, transport=AsyncHTTPHandler.create_aiohttp_transport())
     try:
-        response: Final = await handler.post(f"http://127.0.0.1:{port}/", json={"hello": "world"})
+        yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}", attempts
     finally:
-        await handler.close()
         server.close()
         await server.wait_closed()
 
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
-    assert next(attempts) == 3
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streamed"])
+async def test_server_disconnect_before_response_is_retried_on_a_fresh_connection(stream: bool) -> None:
+    """The request must be resent on a new connection instead of failing the
+    caller, and a streamed resend must stay readable after post() returns."""
+    async with _upstream_that_cuts_the_first_connection(b"200 OK", b'{"ok": true}') as (base_url, attempts):
+        handler: Final = AsyncHTTPHandler(timeout=5.0)
+        try:
+            response: Final = await handler.post(f"{base_url}/", json={"hello": "world"}, stream=stream)
+            await response.aread()
+        finally:
+            await handler.close()
+
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        assert next(attempts) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streamed"])
+async def test_status_error_on_the_resend_is_masked_like_the_first_attempt(stream: bool) -> None:
+    async with _upstream_that_cuts_the_first_connection(b"429 Too Many Requests", b'{"error": "slow down"}') as (
+        base_url,
+        attempts,
+    ):
+        handler: Final = AsyncHTTPHandler(timeout=5.0)
+        try:
+            with pytest.raises(MaskedHTTPStatusError) as raised:
+                await handler.post(f"{base_url}/v1/x?key=SUPERSECRET", json={"hello": "world"}, stream=stream)
+        finally:
+            await handler.close()
+
+        assert raised.value.status_code == 429
+        assert raised.value.response.json() == {"error": "slow down"}
+        assert "SUPERSECRET" not in str(raised.value)
+        assert "SUPERSECRET" not in str(raised.value.request.url)
+        assert next(attempts) == 3

@@ -1,6 +1,7 @@
 import asyncio, importlib, json, time
 import gc
 import io
+import itertools
 import os
 import pathlib
 import ssl
@@ -1475,14 +1476,14 @@ class _RetryClientHandler(AsyncHTTPHandler):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
-async def test_connection_error_retry_forwards_content(method: str):
-    captured: list[bytes] = []  # mutable-ok: async closure capture buffer
+async def test_connection_error_retry_forwards_method_and_content(method: str):
+    captured: list[tuple[str, bytes]] = []  # mutable-ok: async closure capture buffer
 
     async def raise_connection_error(request: httpx.Request) -> httpx.Response:
         raise httpx.RemoteProtocolError("connection dropped", request=request)
 
     async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
-        captured.append(request.content)
+        captured.append((request.method, request.content))
         return httpx.Response(200, request=request)
 
     first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
@@ -1493,8 +1494,61 @@ async def test_connection_error_retry_forwards_content(method: str):
         body = b'{"post": ["run1"]}'
         await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
-        assert captured == [body], "the retried request must carry the same content= body"
+        assert captured == [(method.upper(), body)], "the retried request must keep its method and content= body"
         await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_connection_error_retry_forwards_multipart_files():
+    captured: list[bytes] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        captured.append(await request.aread())
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+        await handler.post(
+            "https://api.example.com/v1/audio/transcriptions",
+            data={"model": "whisper-1"},
+            files={"file": ("clip.wav", io.BytesIO(b"RIFF-audio-bytes"), "audio/wav")},
+        )
+        await handler.close()
+
+    assert len(captured) == 1
+    assert b'filename="clip.wav"' in captured[0]
+    assert b"RIFF-audio-bytes" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_connection_error_retry_keeps_the_handlers_tls_settings(tmp_path: pathlib.Path):
+    cert_pem, key_pem = _write_test_only_ca(tmp_path)
+    server_tls: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_tls.load_cert_chain(cert_pem, key_pem)
+    connections: Final = itertools.count(1)
+
+    async def cut_first_then_answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readuntil(b"\r\n\r\n")
+        if next(connections) > 1:
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            await writer.drain()
+        writer.close()
+
+    server: Final = await asyncio.start_server(cut_first_then_answer, "127.0.0.1", 0, ssl=server_tls)
+    handler: Final = AsyncHTTPHandler(timeout=5.0, ssl_verify=False)
+    try:
+        response: Final = await handler.post(f"https://127.0.0.1:{server.sockets[0].getsockname()[1]}/")
+    finally:
+        await handler.close()
+        server.close()
+
+    assert response.text == "ok"
+    assert next(connections) == 3
 
 
 @pytest.fixture
@@ -1594,14 +1648,9 @@ async def test_force_ipv4_httpx_transport_honours_no_proxy(keepalive_server, mon
     assert response.text == "ok"
 
 
-@pytest.fixture
-def private_ca_tls_upstream(tmp_path: pathlib.Path):
-    """HTTPS server behind a CONNECT proxy, both on localhost; the server's cert is signed by a test-only CA."""
+def _write_test_only_ca(tmp_path: pathlib.Path) -> tuple[str, str]:
+    """A self-signed CA cert for upstream.invalid and its key, as PEM paths."""
     import datetime
-    import select
-    import socket
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    from socketserver import ThreadingMixIn
 
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -1629,6 +1678,18 @@ def private_ca_tls_upstream(tmp_path: pathlib.Path):
     key_pem.write_bytes(
         key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     )
+    return str(ca_pem), str(key_pem)
+
+
+@pytest.fixture
+def private_ca_tls_upstream(tmp_path: pathlib.Path):
+    """HTTPS server behind a CONNECT proxy, both on localhost; the server's cert is signed by a test-only CA."""
+    import select
+    import socket
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
+
+    ca_pem, key_pem = _write_test_only_ca(tmp_path)
 
     class OkTlsHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"

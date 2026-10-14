@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 import weakref
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
@@ -18,6 +18,7 @@ import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
+from httpx._client import UseClientDefault
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
 
@@ -620,6 +621,24 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         self.status_code = original_error.response.status_code
 
 
+class _ClosesClientWithStream(httpx.AsyncByteStream):
+    """The body of a streamed resend reads through the client that sent it, so that client closes with the body."""
+
+    def __init__(self, body: httpx.AsyncByteStream, client: httpx.AsyncClient) -> None:
+        self._body: Final = body
+        self._client: Final = client
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._body:
+            yield chunk
+
+    async def aclose(self) -> None:
+        try:
+            await self._body.aclose()
+        finally:
+            await self._client.aclose()
+
+
 class AsyncHTTPHandler:
     def __init__(
         self,
@@ -825,45 +844,31 @@ class AsyncHTTPHandler:
         content: _RequestContent | None = None,
     ):
         start_time: Final = time.time()
+        if timeout is None:
+            timeout = self.timeout
+
+        # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+        request_data, request_content = _prepare_request_data_and_content(data, content)
+
+        req: Final = self.client.build_request(
+            "POST",
+            url,
+            data=request_data,
+            json=json,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            files=files,
+            content=request_content,
+        )
         try:
-            if timeout is None:
-                timeout = self.timeout
-
-            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-
-            req: Final = self.client.build_request(
-                "POST",
-                url,
-                data=request_data,
-                json=json,
-                params=params,
-                headers=headers,
-                timeout=timeout,
-                files=files,
-                content=request_content,
-            )
             response: Final = await self.client.send(req, stream=stream)
             if stream:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
-            # Retry the request with a new session if there is a connection error
-            new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                    content=content,
-                )
-            finally:
-                await new_client.aclose()
+            return await self._resend_on_fresh_client(req, stream=stream)
         except httpx.TimeoutException as e:
             end_time: Final = time.time()
             time_delta: Final = round(end_time - start_time, 3)
@@ -897,49 +902,28 @@ class AsyncHTTPHandler:
         follow_redirects: bool | None = None,
     ):
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
+        if timeout is None:
+            timeout = self.timeout
+
+        # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+        request_data, request_content = _prepare_request_data_and_content(data, content)
+
+        req: Final = self.client.build_request(
+            "PUT",
+            url,
+            data=request_data,
+            json=json,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            content=request_content,
+        )
         try:
-            if timeout is None:
-                timeout = self.timeout
-
-            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-
-            req: Final = self.client.build_request(
-                "PUT",
-                url,
-                data=request_data,
-                json=json,
-                params=params,
-                headers=headers,
-                timeout=timeout,
-                content=request_content,
-            )
             response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
-            # Retry the request with a new session if there is a connection error
-            new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                retry_data, retry_content = _prepare_request_data_and_content(data, content)
-                retry: Final = new_client.build_request(
-                    "PUT",
-                    url,
-                    data=retry_data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    timeout=timeout,
-                    content=retry_content,
-                )
-                retried: Final = await new_client.send(retry, stream=stream, follow_redirects=_follow_redirects)
-                try:
-                    retried.raise_for_status()
-                except httpx.HTTPStatusError as retried_error:
-                    await _raise_masked_async_error(retried_error, stream)
-                return retried
-            finally:
-                await new_client.aclose()
+            return await self._resend_on_fresh_client(req, stream=stream, follow_redirects=_follow_redirects)
         except httpx.TimeoutException as e:
             headers = {}
             error_response: Final[httpx.Response | None] = getattr(e, "response", None)
@@ -969,42 +953,28 @@ class AsyncHTTPHandler:
         stream: bool = False,
         content: _RequestContent | None = None,
     ):
+        if timeout is None:
+            timeout = self.timeout
+
+        # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+        request_data, request_content = _prepare_request_data_and_content(data, content)
+
+        req: Final = self.client.build_request(
+            "PATCH",
+            url,
+            data=request_data,
+            json=json,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            content=request_content,
+        )
         try:
-            if timeout is None:
-                timeout = self.timeout
-
-            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-
-            req: Final = self.client.build_request(
-                "PATCH",
-                url,
-                data=request_data,
-                json=json,
-                params=params,
-                headers=headers,
-                timeout=timeout,
-                content=request_content,
-            )
             response: Final = await self.client.send(req)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
-            # Retry the request with a new session if there is a connection error
-            new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                    content=content,
-                )
-            finally:
-                await new_client.aclose()
+            return await self._resend_on_fresh_client(req, stream=stream)
         except httpx.TimeoutException as e:
             headers = {}
             error_response: Final[httpx.Response | None] = getattr(e, "response", None)
@@ -1034,48 +1004,64 @@ class AsyncHTTPHandler:
         stream: bool = False,
         content: _RequestContent | None = None,
     ):
+        if timeout is None:
+            timeout = self.timeout
+
+        # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
+        request_data, request_content = _prepare_request_data_and_content(data, content)
+
+        req: Final = self.client.build_request(
+            "DELETE",
+            url,
+            data=request_data,
+            json=json,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            content=request_content,
+        )
         try:
-            if timeout is None:
-                timeout = self.timeout
-
-            # Prepare data/content parameters to prevent httpx DeprecationWarning (memory leak fix)
-            request_data, request_content = _prepare_request_data_and_content(data, content)
-
-            req: Final = self.client.build_request(
-                "DELETE",
-                url,
-                data=request_data,
-                json=json,
-                params=params,
-                headers=headers,
-                timeout=timeout,
-                content=request_content,
-            )
             response: Final = await self.client.send(req, stream=stream)
             if stream:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
-            # Retry the request with a new session if there is a connection error
-            new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
-            try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
-                    json=json,
-                    params=params,
-                    headers=headers,
-                    stream=stream,
-                    content=content,
-                )
-            finally:
-                await new_client.aclose()
+            return await self._resend_on_fresh_client(req, stream=stream)
         except httpx.HTTPStatusError as e:
             await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
+
+    async def _resend_on_fresh_client(
+        self,
+        request: httpx.Request,
+        *,
+        stream: bool,
+        follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
+    ) -> httpx.Response:
+        """Resend a request whose pooled connection broke, on a client with a pool of its own.
+
+        A streamed response holds that client open until the response is closed, and a status
+        error is masked the same way the first attempt's is.
+        """
+        client: Final = self.create_client(
+            timeout=self.timeout, event_hooks=self.event_hooks, ssl_verify=self.ssl_verify
+        )
+        try:
+            response: Final = await client.send(request, stream=stream, follow_redirects=follow_redirects)
+        except BaseException:
+            await client.aclose()
+            raise
+        if stream and isinstance(response.stream, httpx.AsyncByteStream):
+            response.stream = _ClosesClientWithStream(response.stream, client)
+        else:
+            await client.aclose()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            await _raise_masked_async_error(e, stream)
+        return response
 
     async def single_connection_post_request(
         self,
