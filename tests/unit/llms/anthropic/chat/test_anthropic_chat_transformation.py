@@ -3554,12 +3554,39 @@ def _parsed_assistant_message(content: list[dict[str, object]], stop_reason: str
 _WEATHER_CALL: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
 
 
-def test_tool_search_tool_result_round_trips_right_after_its_search_call():
+def _web_search_turn(last_block: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"type": "server_tool_use", "id": "srvtoolu_01Web", "name": "web_search", "input": {"query": "Paris facts"}},
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01Web",
+            "content": [
+                {
+                    "type": "web_search_result",
+                    "url": "https://example.com/paris",
+                    "title": "Paris",
+                    "encrypted_content": "EqgfCioIARgB",
+                    "page_age": None,
+                }
+            ],
+        },
+        last_block,
+    ]
+
+
+@pytest.mark.parametrize("modify_params", [False, True], ids=["modify_params_off", "modify_params_on"])
+@pytest.mark.parametrize(
+    "content",
+    [_tool_search_turn(["get_weather"], _WEATHER_CALL), _web_search_turn(_WEATHER_CALL)],
+    ids=["tool_search", "web_search"],
+)
+def test_server_tool_result_round_trips_right_after_its_call(
+    content: list[dict[str, object]], modify_params: bool, monkeypatch: pytest.MonkeyPatch
+):
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
-    content: Final = _tool_search_turn(["get_weather"], _WEATHER_CALL)
     message: Final = _parsed_assistant_message(content, "tool_use")
-    assert message.provider_specific_fields["tool_results"] == [content[1]]
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
 
     replayed: Final = anthropic_messages_pt(
         messages=[
@@ -3579,11 +3606,10 @@ def _block_ids(message: dict[str, object], block_type: str, id_key: str) -> list
 
 
 @pytest.mark.parametrize(
-    ("tool_references", "last_block", "stop_reason", "follow_ups", "modify_params"),
+    ("content", "stop_reason", "follow_ups", "modify_params"),
     [
         pytest.param(
-            ["get_weather"],
-            _WEATHER_CALL,
+            _tool_search_turn(["get_weather"], _WEATHER_CALL),
             "tool_use",
             (
                 {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"},
@@ -3593,26 +3619,40 @@ def _block_ids(message: dict[str, object], block_type: str, id_key: str) -> list
             id="client_answers_every_tool_call",
         ),
         pytest.param(
-            ["get_weather"],
-            _WEATHER_CALL,
+            _web_search_turn(_WEATHER_CALL),
+            "tool_use",
+            (
+                {"role": "tool", "tool_call_id": "srvtoolu_01Web", "content": "Error: unknown tool"},
+                {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+            ),
+            False,
+            id="client_answers_every_web_search_call",
+        ),
+        pytest.param(
+            _tool_search_turn(["get_weather"], _WEATHER_CALL),
             "tool_use",
             ({"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},),
             True,
             id="modify_params_fills_in_missing_results",
         ),
         pytest.param(
-            [],
-            {"type": "text", "text": "I have no tool that books flights."},
+            _tool_search_turn([], {"type": "text", "text": "I have no tool that books flights."}),
             "end_turn",
             ({"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "no tool found"},),
             False,
             id="client_answers_a_search_that_found_nothing",
         ),
+        pytest.param(
+            _tool_search_turn([], {"type": "text", "text": "I have no tool that books flights."}),
+            "end_turn",
+            (),
+            True,
+            id="modify_params_with_nothing_after_a_search_that_found_nothing",
+        ),
     ],
 )
-def test_replayed_tool_search_turn_answers_every_tool_use_and_ends_on_a_user_turn(
-    tool_references: list[str],
-    last_block: dict[str, object],
+def test_replayed_server_tool_turn_answers_every_tool_use_and_ends_on_a_user_turn(
+    content: list[dict[str, object]],
     stop_reason: str,
     follow_ups: tuple[dict[str, str], ...],
     modify_params: bool,
@@ -3620,7 +3660,7 @@ def test_replayed_tool_search_turn_answers_every_tool_use_and_ends_on_a_user_tur
 ):
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 
-    message: Final = _parsed_assistant_message(_tool_search_turn(tool_references, last_block), stop_reason)
+    message: Final = _parsed_assistant_message(content, stop_reason)
     monkeypatch.setattr(litellm, "modify_params", modify_params)
 
     replayed: Final = anthropic_messages_pt(

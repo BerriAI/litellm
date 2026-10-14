@@ -23,6 +23,7 @@ from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     message_field,
+    parts_of,
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
@@ -1835,7 +1836,7 @@ def find_anthropic_server_tool_result(
     )
 
 
-def _tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
+def tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
     return frozenset(
         tool_call_id for message in messages if isinstance(tool_call_id := message_field(message, "tool_call_id"), str)
     )
@@ -2144,6 +2145,18 @@ def _sanitize_empty_text_content(
     return message
 
 
+def _tool_call_ids_with_a_kept_server_result(message: AllMessageValues) -> frozenset[str]:
+    from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
+
+    provider_specific_fields: Final = message_field(message, "provider_specific_fields")
+    return frozenset(
+        tool_call_id
+        for tool_call in parts_of(message_field(message, "tool_calls"))
+        if isinstance(tool_call_id := message_field(tool_call, "id"), str)
+        and tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields)
+    )
+
+
 def _add_missing_tool_results(
     current_message: AllMessageValues,
     messages: list[AllMessageValues],
@@ -2197,8 +2210,11 @@ def _add_missing_tool_results(
 
         j += 1
 
-    # Find missing tool results
-    missing_tool_call_ids: Final = expected_tool_call_ids - found_tool_call_ids
+    missing_tool_call_ids: Final = (
+        expected_tool_call_ids - found_tool_call_ids - _tool_call_ids_with_a_kept_server_result(current_message)
+        if current_index + 1 < len(messages)
+        else expected_tool_call_ids - found_tool_call_ids
+    )
 
     if missing_tool_call_ids:
         verbose_logger.debug(
@@ -2476,7 +2492,7 @@ def anthropic_messages_pt(
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
-    client_answered_tool_ids: Final = _tool_call_ids_answered_by_client(messages)
+    client_answered_tool_ids: Final = tool_call_ids_answered_by_client(messages)
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}

@@ -5,7 +5,7 @@ This file contains common utils for anthropic calls.
 import copy
 import json
 import re
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Container, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Literal, TypeVar
@@ -1889,9 +1889,11 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
         return None
 
 
-def tool_call_is_rebuilt_as_server_tool_use(tool_call_id: object, provider_specific_fields: object) -> bool:
+def tool_call_is_rebuilt_as_server_tool_use(
+    tool_call_id: object, provider_specific_fields: object, answered_tool_ids: Container[str] = frozenset()
+) -> bool:
     fields: Final = _validated_claude_code_mapping(provider_specific_fields)
-    if not isinstance(tool_call_id, str) or fields is None:
+    if not isinstance(tool_call_id, str) or tool_call_id in answered_tool_ids or fields is None:
         return False
     return (
         find_anthropic_server_tool_result(

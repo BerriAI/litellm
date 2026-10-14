@@ -1164,6 +1164,40 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
     assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
 
 
+@pytest.mark.parametrize(
+    ("follow_ups", "expected_breakpoints"),
+    [
+        pytest.param((), 0, id="rebuilt_from_its_kept_result"),
+        pytest.param(
+            ({"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"},),
+            1,
+            id="replayed_with_the_client_answer",
+        ),
+    ],
+)
+def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_the_call_replays_as_tool_use(
+    follow_ups: tuple[AllMessageValues, ...], expected_breakpoints: int
+):
+    search_call: Final = cast(
+        AllMessageValues,
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_bm25", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "provider_specific_fields": {"tool_results": [{"tool_use_id": "srvtoolu_01Search"}]},
+        },
+    )
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([search_call, *follow_ups]) == expected_breakpoints
+
+
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])
 @pytest.mark.parametrize(
     "mark",
