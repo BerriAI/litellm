@@ -1088,6 +1088,53 @@ def test_transform_request_resolves_an_inference_profile_through_its_base_model(
     assert properties == _LOOKAROUND_FREE_PROPERTIES
 
 
+_APPLICATION_PROFILE_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model, litellm_params, replays_redacted",
+    [
+        ("us.anthropic.claude-sonnet-4-6", {}, True),
+        ("arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6", {}, True),
+        (_APPLICATION_PROFILE_ARN, {"base_model": "anthropic.claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"}, True),
+        (_APPLICATION_PROFILE_ARN, {}, False),
+        (_APPLICATION_PROFILE_ARN, {"base_model": "us.amazon.nova-pro-v1:0"}, False),
+        ("us.amazon.nova-pro-v1:0", {}, False),
+    ],
+)
+async def test_transform_request_replays_redacted_thinking_only_to_claude(
+    use_async: bool, model: str, litellm_params: dict[str, str], replays_redacted: bool
+):
+    """An application inference profile ARN hides its model, so the deployment's ``base_model`` is what marks it as
+    Claude. Without one the redacted block is dropped the way it is for every non-Claude target."""
+    redacted_data: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "hello",
+            "thinking_blocks": [{"type": "redacted_thinking", "data": redacted_data}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(model=model, messages=messages, optional_params={}, litellm_params=dict(litellm_params))
+
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": [{"reasoningContent": {"redactedContent": redacted_data}}, {"text": "hello"}]
+        if replays_redacted
+        else [{"text": "hello"}],
+    }
+
+
 def test_transform_request_drops_lookaround_regex_around_pre_formatted_tool_blocks():
     """Blocks that arrive already in Bedrock shape, like Nova's grounding ``systemTool``, pass through as sent."""
     grounding: Final = {"systemTool": {"name": "nova_grounding"}}

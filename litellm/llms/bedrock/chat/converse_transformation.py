@@ -2045,6 +2045,7 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
+                    base_model=self._deployment_base_model(litellm_params),
                 ),
                 model,
             )
@@ -2060,6 +2061,11 @@ class AmazonConverseConfig(BaseConfig):
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
 
         return data
+
+    @staticmethod
+    def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
+        base_model: Final = litellm_params.get("base_model")
+        return base_model if isinstance(base_model, str) else None
 
     def transform_request(
         self,
@@ -2113,6 +2119,7 @@ class AmazonConverseConfig(BaseConfig):
                     model=model,
                     llm_provider="bedrock_converse",
                     user_continue_message=litellm_params.pop("user_continue_message", None),
+                    base_model=self._deployment_base_model(litellm_params),
                 ),
                 model,
             )

@@ -1164,6 +1164,19 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:
+    """
+    Whether ``reasoningContent.redactedContent`` may be replayed to this Converse target.
+
+    Only Claude takes it back. Nova, Llama, DeepSeek and gpt-oss reject it with a 400, so every
+    other target keeps dropping the block. An application inference profile ARN hides its model,
+    so it counts as Claude only when the deployment's ``base_model`` names a Claude model.
+    """
+    return any(
+        get_bedrock_base_model(candidate).startswith("anthropic") for candidate in (model, base_model) if candidate
+    )
+
+
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True

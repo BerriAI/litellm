@@ -4454,9 +4454,13 @@ class BedrockConverseMessagesProcessor:
         llm_provider: str,
         user_continue_message: ChatCompletionUserMessage | None = None,
         assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
+        base_model: str | None = None,
     ) -> list[BedrockMessageBlock]:
+        from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
+
         contents: list[BedrockMessageBlock] = []
         msg_i = 0
+        send_redacted: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
 
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
@@ -4606,7 +4610,7 @@ class BedrockConverseMessagesProcessor:
                 if thinking_blocks is not None:
                     converted_thinking_blocks = (
                         BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                            thinking_blocks
+                            thinking_blocks, send_redacted=send_redacted
                         )
                     )
                     assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4620,7 +4624,7 @@ class BedrockConverseMessagesProcessor:
                         if isinstance(element, dict):
                             if element["type"] == "thinking" or element["type"] == "redacted_thinking":
                                 thinking_block = BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[element]
+                                    thinking_blocks=[element], send_redacted=send_redacted
                                 )
                                 assistants_parts = (
                                     BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -4685,10 +4689,14 @@ class BedrockConverseMessagesProcessor:
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
         thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+        *,
+        send_redacted: bool,
     ) -> list[BedrockContentBlock]:
         return [
             BedrockContentBlock(
-                reasoningContent=BedrockConverseMessagesProcessor._to_reasoning_content_block(thinking_block)
+                reasoningContent=BedrockConverseMessagesProcessor._to_reasoning_content_block(
+                    thinking_block, send_redacted=send_redacted
+                )
             )
             for thinking_block in thinking_blocks
         ]
@@ -4696,9 +4704,11 @@ class BedrockConverseMessagesProcessor:
     @staticmethod
     def _to_reasoning_content_block(
         thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+        *,
+        send_redacted: bool,
     ) -> BedrockConverseReasoningContentBlock:
         match thinking_block:
-            case {"type": "redacted_thinking", "data": str() as data} if data.strip():
+            case {"type": "redacted_thinking", "data": str() as data} if send_redacted and data.strip():
                 return BedrockConverseReasoningContentBlock(redactedContent=data)
             case {"signature": signature} if signature is not None:
                 return BedrockConverseReasoningContentBlock(
@@ -4837,6 +4847,7 @@ def _bedrock_converse_messages_pt(
     llm_provider: str,
     user_continue_message: ChatCompletionUserMessage | None = None,
     assistant_continue_message: str | ChatCompletionAssistantMessage | None = None,
+    base_model: str | None = None,
 ) -> list[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -4845,9 +4856,11 @@ def _bedrock_converse_messages_pt(
     - Please ensure that function response turn comes immediately after a function call turn
     - Conversation blocks and tool result blocks cannot be provided in the same turn. Issue: https://github.com/BerriAI/litellm/issues/6053
     """
+    from litellm.llms.bedrock.common_utils import bedrock_converse_accepts_redacted_thinking
 
     contents: list[BedrockMessageBlock] = []
     msg_i = 0
+    send_redacted: Final = bedrock_converse_accepts_redacted_thinking(model, base_model)
 
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
@@ -4998,7 +5011,7 @@ def _bedrock_converse_messages_pt(
             if thinking_blocks is not None:
                 converted_thinking_blocks = (
                     BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                        thinking_blocks
+                        thinking_blocks, send_redacted=send_redacted
                     )
                 )
                 assistant_content = BedrockConverseMessagesProcessor.add_thinking_blocks_to_assistant_content(
@@ -5013,7 +5026,7 @@ def _bedrock_converse_messages_pt(
                         if element["type"] == "thinking" or element["type"] == "redacted_thinking":
                             thinking_block = (
                                 BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
-                                    thinking_blocks=[element]
+                                    thinking_blocks=[element], send_redacted=send_redacted
                                 )
                             )
                             assistants_parts = (

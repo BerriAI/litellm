@@ -483,6 +483,44 @@ def test_bedrock_converse_drops_redacted_thinking_with_blank_data(data: str):
     assert assistant_content == [{"text": "hello"}]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.amazon.nova-pro-v1:0",
+        "us.meta.llama4-maverick-17b-instruct-v1:0",
+        "us.deepseek.r1-v1:0",
+        "openai.gpt-oss-120b-1:0",
+        "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+    ],
+)
+async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_targets(
+    use_async: bool, placement: str, model: str
+):
+    """Only Claude takes redactedContent back. Any other Converse target 400s on it, so a Claude history replayed
+    there (a Router fallback or a model switch) drops the redacted block and keeps the call working."""
+    redacted: Final = {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"}
+    assistant_message: Final = (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [redacted]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [redacted, {"type": "text", "text": "hello"}]}
+    )
+    messages: Final = [{"role": "user", "content": "hi"}, assistant_message, {"role": "user", "content": "again"}]
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [{"text": "hello"}]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [
