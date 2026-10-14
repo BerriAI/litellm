@@ -42,6 +42,7 @@ CLAUDE_MODEL = "claude-haiku-4-5"
 CODEX_MODEL = "openai-responses-codex"
 EMBEDDING_MODEL = "openai-text-embedding-3-small"
 OPENAI_BACKEND = "openai/gpt-5.5"
+ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 
 
 def _approx_equal(actual: float, expected: float) -> bool:
@@ -534,6 +535,15 @@ def test_end_user_spend_attributed_on_row(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.end_user.attributes_responses_header")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.RESPONSES,
+        providers=(Provider.OPENAI,),
+        models=(CODEX_MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
 @pytest.mark.parametrize("header", ["x-litellm-customer-id", "x-litellm-end-user-id"])
 def test_end_user_header_attributes_responses_row(
     client: SpendClient, scoped_key: str, resources: ResourceManager, header: str
@@ -659,6 +669,14 @@ def test_failure_call_writes_failure_status_row(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_normalized_error")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        providers=(Provider.ANTHROPIC, Provider.OPENAI),
+        models=(OPENAI_BACKEND, ANTHROPIC_BACKEND),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_failure_rows_share_normalized_error_across_provider_wording(
     client: SpendClient, resources: ResourceManager, scoped_key: str
 ) -> None:
@@ -668,7 +686,7 @@ def test_failure_rows_share_normalized_error_across_provider_wording(
     marker = unique_marker()
     deployments: Final = (
         (f"e2e-norm-openai-{marker}", OPENAI_BACKEND),
-        (f"e2e-norm-anthropic-{marker}", "anthropic/claude-haiku-4-5"),
+        (f"e2e-norm-anthropic-{marker}", ANTHROPIC_BACKEND),
     )
     for name, provider_model in deployments:
         model_id = client.proxy.create_model(
@@ -700,6 +718,14 @@ def test_failure_rows_share_normalized_error_across_provider_wording(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.attributes_provider")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        providers=(Provider.OPENAI,),
+        models=(OPENAI_BACKEND,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_pre_call_rejection_row_attributes_provider_and_model_id(
     client: SpendClient, resources: ResourceManager
 ) -> None:

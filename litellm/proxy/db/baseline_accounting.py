@@ -223,7 +223,8 @@ ON CONFLICT (request_id) DO NOTHING
 _MARK_CONFLICT: Final = """
 UPDATE "LiteLLM_AutoRouterBaselineObservation"
 SET conflicted = TRUE, revision = $4::bigint
-WHERE request_id = $1 AND scope = $2 AND data <> $3 AND NOT conflicted
+WHERE request_id = $1 AND scope = $2 AND NOT conflicted
+  AND (data::jsonb #- '{turn,turn_at}') <> ($3::jsonb #- '{turn,turn_at}')
 """
 _READ_PAGE: Final = """
 WITH times AS (
@@ -242,18 +243,19 @@ WHERE scope = $1 AND revision > $2::bigint
   AND ($5::float8 IS NULL OR publication::jsonb->>'status' = 'estimated')
 ORDER BY started_at, request_id
 """
+_PUBLISHED_LOG_FIELDS: Final = ("autorouter_savings_estimate", "autorouter_savings")
 _UPDATE_LOGS: Final = """
 WITH changes AS (
     SELECT request_id, publication::jsonb AS publication
     FROM jsonb_to_recordset($1::jsonb) AS x(request_id text, publication jsonb)
 )
 UPDATE "LiteLLM_SpendLogs" AS logs
-SET metadata = (COALESCE(logs.metadata::jsonb, '{}'::jsonb) - 'autorouter_baseline_observation') || jsonb_build_object(
+SET metadata = (COALESCE(logs.metadata::jsonb, '{}'::jsonb) - 'autorouter_baseline_observation') || (jsonb_build_object(
     'autorouter_savings_estimate', changes.publication,
     'autorouter_savings', CASE WHEN changes.publication->>'status' = 'estimated' THEN
         (changes.publication->>'baseline_spend')::float8 - (changes.publication->>'actual_spend')::float8
         ELSE NULL END
-)
+) - ARRAY(SELECT jsonb_array_elements_text($2::jsonb)))
 FROM changes WHERE logs.request_id = changes.request_id
 """
 _UPDATE_PUBLICATIONS: Final = """
@@ -396,7 +398,11 @@ async def _publish(db: SupportsRawQueries, changes: Sequence[_Change]) -> None:
     if not changes:
         return
     serialized: Final = json.dumps(tuple(change.model_dump(mode="json") for change in changes), separators=(",", ":"))
-    await db.execute_raw(_UPDATE_LOGS, serialized)
+    from litellm.proxy.spend_tracking.spend_tracking_utils import configured_spend_logs_metadata_fields
+
+    fields: Final = configured_spend_logs_metadata_fields()
+    unstored: Final = tuple(name for name in _PUBLISHED_LOG_FIELDS if fields is not None and not fields.keeps(name))
+    await db.execute_raw(_UPDATE_LOGS, serialized, json.dumps(unstored))
     await db.execute_raw(_UPDATE_SESSIONS, serialized)
     if any(change.user_id for change in changes):
         await db.execute_raw(_UPDATE_USER_SESSIONS, serialized)
