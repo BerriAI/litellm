@@ -279,6 +279,8 @@ class _TeamTable(Protocol):
 class _VerificationTokenTable(Protocol):
     """The subset of the Prisma verification token table API this module uses."""
 
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_SupportsModelDump]: ...
+
     async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
 
 
@@ -292,6 +294,35 @@ def _team_table(prisma_client: PrismaClient) -> _TeamTable:
 
 def _verification_token_table(prisma_client: PrismaClient) -> _VerificationTokenTable:
     return VerificationTokenRepository(prisma_client).table
+
+
+async def _reset_spend_counters(prisma_client: PrismaClient) -> None:
+    """Zero every live spend counter a budget check reads.
+
+    Budget enforcement reads the Redis spend counters first, so zeroing only
+    the DB rows leaves an exhausted key refused with the stale pre-reset
+    counter. Mirrors /key/{key}/reset_spend, setting each counter to 0 (with
+    floor marker and broadcast) rather than deleting it.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _set_spend_counter_with_floor_and_broadcast,
+    )
+
+    key_rows: Final = await _verification_token_table(prisma_client).find_many(where={})
+    for row in key_rows:
+        token: Final[str | None] = row.model_dump().get("token")
+        if token:
+            await _set_spend_counter_with_floor_and_broadcast(
+                counter_key=f"spend:key:{token}", value=0.0
+            )
+
+    team_rows: Final = await _team_table(prisma_client).find_many(where={})
+    for row in team_rows:
+        team_id: Final[str | None] = row.model_dump().get("team_id")
+        if team_id:
+            await _set_spend_counter_with_floor_and_broadcast(
+                counter_key=f"spend:team:{team_id}", value=0.0
+            )
 
 
 def _spend_logs_daily_summary_sql(
@@ -3696,6 +3727,8 @@ async def global_spend_reset():
 
     await _verification_token_table(prisma_client).update_many(data={"spend": 0.0}, where={})
     await _team_table(prisma_client).update_many(data={"spend": 0.0}, where={})
+
+    await _reset_spend_counters(prisma_client)
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",

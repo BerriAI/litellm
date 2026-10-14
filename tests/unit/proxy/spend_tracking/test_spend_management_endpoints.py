@@ -8059,3 +8059,73 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
     assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
         ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
     ]
+
+def test_global_spend_reset_zeroes_live_spend_counters(monkeypatch):
+    """Regression test for https://github.com/BerriAI/litellm/issues/46363
+
+    Budget enforcement reads the Redis spend counters before the DB rows, so
+    a global reset that only zeroes the DB leaves an exhausted key refused
+    with the stale pre-reset counter. The reset must zero every live
+    spend:key: and spend:team: counter, not just the rows.
+    """
+    import litellm.proxy.management_endpoints.key_management_endpoints as kme
+    from litellm.proxy.spend_tracking.spend_management_endpoints import global_spend_reset
+
+    class Row:
+        def __init__(self, data):
+            self._data = data
+
+        def model_dump(self):
+            return self._data
+
+    class MockTable:
+        def __init__(self, rows):
+            self.rows = rows
+
+        async def find_many(self, *args, **kwargs):
+            return self.rows
+
+        async def update_many(self, *args, **kwargs):
+            return len(self.rows)
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_verificationtoken = MockTable(
+                [Row({"token": "key-1"}), Row({"token": "key-2"})]
+            )
+            self.litellm_teamtable = MockTable([Row({"team_id": "team-1"})])
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+
+    reset_calls: list[tuple[str, float]] = []
+
+    async def mock_set_counter(counter_key: str, value: float) -> None:
+        reset_calls.append((counter_key, value))
+
+    monkeypatch.setattr(
+        kme,
+        "_set_spend_counter_with_floor_and_broadcast",
+        mock_set_counter,
+    )
+
+    async def run_reset():
+        import litellm.proxy.proxy_server as ps
+
+        ps.prisma_client = MockPrismaClient()
+        try:
+            return await global_spend_reset()
+        finally:
+            ps.prisma_client = None
+
+    response: Final = asyncio.run(run_reset())
+    assert response == {
+        "message": "Spend for all API Keys and Teams reset successfully",
+        "status": "success",
+    }
+    assert sorted(reset_calls) == [
+        ("spend:key:key-1", 0.0),
+        ("spend:key:key-2", 0.0),
+        ("spend:team:team-1", 0.0),
+    ], reset_calls
