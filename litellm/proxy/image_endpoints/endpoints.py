@@ -3,7 +3,11 @@ import io
 from collections.abc import Callable, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, cast, get_type_hints  # noqa: TID251  # cast narrows the untyped proxy_server module globals to base_process_llm_request's declared parameter types
+from typing import (  # noqa: TID251  # cast narrows the untyped proxy_server module globals to base_process_llm_request's declared parameter types
+    Final,
+    cast,
+    get_type_hints,
+)
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
