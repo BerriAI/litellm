@@ -282,7 +282,7 @@ def _without_cache_control_key(item: object) -> object:
 
 
 def without_item_cache_control(input: str | ResponseInputParam) -> str | ResponseInputParam:
-    if isinstance(input, str):
+    if not isinstance(input, list):
         return input
     return cast(  # cast-ok: the same input items, each minus its own cache_control key
         ResponseInputParam, [_without_cache_control_key(item) for item in input]

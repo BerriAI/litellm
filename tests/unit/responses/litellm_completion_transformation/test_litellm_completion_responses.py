@@ -5917,6 +5917,21 @@ def test_guardrails_and_token_counting_read_the_input_as_if_it_carried_no_item_m
     assert inspected == unmarked
 
 
+def test_a_single_item_input_reads_the_same_whether_or_not_item_marks_are_kept():
+    single_item: Final = cast(  # cast-ok: a bare item where the input list belongs, as some clients send it
+        ResponseInputParam, {"type": "message", "role": "user", "content": "hi"}
+    )
+
+    inspected: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=single_item, responses_api_request={}
+    )
+    sent: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=single_item, responses_api_request={}, item_cache_control=True
+    )
+
+    assert inspected == sent
+
+
 @pytest.mark.parametrize("index", [0, 1, 2])
 def test_convert_response_function_tool_call_keeps_the_index_it_is_given(index: int) -> None:
     item: Final = ResponseFunctionToolCall(
