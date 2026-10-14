@@ -373,7 +373,7 @@ def get_azure_ad_token(
             "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
         )
         try:
-            azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
+            azure_ad_token_provider = _cached_azure_ad_token_refresh_provider(scope)
         except ValueError:
             verbose_logger.debug("Azure AD Token Provider could not be used.")
         except Exception as e:
