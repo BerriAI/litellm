@@ -3217,6 +3217,24 @@ class TestOpenAIResponsesHandlerNamespaceTools:
         ]
 
     @pytest.mark.asyncio
+    async def test_a_function_only_guardrail_keeps_the_tool_search_tool_it_never_scans(self):
+        data: Final = _codex_request("hi")
+        data["tools"] = [{"type": "tool_search"}, {**data["tools"][0], "defer_loading": True}]
+        expected_tools: Final = copy.deepcopy(data["tools"])
+        scanned: Final[list[list[dict]]] = []
+
+        def keep_functions(tools):
+            scanned.append(copy.deepcopy(tools))
+            return [tool for tool in tools if tool["type"] == "function"]
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolEditingGuardrail(edit=keep_functions, guardrail_name="test")
+        )
+
+        assert result["tools"] == expected_tools
+        assert [tool["type"] for tool in scanned[0]] == ["function"]
+
+    @pytest.mark.asyncio
     async def test_appending_guardrail_keeps_namespace_and_adds_tool(self):
         data = _codex_request("hi")
         expected_tools = copy.deepcopy(data["tools"])
