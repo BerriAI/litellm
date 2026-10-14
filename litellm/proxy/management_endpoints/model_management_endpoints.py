@@ -1912,7 +1912,7 @@ async def _get_team_public_model_names(
         model_info = model_info_as_mapping(row.model_info)
         if model_info is not None:
             public_name = model_info.get("team_public_model_name")
-            if public_name:
+            if isinstance(public_name, str):
                 public_names.add(public_name)
     return public_names
 

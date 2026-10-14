@@ -99,12 +99,17 @@ async def find_many_in(
     chunk_size: int = IN_LIST_CHUNK_SIZE,
 ) -> tuple[RowT, ...]:
     """Rows in chunk order. No take/skip/cursor/order/distinct: none of them survive a split."""
-    if include is None:
-        pages: Final = await _each_chunk(field, values, where, lambda chunk: table.find_many(where=chunk), chunk_size)
-    else:
-        pages = await _each_chunk(
-            field, values, where, lambda chunk: table.find_many(where=chunk, include=include), chunk_size
+    pages: Final = (
+        await _each_chunk(field, values, where, lambda chunk: table.find_many(where=chunk), chunk_size)
+        if include is None
+        else await _each_chunk(
+            field,
+            values,
+            where,
+            lambda chunk: table.find_many(where=chunk, include=include),  # pyright: ignore[reportArgumentType,reportCallIssue,reportUnknownLambdaType]  # prisma find_many accepts include at runtime but FindManyTable protocol omits it for backward compat
+            chunk_size,
         )
+    )
     return tuple(chain.from_iterable(pages))
 
 
