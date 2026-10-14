@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 from litellm.proxy.utils import (
-    _check_and_merge_model_level_guardrails,
+    check_and_merge_model_level_guardrails,
     _merge_guardrails_with_existing,
 )
 
@@ -38,7 +38,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["openai-moderation"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert "openai-moderation" in result["metadata"]["guardrails"]
         mock_router.get_deployment.assert_called_once_with(model_id="model-uuid-123")
@@ -57,7 +57,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["model-guardrail"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert "existing-guardrail" in result["metadata"]["guardrails"]
         assert "model-guardrail" in result["metadata"]["guardrails"]
@@ -76,14 +76,14 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["openai-moderation"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result["metadata"]["guardrails"].count("openai-moderation") == 1
 
     def test_returns_data_unchanged_when_no_router(self):
         """Returns data unchanged when llm_router is None."""
         data = {"model": "gpt-4", "metadata": {}}
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=None)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=None)
         assert result is data
 
     def test_returns_data_unchanged_when_no_model_info(self):
@@ -95,7 +95,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         # finds a deployment.
         mock_router.get_deployment.return_value = None
         mock_router.get_deployment_by_model_group_name.return_value = None
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
         assert result is data
 
     def test_returns_data_unchanged_when_deployment_has_no_guardrails(self):
@@ -109,7 +109,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = None
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result is data
 
@@ -122,7 +122,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_router = MagicMock()
         mock_router.get_deployment.return_value = None
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         assert result is data
 
@@ -140,7 +140,7 @@ class TestCheckAndMergeModelLevelGuardrails:
         mock_deployment.litellm_params.get.return_value = ["new-guardrail"]
         mock_router.get_deployment.return_value = mock_deployment
 
-        result = _check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
+        result = check_and_merge_model_level_guardrails(data=data, llm_router=mock_router)
 
         # Result is a different top-level dict
         assert result is not data

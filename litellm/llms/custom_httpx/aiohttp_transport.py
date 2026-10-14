@@ -14,15 +14,16 @@ import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class HttpxTimeoutExtension(BaseModel):
+class HttpxTimeoutExtension(LiteLLMBaseModel):
     connect: float | None = None
     read: float | None = None
     write: float | None = None
@@ -288,7 +289,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
 
-    def _get_valid_client_session(self) -> ClientSession:
+    def get_valid_client_session(self) -> ClientSession:
         """
         Helper to get a valid ClientSession for the current event loop.
 
@@ -338,6 +339,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             verbose_logger.debug("Error checking session loop, created new session: %s", e)
 
         return self.client
+
+    _get_valid_client_session = get_valid_client_session
 
     async def _make_aiohttp_request(
         self,
@@ -406,7 +409,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         sni_hostname: Final[str | None] = request.extensions.get("sni_hostname")
 
         # Use helper to ensure we have a valid session for the current event loop
-        client_session = self._get_valid_client_session()
+        client_session = self.get_valid_client_session()
 
         # Resolve proxy settings from environment variables
         proxy: Final = await self._get_proxy_settings(request)

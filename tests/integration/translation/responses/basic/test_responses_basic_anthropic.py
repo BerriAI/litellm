@@ -10,7 +10,7 @@ from integration.translation.responses.bases.anthropic import (
     CLAUDE_SONNET_5_5_TEST_CASE,
     CLAUDE_SONNET_5_TEST_CASE,
 )
-from integration.translation.runner import run
+from integration.translation.runner import assert_translation
 
 
 @pytest.mark.parametrize(
@@ -26,8 +26,4 @@ from integration.translation.runner import run
     ids=lambda case: case.id,
 )
 def test_responses_basic_anthropic(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
-    pytest.skip(
-        "BUG: LIT-9231 the chat-completions bridge returns instructions and max_output_tokens as null"
-        " and temperature as 0.0 instead of echoing the request"
-    )
-    run(case, gateway, provider)
+    assert_translation(case, gateway, provider)
