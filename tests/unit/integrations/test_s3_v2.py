@@ -13,7 +13,7 @@ from contextvars import Context
 from datetime import datetime
 from pathlib import Path
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -28,12 +28,20 @@ from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
 from collections import defaultdict
 from litellm._logging import verbose_logger
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 _real_sleep: Final = asyncio.sleep
 _NOW: Final = 1_000_000.0
+
+
+def _assert_jittered_backoff(sleep_mock: MagicMock, retries: int) -> None:
+    """Each retry waits a jittered exponential backoff: attempt n sleeps somewhere in [2**n / 2, 2**n * 1.5)."""
+    waits: Final = [sleep_call.args[0] for sleep_call in sleep_mock.call_args_list]
+    assert len(waits) == retries, waits
+    for attempt, wait in enumerate(waits):
+        assert (1 << attempt) * 0.5 <= wait < (1 << attempt) * 1.5, (attempt, wait)
 
 
 class TestS3V2UnitTests:
@@ -416,8 +424,7 @@ async def test_async_upload_retries_on_s3_503():
 
     # Verify PUT was called twice (retry after 503)
     assert logger.async_httpx_client.put.call_count == 2
-    # Verify sleep was called with the backoff delay
-    mock_sleep.assert_called_once_with(1)  # 2**0 = 1s
+    _assert_jittered_backoff(mock_sleep, 1)
 
 
 @pytest.mark.asyncio
@@ -457,7 +464,7 @@ async def test_async_upload_retries_on_s3_500():
         await logger.async_upload_data_to_s3(test_element)
 
     assert logger.async_httpx_client.put.call_count == 2
-    mock_sleep.assert_called_once_with(1)
+    _assert_jittered_backoff(mock_sleep, 1)
 
 
 @pytest.mark.asyncio
@@ -596,17 +603,20 @@ def _generation(request: httpx.Request) -> tuple[str, str]:
 
 
 @asynccontextmanager
-async def _s3_logger_on_production_handler(profile: str, statuses: list[int]):
+async def _s3_logger_on_production_handler(profile: str, statuses: list[int | type[httpx.TransportError]]):
     """
     S3Logger wired to the real AsyncHTTPHandler over an httpx MockTransport that answers with the given
-    statuses in order, so the handler's own raise_for_status behaviour is exercised end to end.
+    statuses (or raises the given transport errors) in order, so the handler's own error mapping is exercised.
     """
     requests: list[httpx.Request] = []
     replies = iter(statuses)
 
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(next(replies), request=request, text="<Error><Code>SignatureDoesNotMatch</Code></Error>")
+        reply = next(replies)
+        if not isinstance(reply, int):
+            raise reply("S3 attempt failed", request=request)
+        return httpx.Response(reply, request=request, text="<Error><Code>SignatureDoesNotMatch</Code></Error>")
 
     handler = AsyncHTTPHandler()
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
@@ -663,7 +673,7 @@ async def test_async_upload_retries_403_with_fresh_credentials_and_signature(rot
     assert second_key == second_token
     assert int(second_key) > int(first_key)
     assert requests[1].headers["Authorization"] != requests[0].headers["Authorization"]
-    mock_sleep.assert_awaited_once_with(1)
+    _assert_jittered_backoff(mock_sleep, 1)
     assert "Error uploading to s3" not in caplog.text
 
 
@@ -678,7 +688,7 @@ async def test_async_upload_exhausts_403_retries_through_production_http_handler
         await logger.async_upload_data_to_s3(test_element)
 
     assert len(requests) == 3
-    assert mock_sleep.await_args_list == [call(1), call(2)]
+    _assert_jittered_backoff(mock_sleep, 2)
     assert "Error uploading to s3" in caplog.text
 
 
@@ -708,7 +718,7 @@ async def test_async_upload_recovers_from_transient_5xx_through_production_http_
     assert all(request.method == "PUT" for request in requests)
     assert requests[0].url == requests[1].url
     assert requests[0].content == requests[1].content
-    mock_sleep.assert_awaited_once_with(1)
+    _assert_jittered_backoff(mock_sleep, 1)
     assert "Error uploading to s3" not in caplog.text
 
 
@@ -756,8 +766,163 @@ async def test_async_upload_access_denied_403_is_retried_and_then_requeued(rotat
 
     assert outcome is False
     assert len(requests) == 3
-    assert mock_sleep.await_args_list == [call(1), call(2)]
+    _assert_jittered_backoff(mock_sleep, 2)
     assert "Error uploading to s3" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_upload_retries_429_through_production_http_handler(rotating_profile: str, caplog):
+    """S3 and S3-compatible stores answer throttling with 429 too, so it backs off and retries like a 503."""
+    async with _s3_logger_on_production_handler(rotating_profile, [429, 200]) as (logger, requests, mock_sleep):
+        uploaded = await logger.async_upload_data_to_s3(_element({"test": "429"}, "429"))
+
+    assert uploaded is True
+    assert len(requests) == 2
+    assert requests[0].content == requests[1].content
+    _assert_jittered_backoff(mock_sleep, 1)
+    assert "Error uploading to s3" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_upload_retries_a_timed_out_attempt_through_production_http_handler(rotating_profile: str, caplog):
+    """AsyncHTTPHandler.put turns an httpx timeout into litellm.Timeout, which must count as a retryable attempt."""
+    async with _s3_logger_on_production_handler(rotating_profile, [httpx.ReadTimeout, 200]) as (
+        logger,
+        requests,
+        mock_sleep,
+    ):
+        uploaded = await logger.async_upload_data_to_s3(_element({"test": "timeout"}, "timeout"))
+
+    assert uploaded is True
+    assert len(requests) == 2
+    _assert_jittered_backoff(mock_sleep, 1)
+    assert "Error uploading to s3" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(httpx.ConnectError("connection refused"), id="connect-error"),
+        pytest.param(httpx.RemoteProtocolError("server disconnected"), id="remote-protocol-error"),
+        pytest.param(httpx.ReadTimeout("read timed out"), id="read-timeout"),
+    ],
+)
+async def test_async_upload_retries_transport_errors_then_succeeds(error: Exception) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = AsyncMock(side_effect=[error, _ok_response()])
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        uploaded = await logger.async_upload_data_to_s3(_element({"test": "transport"}, "transport"))
+
+    assert uploaded is True
+    assert logger.async_httpx_client.put.call_count == 2
+    _assert_jittered_backoff(mock_sleep, 1)
+
+
+@pytest.mark.asyncio
+async def test_async_upload_exhausts_transport_error_retries_and_keeps_the_event_queued() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+    logger.log_queue = [_element({"test": "down"}, "down")]
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await logger.flush_queue()
+
+    assert logger.async_httpx_client.put.call_count == 3
+    _assert_jittered_backoff(mock_sleep, 2)
+    assert [element.s3_object_key for element in logger.log_queue] == ["2025-09-14/test-down.json"]
+
+
+@pytest.mark.asyncio
+async def test_async_upload_sends_every_attempt_with_a_finite_deadline(rotating_profile: str) -> None:
+    """
+    The logger's handler is built with explicit params and no timeout, and the handler forwards that None to
+    httpx as "no timeout", so without a per-attempt deadline a stalled S3 endpoint pins the upload forever.
+    """
+    async with _s3_logger_on_production_handler(rotating_profile, [503, 200]) as (logger, requests, _):
+        await logger.async_upload_data_to_s3(_element({"test": "deadline"}, "deadline"))
+
+    assert len(requests) == 2
+    for request in requests:
+        deadlines = request.extensions["timeout"]
+        assert all(isinstance(limit, (int, float)) and limit > 0 for limit in deadlines.values()), deadlines
+
+
+@pytest.mark.asyncio
+async def test_backoff_is_jittered_so_throttled_uploads_do_not_retry_in_lockstep() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = AsyncMock(
+        side_effect=[_transient_failure_response(), _ok_response(), _transient_failure_response(), _ok_response()]
+    )
+
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        patch("random.random", side_effect=[0.0, 0.999]),
+    ):
+        await logger.async_upload_data_to_s3(_element({"i": 0}, "0"))
+        await logger.async_upload_data_to_s3(_element({"i": 1}, "1"))
+
+    first, second = (sleep_call.args[0] for sleep_call in mock_sleep.call_args_list)
+    assert first != second
+    assert 0.5 <= first < 1.5 and 0.5 <= second < 1.5
+
+
+@pytest.mark.asyncio
+async def test_dropped_uploads_are_logged_once_per_flush_naming_each_reason(caplog) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    terminal = (_element({"i": "terminal-0"}, "terminal-0"), _element({"i": "terminal-1"}, "terminal-1"))
+    expired = _element({"i": "expired"}, "expired").model_copy(update={"retrying_since": _NOW - 7200})
+    fresh = _element({"i": "fresh"}, "fresh")
+
+    async def put(
+        url: str, data: str | None = None, headers: dict[str, str] | None = None, timeout: httpx.Timeout | None = None
+    ) -> MagicMock:
+        if "test-terminal-" in url:
+            return _terminal_failure_response()
+        if url.endswith("test-expired.json"):
+            return _transient_failure_response()
+        return _ok_response()
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = [*terminal, expired, fresh]
+
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("time.monotonic", return_value=_NOW),
+    ):
+        await logger.flush_queue()
+
+    assert logger.log_queue == []
+    drop_lines = [record.getMessage() for record in caplog.records if "uploads dropped" in record.getMessage()]
+    assert len(drop_lines) == 1, drop_lines
+    assert "3 uploads dropped" in drop_lines[0]
+    assert "2 rejected as terminal" in drop_lines[0]
+    assert "1 retrying longer than s3_max_retry_age_seconds=3600" in drop_lines[0]
 
 
 def test_sync_upload_retries_403_with_fresh_signature(rotating_profile: str, monkeypatch: pytest.MonkeyPatch):
@@ -794,7 +959,7 @@ def test_sync_upload_retries_403_with_fresh_signature(rotating_profile: str, mon
     assert first_key == first_token
     assert second_key == second_token
     assert int(second_key) > int(first_key)
-    mock_sleep.assert_called_once_with(1)
+    _assert_jittered_backoff(mock_sleep, 1)
 
 
 def test_sync_upload_retries_on_s3_503():
@@ -835,7 +1000,7 @@ def test_sync_upload_retries_on_s3_503():
             logger.upload_data_to_s3(test_element)
 
     assert mock_sync_client.put.call_count == 2
-    mock_sleep.assert_called_once_with(1)
+    _assert_jittered_backoff(mock_sleep, 1)
 
 
 @pytest.mark.asyncio
@@ -2866,7 +3031,13 @@ class _CountingPut:
         self.peak = 0
         self.calls = 0
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.in_flight += 1
         self.peak = max(self.peak, self.in_flight)
         self.calls += 1
@@ -2882,7 +3053,13 @@ class _RecordingPut:
     def __init__(self) -> None:
         self.calls: tuple[tuple[str, str | None, dict[str, str] | None], ...] = ()
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.calls = (*self.calls, (url, data, headers))
         return _ok_response()
 
@@ -2895,7 +3072,13 @@ class _LateAppendingPut:
         self.appended = False
         self.failed_key: str | None = None
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         if not self.appended:
             self.appended = True
             self.logger.log_queue.append(self.element)
@@ -2912,7 +3095,13 @@ class _AppendingFailingPut:
         self.elements = elements
         self.appended = False
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         if not self.appended:
             self.appended = True
             for element in self.elements:
@@ -2926,7 +3115,13 @@ class _FailOnSuffixPut:
         self.suffixes = suffixes
         self.calls: tuple[str, ...] = ()
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.calls = (*self.calls, url)
         if self.failing and url.endswith(self.suffixes):
             return _transient_failure_response()
@@ -2939,7 +3134,13 @@ class _FailUntilClearedPut:
         self.response: Final = _coded_failure_response(status, code, raw_body)
         self.calls: tuple[tuple[str, str | None], ...] = ()
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.calls = (*self.calls, (url, data))
         if self.failing:
             return self.response
@@ -3357,7 +3558,13 @@ class _FailOnSuffixCodedPut:
         self.response: Final = _coded_failure_response(status, code, raw_body)
         self.calls: tuple[str, ...] = ()
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.calls = (*self.calls, url)
         if url.endswith(self.suffixes):
             return self.response
@@ -3734,7 +3941,13 @@ class _SyncRecordingClient:
         self.response: Final = response
         self.put_calls: list = []  # mutable-ok: call log appended once per PUT
 
-    def put(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    def put(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.put_calls.append(url)
         return self.response
 
@@ -3760,16 +3973,16 @@ def test_sync_upload_404_is_single_attempt_without_sleep() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "expected_puts", "expected_sleeps"),
+    ("status", "expected_puts", "expected_retries"),
     [
-        pytest.param(429, 1, [], id="429-single"),
-        pytest.param(408, 1, [], id="408-single"),
-        pytest.param(502, 1, [], id="502-single"),
-        pytest.param(504, 1, [], id="504-single"),
-        pytest.param(503, 3, [call(1), call(2)], id="503-backoff"),
+        pytest.param(408, 1, 0, id="408-single"),
+        pytest.param(502, 1, 0, id="502-single"),
+        pytest.param(504, 1, 0, id="504-single"),
+        pytest.param(429, 3, 2, id="429-backoff"),
+        pytest.param(503, 3, 2, id="503-backoff"),
     ],
 )
-def test_sync_upload_retry_set_matches_base(status: int, expected_puts: int, expected_sleeps: list) -> None:
+def test_sync_upload_retry_set(status: int, expected_puts: int, expected_retries: int) -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -3786,7 +3999,50 @@ def test_sync_upload_retry_set_matches_base(status: int, expected_puts: int, exp
         logger.upload_data_to_s3(_element({"id": "sync"}, "sync"))
 
     assert len(sync_client.put_calls) == expected_puts
-    assert mock_sleep.call_args_list == expected_sleeps
+    _assert_jittered_backoff(mock_sleep, expected_retries)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [pytest.param(httpx.ConnectError, id="connect-error"), pytest.param(httpx.ReadTimeout, id="read-timeout")],
+)
+def test_sync_upload_retries_a_failed_attempt_through_production_http_handler(
+    failure: type[httpx.TransportError], caplog: pytest.LogCaptureFixture
+) -> None:
+    """HTTPHandler.put turns an httpx timeout into litellm.Timeout, and each attempt carries its own deadline."""
+    requests: Final[list[httpx.Request]] = []  # mutable-ok: the transport records every attempt
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            raise failure("S3 attempt failed", request=request)
+        return httpx.Response(200, request=request)
+
+    handler: Final = HTTPHandler()
+    handler.client = httpx.Client(transport=httpx.MockTransport(respond), timeout=None)
+    logger: Final = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    with (
+        patch(  # test-quality-ok: sync upload builds its HTTPHandler per call, there is no injection seam for it
+            "litellm.integrations.s3_v2.get_httpx_client", return_value=handler
+        ),
+        patch("time.sleep") as mock_sleep,
+    ):
+        logger.upload_data_to_s3(_element({"id": "sync-transient"}, "sync-transient"))
+    handler.client.close()
+
+    assert len(requests) == 2
+    assert requests[0].content == requests[1].content
+    assert all(
+        request.extensions["timeout"] == httpx.Timeout(S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS).as_dict()
+        for request in requests
+    )
+    _assert_jittered_backoff(mock_sleep, 1)
+    assert "Error uploading to s3" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -3794,6 +4050,7 @@ def test_sync_upload_retry_set_matches_base(status: int, expected_puts: int, exp
     ("status", "code"),
     [
         pytest.param(503, "SlowDown", id="503"),
+        pytest.param(429, "SlowDown", id="429"),
         pytest.param(500, "InternalError", id="500"),
         pytest.param(403, "AccessDenied", id="access-denied-403"),
     ],
@@ -3816,7 +4073,7 @@ async def test_retryable_statuses_back_off_three_attempts(status: int, code: str
         await logger.flush_queue()
 
     assert len(put.calls) == 3
-    assert mock_sleep.await_args_list == [call(1), call(2)]
+    _assert_jittered_backoff(mock_sleep, 2)
     assert len(logger.log_queue) == 1
 
 
@@ -3824,13 +4081,12 @@ async def test_retryable_statuses_back_off_three_attempts(status: int, code: str
 @pytest.mark.parametrize(
     ("status", "code"),
     [
-        pytest.param(429, "TooManyRequests", id="429"),
         pytest.param(408, None, id="408"),
         pytest.param(502, None, id="502"),
         pytest.param(504, None, id="504"),
     ],
 )
-async def test_non_base_statuses_are_not_retried_in_call(status: int, code: str | None) -> None:
+async def test_unlisted_statuses_are_not_retried_in_call(status: int, code: str | None) -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -3858,7 +4114,13 @@ class _FirstFailThenOkPut:
         self.failed_once = False
         self.calls: tuple[str, ...] = ()
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.calls = (*self.calls, url)
         if url.endswith(self.fail_suffix) and not self.failed_once:
             self.failed_once = True
@@ -3971,7 +4233,13 @@ async def test_terminal_drop_of_one_element_does_not_drop_a_sibling_with_the_sam
         def __init__(self) -> None:
             self.calls: tuple[str | None, ...] = ()
 
-        async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+        async def __call__(
+            self,
+            url: str,
+            data: str | None = None,
+            headers: dict[str, str] | None = None,
+            timeout: httpx.Timeout | None = None,
+        ) -> MagicMock:
             self.calls = (*self.calls, data)
             if data is not None and "terminal-marker" in data:
                 return _terminal_failure_response()
@@ -4321,7 +4589,13 @@ class _FailOncePerKeyPut:
         self.failed: set[str] = set()
         self.calls: tuple[str, ...] = ()
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.calls = (*self.calls, url)
         if url not in self.failed:
             self.failed.add(url)
@@ -4336,7 +4610,13 @@ class _SlowFailOncePerKeyPut:
         self.first_completed: int | None = None
         self.calls: tuple[str, ...] = ()
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.calls = (*self.calls, url)
         await _real_sleep(0)
         if self.first_completed is None:
@@ -4470,7 +4750,13 @@ class _AppendingSuffixFailingPut:
         self.fail_suffixes = fail_suffixes
         self.appended = False
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         if not self.appended:
             self.appended = True
             self.logger.log_queue.append(self.element)
@@ -4689,7 +4975,7 @@ def test_sync_upload_retries_access_denied_403(caplog):
         logger.upload_data_to_s3(test_element)
 
     assert mock_sync_client.put.call_count == 3
-    assert mock_sleep.call_args_list == [call(1), call(2)]
+    _assert_jittered_backoff(mock_sleep, 2)
     assert "dropping object" not in caplog.text
 
 
@@ -4940,7 +5226,13 @@ class _StatusPut:
         self.responses = responses
         self.calls = 0
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.calls += 1
         outcome = self.responses[min(self.calls - 1, len(self.responses) - 1)]
         if isinstance(outcome, Exception):
@@ -5074,7 +5366,9 @@ async def test_a_slow_put_does_not_lower_the_adaptive_limit() -> None:
     logger = _override_logger(s3_adaptive_concurrency=True)
     logger.async_httpx_client = AsyncMock()
 
-    async def slow_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def slow_put(
+        url: str, data: str | None = None, headers: dict[str, str] | None = None, timeout: httpx.Timeout | None = None
+    ) -> MagicMock:
         await _real_sleep(0)
         return _ok_response()
 
@@ -5091,7 +5385,13 @@ class _FastOkPut:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
+    async def __call__(
+        self,
+        url: str,
+        data: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> MagicMock:
         self.calls += 1
         await _real_sleep(0)
         return _ok_response()
