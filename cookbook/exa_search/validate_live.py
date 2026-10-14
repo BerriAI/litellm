@@ -7,6 +7,7 @@ import os
 import time
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit
 
 import jsonschema
 
@@ -179,7 +180,7 @@ async def main(output: Path, selected: list[str]):
                 assert isinstance(response["output"]["grounding"], list)
             if name == "domain-filter":
                 assert response["results"]
-                assert all("docs.python.org" in result["url"] for result in response["results"])
+                assert all(urlsplit(result["url"]).hostname == "docs.python.org" for result in response["results"])
             if name in ("null-contents", "metadata-only"):
                 assert all(not result.get("text") for result in response["results"])
             records.append(
