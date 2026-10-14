@@ -9279,6 +9279,47 @@ def test_converse_carries_prompt_cache_breakpoint_to_cache_point():
     ]
 
 
+def test_converse_keeps_the_earliest_prompt_cache_breakpoints_within_the_cap():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                for index in range(5)
+            ],
+        }
+    ]
+
+    def transform(litellm_params: dict) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="anthropic.claude-sonnet-5-5",
+            messages=copy.deepcopy(messages),
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="at most 4 cache breakpoints"):
+        transform({})
+
+    cache_point = {"cachePoint": {"type": "default"}}
+    assert transform({"drop_params": True})["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"text": "part 0"},
+                cache_point,
+                {"text": "part 1"},
+                cache_point,
+                {"text": "part 2"},
+                cache_point,
+                {"text": "part 3"},
+                cache_point,
+                {"text": "part 4"},
+            ],
+        }
+    ]
+
+
 def _converse_request_with_30m_breakpoint(model: str, litellm_params: dict) -> dict:
     return litellm.AmazonConverseConfig()._transform_request(
         model=model,

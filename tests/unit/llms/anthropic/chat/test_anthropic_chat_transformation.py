@@ -4110,11 +4110,11 @@ def test_transform_request_includes_cache_control():
     assert result["cache_control"] == {"type": "ephemeral"}
 
 
-def _anthropic_body(messages: list, litellm_params: dict | None = None) -> dict:
+def _anthropic_body(messages: list, litellm_params: dict | None = None, tools: list | None = None) -> dict:
     return AnthropicConfig().transform_request(
         model="claude-sonnet-5-5",
         messages=messages,
-        optional_params={"max_tokens": 100},
+        optional_params={"max_tokens": 100, **({"tools": tools} if tools else {})},
         litellm_params=litellm_params or {},
         headers={},
     )
@@ -4171,6 +4171,29 @@ def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(mar
 
     body = _anthropic_body(messages, litellm_params={"drop_params": True})
     assert body["messages"] == [{"role": "user", "content": [expected_block]}]
+
+
+def test_transform_request_keeps_the_earliest_prompt_cache_breakpoints_within_the_cap():
+    client_marked_part = {"type": "text", "text": "part 0", "cache_control": {"type": "ephemeral"}}
+    marked_parts = [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        for index in range(1, 5)
+    ]
+    messages = [{"role": "user", "content": [client_marked_part, *marked_parts]}]
+    tools = [{"name": "lookup", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}}]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="at most 4 cache breakpoints"):
+        _anthropic_body(copy.deepcopy(messages), tools=copy.deepcopy(tools))
+
+    body = _anthropic_body(messages, litellm_params={"drop_params": True}, tools=tools)
+    assert [part.get("cache_control") for part in body["messages"][0]["content"]] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+        None,
+        None,
+    ]
+    assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_compaction_block_empty_list_not_added():

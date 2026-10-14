@@ -1514,10 +1514,7 @@ class AmazonConverseConfig(BaseConfig):
     ) -> Sequence[AllMessageValues]:
         if not bedrock_model_accepts_cache_points(model):
             return messages
-        return tuple(
-            AnthropicCacheControlHook.prompt_cache_breakpoints_as_cache_control(message, drop_params)
-            for message in messages
-        )
+        return AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(messages, drop_params, 0)
 
     def _transform_system_message(
         self, messages: Sequence[AllMessageValues], model: str | None = None

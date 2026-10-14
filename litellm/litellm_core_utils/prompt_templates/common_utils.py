@@ -1790,6 +1790,9 @@ def check_is_function_call(logging_obj: "LoggingClass") -> bool:
 
 _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
 _PROMPT_CACHE_BREAKPOINT: Final = TypeAdapter(PromptCacheBreakpoint)
+PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT: Final = (
+    "set `drop_params: true` on the request or in litellm_settings (`litellm.drop_params = True` in the SDK)"
+)
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
@@ -1834,7 +1837,7 @@ def _cache_control_for_prompt_cache_breakpoint(marker: object, drop_params: bool
             raise UnsupportedParamsError(
                 message=(
                     f"prompt_cache_breakpoint must be {{'mode': 'explicit'}} with an optional ttl of '30m', "
-                    f"got {marker!r}. Fix the marker, or set `litellm.drop_params = True` to drop it."
+                    f"got {marker!r}. Fix the marker, or {PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to drop it."
                 ),
                 status_code=400,
             )
@@ -1844,9 +1847,10 @@ def _cache_control_for_prompt_cache_breakpoint(marker: object, drop_params: bool
     if ttl is not None and not drop_params:
         raise UnsupportedParamsError(
             message=(
-                f"Claude caches a prompt for 5m or 1h, so prompt_cache_breakpoint ttl={ttl!r} has no equivalent. "
-                "Remove the ttl, set `litellm.drop_params = True` to send a 5m breakpoint instead, "
-                "or send cache_control {'type': 'ephemeral', 'ttl': '1h'} on the block."
+                f"This model's prompt cache lasts 5m, or 1h where it offers one, so prompt_cache_breakpoint "
+                f"ttl={ttl!r} has no equivalent. Remove the ttl, {PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to send "
+                "a 5m breakpoint instead, or send cache_control {'type': 'ephemeral', 'ttl': '1h'} on the block "
+                "where the model offers a 1h cache."
             ),
             status_code=400,
         )

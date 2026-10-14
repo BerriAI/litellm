@@ -2057,9 +2057,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # system message stays in the conversation: hoisting it rewrites the cached
         # prefix and re-bills the whole history at cache-write pricing (#36559).
         leading_system_run, later_messages = split_leading_system_run(
-            tuple(
-                AnthropicCacheControlHook.prompt_cache_breakpoints_as_cache_control(message, drop_params)
-                for message in messages
+            AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
+                messages,
+                drop_params,
+                AnthropicCacheControlHook.count_chat_external_cache_breakpoints(optional_params),
             )
         )
         anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
