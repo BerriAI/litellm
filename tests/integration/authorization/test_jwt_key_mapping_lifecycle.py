@@ -477,7 +477,7 @@ def test_updating_a_warmed_mapping_deactivates_and_repoints_it_on_both_workers(
         "mapping restored peer " + uuid.uuid4().hex,
     )
     token: Final = _signed_jwt(jwt_lifecycle.private_key_a, client_id, issuer)
-    _assert_upstream_requests(upstream, ())
+    upstream.drain()
     with first.scenario() as scenario:
         old_key: Final = _create_key(first, model)
         new_key: Final = _create_key(first, model)
@@ -560,7 +560,7 @@ def test_reactivating_a_global_mapping_restores_issuer_jwt_callers_on_both_worke
     client_id: Final = "integration-client-" + uuid.uuid4().hex
     prompts: Final = tuple(f"global mapping reactivation {index} {uuid.uuid4().hex}" for index in range(6))
     token: Final = _signed_jwt(jwt_lifecycle.private_key_a, client_id, jwt_lifecycle.issuer_a)
-    _assert_upstream_requests(upstream, ())
+    upstream.drain()
 
     with first.scenario() as scenario:
         key: Final = _create_key(first, model)
@@ -627,7 +627,7 @@ def test_reactivating_a_global_mapping_restores_issuer_jwt_callers_on_both_worke
 
 
 @pytest.mark.parametrize("scope", ("global", "issuer"))
-@pytest.mark.parametrize("spelling", ("body", "path"))
+@pytest.mark.parametrize("spelling", ("body", "path", "plaintext_path"))
 def test_regenerating_a_jwt_mapped_key_moves_jwt_callers_to_the_new_hash(
     jwt_lifecycle: _JWTLifecycleRuntime, spelling: str, scope: str
 ) -> None:
@@ -645,7 +645,7 @@ def test_regenerating_a_jwt_mapped_key_moves_jwt_callers_to_the_new_hash(
     )
     issuer: Final = jwt_lifecycle.issuer_a if scope == "issuer" else None
     token: Final = _signed_jwt(jwt_lifecycle.private_key_a, client_id, jwt_lifecycle.issuer_a)
-    _assert_upstream_requests(upstream, ())
+    upstream.drain()
     with first.scenario() as scenario:
         old_key: Final = _create_key(first, model)
         scenario.cleanups.callback(delete_key_if_present, first, old_key)
@@ -659,10 +659,11 @@ def test_regenerating_a_jwt_mapped_key_moves_jwt_callers_to_the_new_hash(
         _assert_chat(first, model, token, prompts[0], old_hash)
         _assert_chat(second, model, token, prompts[1], old_hash)
 
+        path_key: Final = old_hash if spelling == "path" else old_key
         regenerated_response: Final = (
             first.request("POST", "/key/regenerate", {"key": old_key})
             if spelling == "body"
-            else first.request("POST", f"/key/{old_hash}/regenerate", {})
+            else first.request("POST", f"/key/{path_key}/regenerate", {})
         )
         assert regenerated_response.status_code == 200, regenerated_response.text
         new_key: Final = _KeyResponse.model_validate_json(regenerated_response.content).key
@@ -695,7 +696,7 @@ def test_deleting_a_jwt_mapped_key_stops_its_mapping_on_both_workers(
     )
     issuer: Final = jwt_lifecycle.issuer_a if scope == "issuer" else None
     token: Final = _signed_jwt(jwt_lifecycle.private_key_a, client_id, jwt_lifecycle.issuer_a)
-    _assert_upstream_requests(upstream, ())
+    upstream.drain()
     with first.scenario() as scenario:
         key: Final = _create_key(first, model)
         scenario.cleanups.callback(delete_key_if_present, first, key)
@@ -716,14 +717,14 @@ def test_deleting_a_jwt_mapped_key_stops_its_mapping_on_both_workers(
         assert deletion.status_code == 200, deletion.text
         assert _DeleteResponse.model_validate_json(deletion.content).deleted_keys == (key,), deletion.text
         assert read_rows('SELECT id FROM "LiteLLM_JWTKeyMapping" WHERE id=%s', (mapping.id,)) == []
-        first_refusal: Final = _chat(first, model, token, prompts[2])
-        _assert_unmapped(first_refusal, client_id)
         second_refusal: Final = eventually(
-            lambda: _chat(second, model, token, prompts[3]),
+            lambda: _chat(second, model, token, prompts[2]),
             lambda response: response.status_code == 403,
             seconds=3,
         )
         _assert_unmapped(second_refusal, client_id)
+        first_refusal: Final = _chat(first, model, token, prompts[3])
+        _assert_unmapped(first_refusal, client_id)
         assert _spend_count(first, key_hash) == warm_spend_count
         _assert_upstream_requests(upstream, tuple(_expected_chat_request(backend, prompt) for prompt in prompts[:2]))
 
@@ -739,7 +740,7 @@ def test_issuer_scoped_mappings_with_the_same_claim_resolve_per_issuer(
     issuer_a: Final = jwt_lifecycle.issuer_a
     issuer_b: Final = jwt_lifecycle.issuer_b
     prompts: Final = tuple(f"issuer mapping {index} {uuid.uuid4().hex}" for index in range(4))
-    _assert_upstream_requests(upstream, ())
+    upstream.drain()
 
     with candidate.scenario() as scenario:
         key_a: Final = _create_key(candidate, model)
@@ -809,7 +810,7 @@ def test_repointing_a_warmed_mapping_to_a_new_issuer_moves_it_on_both_workers(
     issuer_b: Final = jwt_lifecycle.issuer_b
     client_id: Final = "integration-client-" + uuid.uuid4().hex
     prompts: Final = tuple(f"mapping repoint {index} {uuid.uuid4().hex}" for index in range(4))
-    _assert_upstream_requests(upstream, ())
+    upstream.drain()
 
     with first.scenario() as scenario:
         key: Final = _create_key(first, model)

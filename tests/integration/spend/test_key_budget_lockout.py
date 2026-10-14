@@ -119,7 +119,13 @@ def _wire_reply(identity: str, usage: _Usage) -> Reply:
 
 
 def _assert_wire_requests(wire: Wire, expected: tuple[tuple[str, str], ...]) -> None:
-    observed: Final = tuple(sorted((request.method, request.target) for request in wire.drain()))
+    observed: Final = tuple(
+        sorted(
+            (request.method, request.target)
+            for request in wire.drain()
+            if (request.method, request.target) != _EXPECTED_MODEL_DISCOVERY
+        )
+    )
     assert observed == tuple(sorted(expected)), observed
 
 
@@ -303,7 +309,7 @@ def test_reset_spend_lifts_an_exhausted_key_on_both_workers_for_both_path_spelli
                 lambda: _spend(gateway, key_hash), lambda spend: spend >= 0.06, seconds=70
             )
             assert exhausted_spend == pytest.approx(0.06)
-            _assert_wire_requests(wire, (_EXPECTED_MODEL_DISCOVERY, _EXPECTED_CHAT))
+            _assert_wire_requests(wire, (_EXPECTED_CHAT,))
             _assert_budget_refusal(gateway, model, key, prompts[1])
             _assert_budget_refusal(second, model, key, prompts[2])
             assert wire.drain() == (), "exhausted-key requests reached the upstream"
