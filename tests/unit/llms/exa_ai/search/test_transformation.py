@@ -122,12 +122,16 @@ def test_transform_search_response_maps_every_exa_result_in_provider_order():
     )
 
     assert response.object == "search"
-    assert response.results == [
+    expected: Final = [
         SearchResult(
             title="First", url="https://example.com/first", snippet="First text", date="2024-01-05T00:00:00.000Z"
         ),
         SearchResult(title="Second", url="https://example.com/second", snippet="one\n\ntwo"),
         SearchResult(title="Third", url="https://example.com/third", snippet="Summary"),
+    ]
+
+    assert [result.model_dump(include=set(SearchResult.model_fields)) for result in response.results] == [
+        result.model_dump() for result in expected
     ]
 
 
@@ -212,3 +216,169 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) ->
         ExaAISearchConfig().get_complete_url(api_base=api_base, optional_params={})
         == "https://gateway.example.com/exa/search"
     )
+
+
+OUTPUT_SCHEMA: Final = {"type": "object", "properties": {"answer": {"type": "string"}}}
+OUTPUT: Final = {
+    "content": {"answer": "Grounded answer"},
+    "grounding": [
+        {"field": "answer", "citations": [{"url": "https://example.com", "title": "Source"}], "confidence": "high"}
+    ],
+}
+FULL_RESULT: Final = {
+    "title": "Source",
+    "url": "https://example.com",
+    "publishedDate": "2026-01-01",
+    "author": None,
+    "id": "document-id",
+    "image": "https://example.com/image.png",
+    "favicon": "https://example.com/icon.png",
+    "text": "",
+    "highlights": ["relevant passage", "another passage"],
+    "highlightScores": [0.8, 0.7],
+    "summary": "summary",
+    "subpages": [{"title": "Subpage", "url": "https://example.com/sub"}],
+    "extras": {
+        "links": ["https://example.com/link"],
+        "richLinks": [{"url": "https://example.com/link", "anchor": "Link"}],
+    },
+    "entities": [{"id": "entity", "type": "company", "properties": {"name": "Example"}}],
+    "futureField": {"nested": [False, 0, None]},
+}
+FULL_RESPONSE: Final = {
+    "results": [FULL_RESULT],
+    "output": OUTPUT,
+    "requestId": "request-id",
+    "costDollars": {"total": 0.012},
+    "searchTime": 24,
+    "resolvedSearchType": "auto",
+    "context": "",
+    "futureMetadata": [],
+}
+
+
+@pytest.mark.parametrize("mode", ["instant", "fast", "auto", "deep-lite", "deep", "deep-reasoning"])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.usefixtures("exa_api_key")
+@pytest.mark.asyncio
+async def test_public_search_preserves_native_contract(respx_mock: respx.MockRouter, mode: str, asynchronous: bool):
+    native: Final = {
+        "type": mode,
+        "additionalQueries": ["related question"],
+        "outputSchema": OUTPUT_SCHEMA,
+        "systemPrompt": "Use grounded sources",
+        "objective": "Research",
+        "userIdentifier": "opaque-id",
+        "userLocation": {"latitude": 40.7, "longitude": -74.0, "country": "US"},
+        "includeDomains": ["example.com"],
+        "excludeDomains": ["other.example"],
+        "startPublishedDate": "2026-01-01T00:00:00Z",
+        "endPublishedDate": "2026-02-01T00:00:00Z",
+        "moderation": False,
+        "numResults": 3,
+        "category": "publication",
+        "compliance": "hipaa",
+        "contents": {
+            "highlights": {"query": "evidence", "dynamic": True, "verbosity": "medium"},
+            "extras": {"links": 2, "imageLinks": 2, "richLinks": 2, "richImageLinks": 2, "codeBlocks": 2},
+            "maxAgeHours": -1,
+            "livecrawlTimeout": 5000,
+            "subpages": 1,
+            "subpageTarget": ["about"],
+        },
+    }
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(json=FULL_RESPONSE)
+    headers: Final = {"Exa-Beta": "dynamic-highlights-2026-08-28"}
+    result: Final = (
+        await litellm.asearch(query="question", search_provider="exa_ai", extra_headers=headers, **native)
+        if asynchronous
+        else litellm.search(query="question", search_provider="exa_ai", extra_headers=headers, **native)
+    )
+    assert json.loads(route.calls.last.request.content) == {"query": "question", **native}
+    assert route.calls.last.request.headers["exa-beta"] == headers["Exa-Beta"]
+    dumped: Final = result.model_dump()
+    for key, value in FULL_RESPONSE.items():
+        if key != "results":
+            assert dumped[key] == value
+    for key, value in FULL_RESULT.items():
+        assert dumped["results"][0][key] == value
+    assert dumped["results"][0]["snippet"] == "\n\n".join(FULL_RESULT["highlights"])
+    assert dumped["results"][0]["date"] == FULL_RESULT["publishedDate"]
+    assert json.loads(result.model_dump_json()) == dumped
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        None,
+        {},
+        {"text": False},
+        {"highlights": True},
+        {
+            "text": {
+                "maxCharacters": 800,
+                "includeHtmlTags": True,
+                "verbosity": "full",
+                "includeSections": ["body"],
+                "excludeSections": ["footer"],
+            }
+        },
+        {"summary": {"query": "summarize", "schema": OUTPUT_SCHEMA}},
+        {"highlights": {"maxCharacters": 700, "query": "evidence"}, "snapshotAsOf": "2026-01-01"},
+        {"text": True, "livecrawl": "never", "crawledBeforeDate": "2026-01-01", "context": {"maxCharacters": 200}},
+    ],
+)
+@pytest.mark.usefixtures("exa_api_key")
+def test_contents_are_sent_without_injecting_text(respx_mock: respx.MockRouter, contents: object):
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(json={"results": []})
+    litellm.search(query="question", search_provider="exa_ai", contents=contents)
+    assert json.loads(route.calls.last.request.content) == {"query": "question", "contents": contents}
+
+
+@pytest.mark.parametrize(
+    "output", [None, {}, {"content": "", "grounding": []}, {"content": {}, "grounding": []}, OUTPUT]
+)
+def test_output_preserves_present_empty_and_null_values(output: object):
+    response: Final = _transform({"results": [], "output": output})
+    assert response.model_dump()["output"] == output
+
+
+def test_absent_output_stays_absent():
+    assert _transform({"results": []}).model_dump() == {"results": [], "object": "search"}
+
+
+@pytest.fixture(autouse=True)
+def use_httpx_for_respx(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+
+def test_legacy_parameters_and_unified_precedence_are_preserved():
+    legacy: Final = {
+        "max_results": 4,
+        "numResults": 9,
+        "country": "US",
+        "userLocation": "GB",
+        "search_domain_filter": ["example.com"],
+        "includeDomains": ["other.example"],
+        "startCrawlDate": "2020-01-01",
+        "endCrawlDate": "2021-01-01",
+        "includeText": ["one"],
+        "excludeText": ["two"],
+        "context": True,
+        "max_tokens_per_page": 100,
+    }
+    before: Final = json.dumps(legacy, sort_keys=True)
+    request: Final = ExaAISearchConfig().transform_search_request(["first", "second"], legacy)
+    assert request == {
+        "query": "first second",
+        "numResults": 4,
+        "userLocation": "US",
+        "includeDomains": ["example.com"],
+        "startCrawlDate": "2020-01-01",
+        "endCrawlDate": "2021-01-01",
+        "includeText": ["one"],
+        "excludeText": ["two"],
+        "context": True,
+        "contents": {"text": True},
+    }
+    assert json.dumps(legacy, sort_keys=True) == before

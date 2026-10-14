@@ -9881,6 +9881,11 @@ def _fast_serialize_simple_model_response_stream(
 
 
 def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
+    from litellm.llms.base_llm.search.streaming_iterator import SearchStreamEvent
+
+    if isinstance(chunk, SearchStreamEvent):
+        return chunk.model_dump_json(exclude_unset=True)
+
     if isinstance(chunk, ModelResponseStream):
         serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
         if serialized_chunk is not None:

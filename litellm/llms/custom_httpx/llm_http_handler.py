@@ -89,6 +89,7 @@ from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPC
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
@@ -1895,7 +1896,7 @@ class BaseLLMHTTPHandler:
     def search(
         self,
         query: str | list[str],
-        optional_params: dict,
+        optional_params: dict[str, object],
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
@@ -1905,7 +1906,7 @@ class BaseLLMHTTPHandler:
         asearch: bool = False,
         headers: dict[str, object] | None = None,
         provider_config: BaseSearchConfig | None = None,
-    ) -> SearchResponse | Coroutine[object, object, SearchResponse]:
+    ) -> SearchResponse | SearchStreamWrapper | Coroutine[object, object, SearchResponse | SearchStreamWrapper]:
         """
         Sync Search handler.
         """
@@ -1989,11 +1990,27 @@ class BaseLLMHTTPHandler:
                     data=signed_json_body,
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
+                    stream=provider_config.should_stream_search(optional_params),
                 )
         except httpx.HTTPStatusError as e:
             raise provider_config.get_http_error_class(e)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        if (
+            provider_config.should_stream_search(optional_params)
+            and "text/event-stream" in response.headers.get("content-type", "").lower()
+        ):
+            return SearchStreamWrapper(response, provider_config, logging_obj, custom_llm_provider)
+        if provider_config.should_stream_search(optional_params):
+            try:
+                response.read()
+            finally:
+                response.close()
+
+        if logging_obj.stream is True or optional_params.get("stream") is True:
+            logging_obj.stream = False
+            logging_obj.model_call_details["stream"] = False
 
         return provider_config.transform_search_response(
             raw_response=response,
@@ -2004,7 +2021,7 @@ class BaseLLMHTTPHandler:
     async def async_search(
         self,
         query: str | list[str],
-        optional_params: dict,
+        optional_params: dict[str, object],
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
@@ -2013,7 +2030,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         headers: dict[str, object] | None = None,
         provider_config: BaseSearchConfig | None = None,
-    ) -> SearchResponse:
+    ) -> SearchResponse | SearchStreamWrapper:
         """
         Async Search handler.
         """
@@ -2093,11 +2110,27 @@ class BaseLLMHTTPHandler:
                     data=signed_json_body,
                     json=data if signed_json_body is None else None,
                     timeout=timeout,
+                    stream=provider_config.should_stream_search(optional_params),
                 )
         except httpx.HTTPStatusError as e:
             raise provider_config.get_http_error_class(e)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        if (
+            provider_config.should_stream_search(optional_params)
+            and "text/event-stream" in response.headers.get("content-type", "").lower()
+        ):
+            return SearchStreamWrapper(response, provider_config, logging_obj, custom_llm_provider)
+        if provider_config.should_stream_search(optional_params):
+            try:
+                await response.aread()
+            finally:
+                await response.aclose()
+
+        if logging_obj.stream is True or optional_params.get("stream") is True:
+            logging_obj.stream = False
+            logging_obj.model_call_details["stream"] = False
 
         return provider_config.transform_search_response(
             raw_response=response,

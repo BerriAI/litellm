@@ -2560,10 +2560,14 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _with_client_facing_stream_model(
         self,
-        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
-    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        response: ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | SearchResponse,
+    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | SearchResponse:
         model: Final = self.client_facing_stream_model
-        if model is None or response.model in (None, model):
+        if isinstance(response, SearchResponse) or model is None or response.model in (None, model):
             return response
         return response.model_copy(update={"model": model})
 
@@ -2867,7 +2871,12 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: (
-                ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
+                ModelResponse
+                | TextCompletionResponse
+                | ResponsesAPIResponse
+                | InteractionsAPIResponse
+                | SearchResponse
+                | None
             ) = None
             if "complete_streaming_response" in self.model_call_details:
                 return  # break out of this.
@@ -3384,7 +3393,12 @@ class Logging(LiteLLMLoggingBaseClass):
         if "async_complete_streaming_response" in self.model_call_details:
             return  # break out of this.
         complete_streaming_response: Final[
-            ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
+            ModelResponse
+            | TextCompletionResponse
+            | ResponsesAPIResponse
+            | InteractionsAPIResponse
+            | SearchResponse
+            | None
         ] = self._get_assembled_streaming_response(
             result=result,
             start_time=start_time,
@@ -4190,10 +4204,12 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         is_async: bool,
         streaming_chunks: list[object],
-    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None:
+    ) -> (
+        ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | SearchResponse | None
+    ):
         if self.stream is not True:
             return None
-        if isinstance(result, ModelResponse) or isinstance(result, TextCompletionResponse):
+        if isinstance(result, (ModelResponse, TextCompletionResponse, SearchResponse)):
             return result
         elif isinstance(
             result,

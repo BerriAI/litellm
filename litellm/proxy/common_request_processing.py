@@ -2820,8 +2820,9 @@ class ProxyBaseLLMRequestProcessing:
                     status="success",
                 )
             )
-            if self._is_streaming_request(
-                data=self.data, is_streaming_request=is_streaming_request
+            if (
+                route_type != "asearch"
+                and self._is_streaming_request(data=self.data, is_streaming_request=is_streaming_request)
             ) or self._is_streaming_response(response):  # use generate_responses to stream responses
                 selected_data_generator: AsyncGenerator[str, None] | None = None
                 # Call response headers hook for streaming success
