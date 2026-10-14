@@ -38,13 +38,23 @@ def resolve_inference_model(
     endpoint_model: object = None,
     *,
     kind: Literal[
-        "completion", "image_generation", "image_edit", "moderation", "speech", "body", "path"
+        "completion", "image_generation", "image_edit", "image_variation", "moderation", "speech", "body", "path"
     ] = "completion",
 ) -> object:
     match kind:
         case "image_generation":
             return cli_model or endpoint_model or settings.get("image_generation_model") or body_model
         case "image_edit":
+            return (
+                settings.get("completion_model")
+                or cli_model
+                or endpoint_model
+                or settings.get("image_generation_model")
+                or body_model
+            )
+        case "image_variation":
+            # Variations take the source image rather than a prompt; model
+            # resolution mirrors image_edit (completion model first).
             return (
                 settings.get("completion_model")
                 or cli_model

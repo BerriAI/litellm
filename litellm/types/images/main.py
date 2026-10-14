@@ -33,3 +33,14 @@ class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):
     image: FileTypes
     prompt: str
     model: str | None
+
+
+class ImageVariationRequestParams(ImageEditOptionalRequestParams, total=False):
+    """
+    TypedDict for request parameters supported by OpenAI's image variation API.
+
+    Params here: https://platform.openai.com/docs/api-reference/images/createVariation
+    """
+
+    image: FileTypes
+    model: str | None

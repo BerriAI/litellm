@@ -32,13 +32,18 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
 )
 from litellm.proxy.route_llm_request import route_request
-from litellm.types.images.main import ImageEditRequestParams
+from litellm.types.images.main import (
+    ImageEditRequestParams,
+    ImageVariationRequestParams,
+)
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
+IMAGE_VARIATION_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageVariationRequestParams))
+IMAGE_VARIATION_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"image": None})
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
@@ -331,6 +336,97 @@ async def image_edit_api(
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
             route_type="aimage_edit",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor.handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.post(
+    "/v1/images/variations",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["images"],
+)
+@router.post(
+    "/images/variations",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["images"],
+)
+@router.post(
+    "/openai/deployments/{model:path}/images/variations",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+)  # azure compatible endpoint
+async def image_variation_api(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    image: list[UploadFile] | None = File(None),
+    model: str | None = None,
+):
+    """
+    Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/createVariation
+
+    ```bash
+    curl -X POST "http://localhost:4000/v1/images/variations"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=dall-e-2"         -F "image=@image.png"         -F "n=2"
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        read_request_body,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    form_fields: Final = coerce_numeric_form_fields(
+        parsed_body=await read_request_body(request=request),
+        numeric_fields=IMAGE_VARIATION_NUMERIC_FORM_FIELDS,
+    )
+    data: Final = {
+        key: value
+        for key, value in chain(IMAGE_VARIATION_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
+        if key not in BRACKETED_FILE_FIELDS
+    }
+    image_files: Final = await batch_to_bytesio(image)
+    if image_files:
+        data["image"] = image_files
+    if isinstance(data.get("image"), str):
+        raise HTTPException(
+            status_code=422,
+            detail="'image' must be provided as a multipart file upload, not a string.",
+        )
+
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aimage_variation",
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,
