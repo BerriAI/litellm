@@ -22,8 +22,8 @@ from litellm.llms.base_llm.decisions.transformation import (
     ir_to_systemone_response,
     remote_image_urls,
     systemone_request_to_ir,
+    with_images_where,
     with_inlined_images,
-    without_images,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
@@ -35,6 +35,7 @@ from litellm.types.decisions import (
     DecisionsIRMessages,
     DecisionsIRRequest,
     DecisionsIRResponse,
+    DecisionsIRState,
     DecisionsJSON,
     DecisionsRequestBody,
     DecisionsResponse,
@@ -64,6 +65,7 @@ _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAda
     tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
 _HANDLER: Final = BaseLLMHTTPHandler()
+_BASE64_MARKER: Final = ";base64,"
 
 
 _IMAGE_ADAPTER: Final[TypeAdapter[DecisionsImage]] = TypeAdapter(DecisionsImage, config=ConfigDict(title="images"))
@@ -82,6 +84,14 @@ def _image_entries(images: object) -> tuple[object, ...]:
         return _IMAGE_ENTRIES_ADAPTER.validate_python(images)
     except ValidationError:
         return ()
+
+
+def _is_well_formed_image(image: DecisionsImage) -> bool:
+    return _valid_image(image) is not None
+
+
+def _no_image(_image: DecisionsImage) -> bool:
+    return False
 
 
 def _request_images(images: object, drops_params: bool) -> tuple[DecisionsImage, ...]:
@@ -221,6 +231,11 @@ class _NoInputLeftAfterDrop:
     names: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _MalformedImages:
+    count: int
+
+
 def _unsupported_params(
     ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig, model: str, custom_llm_provider: str
 ) -> tuple[str, ...]:
@@ -247,9 +262,25 @@ def _without_unsupported_params(
 ) -> DecisionsIRRequest:
     return replace(
         ir_request,
-        input=ir_request.input if provider_config.supports_images else without_images(ir_request.input),
+        input=ir_request.input if provider_config.supports_images else with_images_where(ir_request.input, _no_image),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
     )
+
+
+def _leaves_no_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    return isinstance(decision_input, DecisionsIRMessages) and not decision_input.messages
+
+
+def _without_malformed_images(
+    ir_request: DecisionsIRRequest, drops_params: bool
+) -> DecisionsIRRequest | _MalformedImages:
+    malformed: Final = sum(1 for image in input_images(ir_request.input) if not _is_well_formed_image(image))
+    if not malformed:
+        return ir_request
+    well_formed: Final = replace(ir_request, input=with_images_where(ir_request.input, _is_well_formed_image))
+    if not drops_params or _leaves_no_input(well_formed.input):
+        return _MalformedImages(count=malformed)
+    return well_formed
 
 
 def _provider_ir_request(
@@ -260,15 +291,17 @@ def _provider_ir_request(
     model: str,
     custom_llm_provider: str,
     kwargs: Mapping[str, object],
-) -> DecisionsIRRequest | _UnsupportedParams | _NoInputLeftAfterDrop:
-    ir_request: Final = _ir_request(request, safety_identifier)
+) -> DecisionsIRRequest | _UnsupportedParams | _NoInputLeftAfterDrop | _MalformedImages:
+    ir_request: Final = _without_malformed_images(_ir_request(request, safety_identifier), _drops_params(kwargs))
+    if isinstance(ir_request, _MalformedImages):
+        return ir_request
     unsupported: Final = _unsupported_params(ir_request, provider_config, model, custom_llm_provider)
     if not unsupported:
         return ir_request
     if not _drops_params(kwargs):
         return _UnsupportedParams(names=unsupported)
     supported: Final = _without_unsupported_params(ir_request, provider_config)
-    if isinstance(supported.input, DecisionsIRMessages) and not supported.input.messages:
+    if _leaves_no_input(supported.input):
         return _NoInputLeftAfterDrop(names=unsupported)
     return supported
 
@@ -347,6 +380,15 @@ def prepare_call(
             model=model,
             llm_provider=provider,
         )
+    if isinstance(ir_request, _MalformedImages):
+        raise litellm.BadRequestError(
+            message=(
+                f"Invalid Decisions request: {ir_request.count} input_image part(s) have an image_url that is "
+                "neither a data:image/...;base64, URL nor an http(s) URL"
+            ),
+            model=model,
+            llm_provider=provider,
+        )
     if isinstance(ir_request, _NoInputLeftAfterDrop):
         raise litellm.BadRequestError(
             message=(
@@ -420,6 +462,40 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
     return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
 
 
+def _decoded_image_bytes(image: DecisionsImage) -> int:
+    if isinstance(image, DecisionsBase64Image):
+        return len(image.base64.rstrip("=")) * 3 // 4
+    marker_at: Final = image.lower().find(_BASE64_MARKER)
+    return 0 if marker_at < 0 else len(image[marker_at + len(_BASE64_MARKER) :].rstrip("=")) * 3 // 4
+
+
+def _byte_limit(limit: int) -> str:
+    return f"{limit:,} bytes ({limit / (1024 * 1024):g} MiB)"
+
+
+def _image_size_error(call: DecisionsCall) -> str | None:
+    sizes: Final = tuple(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))
+    largest: Final = max(sizes, default=0)
+    per_image: Final = call.provider_config.max_image_bytes
+    total: Final = call.provider_config.max_total_image_bytes
+    if per_image is not None and largest > per_image:
+        return f"takes images of at most {_byte_limit(per_image)} each, got one of {largest:,} bytes"
+    if total is not None and sum(sizes) > total:
+        return f"takes at most {_byte_limit(total)} of images per request, got {sum(sizes):,} bytes"
+    return None
+
+
+def _checked_image_sizes(call: DecisionsCall) -> DecisionsCall:
+    error: Final = _image_size_error(call)
+    if error is None:
+        return call
+    raise litellm.BadRequestError(
+        message=f"{call.custom_llm_provider} {error}",
+        model=call.requested_model,
+        llm_provider=call.custom_llm_provider,
+    )
+
+
 def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     body: Final = call.provider_config.transform_decisions_request(
         model=call.model, request=call.ir_request, custom_llm_provider=call.custom_llm_provider
@@ -475,7 +551,7 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
 
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    inlined: Final = await _async_with_remote_images_inlined(call)
+    inlined: Final = _checked_image_sizes(await _async_with_remote_images_inlined(call))
     body: Final = _request_body(inlined)
     try:
         response: Final = await _HANDLER.adecisions(
@@ -498,7 +574,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
 
 
 def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    inlined: Final = _with_remote_images_inlined(call)
+    inlined: Final = _checked_image_sizes(_with_remote_images_inlined(call))
     body: Final = _request_body(inlined)
     try:
         response: Final = _HANDLER.decisions(

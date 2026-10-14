@@ -1,6 +1,6 @@
 import json
 from abc import ABC
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from itertools import chain
 from types import MappingProxyType
@@ -137,25 +137,31 @@ def image_param(decision_input: DecisionsIRState | DecisionsIRMessages) -> str |
             assert_never(decision_input)
 
 
-def _text_only_message(message: OpenAIDecisionInputMessage) -> OpenAIDecisionInputMessage | None:
+def _kept_part(part: OpenAIDecisionInputText | OpenAIDecisionInputImage, keep: Callable[[str], bool]) -> bool:
+    return isinstance(part, OpenAIDecisionInputText) or keep(part.image_url)
+
+
+def _message_with_images_where(
+    message: OpenAIDecisionInputMessage, keep: Callable[[str], bool]
+) -> OpenAIDecisionInputMessage | None:
     if isinstance(message.content, str):
         return message
-    text_parts: Final = tuple(part for part in message.content if isinstance(part, OpenAIDecisionInputText))
-    return message.model_copy(update={"content": text_parts}) if text_parts else None
+    kept_parts: Final = tuple(part for part in message.content if _kept_part(part, keep))
+    return message.model_copy(update={"content": kept_parts}) if kept_parts else None
 
 
-def without_images(
-    decision_input: DecisionsIRState | DecisionsIRMessages,
+def with_images_where(
+    decision_input: DecisionsIRState | DecisionsIRMessages, keep: Callable[[DecisionsImage], bool]
 ) -> DecisionsIRState | DecisionsIRMessages:
     match decision_input:
         case DecisionsIRState():
-            return replace(decision_input, images=())
+            return replace(decision_input, images=tuple(image for image in decision_input.images if keep(image)))
         case DecisionsIRMessages():
             return DecisionsIRMessages(
                 messages=tuple(
-                    text_only
+                    kept
                     for message in decision_input.messages
-                    if (text_only := _text_only_message(message)) is not None
+                    if (kept := _message_with_images_where(message, keep)) is not None
                 )
             )
         case _:
@@ -422,6 +428,8 @@ class BaseDecisionsConfig(ABC):
     supports_safety_identifier: bool = False
     supports_images: bool = False
     max_images: int | None = None
+    max_image_bytes: int | None = None
+    max_total_image_bytes: int | None = None
     inlines_remote_images: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}

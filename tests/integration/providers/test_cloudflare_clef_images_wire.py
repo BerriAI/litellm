@@ -46,6 +46,7 @@ _SPEND_QUERY: Final = (
     "WHERE request_id = %s"
 )
 _OWNED_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 120)
+_COLD_OPENAPI_SECONDS: Final = 120
 _SLOW_IMAGE_RELEASE: Final = threading.Event()
 _IMAGE_INPUT_RECORDER: Final = """
 import json
@@ -390,6 +391,79 @@ def test_a_malformed_image_under_drop_params_keeps_the_well_formed_ones(gateway:
         assert _upstream_body(request) == _expected_upstream_body("clef", _state(marker), [_PNG_DATA_URL, _PNG_OBJECT])
 
 
+_MALFORMED_IMAGE_URLS: Final = (
+    ("not_a_url", "not-an-image"),
+    ("pdf_data_url", "data:application/pdf;base64,AA=="),
+    ("ftp_url", "ftp://images.example/a.png"),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "image_url"), _MALFORMED_IMAGE_URLS, ids=[label for label, _ in _MALFORMED_IMAGE_URLS]
+)
+def test_a_malformed_input_image_is_refused_unless_the_deployment_drops_params(
+    gateway: Gateway, label: str, image_url: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_clef_reply) as wire, gateway.scenario() as scenario:
+        strict: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY)
+        dropping: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY, drop_params=True)
+        refused: Final = _decide(gateway, "/v1/decisions", strict, marker, [image_url, _PNG_DATA_URL])
+        assert refused.status_code == 400, (label, refused.text)
+        assert "Invalid Decisions request: 1 input_image" in refused.text, (label, refused.text)
+        assert wire.drain() == (), label
+        dropped: Final = _decide(gateway, "/v1/decisions", dropping, marker, [image_url, _PNG_DATA_URL])
+        assert dropped.status_code == 200, (label, dropped.text)
+        assert dropped.json() == _expected_response("/v1/decisions", "clef", marker), label
+        (request,) = wire.drain()
+        assert _upstream_body(request) == _expected_upstream_body("clef", _state(marker), [_PNG_DATA_URL]), label
+
+
+_MIB: Final = 1024 * 1024
+
+
+def _png_data_url(decoded_bytes: int) -> str:
+    return f"data:image/png;base64,{base64.b64encode(bytes(decoded_bytes)).decode()}"
+
+
+def _png_object(decoded_bytes: int) -> dict[str, JsonValue]:
+    return {"content_type": "image/png", "base64": base64.b64encode(bytes(decoded_bytes)).decode()}
+
+
+_OVERSIZED: Final[tuple[tuple[str, Route, tuple[JsonValue, ...], str], ...]] = (
+    ("one_over_4mib", "/v1/systemone", (_png_object(4 * _MIB + 1),), "got one of 4,194,305 bytes"),
+    ("one_over_4mib", "/v1/decisions", (_png_data_url(4 * _MIB + 1),), "got one of 4,194,305 bytes"),
+    (
+        "total_over_8mib",
+        "/v1/systemone",
+        (_png_data_url(4 * _MIB), _png_object(4 * _MIB), _png_data_url(1)),
+        "got 8,388,609 bytes",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "route", "images", "refusal"), _OVERSIZED, ids=[f"{label}{route}" for label, route, _, _ in _OVERSIZED]
+)
+def test_images_over_clefs_size_limits_are_refused_before_the_upstream_call(
+    gateway: Gateway, label: str, route: Route, images: tuple[JsonValue, ...], refusal: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_clef_reply) as wire, gateway.scenario() as scenario:
+        strict: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY)
+        dropping: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY, drop_params=True)
+        for model in (strict, dropping):
+            refused = _decide(gateway, route, model, marker, images)
+            assert refused.status_code == 400, (label, refused.text[:500])
+            assert refusal in refused.text, (label, refused.text[:500])
+        assert wire.drain() == (), label
+        at_limits: Final[list[JsonValue]] = [_png_data_url(4 * _MIB), _png_object(4 * _MIB)]
+        accepted: Final = _decide(gateway, "/v1/systemone", strict, marker, at_limits)
+        assert accepted.status_code == 200, accepted.text[:500]
+        (request,) = wire.drain()
+        assert _upstream_body(request) == _expected_upstream_body("clef", _state(marker), at_limits), label
+
+
 def _raw_system_one(gateway: Gateway, model: str, marker: str, images_fragment: str) -> httpx.Response:
     raw: Final = (
         f'{{"model": {json.dumps(model)}, "state": {json.dumps(_state(marker))}, '
@@ -552,7 +626,11 @@ def _image_object_schema(schema: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 
 def test_openapi_documents_what_an_image_object_must_carry(gateway: Gateway) -> None:
-    paths: Final = object_value(gateway.get("/openapi.json")["paths"])
+    response: Final = gateway.client.get(
+        "/openapi.json", headers={"Authorization": f"Bearer {gateway.key}"}, timeout=_COLD_OPENAPI_SECONDS
+    )
+    assert response.status_code == 200, response.text
+    paths: Final = object_value(_JSON_OBJECT.validate_json(response.content)["paths"])
     for route in ("/v1/systemone", "/systemone"):
         post: Final = object_value(object_value(paths[route])["post"])
         content: Final = object_value(object_value(post["requestBody"])["content"])
