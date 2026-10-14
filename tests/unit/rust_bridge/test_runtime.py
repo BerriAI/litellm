@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
-from types import SimpleNamespace
 from typing import Final, Protocol
 
 import pytest
@@ -10,27 +9,15 @@ from litellm.exceptions import APIError
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import bindings, configuration, runtime
+from litellm.rust_bridge._native import RustBridgeDeclined, RustUpstreamError
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.lifecycle import Complete, Open, Yield
 from litellm.rust_bridge.streams import Stream, SyncStream
 
 
-class RustBridgeDeclined(Exception):
-    pass
-
-
-class RustUpstreamError(Exception):
-    pass
-
-
 @pytest.fixture(autouse=True)
-def native_exceptions(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    native: Final = SimpleNamespace(
-        RustBridgeDeclined=RustBridgeDeclined,
-        RustUpstreamError=RustUpstreamError,
-    )
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+def rust_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     configuration.reset_rust_configuration()
     yield

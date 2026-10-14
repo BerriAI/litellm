@@ -488,22 +488,17 @@ async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("media_type", ["application/json", "application/x-protobuf"])
 @pytest.mark.parametrize("root_path", ["", "/tenant-a"])
-@pytest.mark.parametrize("native_available", [True, False])
 @pytest.mark.parametrize("error", [
     ProxyException("database credentials: secret", "auth_error", None, 401),
     HTTPException(403, "database credentials: secret"),
 ])
-async def test_otlp_auth_errors_hide_internal_details_and_survive_missing_native(
-    media_type: str, root_path: str, native_available: bool,
-    error: ProxyException | HTTPException, monkeypatch: pytest.MonkeyPatch,
+async def test_otlp_auth_errors_hide_internal_details(
+    media_type: str, root_path: str, error: ProxyException | HTTPException,
 ) -> None:
     from google.rpc.status_pb2 import Status
 
     from litellm.proxy.proxy_server import otlp_http_exception_handler
-    from litellm.rust_bridge import loader
 
-    if not native_available:
-        monkeypatch.setattr(loader, "_cached_bridge", None)
     request: Final = Request({
         "type": "http", "method": "POST", "path": root_path + "/v1/traces", "root_path": root_path,
         "headers": [(b"content-type", media_type.encode())],
@@ -522,7 +517,7 @@ async def test_otlp_auth_errors_hide_internal_details_and_survive_missing_native
         else Status.FromString(response.body).message
     )
     expected: Final = "Unauthorized" if isinstance(error, ProxyException) else "Forbidden"
-    assert message == (expected if native_available or media_type == "application/json" else "")
+    assert message == expected
 
 
 def _websocket(sent: list[Message]) -> WebSocket:
