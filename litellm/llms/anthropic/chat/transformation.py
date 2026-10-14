@@ -294,6 +294,17 @@ DROP_UNSUPPORTED_SPEED_WARNING: Final = (
     "Dropping unsupported `speed` for model=%s (drop_params=True). Fast mode is only supported on select Opus models."
 )
 
+SERVICE_TIER_PROVIDERS: Final = frozenset({"anthropic", "azure_ai"})
+
+OPENAI_TO_ANTHROPIC_SERVICE_TIER: Final = MappingProxyType(
+    {"auto": "auto", "default": "standard_only", "standard_only": "standard_only"}
+)
+
+DROP_UNSUPPORTED_SERVICE_TIER_WARNING: Final = (
+    "Dropping unsupported `service_tier` for model=%s (drop_params=True). "
+    "Anthropic only accepts 'auto' and 'standard_only'."
+)
+
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
@@ -334,6 +345,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @property
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
+
+    def uses_native_structured_output(self, model: str) -> bool:
+        return AnthropicConfig._supports_model_capability(
+            model, "supports_native_structured_output", self._resolved_provider
+        )
 
     @classmethod
     def get_config(cls, *, model: str | None = None):
@@ -495,6 +511,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         optional_params.pop("speed", None)
 
+    @staticmethod
+    def _map_service_tier(value: str, model: str, drop_params: bool) -> str | None:
+        anthropic_tier: Final = OPENAI_TO_ANTHROPIC_SERVICE_TIER.get(value)
+        if anthropic_tier is not None:
+            return anthropic_tier
+        if not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support service_tier={value!r}. Anthropic accepts 'auto', "
+                    "'standard_only', or OpenAI's 'default' (sent as 'standard_only'). "
+                    "To drop unsupported params, set `litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+        litellm.verbose_logger.warning(DROP_UNSUPPORTED_SERVICE_TIER_WARNING, model)
+        return None
+
     @classmethod
     def maybe_drop_speed_param(
         cls,
@@ -567,6 +600,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ):
             params.append("thinking")
             params.append("reasoning_effort")
+
+        if self._resolved_provider in SERVICE_TIER_PROVIDERS:
+            params.append("service_tier")
 
         return params
 
@@ -1600,11 +1636,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if AnthropicConfig._supports_model_capability(
-                    model,
-                    "supports_native_structured_output",
-                    self._resolved_provider,
-                ):
+                if self.uses_native_structured_output(model):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
@@ -1719,6 +1751,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
+            elif (
+                param == "service_tier"
+                and isinstance(value, str)
+                and self._resolved_provider in SERVICE_TIER_PROVIDERS
+                and (anthropic_tier := AnthropicConfig._map_service_tier(value, model, drop_params)) is not None
+            ):
+                optional_params["service_tier"] = anthropic_tier  # rebind-ok: in-place fill is this method's contract
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
@@ -2906,11 +2945,13 @@ class JsonModeRequest(BaseModel):
         return None if json_tool is None else response_format_schema(json_tool.get("input_schema"))
 
 
-def _valid_user_id(user_id: str) -> bool:
+def _valid_user_id(user_id: object) -> bool:
     """
-    Validate that user_id is not an email or phone number.
-    Returns: bool: True if valid (not email or phone), False otherwise
+    Validate that user_id is a string and not an email or phone number.
+    Returns: bool: True if valid (string, not email or phone), False otherwise
     """
+    if not isinstance(user_id, str):
+        return False
     email_pattern: Final = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
     phone_pattern: Final = r"^\+?[\d\s\(\)-]{7,}$"
 
