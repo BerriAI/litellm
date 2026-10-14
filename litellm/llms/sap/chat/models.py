@@ -65,7 +65,9 @@ class ImageContent(LiteLLMBaseModel):
 
 class FunctionObj(LiteLLMBaseModel):
     name: str
-    arguments: str
+    # Default empty string: streaming tool-call deltas often omit arguments
+    # until the final chunk (OpenAI/Anthropic streaming semantics).
+    arguments: str = ""
 
 
 class FunctionTool(LiteLLMBaseModel):
