@@ -91,15 +91,17 @@ impl Observation {
     }
 }
 
-/// Hooks lock their own state around Python work, so the handle can traverse them while a
-/// hook is suspended.
+/// What the running call shares with its handle: the binding and hooks the handle
+/// traverses and closes, and the Python values the call retains across a suspension.
+/// Binding and hooks lock their own state only around Python work, so the handle can
+/// traverse them while a hook or host call is suspended.
 struct Shared<H, L> {
+    binding: H,
     hooks: L,
-    parts: Mutex<Parts<H>>,
+    parts: Mutex<Parts>,
 }
 
-struct Parts<H> {
-    binding: H,
+struct Parts {
     arguments: Option<Py<PyDict>>,
     interrupted: Option<Py<PyBaseException>>,
     selected: Option<Selected>,
@@ -151,12 +153,16 @@ where
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
-    fn parts(&self) -> MutexGuard<'_, Parts<H>> {
+    fn parts(&self) -> MutexGuard<'_, Parts> {
         self.shared.parts.lock()
     }
 
     fn hooks(&self) -> &L {
         &self.shared.hooks
+    }
+
+    fn binding(&self) -> &H {
+        &self.shared.binding
     }
 
     async fn run(mut self) -> PyResult<Py<PyAny>> {
@@ -198,12 +204,8 @@ where
         self.hooks()
             .arguments_prepared(&prepared)
             .map_err(Setup::Host)?;
-        let decoded = {
-            let mut parts = self.parts();
-            let decoded = Python::attach(|py| parts.binding.decode_request(py, prepared.bind(py)));
-            parts.arguments = Some(prepared);
-            decoded
-        };
+        let decoded = Python::attach(|py| self.binding().decode_request(py, prepared.bind(py)));
+        self.parts().arguments = Some(prepared);
         let request = decoded.map_err(Setup::Decode)?;
         let start = self
             .start
@@ -271,7 +273,9 @@ where
         op: HostRequest<ProtocolOf<H>>,
     ) -> Result<(), InvokeError<ErrorOf<H>>> {
         match op {
-            HostRequest::HostCall(call) => self.host_call(call).await,
+            HostRequest::HostCall(call) => {
+                self.binding().handle_host_call(&self.caller, call).await
+            }
             HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                 wire,
                 context,
@@ -302,42 +306,18 @@ where
             }
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                 self.streaming = true;
-                let head = {
-                    let mut parts = self.parts();
-                    Python::attach(|py| parts.binding.encode_stream_head(py, head))?
-                };
+                let head = Python::attach(|py| self.binding().encode_stream_head(py, head))?;
                 self.hooks().on_stream_open(&head)?;
                 reply.send(self.caller.open_stream(head).await);
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
-                let chunk = {
-                    let mut parts = self.parts();
-                    Python::attach(|py| parts.binding.encode_chunk(py, chunk))?
-                };
+                let chunk = Python::attach(|py| self.binding().encode_chunk(py, chunk))?;
                 self.hooks().on_stream_chunk(&chunk)?;
                 reply.send(self.caller.yield_chunk(chunk).await);
                 Ok(())
             }
         }
-    }
-
-    async fn host_call(
-        &self,
-        call: <ProtocolOf<H> as Protocol>::HostCall,
-    ) -> Result<(), InvokeError<ErrorOf<H>>> {
-        let mut pending = {
-            let mut parts = self.parts();
-            Python::attach(|py| parts.binding.begin_host_call(py, call))?
-        };
-        while let Some(awaitable) = pending {
-            let result = self.caller.await_python(awaitable).await;
-            pending = {
-                let mut parts = self.parts();
-                Python::attach(|py| parts.binding.resume_host_call(py, result))?
-            };
-        }
-        Ok(())
     }
 
     async fn notify(&self, event: PythonCallEvent<'_>) -> PyResult<()> {
@@ -357,11 +337,7 @@ where
                 return self.succeeded(none).await;
             }
         };
-        let encoded = {
-            let mut parts = self.parts();
-            Python::attach(|py| parts.binding.encode_response(py, response))
-        };
-        let public = match encoded {
+        let public = match Python::attach(|py| self.binding().encode_response(py, response)) {
             Ok(public) => public,
             Err(error) => return self.failure(error, FailureOrigin::Call).await,
         };
@@ -385,7 +361,7 @@ where
             parts.observation.ended_at.get_or_insert_with(epoch_seconds);
             Python::attach(|py| match parts.interrupted.take() {
                 Some(retained) => PyErr::from_value(retained.into_bound(py).into_any()),
-                None => classified(py, &parts.binding, error),
+                None => classified(py, self.binding(), error),
             })
         };
         self.failure(error, FailureOrigin::Call).await
@@ -527,11 +503,11 @@ where
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        self.shared.binding.traverse(visit)?;
         self.shared.hooks.traverse(visit)?;
         let Some(parts) = self.shared.parts.try_lock() else {
             return Ok(());
         };
-        parts.binding.traverse(visit)?;
         visit.call(&parts.arguments)?;
         visit.call(&parts.interrupted)?;
         match &parts.selected {
@@ -550,14 +526,15 @@ where
     fn drop(&mut self) {
         self.body.get_mut().cancel();
         self.reply = None;
-        let Some(Shared { hooks, parts }) = Arc::get_mut(&mut self.shared) else {
+        let Some(Shared {
+            binding,
+            hooks,
+            parts,
+        }) = Arc::get_mut(&mut self.shared)
+        else {
             return;
         };
-        let Parts {
-            binding,
-            observation,
-            ..
-        } = parts.get_mut();
+        let observation = &mut parts.get_mut().observation;
         Python::attach(|py| {
             if observation.observing {
                 let timing = observation.timing();
@@ -592,9 +569,9 @@ where
     M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
     let shared = Arc::new(Shared {
+        binding,
         hooks,
         parts: Mutex::new(Parts {
-            binding,
             arguments: Some(arguments),
             interrupted: None,
             selected: None,

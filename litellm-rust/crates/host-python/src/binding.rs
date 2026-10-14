@@ -13,7 +13,7 @@ pub trait PythonBinding: PythonOwned {
 
     /// Decodes the keyword view returned by `prepare_arguments`, including preflight rewrites.
     fn decode_request(
-        &mut self,
+        &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<
@@ -22,21 +22,21 @@ pub trait PythonBinding: PythonOwned {
     >;
 
     fn encode_response(
-        &mut self,
+        &self,
         py: Python<'_>,
         response: <Self::Protocol as Protocol>::Response,
     ) -> PyResult<Py<PyAny>>;
 
     /// What the stream carries at hand-off, as the caller's stream receives it.
     fn encode_stream_head(
-        &mut self,
+        &self,
         py: Python<'_>,
         head: <Self::Protocol as Protocol>::StreamHead,
     ) -> PyResult<Py<PyAny>>;
 
     /// One streamed chunk as the caller receives it.
     fn encode_chunk(
-        &mut self,
+        &self,
         py: Python<'_>,
         chunk: <Self::Protocol as Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>>;

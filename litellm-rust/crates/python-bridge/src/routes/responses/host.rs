@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use crate::routes::inference::InferenceHost;
-use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
+use litellm_host_python::{Awaiter, InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_responses::{Error, route::Responses, types::ResponsesCall};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -12,7 +12,7 @@ use pyo3::{
 pub(super) struct ResponsesPythonHost(pub InferenceHost);
 
 pub(super) fn project(
-    host: &mut InferenceHost,
+    host: &InferenceHost,
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
 ) -> PyResult<ResponsesCall> {
@@ -55,11 +55,11 @@ impl PythonBinding for ResponsesPythonHost {
     type Failure = PyErr;
 
     fn decode_request(
-        &mut self,
+        &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<ResponsesCall, InvokeError<Error>> {
-        let call = project(&mut self.0, py, arguments).map_err(InvokeError::Python)?;
+        let call = project(&self.0, py, arguments).map_err(InvokeError::Python)?;
         if call
             .optional_params
             .get("stream")
@@ -73,7 +73,7 @@ impl PythonBinding for ResponsesPythonHost {
     }
 
     fn encode_response(
-        &mut self,
+        &self,
         py: Python<'_>,
         response: <Responses as litellm_host::protocol::Protocol>::Response,
     ) -> PyResult<Py<PyAny>> {
@@ -81,7 +81,7 @@ impl PythonBinding for ResponsesPythonHost {
     }
 
     fn encode_stream_head(
-        &mut self,
+        &self,
         _py: Python<'_>,
         head: <Responses as litellm_host::protocol::Protocol>::StreamHead,
     ) -> PyResult<Py<PyAny>> {
@@ -92,7 +92,7 @@ impl PythonBinding for ResponsesPythonHost {
     }
 
     fn encode_chunk(
-        &mut self,
+        &self,
         _py: Python<'_>,
         chunk: <Responses as litellm_host::protocol::Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>> {
@@ -111,9 +111,9 @@ impl PythonBinding for ResponsesPythonHost {
 }
 
 impl PythonHostCalls<Responses> for ResponsesPythonHost {
-    fn handle_host_call(
-        &mut self,
-        _: Python<'_>,
+    async fn handle_host_call(
+        &self,
+        _: &dyn Awaiter,
         op: Infallible,
     ) -> Result<(), InvokeError<Error>> {
         match op {}
