@@ -8985,6 +8985,56 @@ async def test_a_deleted_db_pass_through_stops_serving_on_the_next_db_sync(tmp_p
     assert [str(request.url) for request in config_upstream] == ["http://config-upstream.test/api"]
 
 
+class _UnreadableConfigTable(_InMemoryConfigTable):
+    async def get_generic_data(self, key: str, value: str, table_name: str) -> _StoredConfigRow | None:
+        raise RuntimeError("permission denied for table LiteLLM_Config")
+
+    async def find_first(self, where: Mapping[str, str]) -> _StoredConfigRow | None:
+        raise RuntimeError("permission denied for table LiteLLM_Config")
+
+    async def find_unique(self, where: Mapping[str, str]) -> _StoredConfigRow | None:
+        raise RuntimeError("permission denied for table LiteLLM_Config")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config_table_after", "expected_status", "expected_upstream"),
+    [
+        (_UnreadableConfigTable({}), 200, ["http://db-upstream.test/api"]),
+        (_InMemoryConfigTable({"general_settings": {"pass_through_endpoints": []}}), 404, []),
+        (_InMemoryConfigTable({"general_settings": {}}), 404, []),
+    ],
+    ids=["read-fails", "emptied-list", "dropped-key"],
+)
+async def test_the_reload_job_keeps_db_pass_throughs_only_when_the_db_read_fails(
+    tmp_path, monkeypatch, config_table_after, expected_status, expected_upstream
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[],
+        db_pass_through_endpoints=[
+            {"id": "db-kept", "path": "/db-kept", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+    served_before, _ = await _send_through_proxy("/db-kept", {})
+
+    monkeypatch.setitem(proxy_server.general_settings, "supported_db_objects", ["pass_through_endpoints"])
+    monkeypatch.setattr(proxy_server, "prisma_client", config_table_after)
+    await proxy.proxy_config.add_deployment(
+        prisma_client=config_table_after, proxy_logging_obj=MagicMock(spec=ProxyLogging)
+    )
+    served_after, db_upstream = await _send_through_proxy("/db-kept", {})
+
+    assert (served_before.status_code, served_after.status_code) == (200, expected_status)
+    assert [str(request.url) for request in db_upstream] == expected_upstream
+
+
 @pytest.mark.asyncio
 async def test_config_pass_through_reads_its_custom_key_header_when_the_db_holds_pass_throughs(tmp_path, monkeypatch):
     proxy: Final = await _boot_db_backed_proxy(

@@ -3645,6 +3645,8 @@ def _request_app(request: Request) -> FastAPI:
 async def _get_pass_through_endpoints_from_db(
     endpoint_id: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
+    *,
+    raise_on_read_error: bool = False,
 ) -> list[PassThroughGenericEndpoint]:
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.proxy_server import get_config_general_settings
@@ -3655,7 +3657,11 @@ async def _get_pass_through_endpoints_from_db(
         response: Final[ConfigFieldInfo] = await get_config_general_settings(
             field_name="pass_through_endpoints", user_api_key_dict=user_api_key_dict
         )
+    except HTTPException:
+        return []
     except Exception:
+        if raise_on_read_error:
+            raise
         return []
 
     pass_through_endpoint_data: Final = _config_field_endpoints(response)
@@ -4141,5 +4147,9 @@ async def initialize_pass_through_endpoints_in_db():
     """
     Gets all pass-through endpoints from db and initializes them in the proxy server.
     """
-    pass_through_endpoints: Final = await _get_pass_through_endpoints_from_db()
+    try:
+        pass_through_endpoints: Final = await _get_pass_through_endpoints_from_db(raise_on_read_error=True)
+    except Exception:  # noqa: BLE001  # a failed read keeps the routes from the last good read until the next pass
+        verbose_proxy_logger.exception("Could not read pass-through endpoints from the DB, keeping the current routes")
+        return
     await initialize_pass_through_endpoints(pass_through_endpoints=pass_through_endpoints)
