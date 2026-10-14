@@ -394,11 +394,26 @@ def _modes(route: Route) -> tuple[bool, ...]:
     return (False,) if route == "bedrock_converse" else (False, True)
 
 
-def _cells() -> tuple[ParameterSet, ...]:
-    routes: Final[tuple[Route, ...]] = ("gemini", "bedrock_converse", "mistral", "unlisted_claude", "anthropic")
-    searches: Final[tuple[Search, ...]] = ("absent", "dropped")
+_UNDEFERRING: Final[tuple[tuple[Route, Search], ...]] = (
+    ("gemini", "absent"),
+    ("gemini", "dropped"),
+    ("bedrock_converse", "absent"),
+    ("bedrock_converse", "dropped"),
+    ("mistral", "absent"),
+    ("mistral", "dropped"),
+    ("unlisted_claude", "dropped"),
+)
+_KEEPING: Final[tuple[tuple[Route, Search], ...]] = (
+    ("unlisted_claude", "absent"),
+    ("anthropic", "absent"),
+    ("anthropic", "dropped"),
+    ("azure_ai", "absent"),
+)
+
+
+def _cells(pairs: Sequence[tuple[Route, Search]]) -> tuple[ParameterSet, ...]:
     combos: Final = [
-        (route, search, stream) for route in routes for search in searches for stream in _modes(route)
+        (route, search, stream) for route, search in pairs for stream in _modes(route)
     ]  # comprehension-ok: a parametrize grid
     return tuple(
         pytest.param(route, search, stream, id=f"{route}-{search}-{'stream' if stream else 'sync'}")
@@ -406,7 +421,7 @@ def _cells() -> tuple[ParameterSet, ...]:
     )
 
 
-@pytest.mark.parametrize(("route", "search", "stream"), _cells())
+@pytest.mark.parametrize(("route", "search", "stream"), _cells(_UNDEFERRING))
 def test_without_a_search_tool_on_the_wire_every_tool_arrives_without_defer_loading(
     gateway: Gateway, route: Route, search: Search, stream: bool
 ) -> None:
@@ -418,6 +433,27 @@ def test_without_a_search_tool_on_the_wire_every_tool_arrives_without_defer_load
         _assert_served(response, call.marker, stream)
         request, body = _only_request(wire)
         _assert_undeferred_wire(call, request, body)
+
+
+@pytest.mark.parametrize(("route", "search", "stream"), _cells(_KEEPING))
+def test_a_claude_route_sent_no_server_search_tool_keeps_each_tools_own_defer_loading(
+    gateway: Gateway, route: Route, search: Search, stream: bool
+) -> None:
+    call: Final = _Call(route, stream, uuid.uuid4().hex)
+    with wire_server(_vendor(route)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, route, wire.url)
+        tools: Final = (*_search_tools(route, search), _function_tool(), _namespace_tool(), _loaded_tool())
+        response: Final = _raw(gateway, _responses_body(model, call.marker, tools, stream))
+        _assert_served(response, call.marker, stream)
+        request, body = _only_request(wire)
+        _assert_target(route, stream, request, body)
+        assert "tool_search" not in request.body.decode(), body
+        sent: Final = _ITEMS.validate_python(body["tools"])
+        assert [(tool["name"], tool.get("defer_loading")) for tool in sent] == [
+            ("get_weather", True),
+            ("finance__get_stock_price", True),
+            ("send_email", None),
+        ], sent
 
 
 def test_a_false_defer_loading_never_reaches_an_openai_compatible_wire_as_a_key(gateway: Gateway) -> None:
@@ -646,7 +682,8 @@ def test_a_streamed_answer_closes_its_message_item_with_every_streamed_delta(gat
 
 
 async def _send(client: httpx.AsyncClient, key: str, model: str, call: _Call) -> _Served:
-    body: Final = _responses_body(model, call.marker, (_function_tool(), _namespace_tool()), call.stream)
+    tools: Final = (*_search_tools(call.route, "dropped"), _function_tool(), _namespace_tool())
+    body: Final = _responses_body(model, call.marker, tools, call.stream)
     async with client.stream(
         "POST", "/v1/responses", json=body, headers={"Authorization": f"Bearer {key}"}
     ) as response:

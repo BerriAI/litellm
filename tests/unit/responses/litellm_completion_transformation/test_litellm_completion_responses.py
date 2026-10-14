@@ -1825,14 +1825,51 @@ class TestToolTransformation:
         assert [tool["type"] for tool in result["tools"]] == ["function", "function"]
         assert all("defer_loading" not in tool for tool in result["tools"])
 
-    def test_deferred_tools_without_a_search_tool_are_sent_undeferred(self) -> None:
+    @pytest.mark.parametrize(
+        "search_tools", [[], [{"type": "tool_search", "execution": "client"}]], ids=["none", "client"]
+    )
+    @pytest.mark.parametrize(
+        ("model", "provider"),
+        [
+            ("anthropic/claude-sonnet-5-5", "anthropic"),
+            ("vertex_ai/claude-sonnet-5-5", "vertex_ai"),
+            ("bedrock/invoke/us.anthropic.claude-sonnet-5-5-v1:0", "bedrock"),
+            ("azure_ai/claude-sonnet-5-5", "azure_ai"),
+        ],
+    )
+    def test_claude_routes_keep_the_callers_deferral_when_no_server_search_tool_is_sent(
+        self, model: str, provider: str, search_tools: list[dict[str, object]]
+    ) -> None:
+        function_tools: Final = [
+            tool for tool in _deferred_tools_with_server_tool_search() if tool["type"] != "tool_search"
+        ]
+
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": [*search_tools, *function_tools]},
+            custom_llm_provider=provider,
+        )
+
+        assert [tool["function"]["name"] for tool in result["tools"]] == ["get_weather", "finance__get_stock_price"]
+        assert [tool["defer_loading"] for tool in result["tools"]] == [True, True]
+
+    @pytest.mark.parametrize(
+        ("model", "provider"),
+        [
+            ("mistral/mistral-large-latest", "mistral"),
+            ("gemini/gemini-2.5-flash", "gemini"),
+            ("bedrock/converse/us.anthropic.claude-sonnet-5-5-v1:0", "bedrock"),
+        ],
+    )
+    def test_routes_without_anthropic_deferral_get_deferred_tools_undeferred(self, model: str, provider: str) -> None:
         tools: Final = [tool for tool in _deferred_tools_with_server_tool_search() if tool["type"] != "tool_search"]
 
         result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
-            model="anthropic/claude-sonnet-5-5",
+            model=model,
             input="What is the weather in Paris right now?",
             responses_api_request={"tools": tools},
-            custom_llm_provider="anthropic",
+            custom_llm_provider=provider,
         )
 
         assert [tool["function"]["name"] for tool in result["tools"]] == ["get_weather", "finance__get_stock_price"]

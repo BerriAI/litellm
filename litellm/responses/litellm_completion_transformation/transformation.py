@@ -445,8 +445,14 @@ class LiteLLMCompletionResponsesConfig:
         return [tool for tool in tools or () if not is_server_tool_search_tool(tool)]
 
     @staticmethod
-    def _undeferred_unless_a_search_tool_goes_out(tools: Sequence[ChatToolParam]) -> Sequence[ChatToolParam]:
+    def _deferral_the_route_honors(
+        tools: Sequence[ChatToolParam], callers_tools: ResponseTools, model: str, custom_llm_provider: str | None
+    ) -> Sequence[ChatToolParam]:
+        if not any("defer_loading" in tool for tool in tools):
+            return tools
         if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+            return tools
+        if not has_server_tool_search(callers_tools) and provider_builds_anthropic_request(model, custom_llm_provider):
             return tools
         return [LiteLLMCompletionResponsesConfig._without_deferral(tool) for tool in tools]
 
@@ -556,7 +562,9 @@ class LiteLLMCompletionResponsesConfig:
             converted_tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(request_tools)
-        tools: Final = LiteLLMCompletionResponsesConfig._undeferred_unless_a_search_tool_goes_out(converted_tools)
+        tools: Final = LiteLLMCompletionResponsesConfig._deferral_the_route_honors(
+            converted_tools, responses_api_request.get("tools"), model=model, custom_llm_provider=custom_llm_provider
+        )
 
         if web_search_options is not None and LiteLLMCompletionResponsesConfig._should_drop_derived_web_search_options(
             model=model, custom_llm_provider=custom_llm_provider
