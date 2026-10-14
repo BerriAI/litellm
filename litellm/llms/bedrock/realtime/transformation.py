@@ -118,6 +118,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # so the USER/ASSISTANT split from contentStart is tracked here)
         self._user_transcript_active = False
         self._user_transcript_generation_stage: str | None = None
+        self._assistant_final_text_active = False
         self._user_item_id: str | None = None
         self._user_transcript_buffer = ""
         self._cumulative_usage = BedrockUsageEvent()
@@ -748,6 +749,20 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 None,
             )
 
+        generation_stage: Final = self._parse_generation_stage(content_start.get("additionalModelFields"))
+        if content_start.get("type") == "TEXT" and generation_stage == "FINAL":
+            verbose_logger.debug(
+                "Dropping FINAL ASSISTANT text block: the SPECULATIVE block already carried its sentences"
+            )
+            self._assistant_final_text_active = True
+            return (
+                [],
+                current_response_id,
+                current_output_item_id,
+                current_conversation_id,
+                None,
+            )
+
         verbose_logger.debug("Handling ASSISTANT contentStart")
         is_new_response: Final = current_response_id is None
 
@@ -943,6 +958,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug("Handling textOutput")
         text_content: Final = event["textOutput"].get("content", "")
 
+        if self._assistant_final_text_active:
+            return [], current_delta_chunks
         if not current_output_item_id or not current_response_id:
             return [], current_delta_chunks
 
@@ -1022,6 +1039,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         content_end: Final = event["contentEnd"]
         verbose_logger.debug("Handling contentEnd: %s", content_end)
 
+        if self._assistant_final_text_active:
+            self._assistant_final_text_active = False
+            return [], current_delta_chunks
         if not current_output_item_id or not current_response_id:
             return [], current_delta_chunks
 

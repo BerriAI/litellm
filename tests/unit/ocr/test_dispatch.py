@@ -14,13 +14,8 @@ from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.ocr.entrypoints import (
-    NATIVE_AOCR,
-    NATIVE_OCR,
-    LiteLLMOcrRequest,
-    NativeAocr,
-    NativeOcr,
-)
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, NativeAocr, NativeOcr
+from litellm.rust_bridge.public_call import NativeCall
 
 RUST_RULES: Final[Rules] = (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),)
 
@@ -55,14 +50,14 @@ def test_native_receives_normalized_positional_request_and_original_call_shape()
         "extra_headers": extra_headers,
         "pages": pages,
     }
-    captured: Final[list[tuple[LiteLLMOcrRequest, tuple[object, ...], Mapping[str, object]]]] = []
+    captured: Final[list[tuple[NativeCall, tuple[object, ...], Mapping[str, object]]]] = []
     expected: Final = response()
 
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
+        args: Final = request.args
+        kwargs: Final = request.kwargs
         captured.append((request, args, kwargs))
         return expected
 
@@ -71,20 +66,20 @@ def test_native_receives_normalized_positional_request_and_original_call_shape()
         kwargs,
         python=runtime.NO_PYTHON,
         binding=ocr_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
 
     request, call_args, call_kwargs = captured[0]
     assert result is expected
-    assert request.model == "mistral/mistral-ocr-latest"
-    assert request.document is document
-    assert request.api_key == "test-key"
-    assert request.api_base == "https://example.invalid"
-    assert request.timeout is timeout
-    assert request.custom_llm_provider == "mistral"
-    assert request.extra_headers is extra_headers
-    assert request.kwargs == {"pages": pages}
+    assert request.resolved["model"] == "mistral/mistral-ocr-latest"
+    assert request.resolved["document"] is document
+    assert request.resolved["api_key"] == "test-key"
+    assert request.resolved["api_base"] == "https://example.invalid"
+    assert request.resolved["timeout"] is timeout
+    assert request.resolved["custom_llm_provider"] == "mistral"
+    assert request.resolved["extra_headers"] is extra_headers
+    assert request.kwargs == kwargs
     assert request.kwargs["pages"] is pages
     assert call_args is args
     assert call_kwargs is kwargs
@@ -102,14 +97,14 @@ def test_native_preserves_keyword_model_and_document_in_original_call_shape() ->
         "document": document,
         "pages": pages,
     }
-    captured: Final[list[tuple[LiteLLMOcrRequest, tuple[object, ...], Mapping[str, object]]]] = []
+    captured: Final[list[tuple[NativeCall, tuple[object, ...], Mapping[str, object]]]] = []
     expected: Final = response()
 
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
+        args: Final = request.args
+        kwargs: Final = request.kwargs
         captured.append((request, args, kwargs))
         return expected
 
@@ -118,15 +113,15 @@ def test_native_preserves_keyword_model_and_document_in_original_call_shape() ->
         kwargs,
         python=runtime.NO_PYTHON,
         binding=ocr_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
 
     request, call_args, call_kwargs = captured[0]
     assert result is expected
-    assert request.model == "mistral/mistral-ocr-latest"
-    assert request.document is document
-    assert request.kwargs == {"pages": pages}
+    assert request.resolved["model"] == "mistral/mistral-ocr-latest"
+    assert request.resolved["document"] is document
+    assert request.kwargs == kwargs
     assert call_args is args
     assert call_kwargs is kwargs
     assert call_kwargs["model"] == "mistral/mistral-ocr-latest"
@@ -139,9 +134,7 @@ def test_aocr_marker_cannot_be_served_without_python() -> None:
     kwargs: Final[Mapping[str, object]] = {"aocr": True}
 
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         pytest.fail("the aocr bypass marker must not reach native")
 
@@ -151,7 +144,7 @@ def test_aocr_marker_cannot_be_served_without_python() -> None:
             kwargs,
             python=runtime.NO_PYTHON,
             binding=ocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 
@@ -165,7 +158,7 @@ def test_missing_native_binding_is_a_required_rust_error() -> None:
             {},
             python=runtime.NO_PYTHON,
             binding=ocr_binding(None),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 
@@ -174,9 +167,7 @@ def test_non_required_rule_cannot_be_served_without_python() -> None:
     args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", {"type": "file", "file": b"pdf"})
 
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         return response()
 
@@ -186,7 +177,7 @@ def test_non_required_rule_cannot_be_served_without_python() -> None:
             {},
             python=runtime.NO_PYTHON,
             binding=ocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=(RouteRule(Route.OCR, Rollout.PYTHON_ONLY),),
         )
 
@@ -206,13 +197,9 @@ def test_non_required_rule_cannot_be_served_without_python() -> None:
         ),
     ),
 )
-def test_ocr_parser_errors_before_native(
-    args: tuple[object, ...], kwargs: Mapping[str, object], message: str
-) -> None:
+def test_ocr_parser_errors_before_native(args: tuple[object, ...], kwargs: Mapping[str, object], message: str) -> None:
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         pytest.fail("OCR parser failures must not call native")
 
@@ -222,7 +209,7 @@ def test_ocr_parser_errors_before_native(
             kwargs,
             python=runtime.NO_PYTHON,
             binding=ocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 
@@ -247,9 +234,7 @@ async def test_aocr_parser_errors_before_native(
     args: tuple[object, ...], kwargs: Mapping[str, object], message: str
 ) -> None:
     async def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         pytest.fail("OCR parser failures must not call native")
 
@@ -259,7 +244,7 @@ async def test_aocr_parser_errors_before_native(
             kwargs,
             python=runtime.NO_PYTHON,
             binding=aocr_binding(native),
-            native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+            native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
 
@@ -269,13 +254,11 @@ def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> 
         "type": "document_url",
         "document_url": "https://example.invalid/document.pdf",
     }
-    captured: Final[list[LiteLLMOcrRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
     def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         captured.append(request)
         return expected
@@ -288,7 +271,7 @@ def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> 
     finally:
         NATIVE_OCR.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["mistral/mistral-ocr-latest"]
+    assert [request.resolved["model"] for request in captured] == ["mistral/mistral-ocr-latest"]
 
 
 @pytest.mark.asyncio
@@ -297,13 +280,11 @@ async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
         "type": "document_url",
         "document_url": "https://example.invalid/document.pdf",
     }
-    captured: Final[list[LiteLLMOcrRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
     async def native(
-        request: LiteLLMOcrRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> OCRResponse:
         captured.append(request)
         return expected
@@ -316,4 +297,4 @@ async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
     finally:
         NATIVE_AOCR.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["mistral/mistral-ocr-latest"]
+    assert [request.resolved["model"] for request in captured] == ["mistral/mistral-ocr-latest"]
