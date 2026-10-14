@@ -14,5 +14,6 @@
   "tests/e2e/ui/tests/integrationCritical/anthropicFederationCredential.spec.ts::the Add Credential dialog stores each federation identity source with only the values it needs and refuses the invalid ones",
   "tests/e2e/ui/tests/integrationCritical/anthropicFederationCredential.spec.ts::the Edit Credential dialog sends only the changed values and deletes the keys the new choice leaves behind",
   "tests/e2e/ui/tests/integrationCritical/anthropicFederationCredential.spec.ts::a proxy admin saves a federation credential from the Add Model tab and the model is created against it",
-  "tests/e2e/ui/tests/integrationCritical/anthropicFederationCredential.spec.ts::a team admin who is not a proxy admin gets no federation shortcut on the Add Model tab"
+  "tests/e2e/ui/tests/integrationCritical/anthropicFederationCredential.spec.ts::a team admin who is not a proxy admin gets no federation shortcut on the Add Model tab",
+  "tests/e2e/ui/tests/integrationCritical/addModelCoralBricks.spec.ts::the Add Model form offers CoralBricks and the deployment it creates serves and bills a chat"
 ]

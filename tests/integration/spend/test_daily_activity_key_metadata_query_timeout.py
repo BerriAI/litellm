@@ -1,7 +1,5 @@
 import itertools
 import json
-import os
-import signal
 import threading
 import uuid
 from bisect import bisect_left
@@ -1025,14 +1023,6 @@ def _running_children(owned: OwnedProxy) -> tuple[int, ...]:
     )
 
 
-def _worker_pids(owned: OwnedProxy) -> tuple[int, ...]:
-    return tuple(
-        member.pid
-        for member in group_members(owned.process.pid)
-        if member.pid != owned.process.pid and any("spawn_main" in part for part in member.cmdline())
-    )
-
-
 @pytest.mark.timeout(600)
 def test_usage_page_keeps_serving_when_a_worker_dies_mid_outage(gateway: Gateway, tmp_path: Path) -> None:
     with (
@@ -1042,23 +1032,25 @@ def test_usage_page_keeps_serving_when_a_worker_dies_mid_outage(gateway: Gateway
     ):
         spender: Final = _spender(owned.gateway, database_url, "worker-death")
         children: Final = _running_children(owned)
-        workers: Final = _worker_pids(owned)
+        workers: Final = owned.worker_pids()
         assert len(workers) == WORKERS, workers
+        victim: Final = min(workers)
         with _locked_spend_logs(database_url):
             timed_out: Final = _fresh_read(owned, spender.digest)
             assert timed_out.status_code == 200, timed_out.text
             assert timed_out.elapsed >= FAILED_LOOKUP_FLOOR, timed_out.elapsed
             assert _aliases(timed_out, spender.digest) == (None,), timed_out.text
-            os.kill(workers[0], signal.SIGKILL)
-            after_kill: Final = _fresh_read(owned, spender.digest)
-            assert after_kill.status_code == 200, after_kill.text
-            assert _aliases(after_kill, spender.digest) == (None,), after_kill.text
+            with owned.replacing_worker(victim) as kill:
+                kill()
+                after_kill: Final = _fresh_read(owned, spender.digest)
+                assert after_kill.status_code == 200, after_kill.text
+                assert _aliases(after_kill, spender.digest) == (None,), after_kill.text
             respawned: Final = eventually(
                 lambda: _running_children(owned),
                 lambda pids: len(pids) >= len(children) and any(pid not in children for pid in pids),
                 seconds=30,
             )
-            assert workers[0] not in respawned, respawned
+            assert victim not in respawned, respawned
         recovered: Final = eventually(
             lambda: _fresh_read(owned, spender.digest),
             lambda response: response.status_code == 200 and _aliases(response, spender.digest) == (spender.alias,),
