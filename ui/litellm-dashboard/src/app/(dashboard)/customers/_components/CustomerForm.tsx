@@ -57,10 +57,23 @@ const regionOptions = [
   { value: "us", label: "US" },
 ];
 
+const getBudgetFieldCopy = (hasCurrentBudget: boolean, isEdit: boolean) => {
+  if (hasCurrentBudget) {
+    return { emptyOption: "Keep current budget", description: "Select another budget to change the link" };
+  }
+  return {
+    emptyOption: "No budget",
+    description: isEdit
+      ? "Leaving both budget fields empty keeps the current budget"
+      : "Choose a budget or enter a maximum below",
+  };
+};
+
 type CustomerFormProps = {
   customer?: EndUser | null;
   isEdit?: boolean;
   isSaving?: boolean;
+  hasSharedBudget?: boolean;
   onSubmit: (values: CustomerFormValues) => void | Promise<void>;
   onCancel: () => void;
 };
@@ -69,29 +82,27 @@ export function CustomerForm({
   customer = null,
   isEdit = false,
   isSaving = false,
+  hasSharedBudget,
   onSubmit,
   onCancel,
 }: CustomerFormProps) {
   const { accessToken } = useAuthorized();
   const { data: budgets = [] } = useBudgetOptions(accessToken);
   const { data: models = [] } = useUserModels();
-  const initialValues = toCustomerFormValues(customer);
+  const initialValues = { ...toCustomerFormValues(customer), ...(isEdit ? { budget_id: "" } : {}) };
   const form = useZodForm(isEdit ? editCustomerSchema : customerSchema, {
     defaultValues: initialValues,
   });
-  const hasLinkedBudget = isEdit && Boolean(initialValues.budget_id);
-  const budgetFieldCopy = hasLinkedBudget
-    ? { emptyOption: "Keep current budget", description: "Select another budget to change the link" }
-    : {
-        emptyOption: "No budget",
-        description: isEdit
-          ? "Leaving both budget fields empty keeps the current budget"
-          : "Choose a budget or enter a maximum below",
-      };
+  const hasCurrentBudget = isEdit && Boolean(customer?.budget_id);
+  const budgetFieldCopy = getBudgetFieldCopy(hasCurrentBudget, isEdit);
   const handleSubmit = form.handleSubmit(async (values) => {
-    if (hasLinkedBudget && !values.budget_id && values.max_budget.trim()) {
+    const isMaximumEdit = !values.budget_id && Boolean(values.max_budget.trim());
+    if (hasCurrentBudget && hasSharedBudget !== false && isMaximumEdit) {
       form.setError("max_budget", {
-        message: "This customer has a linked budget. Leave Max Budget empty or choose another budget",
+        message:
+          hasSharedBudget === undefined
+            ? "Unable to verify budget sharing. Reload customers before changing Max Budget"
+            : "This customer has a shared budget. Leave Max Budget empty or choose another budget",
       });
       return;
     }
