@@ -4020,10 +4020,10 @@ async def test_acompletion_mid_stream_fallback_honors_a_per_request_fallbacks_no
         return _stream_for(**kwargs)
 
     with patch("litellm.acompletion", side_effect=fake_acompletion) as provider_calls:
-        response: Final = await router.acompletion(
-            model="primary", messages=[{"role": "user", "content": "hi"}], stream=True, fallbacks=None
-        )
         with pytest.raises(litellm.InternalServerError, match="provider 500 from openai/primary-model"):
+            response: Final = await router.acompletion(
+                model="primary", messages=[{"role": "user", "content": "hi"}], stream=True, fallbacks=None
+            )
             [chunk async for chunk in response]
 
     assert _groups_called(provider_calls) == ["primary"]
@@ -16837,10 +16837,10 @@ async def test_acompletion_disable_fallbacks_reaches_the_mid_stream_hop():
         return _MidStreamOptOutChatStream(_mid_stream_opt_out_trigger(primary_error), model=kwargs["model"])
 
     with patch("litellm.acompletion", side_effect=primary_stream) as provider_calls:
-        response = await router.acompletion(
-            model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
-        )
         with pytest.raises(litellm.InternalServerError) as raised:
+            response = await router.acompletion(
+                model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
+            )
             [chunk async for chunk in response]
 
     assert raised.value is primary_error
@@ -16856,10 +16856,10 @@ def test_completion_disable_fallbacks_reaches_the_mid_stream_hop():
         return _MidStreamOptOutChatStream(_mid_stream_opt_out_trigger(primary_error), model=kwargs["model"])
 
     with patch("litellm.completion", side_effect=primary_stream) as provider_calls:
-        response = router.completion(
-            model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
-        )
         with pytest.raises(litellm.InternalServerError) as raised:
+            response = router.completion(
+                model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
+            )
             list(response)
 
     assert raised.value is primary_error
@@ -26135,3 +26135,69 @@ async def test_batch_completion_fastest_response_streams_mocked_chunks() -> None
 
     assert text == "stream answer"
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+class _PrimingStream:
+    """A stream whose first pull yields `first`, raises it, or ends (first=None)."""
+
+    def __init__(self, first: object) -> None:
+        self._first = first
+
+    def _pull(self, stop: type[Exception]) -> object:
+        if self._first is None:
+            raise stop
+        if isinstance(self._first, Exception):
+            raise self._first
+        return self._first
+
+    def __next__(self) -> object:
+        return self._pull(StopIteration)
+
+    async def __anext__(self) -> object:
+        return self._pull(StopAsyncIteration)
+
+
+def _priming_cases():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.router import _PrimedStream
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    chunk = ModelResponseStream(choices=[StreamingChoices(delta=Delta(content="hi"))])
+    provider_error = litellm.InternalServerError(message="primary died at stream start", llm_provider="openai", model="m")
+    wrapped = MidStreamFallbackError(
+        message=str(provider_error),
+        model="m",
+        llm_provider="openai",
+        original_exception=provider_error,
+        is_pre_first_chunk=True,
+    )
+    return [
+        pytest.param(chunk, _PrimedStream(first_chunk=chunk), None, id="first-chunk"),
+        pytest.param(None, _PrimedStream(first_chunk=None), None, id="empty-stream"),
+        pytest.param(wrapped, None, provider_error, id="pre-content-failure"),
+    ]
+
+
+@pytest.mark.parametrize("first, expected, raised", _priming_cases())
+def test_prime_stream_direct_call(first, expected, raised):
+    from litellm.router import _prime_stream
+
+    if raised is None:
+        assert _prime_stream(_PrimingStream(first)) == expected
+        return
+    with pytest.raises(type(raised)) as caught:
+        _prime_stream(_PrimingStream(first))
+    assert caught.value is raised
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first, expected, raised", _priming_cases())
+async def test_aprime_stream_direct_call(first, expected, raised):
+    from litellm.router import _aprime_stream
+
+    if raised is None:
+        assert await _aprime_stream(_PrimingStream(first)) == expected
+        return
+    with pytest.raises(type(raised)) as caught:
+        await _aprime_stream(_PrimingStream(first))
+    assert caught.value is raised
