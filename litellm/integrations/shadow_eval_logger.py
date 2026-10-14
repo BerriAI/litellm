@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from itertools import groupby
 from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator, model_validator
 
@@ -817,10 +817,14 @@ _jobs_cache: Final = InMemoryCache(max_size_in_memory=4, default_ttl=_JOBS_CACHE
 _JOBS_CACHE_KEY: Final = "shadow_eval:active_jobs"
 
 
-def shadow_eval_snapshot_needed(jobs_cache: InMemoryCache = _jobs_cache) -> bool:
+class _JobsCacheReader(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+
+def shadow_eval_snapshot_needed(jobs_cache: _JobsCacheReader = _jobs_cache) -> bool:
     """Whether pre-call must capture a guardrail snapshot: only a jobs cache proving that no
     shadow-eval job is active lets the copy be skipped; an unfilled cache fails open."""
-    cached: Final[object] = jobs_cache.get_cache(_JOBS_CACHE_KEY)
+    cached: Final = jobs_cache.get_cache(_JOBS_CACHE_KEY)
     if cached is None or not isinstance(cached, Sized):
         return True
     return len(cached) > 0
