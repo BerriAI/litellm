@@ -65,10 +65,10 @@ def main(scenario: str, api_base: str, redis_host: str, redis_port: str) -> None
     from litellm.caching.caching import Cache
 
     if scenario == "callbacks_before_cache":
-        litellm.callbacks = ["prometheus"]  # test-quality-ok: this worker process exits right after the report
+        litellm.service_callback = ["prometheus_system"]  # test-quality-ok: this worker process exits right after the report
     litellm.cache = Cache(type="redis", host=redis_host, port=redis_port)  # test-quality-ok: throwaway worker process
     if scenario == "callbacks_after_cache":
-        litellm.callbacks = ["prometheus"]  # test-quality-ok: throwaway worker process
+        litellm.service_callback = ["prometheus_system"]  # test-quality-ok: throwaway worker process
     response: Final = litellm.completion(
         model="openai/gpt-5.6",
         api_base=api_base,

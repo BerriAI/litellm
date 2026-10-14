@@ -18,6 +18,8 @@ import json
 import logging
 import threading
 import time
+import weakref
+from collections import Counter
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -51,12 +53,11 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-    from prometheus_client import CollectorRegistry as _PromRegistry
-    from prometheus_client import Counter as _PromCounter
-    from prometheus_client import Gauge as _PromGauge
     from redis.asyncio import Redis, RedisCluster
     from redis.asyncio.client import Pipeline
     from redis.asyncio.cluster import ClusterPipeline
+
+    from litellm._service_logger import ServiceLogging
 
     pipeline = Pipeline
     cluster_pipeline = ClusterPipeline
@@ -244,7 +245,9 @@ class RedisCircuitBreaker:
         recovery_timeout: int,
         enabled: bool = True,
         timeout_min_duration: float = REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
+        service_logger: "ServiceLogging | None" = None,
     ) -> None:
+        self._service_logger = service_logger
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.enabled = enabled
@@ -256,7 +259,8 @@ class RedisCircuitBreaker:
         self._opened_at: float | None = None
         self._state = self.CLOSED
         self._generation = 0
-        _breaker_metrics().record_state_change(None, self._state)
+        _LIVE_BREAKERS.add(self)
+        self._report(transitions_to=None, failure_class=None)
 
     @property
     def generation(self) -> int:
@@ -302,7 +306,7 @@ class RedisCircuitBreaker:
             self._timeout_count = 0
             self._timeout_streak_started_at = None
         self._opened_at = now
-        _breaker_metrics().record_failure("timeout" if is_timeout else "connectivity")
+        self._report(transitions_to=None, failure_class="timeout" if is_timeout else "connectivity")
         if self._should_open(now):
             if self._state != self.OPEN:
                 verbose_logger.warning(
@@ -328,10 +332,13 @@ class RedisCircuitBreaker:
     def _set_state(self, state: str) -> None:
         if state == self._state:
             return
-        _breaker_metrics().record_transition(state)
-        _breaker_metrics().record_state_change(self._state, state)
         self._state = state
         self._generation += 1
+        self._report(transitions_to=state, failure_class=None)
+
+    def _report(self, transitions_to: str | None, failure_class: str | None) -> None:
+        if self._service_logger is not None:
+            self._service_logger.redis_breaker_hook(transitions_to=transitions_to, failure_class=failure_class)
 
 
 _RedisCallResult = TypeVar("_RedisCallResult")
@@ -431,110 +438,6 @@ def is_redis_timeout_failure(exc: BaseException) -> bool:
     return any(isinstance(link, timeout_types) for link in _explicit_causes(exc))
 
 
-_PROMETHEUS_CALLBACK_NAMES: Final = frozenset({"prometheus", "prometheus_system"})
-
-
-def _prometheus_logging_configured() -> bool:
-    callback_lists: Final = (
-        litellm.callbacks,
-        litellm.success_callback,
-        litellm.failure_callback,
-        litellm.service_callback,
-    )
-    return any(
-        isinstance(callback, str) and callback in _PROMETHEUS_CALLBACK_NAMES
-        for callback in itertools.chain.from_iterable(callback_lists)
-    )
-
-
-def _bumped(counts: Mapping[str, int], key: str, delta: int) -> Mapping[str, int]:
-    return MappingProxyType({**counts, key: counts.get(key, 0) + delta})
-
-
-class _BreakerMetrics:
-    """Prometheus metrics for the Redis circuit breaker; no-ops until LiteLLM's Prometheus logging is on.
-
-    The collectors join the default registry (which /metrics serves) at the first breaker event that finds a
-    ``prometheus`` / ``prometheus_system`` callback configured, or when a Prometheus logger calls ``publish``.
-    The per-state breaker count is kept meanwhile, so a cache built before the callback still reports ``closed``.
-    Held in the module-level ``_breaker_metrics`` singleton so repeated RedisCache construction never re-registers.
-    """
-
-    def __init__(self, registry: "_PromRegistry | None" = None) -> None:
-        self._registry = registry
-        self._state_gauge: _PromGauge | None = None
-        self._transitions: _PromCounter | None = None
-        self._failures: _PromCounter | None = None
-        self._states: Mapping[str, int] = MappingProxyType({})
-        self._client_missing = False
-
-    def publish(self) -> None:
-        if self._state_gauge is not None or self._client_missing:
-            return
-        try:
-            from prometheus_client import REGISTRY, Gauge
-            from prometheus_client import Counter as PromCounter
-        except ImportError:
-            self._client_missing = True
-            return
-        registry: Final = self._registry if self._registry is not None else REGISTRY
-        self._state_gauge = Gauge(
-            "litellm_redis_circuit_breaker_state",
-            "Number of Redis circuit breakers currently in each state",
-            labelnames=("state",),
-            multiprocess_mode="livesum",
-            registry=registry,
-        )
-        self._transitions = PromCounter(
-            "litellm_redis_circuit_breaker_transitions",
-            "Redis circuit breaker state transitions",
-            labelnames=("state",),
-            registry=registry,
-        )
-        self._failures = PromCounter(
-            "litellm_redis_circuit_breaker_failures",
-            "Redis health failures counted by the circuit breaker",
-            labelnames=("failure_class",),
-            registry=registry,
-        )
-        for state, count in self._states.items():
-            self._state_gauge.labels(state).inc(count)
-
-    def record_state_change(self, old_state: str | None, new_state: str) -> None:
-        exporting: Final = self._exporting()
-        if old_state is not None:
-            self._states = _bumped(self._states, old_state, -1)
-        self._states = _bumped(self._states, new_state, 1)
-        if not exporting or self._state_gauge is None:
-            return
-        if old_state is not None:
-            self._state_gauge.labels(old_state).dec()
-        self._state_gauge.labels(new_state).inc()
-
-    def record_transition(self, state: str) -> None:
-        if self._exporting() and self._transitions is not None:
-            self._transitions.labels(state).inc()
-
-    def record_failure(self, failure_class: str) -> None:
-        if self._exporting() and self._failures is not None:
-            self._failures.labels(failure_class).inc()
-
-    def _exporting(self) -> bool:
-        if self._state_gauge is None and _prometheus_logging_configured():
-            self.publish()
-        return self._state_gauge is not None
-
-
-@functools.lru_cache(maxsize=1)
-def _breaker_metrics() -> _BreakerMetrics:
-    return _BreakerMetrics()
-
-
-def publish_redis_breaker_metrics() -> None:
-    """Export the breaker metrics now that a LiteLLM Prometheus logger exists, whatever order the app built them in."""
-    _breaker_metrics().publish()
-
-
 def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseException) -> None:
     """Record a Redis failure that the calling method is about to swallow.
 
@@ -548,6 +451,14 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
         return
     breaker.record_failure(is_timeout=is_redis_timeout_failure(exc))
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
+
+
+_LIVE_BREAKERS: Final[weakref.WeakSet[RedisCircuitBreaker]] = weakref.WeakSet()
+
+
+def redis_breaker_state_counts() -> Mapping[str, int]:
+    """How many live Redis circuit breakers sit in each state, for the Prometheus services logger."""
+    return MappingProxyType(dict(Counter(breaker._state for breaker in _LIVE_BREAKERS)))
 
 
 class RedisCircuitBreakerOpenError(Exception):
@@ -768,6 +679,7 @@ class RedisCache(BaseCache):
             failure_threshold=REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
             enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
+            service_logger=self.service_logger_obj,
         )
 
         self._setup_health_pings()

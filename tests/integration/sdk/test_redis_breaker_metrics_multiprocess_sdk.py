@@ -25,6 +25,12 @@ _CHAT_RESPONSE: Final = json.dumps(
     }
 ).encode()
 _CLOSED: Final = (("state", "closed"),)
+_HALF_OPEN: Final = (("state", "half_open"),)
+_OPEN: Final = (("state", "open"),)
+
+
+def _all_closed(breakers: float) -> tuple[tuple[tuple[tuple[str, str], ...], float], ...]:
+    return ((_CLOSED, breakers), (_HALF_OPEN, 0.0), (_OPEN, 0.0))
 
 
 def _reply(request: Request) -> Reply:
@@ -57,14 +63,14 @@ def test_two_worker_processes_collect_as_one_state_series_per_state(tmp_path: Pa
             _worked(run_breaker_worker("callbacks_before_cache", wire.url, tmp_path)) for _ in range(2)
         )
     assert len({report.pid for report in reports}) == 2, reports
-    assert _collected_state_series(tmp_path) == ((_CLOSED, 2.0),), reports
+    assert _collected_state_series(tmp_path) == _all_closed(2.0), reports
 
 
 def test_prometheus_logging_turned_on_after_the_cache_still_reports_the_closed_breaker(tmp_path: Path) -> None:
     with wire_server(_reply) as wire:
         report: Final = _worked(run_breaker_worker("callbacks_after_cache", wire.url, tmp_path))
-    assert report.state_series == ((_CLOSED, 1.0),), report
-    assert _collected_state_series(tmp_path) == ((_CLOSED, 1.0),), report
+    assert report.state_series == _all_closed(1.0), report
+    assert _collected_state_series(tmp_path) == _all_closed(1.0), report
 
 
 def test_app_without_litellm_prometheus_logging_gets_no_breaker_series(tmp_path: Path) -> None:

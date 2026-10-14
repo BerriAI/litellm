@@ -3,11 +3,11 @@
 #    On success + failure, log events to Prometheus for litellm / adjacent services (litellm, redis, postgres, llm api providers)
 
 
+from collections.abc import Callable
 from typing import Final
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching.redis_cache import publish_redis_breaker_metrics
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS
 from litellm.types.services import (
     DEFAULT_SERVICE_CONFIGS,
@@ -35,7 +35,6 @@ class PrometheusServicesLogger:
             except ImportError:
                 raise Exception("Missing prometheus_client. Run `pip install prometheus-client`")
 
-            publish_redis_breaker_metrics()
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
 
@@ -43,6 +42,26 @@ class PrometheusServicesLogger:
             self.Counter = Counter
             self.Gauge = Gauge
             self.REGISTRY = REGISTRY
+            self.redis_breaker_state = self._redis_breaker_collector(
+                "litellm_redis_circuit_breaker_state",
+                lambda name: Gauge(
+                    name,
+                    "Number of Redis circuit breakers currently in each state",
+                    labelnames=["state"],
+                    multiprocess_mode="livesum",
+                ),
+            )
+            self.redis_breaker_transitions = self._redis_breaker_collector(
+                "litellm_redis_circuit_breaker_transitions",
+                lambda name: Counter(name, "Redis circuit breaker state transitions", labelnames=["state"]),
+            )
+            self.redis_breaker_failures = self._redis_breaker_collector(
+                "litellm_redis_circuit_breaker_failures",
+                lambda name: Counter(
+                    name, "Redis health failures counted by the circuit breaker", labelnames=["failure_class"]
+                ),
+            )
+            self._refresh_redis_breaker_gauge()
 
             verbose_logger.debug("in init prometheus services metrics")
 
@@ -99,6 +118,23 @@ class PrometheusServicesLogger:
             verbose_logger.debug("No metrics found for service %s", service)
             return DEFAULT_METRICS
         return metrics
+
+    def _redis_breaker_collector(self, metric_name: str, build: Callable[[str], object]) -> object:
+        return self._get_metric(metric_name) if self.is_metric_registered(metric_name) else build(metric_name)
+
+    def _refresh_redis_breaker_gauge(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker, redis_breaker_state_counts
+
+        counts: Final = redis_breaker_state_counts()
+        for state in (RedisCircuitBreaker.CLOSED, RedisCircuitBreaker.OPEN, RedisCircuitBreaker.HALF_OPEN):
+            self.redis_breaker_state.labels(state).set(counts.get(state, 0))  # pyright: ignore[reportAttributeAccessIssue]  # registry lookup is untyped
+
+    def redis_breaker_hook(self, transitions_to: str | None, failure_class: str | None) -> None:
+        self._refresh_redis_breaker_gauge()
+        if transitions_to is not None:
+            self.redis_breaker_transitions.labels(transitions_to).inc()  # pyright: ignore[reportAttributeAccessIssue]  # registry lookup is untyped
+        if failure_class is not None:
+            self.redis_breaker_failures.labels(failure_class).inc()  # pyright: ignore[reportAttributeAccessIssue]  # registry lookup is untyped
 
     def is_metric_registered(self, metric_name) -> bool:
         # Use _names_to_collectors (O(1)) instead of REGISTRY.collect() (O(n)) to avoid
