@@ -76,7 +76,7 @@ async def test_unsupported_requests_fail_before_callbacks_and_provider_io(
     recorder: Final = RecordingLogger()
     server.expected_requests = 0
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(RuntimeError, match="declined the request"):
         await RESPONSES_SURFACE.call(server, callbacks=[recorder], **options)
 
     assert not server.requests
