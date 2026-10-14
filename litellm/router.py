@@ -957,7 +957,7 @@ class Router:
         allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
         cooldown_time: float | None = None,  # (seconds) time to cooldown a deployment after failure
         disable_cooldowns: bool | None = None,
-        fallback_on_unsupported_params: bool = True,
+        fallback_on_bad_request: bool = True,
         routing_strategy: RoutingStrategyName = "simple-shuffle",
         optional_pre_call_checks: OptionalPreCallChecks | None = None,
         routing_strategy_args: dict = {},  # just for latency-based
@@ -1200,7 +1200,7 @@ class Router:
         self.cooldown_time = cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
         self.cooldown_cache = CooldownCache(cache=self.cache, default_cooldown_time=self.cooldown_time)
         self.disable_cooldowns = disable_cooldowns
-        self.fallback_on_unsupported_params = fallback_on_unsupported_params
+        self.fallback_on_bad_request = fallback_on_bad_request
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
@@ -7649,14 +7649,16 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        rejected_client_side: Final = (
-            isinstance(e, litellm.UnsupportedParamsError) and not self.fallback_on_unsupported_params
+        bad_request_without_fallback: Final = (
+            isinstance(e, litellm.BadRequestError)
+            and not isinstance(e, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError))
+            and not self.fallback_on_bad_request
         )
         if (
             disable_fallbacks is True
             or original_model_group is None
             or is_guardrail_intervention(e)
-            or rejected_client_side
+            or bad_request_without_fallback
         ):
             raise e
 

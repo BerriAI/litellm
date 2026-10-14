@@ -13,7 +13,7 @@ from litellm import Router
 
 _MODEL: Final = "gpt-5-wire-unmapped"
 _API_KEY: Final = "synthetic-unsupported-params-key"
-_PROMPT: Final = "which deployment answers when the requested model rejects a param before any request is sent?"
+_PROMPT: Final = "which deployment answers when the requested model rejects the request?"
 _CLIENTS: Final = ("sync", "async")
 _PRIMARY_TO_BACKUP: Final = [{"primary": ["backup"]}]
 _UNSUPPORTED_BY_PRIMARY: Final = {"reasoning_effort": "xhigh"}
@@ -21,7 +21,7 @@ _UNSUPPORTED_BY_PRIMARY: Final = {"reasoning_effort": "xhigh"}
 
 def _answers(text: str) -> Reply:
     body: Final = {
-        "id": "chatcmpl-unsupported-params-wire",
+        "id": "chatcmpl-bad-request-wire",
         "object": "chat.completion",
         "created": 1700000000,
         "model": _MODEL,
@@ -32,6 +32,10 @@ def _answers(text: str) -> Reply:
 
 
 _UPSTREAM_500: Final = Reply(status=500, body=json.dumps({"error": {"message": "overloaded"}}).encode())
+_UPSTREAM_400: Final = Reply(
+    status=400,
+    body=json.dumps({"error": {"message": "Unsupported value: temperature", "type": "invalid_request_error"}}).encode(),
+)
 _BACKUP_ANSWERS: Final = _answers("answered by the backup")
 
 
@@ -85,7 +89,7 @@ def _complete(client: str, router: Router, **request: object) -> str:
 @pytest.mark.parametrize("client", _CLIENTS)
 def test_client_side_param_rejection_reaches_the_caller_without_trying_fallbacks(client: str) -> None:
     with wire_server(_peer({"backup": _BACKUP_ANSWERS})) as wire:
-        router: Final = _router(wire, fallback_on_unsupported_params=False)
+        router: Final = _router(wire, fallback_on_bad_request=False)
         with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
             _complete(client, router, **_UNSUPPORTED_BY_PRIMARY)
         assert _deployments_hit(wire) == ()
@@ -100,8 +104,25 @@ def test_client_side_param_rejection_still_falls_back_by_default(client: str) ->
 
 
 @pytest.mark.parametrize("client", _CLIENTS)
-def test_upstream_500_still_falls_back_when_param_rejections_raise(client: str) -> None:
+def test_upstream_500_still_falls_back_when_bad_requests_raise(client: str) -> None:
     with wire_server(_peer({"primary": _UPSTREAM_500, "backup": _BACKUP_ANSWERS})) as wire:
-        router: Final = _router(wire, fallback_on_unsupported_params=False)
+        router: Final = _router(wire, fallback_on_bad_request=False)
+        assert _complete(client, router) == "answered by the backup"
+        assert _deployments_hit(wire) == ("primary", "backup")
+
+
+@pytest.mark.parametrize("client", _CLIENTS)
+def test_upstream_400_reaches_the_caller_without_trying_fallbacks(client: str) -> None:
+    with wire_server(_peer({"primary": _UPSTREAM_400, "backup": _BACKUP_ANSWERS})) as wire:
+        router: Final = _router(wire, fallback_on_bad_request=False)
+        with pytest.raises(litellm.BadRequestError, match="Unsupported value: temperature"):
+            _complete(client, router)
+        assert _deployments_hit(wire) == ("primary",)
+
+
+@pytest.mark.parametrize("client", _CLIENTS)
+def test_upstream_400_still_falls_back_by_default(client: str) -> None:
+    with wire_server(_peer({"primary": _UPSTREAM_400, "backup": _BACKUP_ANSWERS})) as wire:
+        router: Final = _router(wire)
         assert _complete(client, router) == "answered by the backup"
         assert _deployments_hit(wire) == ("primary", "backup")
