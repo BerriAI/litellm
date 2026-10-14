@@ -435,8 +435,8 @@ jobs:
             python-version: "3.12"
             workers: 4
             reruns: 0
-            timeout-minutes: 20
-            job-timeout-minutes: 60
+            timeout-minutes: 23
+            job-timeout-minutes: 63
             dist: loadscope
 
           - shard: enterprise-repositories-secrets
@@ -1010,6 +1010,7 @@ jobs:
         timeout-minutes: ${{ matrix.timeout-minutes }}
         env:
           TEST_PATH: ${{ matrix.test-path }}
+          UNIT_SHARD: ${{ matrix.shard }}
           MAX_FAILURES: "10"
           WORKERS: ${{ matrix.workers }}
           RERUNS: ${{ matrix.reruns }}
@@ -1017,6 +1018,10 @@ jobs:
           DIST: ${{ matrix.dist }}
           COVERAGE_CORE: sysmon
         run: |
+          if [ "$UNIT_SHARD" = "rust-bridge-harness" ]; then
+            python -m unittest discover -s tests/code_coverage_tests -p test_docker_pull_with_retries.py -v
+            bash .github/scripts/docker_pull_with_retries.sh alpine:3.20
+          fi
           echo "has-coverage=false" >> "$GITHUB_OUTPUT"
           selection="${TEST_PATH}"
           if [ -z "${selection// /}" ]; then
