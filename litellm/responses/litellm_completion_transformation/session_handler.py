@@ -51,6 +51,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
+        item_cache_control: bool = False,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -86,6 +87,7 @@ class ResponsesSessionHandler:
                     spend_log=spend_log,
                     proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
+                    item_cache_control=item_cache_control,
                 )
             )
 
@@ -117,12 +119,14 @@ class ResponsesSessionHandler:
             | ChatCompletionResponseMessage
             | Message
         ],
+        item_cache_control: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
             LiteLLMCompletionResponsesConfig,
+            without_item_cache_control,
         )
 
         response_input_param: str | ResponseInputParam | None = None
@@ -145,7 +149,9 @@ class ResponsesSessionHandler:
         if response_input_param:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=response_input_param,
+                    input=(
+                        response_input_param if item_cache_control else without_item_cache_control(response_input_param)
+                    ),
                     responses_api_request={},
                     replay_reasoning=True,
                 )

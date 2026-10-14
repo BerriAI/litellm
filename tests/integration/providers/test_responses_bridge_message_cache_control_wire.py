@@ -48,11 +48,7 @@ _BEDROCK_SYSTEM_LABEL: Final = f"system:text:{SYSTEM}"
 _BEDROCK_RESULT_LABEL: Final = f"user:toolResult:{call_id(CITIES[0])}"
 _TOOL: Final[dict[str, JsonValue]] = {"type": "function", "name": "lookup_weather", "parameters": {"type": "object"}}
 _GEMINI: Final = "gemini/gemini-3.8-flash"
-_GEMINI_CACHE_WRITE: Final = [
-    ("GET", "/models/gemini-3.8-flash:cachedContents"),
-    ("POST", "/models/gemini-3.8-flash:cachedContents"),
-    ("POST", "/models/gemini-3.8-flash:generateContent"),
-]
+_GEMINI_GENERATE_ONLY: Final = [("POST", "/models/gemini-3.8-flash:generateContent")]
 _GEMINI_REPLY: Final = json.dumps(
     {
         "candidates": [{"content": {"role": "model", "parts": [{"text": "sunny"}]}, "finishReason": "STOP"}],
@@ -383,15 +379,26 @@ def _gemini_peer(request: Request) -> Reply:
     return Reply(body=_GEMINI_REPLY)
 
 
-def test_gemini_marked_system_item_writes_a_context_cache(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    "fields",
+    (
+        pytest.param({}, id="bare"),
+        pytest.param({"instructions": SYSTEM, "tools": [_TOOL]}, id="instructions-and-tools"),
+    ),
+)
+def test_gemini_marked_items_never_start_a_context_cache(gateway: Gateway, fields: dict[str, JsonValue]) -> None:
     marker: Final = new_marker()
     long_system: Final = "lorem " * (2 * get_prompt_cache_min_tokens(_GEMINI))
-    items: Final[list[JsonValue]] = [_item("system", long_system), {"role": "user", "content": final_text(marker)}]
+    items: Final[list[JsonValue]] = [
+        _item("system", long_system),
+        _item("developer", SYSTEM),
+        {"role": "user", "content": final_text(marker)},
+    ]
     with wire_server(_gemini_peer) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_GEMINI, api_base=wire.url, api_key=PROVIDER_KEY)
-        _assert_completed(_send(gateway, _responses(model, items)))
+        _assert_completed(_send(gateway, _responses(model, items, **fields)))
         targets: Final = [(request.method, request.target.split("?")[0]) for request in wire.drain()]
-    assert targets == _GEMINI_CACHE_WRITE
+    assert targets == _GEMINI_GENERATE_ONLY
 
 
 def test_azure_ai_claude_marked_system_item_reaches_the_anthropic_route(gateway: Gateway) -> None:
@@ -424,7 +431,7 @@ def _openai_message_marks(request: Request) -> list[str]:
     ]
 
 
-def test_openai_compatible_chat_bridge_keeps_the_message_mark(gateway: Gateway) -> None:
+def test_openai_compatible_chat_bridge_leaves_the_item_mark_off(gateway: Gateway) -> None:
     marker: Final = new_marker()
     reply: Final = chat_reply(f"chatcmpl-{marker}", "gpt-5.4", "sunny", stream=False)
     with wire_server(answering_model_discovery(lambda request: reply)) as wire, gateway.scenario() as scenario:
@@ -434,7 +441,7 @@ def test_openai_compatible_chat_bridge_keeps_the_message_mark(gateway: Gateway) 
         _assert_completed(_send(gateway, _marked_system(model, marker)))
         posted: Final = [request for request in wire.drain() if request.method == "POST"]
     assert [request.target for request in posted] == ["/v1/chat/completions"], [request.target for request in posted]
-    assert _openai_message_marks(posted[0]) == ["cache_control@system:message"]
+    assert _openai_message_marks(posted[0]) == []
 
 
 def test_injection_points_keep_the_caller_one_hour_system_mark(gateway: Gateway) -> None:
@@ -662,6 +669,35 @@ def test_five_marks_are_refused_by_the_vendor(gateway: Gateway) -> None:
     assert answer.status == 400, answer.text
     assert "A maximum of 4 blocks with cache_control" in answer.text, answer.text
     assert len(labels) == 5, labels
+
+
+def test_five_marks_keep_the_newest_four_under_drop_params(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"anthropic/{ANTHROPIC_MODEL}", api_base=wire.url, api_key=PROVIDER_KEY, drop_params=True
+        )
+        body: Final = _responses(model, _many_marks(marker, assistant_marked=True), tools=[_TOOL])
+        _assert_completed(_send(gateway, body))
+        labels: Final = anthropic_labels(_only_request(wire))
+    assert labels == [ASK_LABEL, _ASSISTANT_LABEL, _RESULT_LABEL, final_label(marker)]
+
+
+@pytest.mark.parametrize(
+    "mark",
+    (
+        pytest.param("ephemeral", id="string"),
+        pytest.param({"type": "forever"}, id="unknown-type"),
+    ),
+)
+def test_malformed_mark_is_dropped_under_drop_params(gateway: Gateway, mark: JsonValue) -> None:
+    marker: Final = new_marker()
+    with wire_server(_strict_anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"anthropic/{ANTHROPIC_MODEL}", api_base=wire.url, api_key=PROVIDER_KEY, drop_params=True
+        )
+        _assert_completed(_send(gateway, _marked_system(model, marker, mark)))
+        assert anthropic_labels(_only_request(wire)) == []
 
 
 def test_ttl_order_violation_is_the_vendors_verdict(gateway: Gateway) -> None:

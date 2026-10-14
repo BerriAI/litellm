@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeA
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import TypeIs, assert_never
+from typing_extensions import (
+    TypeIs,  # noqa: TID251  # narrows a client input item before its mark is read
+    assert_never,
+)
 
 import litellm
 from litellm._logging import verbose_logger

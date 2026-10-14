@@ -898,10 +898,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert tool_call["id"] == "call_4SjsMeA6DUHwGKaE87ZojgOF"
         assert tool_call["type"] == "function"
         assert tool_call["function"]["name"] == "get_current_weather"
-        assert (
-            tool_call["function"]["arguments"]
-            == '{"location":"Boston, MA","unit":"celsius"}'
-        )
+        assert tool_call["function"]["arguments"] == '{"location":"Boston, MA","unit":"celsius"}'
         assert tool_call["index"] == 0
 
     def test_extract_tool_call_from_dict_format(self):
@@ -942,10 +939,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert tool_call["id"] == "call_4SjsMeA6DUHwGKaE87ZojgOF"
         assert tool_call["type"] == "function"
         assert tool_call["function"]["name"] == "get_current_weather"
-        assert (
-            tool_call["function"]["arguments"]
-            == '{"location":"Boston, MA","unit":"celsius"}'
-        )
+        assert tool_call["function"]["arguments"] == '{"location":"Boston, MA","unit":"celsius"}'
 
     @pytest.mark.parametrize(
         "output_item",
@@ -1481,9 +1475,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 logging_obj: Optional[Any] = None,
             ) -> GenericGuardrailAPIInputs:
                 texts = inputs.get("texts", [])
-                inputs["texts"] = [
-                    t.replace("<TOKEN_1>", "john@example.com") for t in texts
-                ]
+                inputs["texts"] = [t.replace("<TOKEN_1>", "john@example.com") for t in texts]
                 return inputs
 
         handler = OpenAIResponsesHandler()
@@ -1519,15 +1511,11 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             litellm_logging_obj=None,
         )
 
-        completed_chunk = next(
-            c
-            for c in result
-            if isinstance(c, dict) and c.get("type") == "response.completed"
-        )
+        completed_chunk = next(c for c in result if isinstance(c, dict) and c.get("type") == "response.completed")
         output_text = completed_chunk["response"]["output"][0]["content"][0]["text"]
-        assert (
-            output_text == "send to john@example.com"
-        ), f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+        assert output_text == "send to john@example.com", (
+            f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_process_output_streaming_response_pass_through_unchanged(self):
@@ -1585,7 +1573,11 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 "content_index": 0,
                 "part": {"type": "output_text", "text": "hello world"},
             },
-            {"type": "response.output_item.done", "output_index": 0, "item": {**item, "content": [dict(c) for c in content]}},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {**item, "content": [dict(c) for c in content]},
+            },
             {
                 "type": "response.completed",
                 "response": {
@@ -1646,15 +1638,29 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
 
         return [
             {"type": "response.output_item.added", "output_index": 0, "item": item("", "in_progress")},
-            {"type": "response.function_call_arguments.delta", "item_id": "fc_123", "output_index": 0, "delta": '{"fruit":'},
-            {"type": "response.function_call_arguments.delta", "item_id": "fc_123", "output_index": 0, "delta": ' "persimmon"}'},
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_123",
+                "output_index": 0,
+                "delta": '{"fruit":',
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_123",
+                "output_index": 0,
+                "delta": ' "persimmon"}',
+            },
             {
                 "type": "response.function_call_arguments.done",
                 "item_id": "fc_123",
                 "output_index": 0,
                 "arguments": '{"fruit": "persimmon"}',
             },
-            {"type": "response.output_item.done", "output_index": 0, "item": item('{"fruit": "persimmon"}', "completed")},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": item('{"fruit": "persimmon"}', "completed"),
+            },
             {
                 "type": "response.completed",
                 "response": {
@@ -1759,8 +1765,18 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         return [
             {"type": "response.output_item.added", "output_index": 0, "item": item("", "in_progress")},
             {"type": "response.custom_tool_call_input.delta", "item_id": "ctc_1", "output_index": 0, "delta": "echo "},
-            {"type": "response.custom_tool_call_input.delta", "item_id": "ctc_1", "output_index": 0, "delta": "persimmon"},
-            {"type": "response.custom_tool_call_input.done", "item_id": "ctc_1", "output_index": 0, "input": "echo persimmon"},
+            {
+                "type": "response.custom_tool_call_input.delta",
+                "item_id": "ctc_1",
+                "output_index": 0,
+                "delta": "persimmon",
+            },
+            {
+                "type": "response.custom_tool_call_input.done",
+                "item_id": "ctc_1",
+                "output_index": 0,
+                "input": "echo persimmon",
+            },
             {"type": "response.output_item.done", "output_index": 0, "item": item("echo persimmon", "completed")},
             {
                 "type": "response.completed",
@@ -1893,19 +1909,43 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         return [
             {"type": "response.output_item.added", "output_index": 0, "item": dict(reasoning)},
             {"type": "response.output_item.done", "output_index": 0, "item": dict(reasoning)},
-            {"type": "response.output_item.added", "output_index": 0, "item": {**message, "status": "in_progress", "content": []}},
-            {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "Looking that up"},
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {**message, "status": "in_progress", "content": []},
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Looking that up",
+            },
             {"type": "response.output_item.done", "output_index": 0, "item": {**message, "content": [dict(text)]}},
             {"type": "response.output_item.added", "output_index": 1, "item": function_call("", "in_progress")},
-            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": '{"fruit":'},
-            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": ' "persimmon"}'},
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "delta": '{"fruit":',
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "delta": ' "persimmon"}',
+            },
             {
                 "type": "response.function_call_arguments.done",
                 "item_id": "fc_1",
                 "output_index": 1,
                 "arguments": '{"fruit": "persimmon"}',
             },
-            {"type": "response.output_item.done", "output_index": 1, "item": function_call('{"fruit": "persimmon"}', "completed")},
+            {
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": function_call('{"fruit": "persimmon"}', "completed"),
+            },
             {
                 "type": "response.completed",
                 "response": {
@@ -2303,9 +2343,7 @@ class TestGetStructuredMessages:
         }
         result = handler.get_structured_messages(data)
         assert result is not None
-        has_system = any(
-            isinstance(msg, dict) and msg.get("role") == "system" for msg in result
-        )
+        has_system = any(isinstance(msg, dict) and msg.get("role") == "system" for msg in result)
         assert has_system, f"Expected system message from instructions, got: {result}"
 
     def test_should_return_none_when_no_input(self):
@@ -2405,9 +2443,7 @@ class StructuredRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first_user = next(i for i, m in enumerate(messages) if m.get("role") == "user")
-        rewritten = [
-            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten}
 
 
@@ -2453,9 +2489,7 @@ class ToolOutputRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first_tool = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "tool")
-        rewritten = [
-            {**m, "content": COMPRESSED_MARKER} if i == first_tool else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_tool else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten}
 
 
@@ -2472,9 +2506,7 @@ class DroppingRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first_user = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user")
-        rewritten = [
-            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten[:-1]}
 
 
@@ -2519,6 +2551,21 @@ class TestStructuredMessagesWriteBack:
 
         assert [_texts(item) for item in result["input"]] == [[COMPRESSED_MARKER]]
         assert "instructions" not in result
+
+    @pytest.mark.asyncio
+    async def test_rows_the_guardrail_left_alone_keep_their_cache_control_past_the_provider_cap(self):
+        handler = OpenAIResponsesHandler()
+        ephemeral = {"type": "ephemeral"}
+        marked_turns = [{"role": "user", "content": f"turn {index}", "cache_control": ephemeral} for index in range(4)]
+        data = {
+            "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+            "input": [{"role": "user", "content": "memo " * 400, "cache_control": ephemeral}, *marked_turns],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert _texts(result["input"][0]) == [COMPRESSED_MARKER]
+        assert result["input"][1:] == marked_turns
 
     @pytest.mark.asyncio
     async def test_developer_item_preserved_verbatim_by_row_patch(self):
@@ -3034,9 +3081,7 @@ class SystemRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "system")
-        rewritten = [
-            {**m, "content": self.rewritten_content} if i == first else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": self.rewritten_content} if i == first else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten}
 
 
@@ -3411,9 +3456,7 @@ class TestBuildBlockSseChunks:
             {"type": "message", "id": "msg_live", "status": "in_progress", "role": "assistant", "content": []}
         )
         yielded = [
-            OutputItemAddedEvent(
-                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=open_item
-            ),
+            OutputItemAddedEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=open_item),
             ContentPartAddedEvent(
                 type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
                 item_id="msg_live",
@@ -3627,7 +3670,11 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
             "delta": '{"city":',
         }
         function_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city":'}
-        terminal = {"type": terminal_type, "sequence_number": 2, "response": {"id": "resp_1", "output": [function_call]}}
+        terminal = {
+            "type": terminal_type,
+            "sequence_number": 2,
+            "response": {"id": "resp_1", "output": [function_call]},
+        }
         mid_stream_key = handler.get_streaming_scan_key([arguments_delta])
         ended_key = handler.get_streaming_scan_key([arguments_delta, terminal])
         assert ended_key.stream_ended is True
@@ -3661,7 +3708,13 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         added = {
             "type": "response.output_item.added",
             "sequence_number": 1,
-            "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "get_weather", "arguments": ""},
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": "",
+            },
         }
         arguments_delta = {
             "type": "response.function_call_arguments.delta",
@@ -3686,7 +3739,11 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         arguments = json.dumps({"city": city})
         pending = {"type": "function_call", "id": item_id, "call_id": "call_" + item_id, "name": "get_weather"}
         return (
-            {"type": "response.output_item.added", "sequence_number": sequence_number, "item": {**pending, "arguments": ""}},
+            {
+                "type": "response.output_item.added",
+                "sequence_number": sequence_number,
+                "item": {**pending, "arguments": ""},
+            },
             {
                 "type": "response.function_call_arguments.delta",
                 "sequence_number": sequence_number + 1,
@@ -3710,7 +3767,9 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         ended_key = handler.get_streaming_scan_key(handler.released_stream_as_ended(released))
         assert ended_key.stream_ended is True
         assert ended_key.texts == ("hi",)
-        cities = tuple(city for fingerprint in ended_key.tool_calls for city in ("Paris", "Rome") if city in fingerprint)
+        cities = tuple(
+            city for fingerprint in ended_key.tool_calls for city in ("Paris", "Rome") if city in fingerprint
+        )
         assert cities == ("Paris", "Rome"), ended_key
 
     def test_released_stream_as_ended_keys_a_message_whose_item_already_finished(self):
@@ -3720,7 +3779,9 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
             "sequence_number": 1,
             "item": {"type": "message", "id": "msg_1", "content": [{"type": "output_text", "text": "hi"}]},
         }
-        ended_key = handler.get_streaming_scan_key(handler.released_stream_as_ended((self._delta(0, "hi"), message_done)))
+        ended_key = handler.get_streaming_scan_key(
+            handler.released_stream_as_ended((self._delta(0, "hi"), message_done))
+        )
         assert ended_key.stream_ended is True
         assert ended_key.texts == ("hi",)
 

@@ -8,13 +8,13 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, Final, cast  # noqa: TID251  # a developer message is rebuilt as a typed system message
+from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
 
 
@@ -370,17 +370,13 @@ def map_developer_role_to_system_role(
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    return [_developer_message_as_system_message(message) for message in messages]
-
-
-_SYSTEM_MESSAGE_FIELDS: Final = frozenset(("content", "name", "cache_control"))
-
-
-def _developer_message_as_system_message(message: AllMessageValues) -> AllMessageValues:
-    if message["role"] != "developer":
-        return message
-    verbose_logger.debug("Translating developer role to system role for non-OpenAI providers.")
-    carried: Final = {key: value for key, value in message.items() if key in _SYSTEM_MESSAGE_FIELDS}
-    return cast(  # cast-ok: content, name and cache_control are the system message's own fields
-        ChatCompletionSystemMessage, {"role": "system", **carried}
-    )
+    new_messages: Final[list[AllMessageValues]] = []
+    for m in messages:
+        if m["role"] == "developer":
+            verbose_logger.debug(
+                "Translating developer role to system role for non-OpenAI providers."
+            )  # ensure user knows what's happening with their input.
+            new_messages.append({"role": "system", "content": m["content"]})
+        else:
+            new_messages.append(m)
+    return new_messages
