@@ -8540,7 +8540,7 @@ def speech(
         )
 
         if text_to_speech_provider_config is None:
-            text_to_speech_provider_config = GradiumTextToSpeechConfig()  # rebind-ok: shared across every provider branch of speech()
+            text_to_speech_provider_config = GradiumTextToSpeechConfig()  # rebind-ok: set per provider branch
 
         gradium_config: Final = cast(  # cast-ok: narrowed to the config the branch above just selected
             GradiumTextToSpeechConfig, text_to_speech_provider_config
@@ -8559,7 +8559,7 @@ def speech(
         if api_key is not None:
             litellm_params_dict["api_key"] = api_key
 
-        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: shared across every provider branch of speech()
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch
             model=model,
             input=input,
             voice=gradium_voice_id,

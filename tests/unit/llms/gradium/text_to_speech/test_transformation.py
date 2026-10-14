@@ -102,6 +102,21 @@ def test_drops_openai_only_speed_and_instructions():
     assert "instructions" not in params
 
 
+def test_advertises_the_openai_params_it_honors():
+    config = GradiumTextToSpeechConfig()
+
+    assert config.get_supported_openai_params(model="default") == ["voice", "response_format"]
+
+
+def test_maps_upstream_failures_to_a_gradium_exception():
+    config = GradiumTextToSpeechConfig()
+
+    error = config.get_error_class(error_message="unknown voice", status_code=422, headers={})
+
+    assert isinstance(error, GradiumException)
+    assert error.status_code == 422
+
+
 def test_requires_an_api_key():
     config = GradiumTextToSpeechConfig()
 
@@ -221,6 +236,56 @@ async def test_aspeech_calls_the_gradium_rest_endpoint(gradium_env):
         respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
 
         response = await litellm.aspeech(model="gradium/default", input="Bonjour", voice="alloy")
+
+        assert response.content == _AUDIO
+
+
+def test_speech_rejects_a_missing_voice(gradium_env):
+    with pytest.raises(ValueError, match="voice_id is required"):
+        litellm.speech(model="gradium/default", input="Bonjour", voice=None)
+
+
+def test_speech_rejects_a_missing_voice_without_a_provider_config(gradium_env, monkeypatch):
+    """`speech()` guards the voice itself on the path where no config was resolved."""
+    monkeypatch.setattr(
+        litellm.utils.ProviderConfigManager,
+        "get_provider_text_to_speech_config",
+        staticmethod(lambda **_: None),
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="must resolve to a Gradium voice id"):
+        litellm.speech(model="gradium/default", input="Bonjour", voice=None)
+
+
+def test_speech_honors_an_explicit_api_base_and_api_key(gradium_env):
+    with respx.mock:
+        route = respx.post("https://eu.api.gradium.ai/api/post/speech/tts").mock(
+            return_value=httpx.Response(200, content=_AUDIO)
+        )
+
+        litellm.speech(
+            model="gradium/default",
+            input="Bonjour",
+            voice="alloy",
+            api_base="https://eu.api.gradium.ai",
+            api_key="gd_explicit",
+        )
+
+        assert route.calls[-1].request.headers["x-api-key"] == "gd_explicit"
+
+
+def test_speech_falls_back_to_its_own_config(gradium_env, monkeypatch):
+    """`speech()` instantiates the config itself when the manager returns none."""
+    monkeypatch.setattr(
+        litellm.utils.ProviderConfigManager,
+        "get_provider_text_to_speech_config",
+        staticmethod(lambda **_: None),
+    )
+
+    with respx.mock:
+        respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
+
+        response = litellm.speech(model="gradium/default", input="Bonjour", voice="alloy")
 
         assert response.content == _AUDIO
 
