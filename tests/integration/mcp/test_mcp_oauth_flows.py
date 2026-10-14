@@ -1931,7 +1931,7 @@ def test_managed_scope_step_up_preserves_read_and_write_without_retry(gateway: G
         owner: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
         stranger: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
         pkce: Final = _Pkce(secrets.token_urlsafe(32))
-        code: Final = _authorize_through_gateway(gateway, auth, alias, owner, "scope-client", pkce, "tools.read")
+        code, _ = _authorize_through_gateway(gateway, auth, alias, owner, "scope-client", pkce, "tools.read")
         first: Final = _redeem(gateway, alias, owner, "scope-client", code, pkce)
         assert first.status_code == 200, first.text
         caller: Final = McpCaller(gateway, owner, entry, alias)
@@ -1954,9 +1954,7 @@ def test_managed_scope_step_up_preserves_read_and_write_without_retry(gateway: G
             if request.body and json.loads(request.body).get("method") == "tools/call"
         )
         assert len(attempts) == 1 and tool_calls(peer.drain()) == (), "denied operation was retried or executed"
-        second_code: Final = _authorize_through_gateway(
-            gateway, auth, alias, owner, "scope-client", pkce, "tools.write"
-        )
+        second_code, _ = _authorize_through_gateway(gateway, auth, alias, owner, "scope-client", pkce, "tools.write")
         second: Final = _redeem(gateway, alias, owner, "scope-client", second_code, pkce)
         assert second.status_code == 200, second.text
         with auth.lock:
@@ -1998,7 +1996,7 @@ def test_managed_step_up_advertises_sdk_compatible_metadata_and_bound_permission
             user_id=scenario.user(), object_permission={"mcp_servers": [identity], "mcp_toolsets": [toolset_id]}
         )
         pkce: Final = _Pkce(secrets.token_urlsafe(32))
-        code: Final = _authorize_through_gateway(gateway, auth, alias, owner, "scope-client", pkce, "tools.read")
+        code, _ = _authorize_through_gateway(gateway, auth, alias, owner, "scope-client", pkce, "tools.read")
         first: Final = _redeem(gateway, alias, owner, "scope-client", code, pkce)
         assert first.status_code == 200, first.text
         path: Final = route.format(toolset=toolset_name)
