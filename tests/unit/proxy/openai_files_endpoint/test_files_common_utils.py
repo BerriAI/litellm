@@ -717,30 +717,42 @@ def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentia
 
 
 @pytest.mark.parametrize(
-    "request_credentials, sent_api_key",
+    "request_credentials, sent_api_key, sent_api_base",
     [
-        ({}, "team-openai-key"),
-        ({"api_key": ""}, "team-openai-key"),
-        ({"api_key": "sk-forwarded"}, "sk-forwarded"),
-        ({"api_base": "https://caller.example/v1"}, None),
-        ({"litellm_credential_name": "caller-openai"}, None),
+        ({}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": ""}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-forwarded"}, "sk-forwarded", "https://team.example/v1"),
+        ({"api_base": "https://caller.example/v1"}, "team-openai-key", "https://caller.example/v1"),
+        ({"litellm_credential_name": "no-such-credential"}, "team-openai-key", "https://team.example/v1"),
     ],
 )
-def test_team_provider_credentials_never_replace_credentials_the_request_already_carries(
-    request_credentials: dict[str, str], sent_api_key: str | None
+def test_a_key_or_base_the_request_carries_replaces_only_that_part_of_the_team_credentials(
+    request_credentials: dict[str, str], sent_api_key: str, sent_api_base: str
 ):
     data: Final[dict[str, object]] = dict(request_credentials)
 
     apply_team_provider_credentials(
         data=data,
-        llm_router=_team_openai_router("openai/*", "openai/*"),
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "team-openai-key",
+                        "api_base": "https://team.example/v1",
+                    },
+                    "model_info": {"id": "team-a-openai", "team_id": "team-a"},
+                }
+            ]
+        ),
         user_api_key_dict=UserAPIKeyAuth(
             api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
         ),
         custom_llm_provider="openai",
     )
 
-    assert data.get("api_key") == sent_api_key
+    assert (data.get("api_key"), data.get("api_base")) == (sent_api_key, sent_api_base)
 
 
 def _team_openai_deployment(

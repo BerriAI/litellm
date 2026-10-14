@@ -567,19 +567,18 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     pass
             return file_id, fetch_kwargs
 
-        request_credentials: Final = explicit_request_credentials(data)
-        if request_credentials:
-            fetch_kwargs.update(extract_file_access_credentials(request_credentials))
-            return file_id, fetch_kwargs
-        if user_api_key_dict is None:
-            return file_id, fetch_kwargs
-        team_credentials: Final = get_team_provider_credentials(
-            llm_router=llm_router,
-            user_api_key_dict=user_api_key_dict,
-            custom_llm_provider=custom_llm_provider,
+        team_credentials: Final = (
+            get_team_provider_credentials(
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
+            if user_api_key_dict is not None
+            else None
         )
-        if team_credentials is not None:
-            fetch_kwargs.update(extract_file_access_credentials(team_credentials))
+        fetch_kwargs.update(
+            extract_file_access_credentials({**(team_credentials or {}), **explicit_request_credentials(data)})
+        )
         return file_id, fetch_kwargs
 
     async def _reserve_batch_enqueued_tokens(

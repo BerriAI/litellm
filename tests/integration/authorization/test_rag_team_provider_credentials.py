@@ -25,6 +25,7 @@ import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import (
+    JSON_OBJECT,
     Gateway,
     Scenario,
     eventually,
@@ -1058,13 +1059,19 @@ def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_
     assert rag_rig.signatures() == (("wildcard", "POST", "/v1/files", f"Bearer {WILDCARD_API_KEY}"),)
 
 
+@pytest.mark.parametrize("batch_options", ({}, {"litellm_credential_name": "no-such-credential"}), ids=("plain", "credential_name"))
 @pytest.mark.parametrize(
     ("caller", "prefix", "api_key", "reads_input"),
     (("team_a_key", "team", TEAM_API_KEY, False), ("wildcard_bare_key", "wildcard", WILDCARD_API_KEY, True)),
     ids=("team_key", "restricted_wildcard_key"),
 )
 def test_batch_create_reads_the_input_and_creates_the_batch_through_the_team_deployment(
-    rag_rig: RagRig, caller: Literal["team_a_key", "wildcard_bare_key"], prefix: str, api_key: str, reads_input: bool
+    rag_rig: RagRig,
+    caller: Literal["team_a_key", "wildcard_bare_key"],
+    prefix: str,
+    api_key: str,
+    reads_input: bool,
+    batch_options: Mapping[str, JsonValue],
 ) -> None:
     key: Final = getattr(rag_rig.tenants, caller)
     uploaded: Final = rag_rig.gateway.request_multipart(
@@ -1076,7 +1083,7 @@ def test_batch_create_reads_the_input_and_creates_the_batch_through_the_team_dep
     created: Final = rag_rig.gateway.request(
         "POST",
         "/v1/batches",
-        {"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        {"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h", **batch_options},
         key=key,
     )
 
@@ -1898,38 +1905,51 @@ async def test_jwt_team_member_reaches_its_llm_routes_through_the_sdks(
     assert [(call.prefix, call.authorization) for call in calls] == [("team", f"Bearer {TEAM_API_KEY}")], calls
 
 
-def _batch_for(rig: RagRig, key: str) -> tuple[str, str]:
-    uploaded: Final = rig.gateway.request_multipart("/v1/files", {"purpose": "batch"}, {"file": BATCH_INPUT}, key=key)
+def _batch_for(rig: RagRig, headers: Mapping[str, str]) -> tuple[str, str]:
+    uploaded: Final = rig.gateway.client.post(
+        "/v1/files", data={"purpose": "batch"}, files={"file": BATCH_INPUT}, headers=dict(headers)
+    )
     assert uploaded.status_code == 200, uploaded.text
     file_id: Final = string_value(object_value(uploaded.json())["id"])
     created: Final = rig.gateway.request(
         "POST",
         "/v1/batches",
         {"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
-        key=key,
+        headers=headers,
     )
     assert created.status_code == 200, created.text
     rig.upstream.drain()
     return file_id, string_value(object_value(created.json())["id"])
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "route"),
-    (
-        ("GET", "/v1/files/{file_id}", "/v1/files/{file_id}"),
-        ("GET", "/v1/files/{file_id}/content", "/v1/files/{file_id}/content"),
-        ("DELETE", "/v1/files/{file_id}", "/v1/files/{file_id}"),
-        ("GET", "/v1/files?purpose=batch&custom_llm_provider=openai", "/v1/files"),
-        ("GET", "/v1/batches/{batch_id}", "/v1/batches/{batch_id}"),
-        ("POST", "/v1/batches/{batch_id}/cancel", "/v1/batches/{batch_id}/cancel"),
-    ),
-    ids=("file_retrieve", "file_content", "file_delete", "file_list", "batch_retrieve", "batch_cancel"),
+FOLLOW_UP_CALLS: Final = (
+    ("GET", "/v1/files/{file_id}", "/v1/files/{file_id}"),
+    ("GET", "/v1/files/{file_id}/content", "/v1/files/{file_id}/content"),
+    ("DELETE", "/v1/files/{file_id}", "/v1/files/{file_id}"),
+    ("GET", "/v1/files?purpose=batch&custom_llm_provider=openai", "/v1/files"),
+    ("GET", "/v1/batches/{batch_id}", "/v1/batches/{batch_id}"),
+    ("POST", "/v1/batches/{batch_id}/cancel", "/v1/batches/{batch_id}/cancel"),
 )
+FOLLOW_UP_CALL_IDS: Final = (
+    "file_retrieve",
+    "file_content",
+    "file_delete",
+    "file_list",
+    "batch_retrieve",
+    "batch_cancel",
+)
+
+
+def _bearer(key: str) -> Mapping[str, str]:
+    return MappingProxyType({"Authorization": f"Bearer {key}"})
+
+
+@pytest.mark.parametrize(("method", "path", "route"), FOLLOW_UP_CALLS, ids=FOLLOW_UP_CALL_IDS)
 def test_files_and_batches_calls_by_a_key_restricted_under_the_team_wildcard_use_the_team_deployment(
     rag_rig: RagRig, method: str, path: str, route: str
 ) -> None:
     key: Final = rag_rig.tenants.wildcard_bare_key
-    file_id, batch_id = _batch_for(rag_rig, key)
+    file_id, batch_id = _batch_for(rag_rig, _bearer(key))
 
     response: Final = rag_rig.gateway.request(method, path.format(file_id=file_id, batch_id=batch_id), key=key)
 
@@ -1943,7 +1963,7 @@ def test_batch_list_by_a_key_restricted_under_the_team_wildcard_is_answered_by_t
     rag_rig: RagRig,
 ) -> None:
     key: Final = rag_rig.tenants.wildcard_bare_key
-    _batch_for(rag_rig, key)
+    _batch_for(rag_rig, _bearer(key))
 
     response: Final = rag_rig.gateway.request("GET", "/v1/batches?custom_llm_provider=openai", key=key)
 
@@ -2038,10 +2058,10 @@ def _forwarding(key: str) -> Mapping[str, str]:
 @pytest.mark.parametrize(
     ("stored", "stream", "search"),
     (
-        (None, False, ("environment", FORWARDED_API_KEY)),
-        (None, True, ("environment", FORWARDED_API_KEY)),
+        (None, False, ("team", FORWARDED_API_KEY)),
+        (None, True, ("team", FORWARDED_API_KEY)),
         ("own_key", False, ("caller", CALLER_API_KEY)),
-        ("null_key", False, ("environment", FORWARDED_API_KEY)),
+        ("null_key", False, ("team", FORWARDED_API_KEY)),
     ),
     ids=("unmanaged_json", "unmanaged_stream", "managed_own_key", "managed_null_key"),
 )
@@ -2093,12 +2113,16 @@ def test_forwarded_provider_key_on_ingest_wins_over_team_provider_credentials(ra
     )
 
     store_id: Final = _completed_store(rag_rig, response)
-    assert rag_rig.signatures() == _ingest_signatures("environment", FORWARDED_API_KEY, store_id)
+    assert rag_rig.signatures() == _ingest_signatures("team", FORWARDED_API_KEY, store_id)
 
 
-@pytest.mark.parametrize("caller", ("team_a_key", "wildcard_bare_key"), ids=("team_key", "restricted_wildcard_key"))
+@pytest.mark.parametrize(
+    ("caller", "prefix"),
+    (("team_a_key", "team"), ("wildcard_bare_key", "wildcard")),
+    ids=("team_key", "restricted_wildcard_key"),
+)
 def test_forwarded_provider_key_on_files_and_batches_wins_over_team_provider_credentials(
-    rag_rig: RagRig, caller: Literal["team_a_key", "wildcard_bare_key"]
+    rag_rig: RagRig, caller: Literal["team_a_key", "wildcard_bare_key"], prefix: str
 ) -> None:
     headers: Final = _forwarding(getattr(rag_rig.tenants, caller))
     uploaded: Final = rag_rig.gateway.client.post(
@@ -2117,7 +2141,7 @@ def test_forwarded_provider_key_on_files_and_batches_wins_over_team_provider_cre
     assert created.status_code == 200, created.text
     calls: Final = rag_rig.calls()
     assert [(call.prefix, call.authorization) for call in calls] == [
-        ("environment", f"Bearer {FORWARDED_API_KEY}")
+        (prefix, f"Bearer {FORWARDED_API_KEY}")
     ] * len(calls), calls
     assert {(call.method, call.route) for call in calls} >= {("POST", "/v1/files"), ("POST", "/v1/batches")}, calls
 
@@ -2140,3 +2164,156 @@ def test_jwt_team_claim_with_a_non_string_entry_still_resolves_the_string_team(
     assert response.status_code == 200, response.text
     search: Final = (_search_signature("team", TEAM_API_KEY, store_id),) if route == "/v1/rag/query" else ()
     assert rag_rig.signatures() == (*search, _chat_signature("team", TEAM_API_KEY))
+
+
+@pytest.mark.parametrize("stray_claim", (7, None), ids=("int", "null"))
+def test_jwt_header_team_outside_a_claim_with_a_non_string_entry_is_denied_with_403(
+    rag_rig: RagRig, stray_claim: JsonValue
+) -> None:
+    tenants: Final = rag_rig.tenants
+    header_team: Final = f"integration-rag-unknown-team-{uuid.uuid4().hex}"
+
+    response: Final = rag_rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        _llm_body("/v1/chat/completions", tenants.team_a_model),
+        key=rag_rig.jwt(tenants.jwt_member, tenants.team_a, stray_claim),
+        headers={"x-litellm-team-id": header_team},
+    )
+
+    assert response.status_code == 403, response.text
+    assert f"x-litellm-team-id '{header_team}' does not resolve to a team id or a unique team alias" in response.text, (
+        response.text
+    )
+    assert f"'{tenants.team_a}'" in response.text, response.text
+    assert rag_rig.calls() == ()
+
+
+@pytest.mark.parametrize(("method", "path", "route"), FOLLOW_UP_CALLS, ids=FOLLOW_UP_CALL_IDS)
+@pytest.mark.parametrize(
+    ("caller", "prefix"),
+    (("team_a_key", "team"), ("wildcard_bare_key", "wildcard")),
+    ids=("team_key", "restricted_wildcard_key"),
+)
+def test_forwarded_provider_key_on_files_and_batches_follow_up_calls_replaces_the_team_deployment_key(
+    rag_rig: RagRig,
+    caller: Literal["team_a_key", "wildcard_bare_key"],
+    prefix: str,
+    method: str,
+    path: str,
+    route: str,
+) -> None:
+    headers: Final = _forwarding(getattr(rag_rig.tenants, caller))
+    file_id, batch_id = _batch_for(rag_rig, headers)
+
+    response: Final = rag_rig.gateway.request(method, path.format(file_id=file_id, batch_id=batch_id), headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert rag_rig.signatures() == (
+        (prefix, method, route.format(file_id=file_id, batch_id=batch_id), f"Bearer {FORWARDED_API_KEY}"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("x_api_key", "prefix", "api_key"),
+    (
+        (("",), "wildcard", WILDCARD_API_KEY),
+        (("f" * 5120,), "wildcard", "f" * 5120),
+        ((FORWARDED_API_KEY, FORWARDED_API_KEY), "wildcard", FORWARDED_API_KEY),
+    ),
+    ids=("empty", "five_kb", "repeated"),
+)
+def test_blank_oversized_or_repeated_forwarded_provider_key_on_files_and_batches(
+    rag_rig: RagRig, x_api_key: tuple[str, ...], prefix: str, api_key: str
+) -> None:
+    headers: Final = (
+        ("Authorization", f"Bearer {rag_rig.tenants.wildcard_bare_key}"),
+        *(("x-api-key", value) for value in x_api_key),
+    )
+    uploaded: Final = rag_rig.gateway.client.post(
+        "/v1/files", data={"purpose": "batch"}, files={"file": BATCH_INPUT}, headers=headers
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    file_id: Final = string_value(JSON_OBJECT.validate_json(uploaded.content)["id"])
+
+    created: Final = rag_rig.gateway.client.post(
+        "/v1/batches",
+        json={"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        headers=headers,
+    )
+
+    assert created.status_code == 200, created.text
+    calls: Final = rag_rig.calls()
+    assert [(call.prefix, call.authorization) for call in calls] == [(prefix, f"Bearer {api_key}")] * len(calls), calls
+    assert {(call.method, call.route) for call in calls} == {
+        ("POST", "/v1/files"),
+        ("GET", f"/v1/files/{file_id}/content"),
+        ("POST", "/v1/batches"),
+    }, calls
+
+
+def _forwarded_ingest(rig: RagRig, vector_store: Mapping[str, JsonValue]) -> httpx.Response:
+    return rig.gateway.client.post(
+        "/v1/rag/ingest",
+        data=dict(_ingest_request("litellm-rag-forwarded-key", vector_store)),
+        files={"file": DOCUMENT},
+        headers=dict(_forwarding(rig.tenants.team_a_key)),
+    )
+
+
+def test_forwarded_provider_key_on_ingest_never_overrides_a_named_credential(rag_rig: RagRig) -> None:
+    store_id: Final = _completed_store(
+        rag_rig, _forwarded_ingest(rag_rig, {**OPENAI, "litellm_credential_name": rag_rig.tenants.credential_name})
+    )
+
+    assert rag_rig.signatures() == _ingest_signatures("credential", CREDENTIAL_API_KEY, store_id)
+
+
+@pytest.mark.parametrize(
+    ("stored", "prefix", "api_key"),
+    (("own_key", "caller", CALLER_API_KEY), ("null_key", "team", FORWARDED_API_KEY)),
+    ids=("own_key", "null_key"),
+)
+def test_forwarded_provider_key_on_ingest_into_a_managed_store_yields_only_to_the_store_key(
+    rag_rig: RagRig, stored: Literal["own_key", "null_key"], prefix: str, api_key: str
+) -> None:
+    with rag_rig.gateway.scenario() as scenario:
+        store_id: Final = _managed_store(
+            rag_rig,
+            scenario,
+            {"api_key": CALLER_API_KEY, "api_base": f"{rag_rig.upstream.url}/caller/v1"}
+            if stored == "own_key"
+            else {"api_key": None},
+        )
+
+        response: Final = _forwarded_ingest(rag_rig, {**OPENAI, "vector_store_id": store_id})
+
+        assert response.status_code == 200, response.text
+        assert JSON_OBJECT.validate_json(response.content)["vector_store_id"] == store_id, response.text
+        bearer: Final = f"Bearer {api_key}"
+        assert rag_rig.signatures() == (
+            (prefix, "POST", "/v1/files", bearer),
+            (prefix, "POST", f"/v1/vector_stores/{store_id}/files", bearer),
+        )
+
+
+def test_forwarded_provider_key_never_reaches_a_gemini_ingest(rag_rig: RagRig) -> None:
+    store_id: Final = _completed_store(rag_rig, _forwarded_ingest(rag_rig, {"custom_llm_provider": "gemini"}))
+
+    requests: Final = rag_rig.upstream.drain()
+    store_name: Final = store_id.removeprefix("fileSearchStores/")
+    assert tuple(
+        (call.prefix, call.method, call.route, call.google_key, call.authorization)
+        for call in (_call(request) for request in requests)
+    ) == (
+        ("gemini", "POST", "/v1beta/fileSearchStores", GEMINI_API_KEY, None),
+        (
+            "gemini",
+            "POST",
+            f"/upload/v1beta/fileSearchStores/{store_name}:uploadToFileSearchStore",
+            GEMINI_API_KEY,
+            None,
+        ),
+        ("gemini", "PUT", f"/upload-session/{store_name}", None, None),
+    )
+    assert [request.headers.get("x-api-key") for request in requests] == [None] * len(requests), requests

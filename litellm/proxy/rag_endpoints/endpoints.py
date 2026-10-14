@@ -223,6 +223,14 @@ def _forwarded_store_credentials(
     return explicit_request_credentials(request_data)
 
 
+def _with_request_credentials(
+    team_credentials: Mapping[str, object], request_data: Mapping[str, object]
+) -> Mapping[str, object]:
+    if not team_credentials:
+        return team_credentials
+    return MappingProxyType({**team_credentials, **explicit_request_credentials(request_data)})
+
+
 def _team_provider_credentials(
     effective_config: Mapping[str, object],
     llm_router: "Router | None",
@@ -666,7 +674,7 @@ async def rag_ingest(
         )
         forwarded_credentials: Final = _forwarded_store_credentials(base, request_data)
         merged_vector_store_config: Final = {
-            **_team_provider_credentials({**base, **forwarded_credentials}, llm_router, user_api_key_dict),
+            **_team_provider_credentials(base, llm_router, user_api_key_dict),
             **forwarded_credentials,
             **base,
         }
@@ -890,11 +898,9 @@ async def rag_query(
             version=version,
             proxy_config=proxy_config,
         )
-        forwarded_credentials: Final = explicit_request_credentials(request_data)
-        team_credentials: Final = _team_provider_credentials(
-            {**effective_vector_store_config, **forwarded_credentials},
-            llm_router,
-            user_api_key_dict,
+        team_credentials: Final = _with_request_credentials(
+            _team_provider_credentials(effective_vector_store_config, llm_router, user_api_key_dict),
+            request_data,
         )
         vector_store_params: Final = (
             {**team_credentials, **managed_store_params} if managed_store is not None else team_credentials

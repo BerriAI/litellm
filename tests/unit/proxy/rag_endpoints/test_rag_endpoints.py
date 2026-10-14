@@ -469,7 +469,7 @@ def test_rag_ingest_uses_the_forwarded_provider_key_over_team_provider_credentia
     assert response.status_code == 200, response.json()
     forwarded: Final = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
     assert forwarded["api_key"] == forwarded_provider_key
-    assert "api_base" not in forwarded
+    assert forwarded["api_base"] == _TEAM_OPENAI_BASE
 
 
 def test_rag_ingest_caller_credential_name_suppresses_team_provider_credentials(client_team_a):
@@ -724,7 +724,7 @@ def test_rag_query_search_uses_the_forwarded_provider_key_over_team_provider_cre
     monkeypatch.setenv("OPENAI_API_KEY", _ENVIRONMENT_OPENAI_KEY)
     for unset in ("OPENAI_BASE_URL", "OPENAI_API_BASE"):
         monkeypatch.delenv(unset, raising=False)
-    search: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/provider-native-store/search").respond(
+    search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
         json=_OPENAI_SEARCH_PAGE
     )
 

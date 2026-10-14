@@ -535,9 +535,9 @@ async def test_batch_input_without_a_model_is_read_through_the_team_deployment(
         data={"api_key": "sk-forwarded"},
     )
 
-    assert team_route.call_count == 1
-    assert environment_route.call_count == 2
-    assert environment_route.calls.last.request.headers["authorization"] == "Bearer sk-forwarded"
+    assert team_route.call_count == 2
+    assert team_route.calls.last.request.headers["authorization"] == "Bearer sk-forwarded"
+    assert environment_route.call_count == 1
     assert forwarded_usage.total_tokens == _token_counter_total(rows)
 
 

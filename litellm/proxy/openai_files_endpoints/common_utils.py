@@ -43,6 +43,7 @@ FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
 BATCH_CREATE_HIDDEN_PARAM: Final = "batch_create"
 LITELLM_EXECUTED_BATCH_ID_PREFIX: Final = "litellm_batch_"
 EXPLICIT_CREDENTIAL_KEYS: Final = frozenset({"api_key", "api_base", "litellm_credential_name"})
+_REQUEST_CREDENTIAL_KEYS: Final = frozenset({"api_key", "api_base"})
 
 
 def validate_file_list_limit(limit: int | None) -> None:
@@ -649,7 +650,7 @@ def get_team_provider_credentials(
 
 
 def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({key: value for key, value in data.items() if key in EXPLICIT_CREDENTIAL_KEYS and value})
+    return MappingProxyType({key: value for key, value in data.items() if key in _REQUEST_CREDENTIAL_KEYS and value})
 
 
 def apply_team_provider_credentials(
@@ -662,13 +663,11 @@ def apply_team_provider_credentials(
     Resolve credentials for a provider-only request (no model pinned) via
     ``get_team_provider_credentials`` and merge them into ``data`` in-place.
     Leaves ``data`` untouched when no authorized deployment matches, so the
-    caller falls back to environment-variable credentials exactly as before,
-    and when the request already carries its own credentials (a provider key
-    forwarded with ``forward_llm_provider_auth_headers``), which win over any
-    deployment-configured key.
+    caller falls back to environment-variable credentials exactly as before.
+    An ``api_key`` or ``api_base`` the request carries itself (a provider key
+    forwarded with ``forward_llm_provider_auth_headers``) replaces the
+    deployment's, as on chat completions.
     """
-    if explicit_request_credentials(data):
-        return
     credentials: Final = get_team_provider_credentials(
         llm_router=llm_router,
         user_api_key_dict=user_api_key_dict,
@@ -676,7 +675,7 @@ def apply_team_provider_credentials(
     )
     if credentials is None:
         return
-    prepare_data_with_credentials(data=data, credentials=credentials)
+    prepare_data_with_credentials(data=data, credentials={**credentials, **explicit_request_credentials(data)})
 
 
 def add_internal_model_credentials(
