@@ -20,6 +20,8 @@ Metric = Literal[
     "gateway_added_seconds",
     "time_to_first_token_seconds",
     "memory_growth_megabytes",
+    "postgres_calls_per_request",
+    "redis_calls_per_request",
 ]
 
 

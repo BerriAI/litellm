@@ -65,5 +65,7 @@ CASE: Final = PerformanceTestCase(
         Limit("time_to_first_token_seconds", percentile=50, max=2.0),
         Limit("time_to_first_token_seconds", percentile=99, max=4.0),
         Limit("memory_growth_megabytes", max=300),
+        Limit("postgres_calls_per_request", max=1.5),
+        Limit("redis_calls_per_request", max=25.0),
     ),
 )

@@ -24,6 +24,7 @@ from setup.observe import (
 )
 from setup.performance_test_case import PerformanceTestCase
 from setup.plan import build_plan
+from setup.datastore import read_db_counters, read_redis_counters
 from setup.provision import build_setup, guardrail_url, mock_url
 from setup.run import run_plan
 from proxy_client import ProxyClient
@@ -53,6 +54,8 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
     setup_started: Final = time.monotonic()
     setup: Final = build_setup(case, proxy=proxy, idp=idp, resources=resources)
     rss_before: Final = read_rss_everywhere(proxy)
+    db_before: Final = read_db_counters()
+    redis_before: Final = read_redis_counters()
     run_started: Final = time.monotonic()
     outcome: Final = run_plan(case, plan, setup)
     run_finished: Final = time.monotonic()
@@ -66,6 +69,8 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
         proxy, served_call_ids[:: max(1, len(served_call_ids) // _SPEND_SAMPLE)][:_SPEND_SAMPLE]
     )
     spend_read: Final = time.monotonic()
+    db_after: Final = read_db_counters()
+    redis_after: Final = read_redis_counters()
     mock_requests: Final = tuple(seen for url in mock_urls.values() for seen in read_mock_requests(url))
     guardrail_calls: Final = tuple(read_guardrail_calls(guardrail_url())) if case.guardrails else ()
     mocks_read: Final = time.monotonic()
@@ -77,6 +82,10 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
         rss_after=rss_after,
         wall_seconds=outcome.wall_seconds,
         spend_logged_share=spend_share,
+        db_before=db_before,
+        db_after=db_after,
+        redis_before=redis_before,
+        redis_after=redis_after,
     )
     rows, exceeded_limits = evaluate(case, observation)
     print(render(case, observation, rows))

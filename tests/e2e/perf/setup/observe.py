@@ -11,10 +11,12 @@ from typing import Final
 
 from e2e_http import NoBody, get_external, post_external, unwrap
 from memory_readings import RssCapture, RssReading, WorkerKey
+from pydantic import BaseModel
+
+from setup.datastore import DbCounters, RedisCounters
 from setup.mocks.replay import Capture, Provider, library
 from setup.performance_test_case import Limit, Metric, PerformanceTestCase
 from setup.wire import WireRecord
-from pydantic import BaseModel
 
 
 class MockRequestSeen(BaseModel):
@@ -88,6 +90,15 @@ class Observation:
     rss_after: RssCapture
     wall_seconds: float
     spend_logged_share: float | None = None
+    db_before: DbCounters | None = None
+    db_after: DbCounters | None = None
+    redis_before: RedisCounters | None = None
+    redis_after: RedisCounters | None = None
+
+    def per_request(self, before: int | None, after: int | None) -> float | None:
+        if before is None or after is None or not self.records:
+            return None
+        return (after - before) / len(self.records)
 
     @property
     def retried_markers(self) -> frozenset[str]:
@@ -177,6 +188,12 @@ def observe(metric: Metric, percentile_rank: int | None, observation: Observatio
         return percentile(per_request[metric], 50 if percentile_rank is None else percentile_rank)
     if metric == "unexpected_status_count":
         return float(observation.unexpected_status_count())
+    if metric == "postgres_calls_per_request":
+        db_before, db_after = observation.db_before, observation.db_after
+        return observation.per_request(db_before and db_before.commits, db_after and db_after.commits)
+    if metric == "redis_calls_per_request":
+        redis_before, redis_after = observation.redis_before, observation.redis_after
+        return observation.per_request(redis_before and redis_before.commands, redis_after and redis_after.commands)
     return worst_worker_growth_mb(observation.rss_before, observation.rss_after)
 
 
@@ -202,6 +219,8 @@ REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("time_to_first_token_seconds", 50),
     ("time_to_first_token_seconds", 99),
     ("memory_growth_megabytes", None),
+    ("postgres_calls_per_request", None),
+    ("redis_calls_per_request", None),
 )
 
 
@@ -266,4 +285,9 @@ def _diagnostics(observation: Observation) -> list[str]:
         f"    guardrail missed {observation.guardrail_missed() if observation.guardrail_calls else 'n/a'}",
         f"    retried share {len(observation.retried_markers) / count:.4f}",
         f"    spend logged share {'n/a' if share is None else f'{share:.3f}'}",
+        f"    redis connected clients {_clients(observation.redis_before)} -> {_clients(observation.redis_after)}",
     ]
+
+
+def _clients(counters: RedisCounters | None) -> str:
+    return "n/a" if counters is None else str(counters.connected_clients)
