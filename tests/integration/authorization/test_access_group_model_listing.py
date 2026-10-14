@@ -221,9 +221,7 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
 
 
 @pytest.mark.parametrize("route_prefix", ("/v1/access_group", "/v1/unified_access_group"))
-def test_deleting_an_access_group_revokes_a_still_assigned_team_and_key(
-    gateway: Gateway, route_prefix: str
-) -> None:
+def test_deleting_an_access_group_revokes_a_still_assigned_team_and_key(gateway: Gateway, route_prefix: str) -> None:
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
@@ -287,9 +285,7 @@ def test_deleting_an_access_group_revokes_a_still_assigned_team_and_key(
 def test_access_group_revocation_reaches_a_warmed_peer_before_the_cache_ttl(
     gateway: Gateway, peer: Gateway, route_prefix: str, revocation: str
 ) -> None:
-    pytest.skip(
-        "BUG: warmed peer returns 200 instead of 403 after access-group revocation"
-    )
+    pytest.skip("BUG: warmed peer returns 200 instead of 403 after access-group revocation")
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
