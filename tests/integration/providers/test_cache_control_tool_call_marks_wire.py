@@ -466,14 +466,25 @@ def _openai_message_marks(message: dict[str, JsonValue]) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "options",
+    "options, expected_marks",
     (
-        pytest.param({"prompt_cache_options": {"mode": "explicit"}}, id="breakpoint-dialect"),
-        pytest.param({}, id="plain"),
+        pytest.param(
+            {"prompt_cache_options": {"mode": "explicit"}},
+            [f"prompt_cache_breakpoint@user:text:{ASK}"],
+            id="breakpoint-dialect",
+        ),
+        pytest.param(
+            {},
+            [
+                f"cache_control@user:text:{ASK}",
+                *(f"cache_control@tool_call:{call_id(city)}" for city in CITIES),
+            ],
+            id="plain",
+        ),
     ),
 )
 def test_openai_points_skip_injection_when_client_marks_fill_the_cap(
-    gateway: Gateway, options: dict[str, JsonValue]
+    gateway: Gateway, options: dict[str, JsonValue], expected_marks: list[str]
 ) -> None:
     marker: Final = new_marker()
     with wire_server(lambda request: Reply(body=_OPENAI_REPLY)) as wire, gateway.scenario() as scenario:
@@ -487,7 +498,7 @@ def test_openai_points_skip_injection_when_client_marks_fill_the_cap(
         status, _, text = post_chat(gateway, chat_body(model, conversation(marker, marked_calls())))
         assert status == 200, text
         marks: Final = _openai_marks(_only_request(wire))
-    assert marks == [f"cache_control@user:text:{ASK}", *(f"cache_control@tool_call:{call_id(city)}" for city in CITIES)]
+    assert marks == expected_marks
 
 
 @pytest.mark.parametrize("stream", (False, True), ids=("json", "stream"))
