@@ -79,6 +79,9 @@ class _Vendor(str, Enum):
     MASKS_TOOLS = "masks-tools"
     DROPS_A_TOOL = "drops-a-tool"
     ADDS_A_TOOL = "adds-a-tool"
+    RENAMES_A_TOOL = "renames-a-tool"
+    ECHOES_TOOLS_AS_NOT_STRICT = "echoes-tools-as-not-strict"
+    CLEARS_CARD_TEXTS = "clears-card-texts"
     RETURNS_ROW_TEXTS = "returns-row-texts"
     MASKS_TEXTS_AND_ROW_CONTENT = "masks-texts-and-row-content"
     REBUILDS_USER_TEXTS = "rebuilds-user-texts"
@@ -117,6 +120,18 @@ def _normalised_first_part(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]
 
 def _blank_content(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**row, "content": ""} if row.get("content") is None else dict(row)
+
+
+def _card_cleared(value: JsonValue) -> JsonValue:
+    match value:
+        case str() if _CARD_PATTERN.search(value):
+            return ""
+        case list():
+            return [_card_cleared(item) for item in value]
+        case dict():
+            return {key: _card_cleared(item) for key, item in value.items()}
+        case _:
+            return value
 
 
 def _compacted(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
@@ -211,6 +226,29 @@ def _generic_verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str
             return {"action": "GUARDRAIL_INTERVENED", "texts": texts, "tools": tools[1:]}
         case _Vendor.ADDS_A_TOOL:
             return {"action": "GUARDRAIL_INTERVENED", "texts": texts, "tools": [*tools, _ADDED_TOOL]}
+        case _Vendor.RENAMES_A_TOOL:
+            renamed: Final = object_value(tools[0])
+            function: Final = object_value(renamed.get("function"))
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": texts,
+                "tools": [{**renamed, "function": {**function, "name": "lookup_card_v2"}}, *tools[1:]],
+            }
+        case _Vendor.ECHOES_TOOLS_AS_NOT_STRICT:
+            echoed: Final = tuple(object_value(tool) for tool in tools)
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": texts,
+                "tools": [
+                    {**tool, "function": {**object_value(tool.get("function")), "strict": False}} for tool in echoed
+                ],
+            }
+        case _Vendor.CLEARS_CARD_TEXTS:
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": _card_cleared(list_value(body.get("texts") or [])),
+                "structured_messages": _card_cleared([dict(row) for row in sent_rows]),
+            }
         case _Vendor.RETURNS_ROW_TEXTS:
             return {
                 "action": "GUARDRAIL_INTERVENED",
@@ -1104,9 +1142,95 @@ def test_tool_choice_the_guardrail_removed_is_refused_before_bedrock(rig: _Rig) 
     assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.DROPS_A_TOOL), body))
 
 
-def test_tool_the_guardrail_added_is_refused_before_bedrock(rig: _Rig) -> None:
+def _converted_tool(name: str, description: str, properties: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    schema: Final = {"type": "object", "properties": dict(properties), "required": []}
+    return {"toolSpec": {"name": name, "description": description, "inputSchema": {"json": schema}}}
+
+
+def test_tool_the_guardrail_added_reaches_bedrock_after_the_others(rig: _Rig) -> None:
     body: Final = {"messages": [_user({"text": "Which cards are on file?"})], "toolConfig": _TOOL_CONFIG}
-    assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.ADDS_A_TOOL), body))
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.ADDS_A_TOOL), body))
+    assert sent["toolConfig"] == {
+        "tools": [
+            *list_value(object_value(_masked(_TOOL_CONFIG))["tools"]),
+            _converted_tool("retrieve", "retrieve", {}),
+        ]
+    }
+
+
+def test_tool_the_guardrail_renamed_reaches_bedrock_without_the_old_cache_point(rig: _Rig) -> None:
+    body: Final = {"messages": [_user({"text": "Which cards are on file?"})], "toolConfig": _TOOL_CONFIG}
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.RENAMES_A_TOOL), body))
+    assert sent["toolConfig"] == {
+        "tools": [
+            _converted_tool(
+                "lookup_card_v2",
+                f"Looks up cards like {_MASK}",
+                {"card": {"type": "string", "description": f"for example {_MASK}"}},
+            ),
+            _TOOL_CONFIG["tools"][2],
+        ]
+    }
+
+
+def test_tool_choice_naming_a_tool_the_guardrail_renamed_is_refused_before_bedrock(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [_user({"text": "Which cards are on file?"})],
+        "toolConfig": {**_TOOL_CONFIG, "toolChoice": {"tool": {"name": "lookup_card"}}},
+    }
+    assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.RENAMES_A_TOOL), body))
+
+
+def test_tools_echoed_with_an_added_key_are_rebuilt_and_keep_their_cache_point(rig: _Rig) -> None:
+    body: Final = {"messages": [_user({"text": "Which cards are on file?"})], "toolConfig": _TOOL_CONFIG}
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.ECHOES_TOOLS_AS_NOT_STRICT), body))
+    assert sent["toolConfig"] == {
+        "tools": [
+            _converted_tool(
+                "lookup_card",
+                f"Looks up cards like {_MASK}",
+                {"card": {"type": "string", "description": f"for example {_MASK}"}},
+            ),
+            {"cachePoint": {"type": "default"}},
+            _converted_tool("refund", "Refunds an order", {}),
+        ]
+    }
+
+
+def test_text_block_the_guardrail_cleared_is_dropped_before_bedrock(rig: _Rig) -> None:
+    body: Final = {"messages": [_user({"text": "Order details below."}, {"text": f"Card {_CARD} please."})]}
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.CLEARS_CARD_TEXTS), body))
+    assert sent["messages"] == [_user({"text": "Order details below."})]
+
+
+def test_turn_the_guardrail_cleared_entirely_is_refused_before_bedrock(rig: _Rig) -> None:
+    body: Final = {"messages": [_user({"text": f"Card {_CARD} please."})]}
+    assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.CLEARS_CARD_TEXTS), body))
+
+
+def test_deeply_nested_tool_result_json_reaches_bedrock_with_the_rows_mask(rig: _Rig) -> None:
+    nested: JsonValue = "status active"
+    for _ in range(500):
+        nested = {"k": nested}
+    body: Final = {
+        "messages": [
+            _user({"text": "Look up my card."}),
+            _assistant(_tool_use("last four 1111")),
+            _user(_tool_result({"json": nested}), {"text": f"Card {_CARD} please."}),
+        ]
+    }
+    response: Final = _converse(rig, _generic(_Vendor.MASKS_TEXTS_AND_ROWS), body)
+    assert response.status_code == 200, response.text
+    sent: Final = rig.bedrock.drain()
+    assert len(sent) == 1, response.text
+    forwarded: object = json.loads(sent[0].body)
+    assert forwarded == {
+        "messages": [
+            _user({"text": "Look up my card."}),
+            _assistant(_tool_use("last four 1111")),
+            _user(_tool_result({"json": nested}), {"text": f"Card {_MASK} please."}),
+        ]
+    }
 
 
 def test_headroom_leaves_converse_requests_unchanged(rig: _Rig) -> None:
@@ -1159,8 +1283,33 @@ def test_mcp_end_user_permission_drops_tools_of_servers_the_end_user_cannot_use(
     assert _forwarded(rig, response)["toolConfig"] == _named_tools("github-create_issue", "get_weather")
 
 
-def test_mcp_end_user_permission_removing_every_tool_is_refused_before_bedrock(rig: _Rig) -> None:
-    body: Final = {"messages": [_user({"text": "Post the update."})], "toolConfig": _named_tools("slack-post_message")}
+@pytest.mark.parametrize(
+    ("guardrail_config", "result_block"),
+    [
+        ({}, {"text": "[tool result for tooluse_post: posted to #ops]"}),
+        (
+            {"guardrailConfig": {"guardrailIdentifier": "gr-scripted", "guardrailVersion": "1"}},
+            {"guardContent": {"text": {"text": "[tool result for tooluse_post: posted to #ops]"}}},
+        ),
+    ],
+    ids=["plain", "with-guardrail-config"],
+)
+def test_mcp_end_user_permission_removing_every_tool_drops_the_tool_config_and_turns_tool_history_into_text(
+    rig: _Rig, guardrail_config: Mapping[str, JsonValue], result_block: Mapping[str, JsonValue]
+) -> None:
+    tool_use: Final = {"toolUseId": "tooluse_post", "name": "slack-post_message", "input": {"channel": "#ops"}}
+    body: Final = {
+        **guardrail_config,
+        "messages": [
+            _user({"text": "Post the update."}),
+            _assistant({"toolUse": tool_use}),
+            _user(
+                {"toolResult": {"toolUseId": "tooluse_post", "content": [{"text": "posted to #ops"}]}},
+                {"text": "Again."},
+            ),
+        ],
+        "toolConfig": {**_named_tools("slack-post_message"), "toolChoice": {"any": {}}},
+    }
     response: Final = rig.gateway.request(
         "POST",
         f"/bedrock/model/{_MODEL}/converse",
@@ -1168,4 +1317,11 @@ def test_mcp_end_user_permission_removing_every_tool_is_refused_before_bedrock(r
         key=rig.keys["mcp-end-user"],
         headers=_end_user_on_github_only(rig),
     )
-    assert _UNAPPLIABLE in _refused(rig, response)
+    assert _forwarded(rig, response) == {
+        **guardrail_config,
+        "messages": [
+            _user({"text": "Post the update."}),
+            _assistant({"text": '[tool call tooluse_post: slack-post_message({"channel": "#ops"})]'}),
+            _user(dict(result_block), {"text": "Again."}),
+        ],
+    }

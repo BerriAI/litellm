@@ -5,6 +5,7 @@ from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.prompt_templates.factory import bedrock_tool_blocks
 from litellm.llms.bedrock.chat.converse_to_openai import (
     ConverseRow,
     ConverseTool,
@@ -16,6 +17,7 @@ from litellm.llms.bedrock.chat.converse_to_openai import (
     as_json_object,
     breadth_first,
 )
+from litellm.types.llms.bedrock import BedrockToolBlock
 from litellm.types.llms.openai import ChatCompletionTextObject
 
 
@@ -27,12 +29,22 @@ class ToolResultText:
 
 
 @dataclass(frozen=True, slots=True)
-class RemovedTools:
-    indices: frozenset[int]
+class ConvertedTool:
+    replaces: int | None
+    blocks: tuple[BedrockToolBlock, ...]
+
+
+ReturnedTool: TypeAlias = int | ConvertedTool
+
+
+@dataclass(frozen=True, slots=True)
+class ReplacedTools:
+    sent: frozenset[int]
+    tools: tuple[ReturnedTool, ...]
 
 
 TextEdit: TypeAlias = tuple[JsonPath, str]
-Edit: TypeAlias = TextEdit | ToolResultText | RemovedTools
+Edit: TypeAlias = TextEdit | ToolResultText | ReplacedTools
 _JsonPair: TypeAlias = tuple[JsonPath, object, object]
 _TEXT_PARTS: Final = TypeAdapter(tuple[ChatCompletionTextObject, ...])
 _PARSED_JSON: Final = TypeAdapter(object)
@@ -268,21 +280,43 @@ def _tool_name(tool: object) -> object:
     return None if function is None else function.get("name")
 
 
-def _paired_tools(tools: Sequence[ConverseTool], returned: Sequence[object]) -> tuple[ConverseTool | None, ...]:
-    remaining: Final = iter(tools)
-    return tuple(
-        next((tool for tool in remaining if tool.param["function"]["name"] == _tool_name(item)), None)
-        for item in returned
-    )
+def _named(tools: Sequence[ConverseTool], returned: object) -> ConverseTool | None:
+    return next((tool for tool in tools if tool.param["function"]["name"] == _tool_name(returned)), None)
 
 
-def tool_edits(tools: Sequence[ConverseTool], returned: object) -> tuple[Edit, ...] | None:
+def _bedrock_blocks(returned: object, model: str | None) -> tuple[BedrockToolBlock, ...] | None:
+    tool: Final = as_json_object(returned)
+    function: Final = _call_function(returned)
+    if (
+        tool is None
+        or function is None
+        or not isinstance(function.get("name"), str)
+        or ("parameters" in function and as_json_object(function["parameters"]) is None)
+    ):
+        return None
+    return bedrock_tool_blocks((tool,), model)
+
+
+def _returned_tool(
+    tool: ConverseTool | None, returned: object, model: str | None
+) -> tuple[ReturnedTool, tuple[Edit, ...]] | None:
+    edits: Final = _tool_edits(tool, returned)
+    if tool is not None and edits is not None:
+        return tool.index, edits
+    blocks: Final = _bedrock_blocks(returned, model)
+    return None if blocks is None else (ConvertedTool(None if tool is None else tool.index, blocks), ())
+
+
+def tool_edits(tools: Sequence[ConverseTool], returned: object, model: str | None) -> tuple[Edit, ...] | None:
     returned_tools: Final = as_json_array(returned)
     if returned_tools is None:
         return None
-    paired: Final = _paired_tools(tools, returned_tools)
-    edits: Final = _merged(tuple(_tool_edits(tool, item) for tool, item in zip(paired, returned_tools)))
-    removed: Final = frozenset(tool.index for tool in tools if tool not in paired)
-    if edits is None or not removed:
+    planned: Final = tuple(_returned_tool(_named(tools, item), item, model) for item in returned_tools)
+    placed: Final = tuple(plan for plan in planned if plan is not None)
+    if len(placed) != len(planned):
+        return None
+    entries: Final = tuple(entry for entry, _ in placed)
+    edits: Final = tuple(chain.from_iterable(edits for _, edits in placed))
+    if entries == tuple(tool.index for tool in tools):
         return edits
-    return (*edits, RemovedTools(removed))
+    return (*edits, ReplacedTools(frozenset(tool.index for tool in tools), entries))

@@ -1,8 +1,10 @@
 import copy
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from itertools import dropwhile
+from itertools import accumulate, chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
 from pydantic import InstanceOf, TypeAdapter
@@ -28,7 +30,8 @@ from litellm.llms.bedrock.chat.converse_to_openai import (
 )
 from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits import (
     Edit,
-    RemovedTools,
+    ReplacedTools,
+    ReturnedTool,
     ToolResultText,
     structured_edits,
     tool_edits,
@@ -74,7 +77,28 @@ def _reads_flat_texts_only(guardrail: "CustomGuardrail") -> bool:
 
 
 _StringHolder = tuple[Any, str | int]
-_Write: TypeAlias = tuple[_StringHolder, object]
+_LeafIdentity: TypeAlias = tuple[int, str | int]
+
+
+@dataclass(frozen=True, slots=True)
+class _Assign:
+    holder: _StringHolder
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class _Remove:
+    holder: _StringHolder
+
+
+@dataclass(frozen=True, slots=True)
+class _DropToolConfig:
+    pass
+
+
+_Write: TypeAlias = _Assign | _DropToolConfig
+_ContentHolder: TypeAlias = tuple[object, str]
+_BlankDrop: TypeAlias = tuple[_ContentHolder, frozenset[int]]
 _BODY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[dict[str, object]])
 
 
@@ -194,7 +218,7 @@ class _Scope:
 
 
 def _texts_applied_rows(body: Mapping[str, object], texts: Sequence[str], scope: _Scope) -> tuple[ConverseRow, ...]:
-    rewritten: Final = copy.deepcopy(dict(body))
+    rewritten: Final = _BODY_BY_REFERENCE.validate_python(json.loads(json.dumps(body)))
     _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
     _write_back_texts(texts, holders)
     request: Final = parse_converse_request(rewritten)
@@ -236,14 +260,14 @@ def _holder(body: object, path: JsonPath) -> _StringHolder | None:
     return (container, path[-1]) if isinstance(_child(container, path[-1]), str) else None
 
 
-def _leaf_identity(holder: _StringHolder) -> tuple[int, str | int]:
+def _leaf_identity(holder: _StringHolder) -> _LeafIdentity:
     container, key = holder
     return id(container), key
 
 
 def _changed_leaves(
     holders: Sequence[_StringHolder], texts: Sequence[str], guardrailed_texts: Sequence[str]
-) -> frozenset[tuple[int, str | int]]:
+) -> frozenset[_LeafIdentity]:
     return frozenset(
         _leaf_identity(holder) for holder, before, after in zip(holders, texts, guardrailed_texts) if after != before
     )
@@ -255,11 +279,14 @@ def _tool_result_write(body: Mapping[str, object], edit: ToolResultText) -> _Wri
     if blocks is None:
         return None
     dropped: Final = frozenset(edit.indices[1:])
-    return (container, edit.content[-1]), [
-        {"text": edit.text} if index == edit.indices[0] else block
-        for index, block in enumerate(blocks)
-        if index not in dropped
-    ]
+    return _Assign(
+        (container, edit.content[-1]),
+        [
+            {"text": edit.text} if index == edit.indices[0] else block
+            for index, block in enumerate(blocks)
+            if index not in dropped
+        ],
+    )
 
 
 def _is_cache_point(entry: object) -> bool:
@@ -271,50 +298,184 @@ def _tool_name(entry: object) -> object:
     return _child(_child(entry, "toolSpec"), "name")
 
 
-def _tools_write(body: Mapping[str, object], edit: RemovedTools) -> _Write | None:
+def _entries_after(unsent: Sequence[tuple[int, object]], anchor: int) -> tuple[object, ...]:
+    return tuple(entry for at, entry in unsent if at == anchor)
+
+
+def _sent_anchor(sent: frozenset[int], anchor: int, index: int) -> int:
+    return index if index in sent else anchor
+
+
+def _replaced(entry: ReturnedTool) -> int | None:
+    return entry if isinstance(entry, int) else entry.replaces
+
+
+def _replaced_tools_write(body: Mapping[str, object], edit: ReplacedTools) -> _Write | None:
     """
-    Drop the tools the guardrail removed, or refuse when what is left is a ``toolConfig`` Bedrock rejects: no tool at
-    all, or a ``toolChoice`` naming a removed tool.
+    Rebuild ``toolConfig.tools`` in the order the guardrail returned. Entries it was never sent (cache points, system
+    tools) stay right after the tool they followed, and a cache point goes away with its tool. Refuses when
+    ``toolChoice`` names a tool that is no longer there, and drops ``toolConfig`` when nothing is left.
     """
     tool_config: Final = _child(body, "toolConfig")
     tools: Final = as_json_array(_child(tool_config, "tools"))
     if tools is None:
         return None
-    kept: Final = list(
-        dropwhile(_is_cache_point, (tool for index, tool in enumerate(tools) if index not in edit.indices))
+    anchors: Final = tuple(accumulate(range(len(tools)), partial(_sent_anchor, edit.sent), initial=-1))[1:]
+    unsent: Final = tuple(
+        (anchor, tool) for index, (anchor, tool) in enumerate(zip(anchors, tools)) if index not in edit.sent
     )
-    removed: Final = frozenset(
-        name for index, tool in enumerate(tools) if index in edit.indices and isinstance(name := _tool_name(tool), str)
+    replaced: Final = frozenset(_replaced(entry) for entry in edit.tools)
+    placed: Final = chain.from_iterable(
+        (tools[entry], *_entries_after(unsent, entry))
+        if isinstance(entry, int)
+        else (*entry.blocks, *(() if entry.replaces is None else _entries_after(unsent, entry.replaces)))
+        for entry in edit.tools
     )
+    orphans: Final = tuple(tool for at, tool in unsent if at not in replaced and at >= 0 and not _is_cache_point(tool))
+    rebuilt: Final = [*_entries_after(unsent, -1), *placed, *orphans]
     chosen: Final = _child(_child(_child(tool_config, "toolChoice"), "tool"), "name")
-    if all(_tool_name(tool) is None for tool in kept) or (isinstance(chosen, str) and chosen in removed):
+    if isinstance(chosen, str) and all(_tool_name(tool) != chosen for tool in rebuilt):
         return None
-    return (tool_config, "tools"), kept
+    return _DropToolConfig() if all(map(_is_cache_point, rebuilt)) else _Assign((tool_config, "tools"), rebuilt)
 
 
 def _resolved(body: Mapping[str, object], edit: Edit) -> _Write | None:
     match edit:
         case ToolResultText():
             return _tool_result_write(body, edit)
-        case RemovedTools():
-            return _tools_write(body, edit)
+        case ReplacedTools():
+            return _replaced_tools_write(body, edit)
         case (path, text):
             holder: Final = _holder(body, path)
-            return None if holder is None else (holder, text)
+            return None if holder is None else _Assign(holder, text)
+
+
+def _kept_write(write: _Write, flat_changes: frozenset[_LeafIdentity]) -> bool:
+    match write:
+        case _Assign():
+            return _leaf_identity(write.holder) not in flat_changes
+        case _DropToolConfig():
+            return True
 
 
 def _holder_edits(
-    body: Mapping[str, object], edits: Sequence[Edit], flat_changes: frozenset[tuple[int, str | int]]
+    body: Mapping[str, object], edits: Sequence[Edit], flat_changes: frozenset[_LeafIdentity]
 ) -> tuple[_Write, ...] | None:
     resolved: Final = tuple(_resolved(body, edit) for edit in edits)
     if any(write is None for write in resolved):
         return None
-    return tuple(write for write in resolved if write is not None and _leaf_identity(write[0]) not in flat_changes)
+    return tuple(write for write in resolved if write is not None and _kept_write(write, flat_changes))
 
 
-def _write_back_structured_edits(edits: Sequence[_Write]) -> None:
-    for (container, key), value in edits:
-        container[key] = value
+def _apply(writes: Sequence[_Assign | _Remove]) -> None:
+    for write in writes:
+        match write:
+            case _Assign(holder=(container, key), value=value):
+                container[key] = value
+            case _Remove(holder=(container, key)):
+                del container[key]
+
+
+def _tool_result_part(item: object) -> str | None:
+    text: Final = _child(item, "text")
+    if isinstance(text, str):
+        return text
+    fields: Final = as_json_object(item)
+    return json.dumps(fields["json"]) if fields is not None and "json" in fields else None
+
+
+def _tool_result_text(tool_result: object) -> str:
+    parts: Final = as_json_array(_child(tool_result, "content")) or ()
+    rendered: Final = "\n".join(part for item in parts if (part := _tool_result_part(item)) is not None).strip()
+    return rendered or "<non-text tool result omitted>"
+
+
+def _neutralized(block: object, guarded: bool) -> object:
+    tool_use: Final = _child(block, "toolUse")
+    if as_json_object(tool_use) is not None:
+        arguments: Final = json.dumps(_child(tool_use, "input"))
+        return {"text": f"[tool call {_child(tool_use, 'toolUseId')}: {_child(tool_use, 'name')}({arguments})]"}
+    tool_result: Final = _child(block, "toolResult")
+    if as_json_object(tool_result) is None:
+        return block
+    text: Final = f"[tool result for {_child(tool_result, 'toolUseId')}: {_tool_result_text(tool_result)}]"
+    return {"guardContent": {"text": {"text": text}}} if guarded else {"text": text}
+
+
+def _has_tool_block(content: Sequence[object]) -> bool:
+    return any(_child(block, "toolUse") is not None or _child(block, "toolResult") is not None for block in content)
+
+
+def _tool_config_drop(body: Mapping[str, object]) -> tuple[_Assign | _Remove, ...]:
+    """Remove ``toolConfig`` and turn every ``toolUse`` and ``toolResult`` block into text."""
+    guarded: Final = "guardrailConfig" in body
+    turns: Final = as_json_array(body.get("messages")) or ()
+    neutralized: Final = tuple(
+        _Assign((message, "content"), [_neutralized(block, guarded) for block in content])
+        for message in turns
+        if (content := as_json_array(_child(message, "content"))) is not None and _has_tool_block(content)
+    )
+    return (*neutralized, _Remove((body, "toolConfig")))
+
+
+def _write_back_structured_edits(body: Mapping[str, object], writes: Sequence[_Write]) -> None:
+    _apply(tuple(write for write in writes if isinstance(write, _Assign)))
+    if any(isinstance(write, _DropToolConfig) for write in writes):
+        _apply(_tool_config_drop(body))
+
+
+def _block_text_holder(block: object) -> _ContentHolder | None:
+    if isinstance(_child(block, "text"), str):
+        return block, "text"
+    guarded: Final = _child(_child(block, "guardContent"), "text")
+    return (guarded, "text") if isinstance(_child(guarded, "text"), str) else None
+
+
+def _final_texts(
+    holders: Sequence[_StringHolder], applied_texts: Sequence[str], writes: Sequence[_Write]
+) -> Mapping[_LeafIdentity, object]:
+    flat: Final = {_leaf_identity(holder): text for holder, text in zip(holders, applied_texts)}
+    structured: Final = {_leaf_identity(write.holder): write.value for write in writes if isinstance(write, _Assign)}
+    return MappingProxyType({**flat, **structured})
+
+
+def _blanked(final: Mapping[_LeafIdentity, object], block: object) -> bool:
+    holder: Final = _block_text_holder(block)
+    if holder is None:
+        return False
+    container, key = holder
+    value: Final = final.get((id(container), key))
+    return isinstance(value, str) and value != _child(container, key) and not value.strip()
+
+
+def _blank_blocks(final: Mapping[_LeafIdentity, object], holder: _ContentHolder) -> frozenset[int]:
+    container, key = holder
+    return frozenset(id(block) for block in as_json_array(_child(container, key)) or () if _blanked(final, block))
+
+
+def _empties_turn(drop: _BlankDrop) -> bool:
+    (container, key), dropped = drop
+    blocks: Final = as_json_array(_child(container, key)) or ()
+    return bool(dropped) and all(id(block) in dropped or _is_cache_point(block) for block in blocks)
+
+
+def _blank_drops(body: Mapping[str, object], final: Mapping[_LeafIdentity, object]) -> tuple[_BlankDrop, ...] | None:
+    """The system and message text blocks the guardrail left blank, or None when dropping them empties a turn."""
+    turns: Final = tuple(
+        ((message, "content"), _blank_blocks(final, (message, "content")))
+        for message in as_json_array(body.get("messages")) or ()
+    )
+    if any(_empties_turn(turn) for turn in turns):
+        return None
+    system: Final = ((body, "system"), _blank_blocks(final, (body, "system")))
+    return tuple(drop for drop in (system, *turns) if drop[1])
+
+
+def _blank_drop_write(drop: _BlankDrop) -> _Assign | _Remove:
+    holder, dropped = drop
+    container, key = holder
+    kept: Final = [block for block in as_json_array(_child(container, key)) or () if id(block) not in dropped]
+    return _Assign(holder, kept) if not all(map(_is_cache_point, kept)) else _Remove(holder)
 
 
 def _edits_drop_a_text_change(
@@ -334,12 +495,12 @@ def _edits_drop_a_text_change(
         return False
     if len(guardrailed_texts) != len(texts):
         return True
-    rewritten: Final = copy.deepcopy(dict(body))
+    rewritten: Final = _BODY_BY_REFERENCE.validate_python(json.loads(json.dumps(body)))
     _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
     writes: Final = _holder_edits(rewritten, edits, frozenset())
     if writes is None:
         return True
-    _write_back_structured_edits(writes)
+    _write_back_structured_edits(rewritten, writes)
     edited: Final = [container[key] for container, key in holders]
     return any(
         returned != before and after == before for before, returned, after in zip(texts, guardrailed_texts, edited)
@@ -717,7 +878,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             )
         )
         returned_tools: Final = guardrailed_inputs.get("tools")
-        tool_changes: Final = () if returned_tools is None else tool_edits(tools, returned_tools)
+        tool_changes: Final = (
+            ()
+            if returned_tools is None
+            else tool_edits(tools, returned_tools, model if isinstance(model, str) else None)
+        )
         holder_edits: Final = (
             None
             if row_edits is None
@@ -732,11 +897,17 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 request_body, (*row_edits, *tool_changes), _changed_leaves(holders, texts, applied_texts)
             )
         )
-        if holder_edits is None:
+        blank_drops: Final = (
+            None
+            if holder_edits is None
+            else _blank_drops(request_body, _final_texts(holders, applied_texts, holder_edits))
+        )
+        if holder_edits is None or blank_drops is None:
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
         if applied_texts:
             _write_back_texts(applied_texts, holders)
-        _write_back_structured_edits(holder_edits)
+        _write_back_structured_edits(request_body, holder_edits)
+        _apply(tuple(_blank_drop_write(drop) for drop in blank_drops))
 
         return data
 

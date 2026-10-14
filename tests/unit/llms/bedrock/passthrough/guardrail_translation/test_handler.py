@@ -901,19 +901,73 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         assert result["data"]["messages"][0]["content"] == [{"guardContent": {"text": {"text": "My SSN is [SSN]"}}}]
 
     @pytest.mark.asyncio
-    async def test_text_cleared_in_texts_and_structured_messages_stays_cleared(self):
+    @pytest.mark.parametrize("blank", ["", "  \n"])
+    async def test_text_cleared_in_texts_and_structured_messages_is_dropped_as_chat_drops_it(self, blank):
         handler = BedrockPassthroughGuardrailHandler()
         data = _profile_converse_data()
         guardrail = _ScriptedGuardrail(
             lambda inputs: {
-                **_with_structured_text(inputs, "Explain balcony staterooms.", ""),
-                "texts": [text.replace("Explain balcony staterooms.", "") for text in inputs["texts"]],
+                **_with_structured_text(inputs, "Explain balcony staterooms.", blank),
+                "texts": [text.replace("Explain balcony staterooms.", blank) for text in inputs["texts"]],
             }
         )
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert result["data"]["messages"][0]["content"][0] == {"text": ""}
+        assert result["data"]["messages"][0]["content"] == [{"text": "[system] internal notice"}]
+
+    @pytest.mark.asyncio
+    async def test_system_text_the_guardrail_cleared_is_dropped_and_an_emptied_system_is_removed(self):
+        data = _profile_converse_data()
+        guardrail = _ScriptedGuardrail(
+            lambda inputs: {"texts": ["" if text.startswith("Guest") else text for text in inputs["texts"]]}
+        )
+        emptied = _profile_converse_data()
+        clear_system = _ScriptedGuardrail(
+            lambda inputs: {
+                "texts": [
+                    "" if text in ("You are a travel assistant.", "Guest name: Sam") else text
+                    for text in inputs["texts"]
+                ]
+            }
+        )
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+        emptied_result = await BedrockPassthroughGuardrailHandler().process_input_messages(emptied, clear_system)
+
+        assert result["data"]["system"] == [
+            {"text": "You are a travel assistant."},
+            {"cachePoint": {"type": "default"}},
+        ]
+        assert "system" not in emptied_result["data"]
+        assert emptied_result["data"]["messages"] == _profile_converse_data()["data"]["messages"]
+
+    @pytest.mark.asyncio
+    async def test_blank_text_the_client_sent_is_left_in_place(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"text": "  "}, {"text": "card 4111"}]}]},
+        }
+        guard = _ScriptedGuardrail(
+            lambda inputs: {"texts": [text.replace("4111", "[CARD]") for text in inputs["texts"]]}
+        )
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"]["messages"][0]["content"] == [{"text": "  "}, {"text": "card [CARD]"}]
+
+    @pytest.mark.asyncio
+    async def test_guarded_text_the_guardrail_cleared_is_dropped(self):
+        data = _profile_converse_data()
+        data["data"]["messages"][0]["content"].insert(0, {"guardContent": {"text": {"text": "My SSN is 078-05-1120"}}})
+        guardrail = _structured_rewriter("My SSN is 078-05-1120", "")
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+        assert result["data"]["messages"][0]["content"] == [
+            {"text": "Explain balcony staterooms."},
+            {"text": "[system] internal notice"},
+        ]
 
     @pytest.mark.asyncio
     async def test_request_field_strings_reach_the_guardrail_as_the_last_row_as_texts_do_on_main(self):
@@ -2018,14 +2072,48 @@ class TestConverseRewriteRegressions:
         ]
 
     @pytest.mark.asyncio
-    async def test_text_cleared_only_in_structured_rows_is_written_back(self):
+    async def test_text_cleared_only_in_structured_rows_leaving_an_empty_turn_fails_closed(self):
         data = {
             "endpoint": "model/test/converse",
-            "data": {"messages": [{"role": "user", "content": [{"text": "card 4111"}]}]},
+            "data": {
+                "messages": [{"role": "user", "content": [{"text": "card 4111"}, {"cachePoint": {"type": "default"}}]}]
+            },
         }
+        original = copy.deepcopy(data["data"])
         guard = _replying({"structured_messages": [{"role": "user", "content": ""}]})
-        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
-        assert result["data"]["messages"][0]["content"] == [{"text": ""}]
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert data["data"] == original
+
+    @pytest.mark.asyncio
+    async def test_deeply_nested_tool_result_json_survives_a_row_edit(self):
+        nested: object = "leaf"
+        for _ in range(500):
+            nested = {"k": nested}
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "f", "input": {}}}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"toolResult": {"toolUseId": "t1", "content": [{"json": nested}]}},
+                            {"text": "card 4111"},
+                        ],
+                    },
+                ]
+            },
+        }
+        expected = json.loads(json.dumps(data["data"]["messages"][1]["content"][0]))
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data, _structured_rewriter("4111", "[CARD]")
+        )
+
+        assert result["data"]["messages"][1]["content"] == [expected, {"text": "card [CARD]"}]
 
     @pytest.mark.asyncio
     async def test_new_text_on_a_tool_call_only_turn_fails_closed(self):
@@ -2705,6 +2793,23 @@ def _changed_kind(tools: list) -> list:
     return [{**tools[0], "type": "custom"}, *tools[1:]]
 
 
+_LOOKUP_PROPERTIES = {"card": {"type": "string", "description": "use [CARD]"}}
+_CACHE_POINT = {"cachePoint": {"type": "default"}}
+_REFUND = {"toolSpec": {"name": "refund", "inputSchema": {"json": {"type": "object"}}}}
+_LOOKUP_MASKED = {
+    "toolSpec": {
+        "name": "lookup",
+        "description": "Card [CARD] on file",
+        "inputSchema": {"json": {"type": "object", "properties": _LOOKUP_PROPERTIES, "required": ["card"]}},
+    }
+}
+
+
+def _converted(name: str, description: str, properties: dict, required: list | None = None) -> dict:
+    schema = {"type": "object", "properties": properties, "required": required or []}
+    return {"toolSpec": {"name": name, "description": description, "inputSchema": {"json": schema}}}
+
+
 def _retyped_schema(tools: list) -> list:
     function = tools[0]["function"]
     return [
@@ -2785,16 +2890,11 @@ class TestConverseToolDefinitionRewrites:
         }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("tool_choice", "kept"),
-        [({"auto": {}}, slice(0, 0)), ({"tool": {"name": "lookup"}}, slice(1, None))],
-        ids=["every-tool-removed", "chosen-tool-removed"],
-    )
-    async def test_removal_leaving_a_tool_config_bedrock_rejects_fails_closed_without_mutation(self, tool_choice, kept):
+    async def test_removing_the_tool_tool_choice_names_fails_closed_without_mutation(self):
         data = _tool_config_data()
-        data["data"]["toolConfig"]["toolChoice"] = tool_choice
+        data["data"]["toolConfig"]["toolChoice"] = {"tool": {"name": "lookup"}}
         original = copy.deepcopy(data["data"])
-        guard = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": inputs["tools"][kept]})
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": inputs["tools"][1:]})
 
         with pytest.raises(UnappliableRequestRewrite):
             await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
@@ -2803,18 +2903,50 @@ class TestConverseToolDefinitionRewrites:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        ("rewrite", "expected_tools"),
+        [
+            (_added_tool, [_LOOKUP_MASKED, _CACHE_POINT, _REFUND, _converted("retrieve", "retrieve", {})]),
+            (_renamed_tool, [_converted("lookup_v2", "Card [CARD] on file", _LOOKUP_PROPERTIES, ["card"]), _REFUND]),
+            (
+                _changed_kind,
+                [_converted("lookup", "Card [CARD] on file", _LOOKUP_PROPERTIES, ["card"]), _CACHE_POINT, _REFUND],
+            ),
+            (_retyped_schema, [_converted("lookup", "Card [CARD] on file", _LOOKUP_PROPERTIES), _CACHE_POINT, _REFUND]),
+            (lambda tools: tools[::-1], [_REFUND, _LOOKUP_MASKED, _CACHE_POINT]),
+            (
+                lambda tools: [{**tool, "function": {**tool["function"], "strict": False}} for tool in tools],
+                [
+                    _converted("lookup", "Card [CARD] on file", _LOOKUP_PROPERTIES, ["card"]),
+                    _CACHE_POINT,
+                    _converted("refund", "refund", {}),
+                ],
+            ),
+        ],
+        ids=["added", "renamed", "kind-changed", "retyped", "reordered", "strict-echoed"],
+    )
+    async def test_changed_tool_list_is_rebuilt_from_what_the_guardrail_returned(self, rewrite, expected_tools):
+        data = _tool_config_data()
+        guard = _ScriptedGuardrail(
+            lambda inputs: {"texts": _masked_texts(inputs), "tools": rewrite(_masked_tools(inputs))}
+        )
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"]["toolConfig"] == {"tools": expected_tools, "toolChoice": {"auto": {}}}
+        assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "Card [CARD] please"}]}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         "rewrite",
         [
-            _added_tool,
-            _renamed_tool,
-            _changed_kind,
-            _retyped_schema,
-            lambda tools: tools[::-1],
             lambda tools: {"tools": tools},
+            lambda tools: [*tools, "retrieve"],
+            lambda tools: [*tools, {"type": "function", "function": {"name": 7}}],
+            lambda tools: [*tools, {"type": "function", "function": {"name": "f", "parameters": None}}],
         ],
-        ids=["added", "renamed", "kind-changed", "retyped", "reordered", "not-a-list"],
+        ids=["not-a-list", "not-an-object", "name-not-a-string", "parameters-not-an-object"],
     )
-    async def test_tool_change_this_route_cannot_carry_fails_closed_without_mutation(self, rewrite):
+    async def test_tool_list_bedrock_cannot_be_built_from_fails_closed_without_mutation(self, rewrite):
         data = _tool_config_data()
         original = copy.deepcopy(data["data"])
         guard = _ScriptedGuardrail(
@@ -2829,18 +2961,112 @@ class TestConverseToolDefinitionRewrites:
     @pytest.mark.asyncio
     async def test_refused_tool_change_made_in_place_leaves_the_request_unchanged(self):
         data = _tool_config_data()
+        data["data"]["toolConfig"]["toolChoice"] = {"tool": {"name": "lookup"}}
         original = copy.deepcopy(data["data"])
 
-        def mask_in_place_and_add(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
+        def mask_in_place_and_rename(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
             inputs["tools"][0]["function"]["parameters"]["properties"]["card"]["description"] = "use [CARD]"
-            return {**inputs, "tools": _added_tool(inputs["tools"])}
+            return {**inputs, "tools": _renamed_tool(inputs["tools"])}
 
         with pytest.raises(UnappliableRequestRewrite):
             await BedrockPassthroughGuardrailHandler().process_input_messages(
-                data, _ScriptedGuardrail(mask_in_place_and_add)
+                data, _ScriptedGuardrail(mask_in_place_and_rename)
             )
 
         assert data["data"] == original
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("guardrail_config", "result_block"),
+        [
+            ({}, {"text": '[tool result for t1: on file\n{"status": "[CARD]"}]'}),
+            (
+                {"guardrailConfig": {"guardrailIdentifier": "gr", "guardrailVersion": "1"}},
+                {"guardContent": {"text": {"text": '[tool result for t1: on file\n{"status": "[CARD]"}]'}}},
+            ),
+        ],
+        ids=["plain", "with-guardrail-config"],
+    )
+    async def test_every_tool_removed_drops_the_tool_config_and_turns_tool_history_into_text(
+        self, guardrail_config, result_block
+    ):
+        data = _tool_config_data()
+        data["data"].update(guardrail_config)
+        data["data"]["messages"] = [
+            {"role": "user", "content": [{"text": "Card 4111 please"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"text": "Checking."},
+                    {"toolUse": {"toolUseId": "t1", "name": "lookup", "input": {"card": "4111"}}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": "t1", "content": [{"text": "on file"}, {"json": {"status": "4111"}}]}},
+                    {"text": "thanks"},
+                ],
+            },
+        ]
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": _masked_texts(inputs), "tools": []})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"] == {
+            **guardrail_config,
+            "messages": [
+                {"role": "user", "content": [{"text": "Card [CARD] please"}]},
+                {
+                    "role": "assistant",
+                    "content": [{"text": "Checking."}, {"text": '[tool call t1: lookup({"card": "[CARD]"})]'}],
+                },
+                {"role": "user", "content": [result_block, {"text": "thanks"}]},
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_entry_the_guardrail_never_saw_outlives_the_tool_it_followed(self):
+        data = _tool_config_data()
+        system_tool = {"systemTool": {"name": "nova_grounding"}}
+        data["data"]["toolConfig"]["tools"].insert(1, system_tool)
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": inputs["tools"][1:]})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"]["toolConfig"] == {"tools": [_REFUND, system_tool], "toolChoice": {"auto": {}}}
+
+    @pytest.mark.asyncio
+    async def test_tool_result_without_text_becomes_a_placeholder_when_the_tool_config_is_dropped(self):
+        data = _tool_config_data()
+        data["data"]["messages"] = [
+            {"role": "user", "content": [{"text": "Show the receipt"}]},
+            {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "lookup", "input": {}}}]},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "t1",
+                            "content": [{"image": {"format": "png", "source": {"bytes": "iVBO"}}}],
+                        }
+                    },
+                    {"text": "ok"},
+                ],
+            },
+        ]
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": []})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"]["messages"][1:] == [
+            {"role": "assistant", "content": [{"text": "[tool call t1: lookup({})]"}]},
+            {
+                "role": "user",
+                "content": [{"text": "[tool result for t1: <non-text tool result omitted>]"}, {"text": "ok"}],
+            },
+        ]
+        assert "toolConfig" not in result["data"]
 
     @pytest.mark.asyncio
     async def test_compression_guardrail_gets_only_texts_and_leaves_the_request_unchanged(self):
@@ -2917,15 +3143,14 @@ class TestConverseToolEnforcementGuardrails:
         ]
 
     @pytest.mark.asyncio
-    async def test_mcp_end_user_permission_removing_every_tool_fails_closed_without_mutation(self, monkeypatch):
+    async def test_mcp_end_user_permission_removing_every_tool_drops_the_tool_config(self, monkeypatch):
         guardrail = _github_only_end_user(monkeypatch)
-        data = _mcp_tools_data("slack-post_message")
-        original = copy.deepcopy(data["data"])
 
-        with pytest.raises(UnappliableRequestRewrite):
-            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            _mcp_tools_data("slack-post_message"), guardrail
+        )
 
-        assert data["data"] == original
+        assert result["data"] == {"messages": [{"role": "user", "content": [{"text": "File the bug"}]}]}
 
 
 class _ConductPluginGuard(CustomGuardrail):

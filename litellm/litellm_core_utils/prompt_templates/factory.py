@@ -5260,6 +5260,11 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
     return tool_block_list
 
 
+def bedrock_tool_blocks(tools: Sequence[Mapping[str, object]], model: str | None) -> tuple[BedrockToolBlock, ...]:
+    """Bedrock Converse ``toolConfig.tools`` entries for OpenAI or Anthropic tool definitions."""
+    return tuple(_bedrock_tools_pt([dict(tool) for tool in tools], model=model))
+
+
 # Function call template
 def function_call_prompt(
     messages: list[dict[str, object]],
