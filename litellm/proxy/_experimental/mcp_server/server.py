@@ -72,6 +72,12 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     redact_mcp_resource_url,
     well_known_root_suffix,
 )
+from litellm.proxy._experimental.mcp_server.scope_challenge import (
+    SCOPE_RESPONSE_KEY,
+    OAuthScopeResponse,
+    finish_scope_response,
+    is_tool_call_request,
+)
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     ActingUser,
     GrantedToolsetIds,
@@ -604,7 +610,7 @@ if MCP_AVAILABLE:
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
     )
-    server.middleware.append(GatewayVersionPolicy())
+    server.middleware.extend((finish_scope_response, GatewayVersionPolicy()))
     server.create_initialization_options = types.MethodType(_gateway_create_initialization_options, server)
     sse: Final[SseServerTransport] = SseServerTransport("/sse/messages")
 
@@ -658,6 +664,7 @@ if MCP_AVAILABLE:
         _stateful_session_locks.pop(session_id, None)
         _stateful_session_active_request_counts.pop(session_id, None)
         _stateful_session_client_info.pop(session_id, None)
+        operations.global_mcp_server_manager.release_upstream_sessions(session_id)
 
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless
@@ -793,6 +800,7 @@ if MCP_AVAILABLE:
                     _stateful_auth_context_cleanup_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await _stateful_auth_context_cleanup_task
+                await operations.global_mcp_server_manager.close_all_upstream_sessions()
                 if _session_manager_stateful_cm:
                     await _session_manager_stateful_cm.__aexit__(None, None, None)
                 if _session_manager_cm:
@@ -853,7 +861,7 @@ if MCP_AVAILABLE:
                 wire_compat_for(ctx.protocol_version),
                 ctx.protocol_version,
                 incoming_bearer_token=(
-                    MCPRequestHandler.get_incoming_bearer_token(request.headers)
+                    MCPRequestHandler.get_guardrail_bearer_token(request.headers, auth)
                     if isinstance(request, StarletteRequest)
                     else None
                 ),
@@ -1264,13 +1272,16 @@ if MCP_AVAILABLE:
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
-    def _peeked_json_object_body(body: bytes) -> bytes | None:
-        """The peeked bytes when they form a complete JSON-RPC object, else None so a
-        truncated prefix or a batch array fails closed and stays budget-enforced."""
+    def _admission_auth_body(body: bytes) -> bytes:
+        """Return only the JSON-RPC method for admission auth."""
         try:
-            return body if isinstance(json.loads(body), dict) else None
-        except (json.JSONDecodeError, TypeError):
-            return None
+            data: Final = TypeAdapter(dict[str, object]).validate_json(body)
+        except (ValueError, TypeError):
+            return b"{}"
+        method: Final = data.get("method")
+        if not isinstance(method, str):
+            return b"{}"
+        return json.dumps({"method": method}).encode()
 
     def _is_initialize_request(body: bytes) -> bool:
         """
@@ -2193,10 +2204,10 @@ if MCP_AVAILABLE:
             if peek is not None:
                 receive = peek.receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
 
-                async def peeked_json_object_body() -> bytes:
-                    return _peeked_json_object_body(await peek.admission_body()) or b"{}"
+                async def admission_auth_body() -> bytes:
+                    return _admission_auth_body(await peek.admission_body())
 
-                scope[MCP_PEEKED_BODY_SCOPE_KEY] = peeked_json_object_body
+                scope[MCP_PEEKED_BODY_SCOPE_KEY] = admission_auth_body
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -2346,6 +2357,18 @@ if MCP_AVAILABLE:
                     await rejection(scope, receive, send)
                     return
 
+            scope_response: Final = (
+                OAuthScopeResponse(
+                    send,
+                    get_request_base_url(StarletteRequest(scope)),
+                    get_route_relative_request_path(scope),
+                )
+                if is_tool_call_request(body) or len(body) >= _MCP_ROUTING_PEEK_MAX_BYTES
+                else None
+            )
+            if scope_response is not None:
+                scope[SCOPE_RESPONSE_KEY] = scope_response
+
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless
 
@@ -2463,7 +2486,7 @@ if MCP_AVAILABLE:
                     touch_last_seen=(scope.get("method") or "").upper() != "DELETE",
                     copy_existing_session_auth_context=is_initialize,
                 )
-                local_send = send
+                local_send = scope_response or send
                 if use_stateful and is_initialize:
                     local_send = _wrap_send_with_stateful_session_auth_context(
                         local_send,
@@ -2856,6 +2879,7 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
                         _stateful_session_owners[session_id] = owner_fingerprint
+                        operations.global_mcp_server_manager.track_gateway_session(session_id)
                         if client_info is not None:
                             _stateful_session_client_info[session_id] = client_info
                         break

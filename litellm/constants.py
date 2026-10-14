@@ -104,6 +104,7 @@ S3_PARTITION_GRANULARITY_ENV_VAR: Final = "S3_PARTITION_GRANULARITY"
 MAX_FILE_LIST_LIMIT: Final = 10000
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
+GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS: Final = 10
 budget_reservation_disabled_info_emitted = False
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
 DEFAULT_SQS_BATCH_SIZE: Final = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
@@ -234,6 +235,7 @@ MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"
 MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS: Final = 5.0
 MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
 MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH: Final = 8
 MCP_BYOK_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
@@ -390,6 +392,11 @@ MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolve
 MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
+OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
+OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
+    {"response.completed", "response.incomplete", "response.failed"}
+)
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
 # SSL/TLS cipher configuration for faster handshakes
@@ -825,6 +832,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "scaledown",
 ]
 
 # Resolving these providers runs an OAuth device flow (their provider info IS the login), so any
@@ -1005,6 +1013,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.sailresearch.com/v1",
     "https://api.cognition.ai/v1",
+    "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
@@ -1081,6 +1090,7 @@ openai_compatible_providers: Final[list] = [
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
+    "coralbricks",
     "cortecs",
     "scx-ai",
     "prism",
@@ -1959,6 +1969,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "openai_system_messages_first",
     "max_ui_session_budget",
     "budget_rollover",
+    "personal_key_model_access_from_teams",
     "mcp_tool_search",
     "turn_off_message_logging",
     "datadog_params",

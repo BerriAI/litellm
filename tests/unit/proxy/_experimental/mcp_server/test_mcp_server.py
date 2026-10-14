@@ -1,11 +1,14 @@
 # Create server parameters for stdio connection
 import asyncio
+import json
 import os
 from typing import Final
 
 import pytest
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager, nullcontext
+
+from starlette.types import Receive, Scope, Send
 
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -2997,11 +3000,7 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
             "get_mcp_server_by_id",
             return_value=mock_server,
         ),
-        patch.object(
-            global_mcp_server_manager,
-            "get_mcp_server_from_tool_name",
-            return_value=mock_server,
-        ) as mock_get_server,
+        patch.object(global_mcp_server_manager, "server_exposes_tool", return_value=True),
         patch(
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry"
         ) as mock_tool_registry,
@@ -3026,24 +3025,18 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
 
     assert result == expected_response
     mock_get_allowed.assert_awaited_once()
-    # We call `_get_mcp_server_from_tool_name` multiple times:
-    # - for logging/metadata
-    # - for resolving the server during dispatch
-    # - and inside `call_tool` for guardrails/hooks
-    # The exact count isn't important, only that it is used.
-    assert mock_get_server.call_count >= 2
-    # First call should use the prefixed tool name
-    assert (
-        mock_get_server.call_args_list[0][0][0]
-        == f"{mock_server.name}/gmail_send_email"
-    )
+    # The request names exactly one server, so that server is the dispatch target
+    # and the tool name reaches it untouched (the "/" is not a LiteLLM prefix).
+    mock_handle_managed.assert_awaited_once()
+    assert mock_handle_managed.await_args.kwargs["server_name"] == mock_server.name
+    assert mock_handle_managed.await_args.kwargs["name"] == f"{mock_server.name}/gmail_send_email"
 
 
 @pytest.mark.asyncio
 async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permissions():
     """
-    Ensure `call_mcp_tool` correctly resolves the MCP server for an unprefixed tool
-    name and enforces server-level permissions using that resolved server.
+    Ensure `call_mcp_tool` resolves an unprefixed tool name on a request scoped to
+    one server against that server and enforces server-level permissions with it.
     """
     from litellm.proxy._experimental.mcp_server.server import (
         call_mcp_tool,
@@ -3073,11 +3066,7 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
             "get_mcp_server_by_id",
             return_value=mock_server,
         ),
-        patch.object(
-            global_mcp_server_manager,
-            "get_mcp_server_from_tool_name",
-            return_value=mock_server,
-        ) as mock_get_server,
+        patch.object(global_mcp_server_manager, "server_exposes_tool", return_value=True),
         patch(
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry"
         ) as mock_tool_registry,
@@ -3094,7 +3083,7 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
         mock_tool_registry.get_tool.return_value = None
         mock_handle_managed.return_value = expected_response
 
-        # Call with UNPREFIXED tool name; server should be resolved via mapping
+        # Call with UNPREFIXED tool name; the single server the request names is the target
         result = await call_mcp_tool(
             name="gmail_send_email",
             arguments={"body": "hello"},
@@ -3103,11 +3092,12 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
 
     assert result == expected_response
     mock_get_allowed.assert_awaited_once()
-    # We should resolve the server at least once using the unprefixed name
-    assert mock_get_server.call_count >= 1
-    assert mock_get_server.call_args_list[0][0][0] == "gmail_send_email"
+    mock_handle_managed.assert_awaited_once()
+    assert mock_handle_managed.await_args.kwargs["server_name"] == mock_server.name
+    assert mock_handle_managed.await_args.kwargs["name"] == "gmail_send_email"
     # Permissions check should be invoked with the resolved server name
     mock_is_allowed.assert_called_once()
+    assert mock_is_allowed.call_args.kwargs["server_name"] == mock_server.name
 
 
 @pytest.mark.asyncio
@@ -3134,7 +3124,8 @@ async def test_mcp_admission_body_peek_times_out_without_losing_the_body(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_mcp_routing_stashes_peeked_body_for_auth():
+@pytest.mark.parametrize("method", ["tools/list", "tools/call", ["tools/list"]])
+async def test_mcp_routing_stashes_only_method_for_auth_and_replays_full_body(method: str | list[str]):
     try:
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCP_PEEKED_BODY_SCOPE_KEY,
@@ -3149,7 +3140,15 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    jsonrpc_body: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+    jsonrpc_body: Final = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": method,
+            "model": "zero-cost-model",
+            "params": {},
+        }
+    ).encode()
     scope = {
         "type": "http",
         "method": "POST",
@@ -3161,10 +3160,15 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
     }
     receive = AsyncMock(side_effect=[{"type": "http.request", "body": jsonrpc_body, "more_body": False}])
     send = AsyncMock()
-    stateless_called = []
 
-    async def stateless_handle(s, r, se) -> None:
-        stateless_called.append(1)  # mutable-ok: records the manager the handler dispatched to
+    async def stateless_handle(_scope: Scope, downstream_receive: Receive, _send: Send) -> None:
+        assert await downstream_receive() == {
+            "type": "http.request",
+            "body": jsonrpc_body,
+            "more_body": False,
+        }
+
+    stateless_handle_mock: Final = AsyncMock(side_effect=stateless_handle)
 
     with (
         patch(  # test-quality-ok: the ASGI handler reads auth from a module-level helper; the suite's only seam
@@ -3182,7 +3186,7 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
             True,
         ),
         patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
-            session_manager_stateless, "handle_request", side_effect=stateless_handle
+            session_manager_stateless, "handle_request", side_effect=stateless_handle_mock
         ),
         patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
             session_manager_stateless, "_server_instances", {}
@@ -3193,10 +3197,10 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
-    assert stateless_called, "tools/list without a session should route to the stateless manager"
-    assert await scope[MCP_PEEKED_BODY_SCOPE_KEY]() == jsonrpc_body
-    request_data: Final = await _read_request_body(_admission_request(scope))
-    assert request_data.get("method") == "tools/list"
+    stateless_handle_mock.assert_awaited_once()
+    assert await _read_request_body(_admission_request(scope)) == (
+        {"method": method} if isinstance(method, str) else {}
+    )
 
 
 @pytest.mark.asyncio
