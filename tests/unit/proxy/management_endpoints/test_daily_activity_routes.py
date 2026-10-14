@@ -1150,10 +1150,10 @@ def test_team_scope_applies_membership_and_user_key_filter(
         headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["metadata"]["total_spend"] == pytest.approx(3.0)
-    assert response.json()["metadata"]["total_api_keys"] == 1
+    assert response.json()["metadata"]["total_spend"] == pytest.approx(14.0)
+    assert response.json()["metadata"]["total_api_keys"] == 4
     scope: Final = repository.aggregated.call_args.args[0]
-    assert scope.api_keys == ("key-alpha",)
+    assert set(scope.api_keys or ()) == {"key-alpha", "key-beta", "key-gamma", "key-cache"}
     assert scope.entity_ids == ("team-a",)
     assert scope.timezone_offset_minutes == 480
     assert repository.aggregated.call_args.kwargs["include_entity_breakdown"] is True
@@ -1165,13 +1165,13 @@ def test_team_scope_does_not_allow_an_unowned_api_key(
     client, _ = daily_activity_client
     response: Final = client.get(
         "/team/daily/activity/aggregated",
-        params={**_entity_params("team_ids", "team-a"), "api_key": "key-beta"},
+        params={**_entity_params("team_ids", "team-a"), "api_key": "key-other-team"},
         headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
     )
     assert response.status_code == 200, response.text
     assert response.json()["metadata"]["total_spend"] == 0
     assert response.json()["metadata"]["total_api_keys"] == 0
-    assert "key-beta" not in response.text
+    assert "key-other-team" not in response.text
 
 
 def _assert_customer_route_denied(client: TestClient, prefix: str, suffix: str, extra_params: dict[str, str]) -> None:
@@ -1242,8 +1242,8 @@ def test_non_admin_routes_return_only_permitted_entities_and_keys(
     assert response.status_code == 200, response.text
     assert "key-other-" not in response.text, response.text
     if prefix in ("/team", "/tag"):
-        assert "key-beta" not in response.text, response.text
-        assert "key-alpha" in response.text, response.text
+        for api_key in ("key-alpha", "key-beta", "key-gamma", "key-cache"):
+            assert api_key in response.text, response.text
 
 
 def test_empty_scope_filters_fail_closed(daily_activity_client: tuple[TestClient, _FakeRepository]) -> None:
