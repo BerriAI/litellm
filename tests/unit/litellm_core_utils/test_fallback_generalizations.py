@@ -970,12 +970,12 @@ def test_shipped_tool_search_rule_version_boundaries(shipped_cost_map, model, pr
 
 def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipped_cost_map):
     """A mapped Claude 4.5+ entry with no supports_tool_search key gets it from the rule
-    on Anthropic direct, Vertex, Bedrock and Azure Foundry, a mapped pre-4.5 entry stays
+    on Anthropic direct, Azure Foundry, Vertex and Bedrock, a mapped pre-4.5 entry stays
     without one, and reseller copies of the same model are not touched."""
     for key, model, provider in (
         ("claude-opus-4-7", "claude-opus-4-7", "anthropic"),
-        ("vertex_ai/claude-opus-5", "claude-opus-5", "vertex_ai"),
         ("azure_ai/claude-opus-5", "claude-opus-5", "azure_ai"),
+        ("vertex_ai/claude-opus-5", "claude-opus-5", "vertex_ai"),
     ):
         assert "supports_tool_search" not in litellm.model_cost[key]
         assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_tool_search"] is True

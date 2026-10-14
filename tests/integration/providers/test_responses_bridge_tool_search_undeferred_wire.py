@@ -432,17 +432,18 @@ def test_a_false_defer_loading_never_reaches_an_openai_compatible_wire_as_a_key(
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+@pytest.mark.parametrize("route", ["anthropic", "azure_ai"])
 def test_the_supported_anthropic_route_keeps_each_tools_own_defer_loading_with_the_search_tool(
-    gateway: Gateway, stream: bool
+    gateway: Gateway, route: Route, stream: bool
 ) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_claude) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(scenario, "anthropic", wire.url)
+        model: Final = _deployment(scenario, route, wire.url)
         tools: Final = (_tool_search(), _function_tool(), _namespace_tool(), _loaded_tool())
         response: Final = _raw(gateway, _responses_body(model, marker, tools, stream))
         _assert_served(response, marker, stream)
         request, body = _only_request(wire)
-        _assert_target("anthropic", stream, request, body)
+        _assert_target(route, stream, request, body)
         sent: Final = _ITEMS.validate_python(body["tools"])
         assert sent[0] == {"type": _REGEX_TOOL_TYPE, "name": _REGEX_TOOL_NAME}, sent
         assert [(tool["name"], tool.get("defer_loading")) for tool in sent[1:]] == [

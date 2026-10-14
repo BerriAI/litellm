@@ -29,11 +29,16 @@ prompt cache readable across turns. Messages are handled in OpenAI format; the
 Anthropic wire shape is built later by ``anthropic_messages_pt``.
 """
 
-from collections.abc import Iterator, Mapping, Sequence
-from itertools import chain, groupby
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from itertools import chain, dropwhile, groupby, islice, takewhile
 from typing import Final, Literal, TypeAlias, TypeVar
 
-from litellm.types.llms.anthropic import AnthropicMessagesSystemMessageParam, AnthropicSystemMessageContent
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
+    ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
+    AnthropicMessagesSystemMessageParam,
+    AnthropicSystemMessageContent,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionCachedContent,
@@ -283,14 +288,107 @@ def _separate_thinking_blocks_render(message: object, parts: Sequence[object]) -
     return any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
 
 
-def _assistant_renders(message: object) -> bool:
+def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
+
+
+def find_anthropic_server_tool_result(
+    tool_id: str,
+    web_search_results: Sequence[object] | None,
+    tool_results: Sequence[object] | None,
+) -> dict[str, object] | None:
+    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return None
+    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    return next(
+        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
+        None,
+    )
+
+
+def _tool_result_ids(answers: Iterable[object]) -> Iterator[str]:
+    for message in answers:
+        if isinstance(tool_call_id := message_field(message, "tool_call_id"), str) and tool_call_id:
+            yield tool_call_id
+
+
+def answered_tool_call_ids(messages: Sequence[object], assistant_index: int) -> frozenset[str]:
+    from_assistant: Final = islice(messages, assistant_index, None)
+    following: Final = dropwhile(lambda message: message_field(message, "role") == "assistant", from_assistant)
+    answers: Final = takewhile(lambda message: message_field(message, "role") in _TOOL_ROLES, following)
+    return frozenset(_tool_result_ids(answers))
+
+
+def _unresolved_tool_search_id(tool_call: object, message: object) -> str | None:
+    tool_id: Final = message_field(tool_call, "id")
+    tool_name: Final = message_field(message_field(tool_call, "function"), "name")
+    if not isinstance(tool_id, str) or not isinstance(tool_name, str):
+        return None
+    if not is_anthropic_tool_search_use(tool_id, tool_name):
+        return None
+    provider_fields: Final = message_field(message, "provider_specific_fields")
+    server_result: Final = find_anthropic_server_tool_result(
+        tool_id,
+        parts_of(message_field(provider_fields, "web_search_results")),
+        parts_of(message_field(provider_fields, "tool_results")),
+    )
+    return tool_id if server_result is None else None
+
+
+def _unresolved_tool_search_ids(message: object) -> tuple[str, ...]:
+    return tuple(
+        tool_id
+        for tool_call in parts_of(message_field(message, "tool_calls"))
+        if (tool_id := _unresolved_tool_search_id(tool_call, message)) is not None
+    )
+
+
+def _is_client_tool_call(tool_call: object) -> bool:
+    tool_id: Final = message_field(tool_call, "id")
+    return isinstance(tool_id, str) and not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+
+
+def _tool_search_ids_beside_client_calls(message: object) -> tuple[str, ...]:
+    tool_calls: Final = parts_of(message_field(message, "tool_calls"))
+    return _unresolved_tool_search_ids(message) if any(map(_is_client_tool_call, tool_calls)) else ()
+
+
+def tool_search_ids_dropped_with_their_answers(messages: Iterable[object]) -> frozenset[str]:
+    """Tool search uses ``anthropic_messages_pt`` leaves out together with the caller's answer to them.
+
+    The search already ran on Anthropic's side, so a caller's ``tool`` message for it
+    is never the real result. Dropping the pair is safe only beside a client tool call,
+    whose result keeps a user turn after the assistant turn: Claude rejects a
+    conversation that ends on an assistant turn.
+    """
+    return frozenset(
+        chain.from_iterable(
+            _tool_search_ids_beside_client_calls(message)
+            for message in messages
+            if message_field(message, "role") == "assistant"
+        )
+    )
+
+
+def _tool_calls_render(messages: Sequence[object], index: int) -> bool:
+    tool_calls: Final = parts_of(message_field(messages[index], "tool_calls"))
+    search_ids: Final = _unresolved_tool_search_ids(messages[index])
+    if len(search_ids) < len(tool_calls):
+        return True
+    return bool(search_ids) and not answered_tool_call_ids(messages, index).isdisjoint(search_ids)
+
+
+def _assistant_renders(messages: Sequence[object], index: int) -> bool:
     """Whether ``anthropic_messages_pt`` puts a block on the wire for this assistant message.
 
     String content (the converter pads an empty one with a placeholder), a text part,
     a signed thinking part, a server tool part, tool calls, a function call, a kept
-    thinking block and compaction blocks each render. An assistant message with none
-    of them, such as ``content: None`` or an empty list, vanishes from the wire.
+    thinking block and compaction blocks each render. A tool search use with neither a
+    server result nor a caller's answer is dropped, so it renders nothing. An assistant
+    message with none of them, such as ``content: None`` or an empty list, vanishes
+    from the wire.
     """
+    message: Final = messages[index]
     content: Final = message_field(message, "content")
     if isinstance(content, str):
         return True
@@ -298,13 +396,13 @@ def _assistant_renders(message: object) -> bool:
     return (
         any(_assistant_part_renders(part) for part in parts)
         or _separate_thinking_blocks_render(message, parts)
-        or bool(message_field(message, "tool_calls"))
+        or _tool_calls_render(messages, index)
         or bool(message_field(message, "function_call"))
         or bool(message_field(message_field(message, "provider_specific_fields"), "compaction_blocks"))
     )
 
 
-def _renders(message: object) -> bool:
+def _renders(messages: Sequence[object], index: int) -> bool:
     """Whether ``anthropic_messages_pt`` puts a block on the wire for this message.
 
     A tool message always becomes a ``tool_result`` and a user message with string
@@ -312,11 +410,12 @@ def _renders(message: object) -> bool:
     renders only through parts of a type the converter emits; ``None``, an empty list,
     and a list of other parts vanish. Assistant messages follow ``_assistant_renders``.
     """
+    message: Final = messages[index]
     role: Final = message_field(message, "role")
     if role in _TOOL_ROLES:
         return True
     if role == "assistant":
-        return _assistant_renders(message)
+        return _assistant_renders(messages, index)
     content: Final = message_field(message, "content")
     return isinstance(content, str) or any(
         message_field(part, "type") in _RENDERED_PART_TYPES for part in parts_of(content)
@@ -330,7 +429,7 @@ def _rendered_block(
 ) -> int | None:
     block_index: Final = _block_containing(message_index, blocks)
     _, indices = blocks[block_index]
-    return block_index if any(_renders(messages[index]) for index in indices) else None
+    return block_index if any(_renders(messages, index) for index in indices) else None
 
 
 def _system_may_follow(
@@ -347,7 +446,7 @@ def _system_may_follow(
         (
             not is_user
             for is_user, indices in blocks[block_index + 1 :]
-            if any(_renders(messages[index]) for index in indices)
+            if any(_renders(messages, index) for index in indices)
         ),
         True,
     )

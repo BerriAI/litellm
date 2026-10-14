@@ -281,6 +281,17 @@ EMPTY_ASSISTANT = pytest.mark.parametrize(
             "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}],
         },
         litellm.Message(role="assistant", content=None),
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                }
+            ],
+        },
     ],
     ids=[
         "none",
@@ -291,6 +302,7 @@ EMPTY_ASSISTANT = pytest.mark.parametrize(
         "unsigned-inline-part-hides-signed-block",
         "inline-redacted-part-hides-redacted-block",
         "pydantic-none",
+        "unanswered-tool-search-use",
     ],
 )
 
