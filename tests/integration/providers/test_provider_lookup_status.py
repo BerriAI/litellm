@@ -123,7 +123,7 @@ _EVAL_UPSTREAM_RESPONSES: Final[dict[tuple[str, str], dict[str, JsonValue]]] = {
     ("POST", "/v1/evals/eval_abc/runs"): _EVAL_RUN_RESPONSE,
     ("GET", "/v1/evals/eval_abc/runs"): _EVAL_RUN_LIST_RESPONSE,
     ("GET", "/v1/evals/eval_abc/runs/run_abc"): _EVAL_RUN_RESPONSE,
-    ("POST", "/v1/evals/eval_abc/runs/run_abc"): _EVAL_RUN_CANCEL_RESPONSE,
+    ("POST", "/v1/evals/eval_abc/runs/run_abc/cancel"): _EVAL_RUN_CANCEL_RESPONSE,
     ("DELETE", "/v1/evals/eval_abc/runs/run_abc"): _EVAL_RUN_DELETE_RESPONSE,
 }
 
@@ -415,7 +415,8 @@ _EVAL_RUN_CANCEL_CALL: Final = _EvalCall(
         "run_abc", eval_id="eval_abc", extra_query=routing.query
     ),
     parsed=_EvalRunCancel,
-    upstream=("POST", "/v1/evals/eval_abc/runs/run_abc", {}, {}),
+    # OpenAI cancel path per openai-python 3.30.0 evals.runs.cancel, checked 2026-10-14
+    upstream=("POST", "/v1/evals/eval_abc/runs/run_abc/cancel", {}, {}),
     response=_EVAL_RUN_CANCEL_RESPONSE,
 )
 _EVAL_RUN_DELETE_CALL: Final = _EvalCall(
@@ -515,7 +516,7 @@ def test_every_eval_route_reaches_sdk_path_and_relays_upstream_body(
     gateway: Gateway, suffix: str, spelling: str
 ) -> None:
     pytest.skip(
-        "BUG: evals.runs.cancel goes to /runs/{run_id}/cancel and returns only {id, object, status} "
+        "BUG: evals.runs.cancel returns only {id, object, status} "
         "instead of relaying the full upstream eval run (the route's response_model=CancelRunResponse strips it), "
         "evals.update returns 500, create and run create drop metadata, runs.list drops status, "
         "run create and retrieve overwrite the run's model with the routing alias, "
