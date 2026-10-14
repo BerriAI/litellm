@@ -274,6 +274,36 @@ class TestCheckToolsAllowlist:
         assert "get_weather" not in str(exc_info.value.message)
 
     @pytest.mark.asyncio
+    async def test_disallowed_tool_loaded_by_a_replayed_tool_search_raises_when_extra_body_enables_search(self):
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        body = {
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+            "extra_body": {"tools": [{"type": "tool_search"}]},
+            "messages": [
+                {"role": "user", "content": "clean up the disk"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "provider_specific_fields": {
+                        "tool_search_items": [
+                            {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                            {"type": "tool_search_output", "call_id": "ts_1", "tools": [{"name": "run_shell"}]},
+                        ]
+                    },
+                },
+            ],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/chat/completions",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "run_shell" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
     async def test_replayed_tool_search_is_not_counted_when_the_request_cannot_send_it(self):
         token = _token(metadata={"allowed_tools": ["get_weather"]})
         body = {

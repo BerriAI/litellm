@@ -365,21 +365,59 @@ def _loaded_tools(item: Mapping[str, object]) -> Sequence[object]:
     return cast(Sequence[object], tools)  # cast-ok: untyped JSON, each tool re-checked
 
 
-def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
+def _json_list(value: object) -> Sequence[object] | None:
+    return cast(Sequence[object], value) if isinstance(value, list) else None  # cast-ok: untyped JSON
+
+
+def _message_loaded_tools(message: object) -> Iterator[object]:
+    loaded: Final = chain.from_iterable(_loaded_tools(item) for item in _tool_search_input_items(message))
+    return chain.from_iterable(_namespace_members(tool) for tool in loaded)
+
+
+def replayed_tool_search_tools(request: object) -> tuple[object, ...]:
     if not _requests_tool_search(request):
         return ()
-    messages: Final = _json_field(request, "messages")
-    entries: Final = cast(Sequence[object], messages) if isinstance(messages, list) else ()  # cast-ok: untyped JSON
-    items: Final = chain.from_iterable(_tool_search_input_items(message) for message in entries)
-    loaded: Final = chain.from_iterable(_loaded_tools(item) for item in items)
-    definitions: Final = chain.from_iterable(_namespace_members(tool) for tool in loaded)
-    return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in definitions))
+    messages: Final = _json_list(_json_field(request, "messages")) or ()
+    return tuple(chain.from_iterable(_message_loaded_tools(message) for message in messages))
+
+
+def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
+    return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in replayed_tool_search_tools(request)))
+
+
+def _loads_any_tool(message: object, names: frozenset[str]) -> bool:
+    loaded_names: Final = chain.from_iterable(_tool_definition_name(tool) for tool in _message_loaded_tools(message))
+    return any(name in names for name in loaded_names)
+
+
+def _without_tool_search_items(message: object) -> object:
+    fields: Final = _json_field(message, "provider_specific_fields")
+    if not isinstance(fields, dict):
+        return message
+    kept: Final = {
+        key: value
+        for key, value in cast(Mapping[str, object], fields).items()  # cast-ok: untyped JSON
+        if key != _TOOL_SEARCH_ITEMS_KEY
+    }
+    return {**cast(Mapping[str, object], message), "provider_specific_fields": kept}  # cast-ok: dict checked above
+
+
+def without_tool_search_items_loading(
+    request: object, names: frozenset[str]
+) -> list[object] | None:  # mutable-ok: request messages stay a list for every downstream handler
+    messages: Final = _json_list(_json_field(request, "messages"))
+    if messages is None:
+        return None
+    return [_without_tool_search_items(message) if _loads_any_tool(message, names) else message for message in messages]
+
+
+def _effective_tools(request: object) -> Sequence[object]:
+    override: Final = _json_list(_json_field(_json_field(request, "extra_body"), "tools"))
+    return override if override is not None else (_json_list(_json_field(request, "tools")) or ())
 
 
 def _requests_tool_search(request: object) -> bool:
-    tools: Final = _json_field(request, "tools")
-    entries: Final = cast(Sequence[object], tools) if isinstance(tools, list) else ()  # cast-ok: untyped JSON
-    return any(_json_field(tool, "type") == "tool_search" for tool in entries)
+    return any(_json_field(tool, "type") == "tool_search" for tool in _effective_tools(request))
 
 
 def _reasoning_ids(items: Sequence[Mapping[str, object]]) -> frozenset[str]:
@@ -585,9 +623,43 @@ def _reasoning_item_to_response_input(
     }
 
 
-def _defer_loading_field(tool: Mapping[str, object], function_tool: Mapping[str, object]) -> Mapping[str, bool]:
-    defer_loading: Final = tool.get("defer_loading", function_tool.get("defer_loading"))
-    return {"defer_loading": defer_loading} if isinstance(defer_loading, bool) else {}
+def _requested_defer_loading(tool: Mapping[str, object], function_tool: Mapping[str, object]) -> object:
+    tool_level: Final = tool.get("defer_loading")
+    return tool_level if tool_level is not None else function_tool.get("defer_loading")
+
+
+def _defer_loading_field(
+    tool: Mapping[str, object],
+    function_tool: Mapping[str, object],
+    *,
+    carries_tool_search: bool,
+    drop_params: bool,
+) -> Mapping[str, bool]:
+    defer_loading: Final = _requested_defer_loading(tool, function_tool)
+    if defer_loading is None or (defer_loading is False and not carries_tool_search):
+        return {}
+    if isinstance(defer_loading, bool) and carries_tool_search:
+        return {"defer_loading": defer_loading}
+    if drop_params:
+        verbose_logger.debug("Chat provider: dropping defer_loading=%r under drop_params", defer_loading)
+        return {}
+    problem: Final = (
+        'defer_loading needs a {"type": "tool_search"} tool in the same request'
+        if isinstance(defer_loading, bool)
+        else f"defer_loading must be a boolean, got {defer_loading!r}"
+    )
+    raise litellm.UnsupportedParamsError(
+        message=f"{problem}. To drop it, set `litellm.drop_params=True` or pass `drop_params=True`."
+    )
+
+
+def _without_dropped_defer_loading(
+    tool: Mapping[str, object], *, carries_tool_search: bool, drop_params: bool
+) -> Mapping[str, object]:
+    if tool.get("type") != "function" or "defer_loading" not in tool:
+        return tool
+    kept: Final = _defer_loading_field(tool, {}, carries_tool_search=carries_tool_search, drop_params=drop_params)
+    return {**{key: value for key, value in tool.items() if key != "defer_loading"}, **kept}
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -834,6 +906,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self,
         optional_params: dict,
         responses_api_request: "ResponsesAPIOptionalRequestParams",
+        drop_params: bool = False,
     ) -> None:
         """Map optional_params into responses_api_request (mutates in place)."""
         for key, value in optional_params.items():
@@ -843,7 +916,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 responses_api_request["tools"] = self._convert_tools_to_responses_format(
-                    cast(list[dict[str, object]], value)
+                    cast(list[dict[str, object]], value), drop_params=drop_params
                 )
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
@@ -977,7 +1050,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if instructions:
             responses_api_request["instructions"] = instructions
 
-        self._map_optional_params_to_responses_api_request(optional_params, responses_api_request)
+        self._map_optional_params_to_responses_api_request(
+            optional_params,
+            responses_api_request,
+            drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
+        )
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
         verbose_logger.debug("Chat provider: Stream parameter: %s", stream)
@@ -1507,9 +1584,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return result
 
     def _convert_tools_to_responses_format(
-        self, tools: list[dict[str, object]]
+        self, tools: list[dict[str, object]], drop_params: bool = False
     ) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
         """Convert chat completion tools to responses API tools format"""
+        carries_tool_search: Final = any(tool.get("type") == "tool_search" for tool in tools)
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
         for tool in tools:
             # convert function tool from chat completion to responses API format
@@ -1522,7 +1600,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         strict=function_tool.get("strict"),
                         type="function",
                         description=function_tool.get("description"),
-                        **_defer_loading_field(tool, function_tool),
+                        **_defer_loading_field(
+                            tool, function_tool, carries_tool_search=carries_tool_search, drop_params=drop_params
+                        ),
                     )
                 )
             elif tool.get("type") == "custom" and isinstance(custom_payload := tool.get("custom"), dict):
@@ -1537,7 +1617,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     flat_custom["format"] = convert_custom_tool_format_to_responses_shape(custom_payload["format"])
                 responses_tools.append(flat_custom)
             else:
-                responses_tools.append(tool)
+                responses_tools.append(
+                    _without_dropped_defer_loading(
+                        tool, carries_tool_search=carries_tool_search, drop_params=drop_params
+                    )
+                )
 
         return cast(list["ALL_RESPONSES_API_TOOL_PARAMS"], responses_tools)
 
