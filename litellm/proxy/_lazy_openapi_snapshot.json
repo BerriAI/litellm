@@ -10539,16 +10539,21 @@
                           "items": {
                             "anyOf": [
                               {
+                                "pattern": "^(?i:data:image/[^;,\\s]+;base64,.+|https?://\\S+)$",
                                 "type": "string"
                               },
                               {
                                 "additionalProperties": false,
                                 "properties": {
                                   "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
                                     "title": "Base64",
                                     "type": "string"
                                   },
                                   "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
                                     "title": "Content Type",
                                     "type": "string"
                                   }
@@ -11425,16 +11430,21 @@
                           "items": {
                             "anyOf": [
                               {
+                                "pattern": "^(?i:data:image/[^;,\\s]+;base64,.+|https?://\\S+)$",
                                 "type": "string"
                               },
                               {
                                 "additionalProperties": false,
                                 "properties": {
                                   "base64": {
+                                    "description": "Base64-encoded image bytes",
+                                    "minLength": 1,
                                     "title": "Base64",
                                     "type": "string"
                                   },
                                   "content_type": {
+                                    "description": "An image/* media type, such as image/png",
+                                    "pattern": "^image/\\S+$",
                                     "title": "Content Type",
                                     "type": "string"
                                   }

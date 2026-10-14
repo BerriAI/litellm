@@ -4,6 +4,7 @@ Helper functions to handle images passed in messages
 
 import asyncio
 import base64
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import chain
@@ -23,6 +24,7 @@ from litellm.types.llms.openai import AllMessageValues
 
 MAX_IMGS_IN_MEMORY: Final = 10
 MAX_CONCURRENT_REMOTE_MEDIA_FETCHES: Final = 20
+_FETCH_ATTEMPTS: Final = 3
 
 in_memory_cache: Final = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
 
@@ -74,6 +76,13 @@ def _process_image_response(response: Response, url: str) -> str:
     return result
 
 
+def _attempt_timeouts(timeout: float | httpx.Timeout | None) -> Iterable[float | httpx.Timeout | None]:
+    if timeout is None or isinstance(timeout, httpx.Timeout):
+        return (timeout,) * _FETCH_ATTEMPTS
+    deadline: Final = time.monotonic() + timeout
+    return (remaining for _ in range(_FETCH_ATTEMPTS) if (remaining := deadline - time.monotonic()) > 0)
+
+
 def _rejected_image_fetch(url: str, verdict: SSRFError) -> "litellm.ImageFetchError":
     verbose_logger.warning("Image fetch of %s rejected before any request went out: %s", url, verdict)
     return litellm.ImageFetchError(
@@ -97,9 +106,9 @@ async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout |
         return cached_result
 
     client: Final = litellm.module_level_aclient
-    for _ in range(3):
+    for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = await async_safe_get(client, url, timeout=timeout)
+            response = await async_safe_get(client, url, timeout=attempt_timeout)
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
@@ -125,9 +134,9 @@ def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None
         return cached_result
 
     client: Final = litellm.module_level_client
-    for _ in range(3):
+    for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = safe_get(client, url, timeout=timeout)
+            response = safe_get(client, url, timeout=attempt_timeout)
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise

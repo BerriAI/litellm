@@ -16,6 +16,7 @@ class CloudflareDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("CLOUDFLARE_API_KEY",)
     api_base_env = ("CLOUDFLARE_API_BASE",)
     supports_images = True
+    max_images = 4
     inlines_remote_images = True
 
     def get_default_api_base(self) -> str | None:

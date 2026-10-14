@@ -18,6 +18,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     image_param,
+    input_images,
     ir_to_systemone_response,
     remote_image_urls,
     systemone_request_to_ir,
@@ -355,6 +356,13 @@ def prepare_call(
             model=model,
             llm_provider=provider,
         )
+    image_count: Final = len(input_images(ir_request.input))
+    if provider_config.max_images is not None and image_count > provider_config.max_images:
+        raise litellm.BadRequestError(
+            message=f"{provider} takes at most {provider_config.max_images} images per request, got {image_count}",
+            model=model,
+            llm_provider=provider,
+        )
 
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
@@ -477,6 +485,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
+            logged_body=body if inlined is call else _request_body(call),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
@@ -499,6 +508,7 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
+            logged_body=body if inlined is call else _request_body(call),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
@@ -521,7 +531,7 @@ def reject_other_format(*, model: str, kwargs: Mapping[str, object], field_name:
 
 
 def reject_images_next_to_input(*, model: str, kwargs: Mapping[str, object]) -> None:
-    if not kwargs.get("images"):
+    if not kwargs.get("images") or _drops_params(kwargs):
         return
     raise litellm.BadRequestError(
         message=(

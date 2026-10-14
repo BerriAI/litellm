@@ -68,13 +68,15 @@ DecisionQuestionMap: TypeAlias = Annotated[
 
 
 class DecisionsBase64Image(LiteLLMPydanticObjectBase):
-    content_type: str
-    base64: str
+    content_type: Annotated[str, Field(pattern=r"^image/\S+$", description="An image/* media type, such as image/png")]
+    base64: Annotated[str, Field(min_length=1, description="Base64-encoded image bytes")]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-DecisionsImage: TypeAlias = str | DecisionsBase64Image
+DecisionsImage: TypeAlias = (
+    Annotated[str, Field(pattern=r"^(?i:data:image/[^;,\s]+;base64,.+|https?://\S+)$")] | DecisionsBase64Image
+)
 
 
 class DecisionsBase64Audio(LiteLLMPydanticObjectBase):

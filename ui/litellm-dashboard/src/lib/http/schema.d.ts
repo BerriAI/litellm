@@ -71309,9 +71309,15 @@ export interface operations {
                      * @description Images as data URLs or content_type plus base64, for providers that look at images
                      */
                     images?: (string | {
-                        /** Base64 */
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
                         base64: string;
-                        /** Content Type */
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
                         content_type: string;
                     })[] | null;
                     /**
@@ -80024,9 +80030,15 @@ export interface operations {
                      * @description Images as data URLs or content_type plus base64, for providers that look at images
                      */
                     images?: (string | {
-                        /** Base64 */
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
                         base64: string;
-                        /** Content Type */
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
                         content_type: string;
                     })[] | null;
                     /**

@@ -1489,6 +1489,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj | None,
         provider_config: BaseDecisionsConfig,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1498,7 +1499,7 @@ class BaseLLMHTTPHandler:
         data: Final = dict(body)
         if logging_obj is not None:
             logging_obj.pre_call(
-                input=data,
+                input=dict(logged_body),
                 api_key=api_key,
                 model=model,
                 additional_args={"api_base": url, "complete_input_dict": data, "headers": outbound_headers},
@@ -1513,6 +1514,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseDecisionsConfig,
         request: DecisionsIRRequest,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1525,6 +1527,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             provider_config=provider_config,
             body=body,
+            logged_body=logged_body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,
@@ -1561,6 +1564,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseDecisionsConfig,
         request: DecisionsIRRequest,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1573,6 +1577,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             provider_config=provider_config,
             body=body,
+            logged_body=logged_body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,

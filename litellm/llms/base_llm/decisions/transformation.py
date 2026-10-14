@@ -115,7 +115,7 @@ def _image_urls(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:
     return tuple(part.image_url for part in message.content if isinstance(part, OpenAIDecisionInputImage))
 
 
-def _input_images(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[DecisionsImage, ...]:
+def input_images(decision_input: DecisionsIRState | DecisionsIRMessages) -> tuple[DecisionsImage, ...]:
     match decision_input:
         case DecisionsIRState():
             return decision_input.images
@@ -126,7 +126,7 @@ def _input_images(decision_input: DecisionsIRState | DecisionsIRMessages) -> tup
 
 
 def image_param(decision_input: DecisionsIRState | DecisionsIRMessages) -> str | None:
-    if not _input_images(decision_input):
+    if not input_images(decision_input):
         return None
     match decision_input:
         case DecisionsIRState():
@@ -166,7 +166,7 @@ def remote_image_urls(decision_input: DecisionsIRState | DecisionsIRMessages) ->
     return tuple(
         dict.fromkeys(
             image
-            for image in _input_images(decision_input)
+            for image in input_images(decision_input)
             if isinstance(image, str) and image.lower().startswith(_REMOTE_URL_PREFIXES)
         )
     )
@@ -270,7 +270,7 @@ def ir_to_systemone_request(
         return UnsupportedDecisionsRequest(reason="video input is not supported by this Decisions model")
     state: Final = _systemone_state(request.input)
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
-    images: Final = _input_images(request.input)
+    images: Final = input_images(request.input)
     return {
         "model": model,
         "state": state,
@@ -421,6 +421,7 @@ class BaseDecisionsConfig(ABC):
     api_key_required: bool = True
     supports_safety_identifier: bool = False
     supports_images: bool = False
+    max_images: int | None = None
     inlines_remote_images: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}

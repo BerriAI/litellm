@@ -1549,18 +1549,8 @@ async def test_openai_format_calls_to_a_systemone_provider_get_openai_format_ans
             },
             "send images as input_image content parts",
         ),
-        (
-            "openai/gpt-6-luna",
-            {
-                "input": "review",
-                "images": ["data:image/png;base64,AA=="],
-                "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
-                "drop_params": True,
-            },
-            "send images as input_image content parts",
-        ),
     ),
-    ids=("images_and_input", "images_and_input_under_drop_params"),
+    ids=("images_and_input",),
 )
 async def test_requests_a_provider_cannot_serve_are_rejected_before_http(
     respx_mock: respx.MockRouter,
@@ -1828,6 +1818,39 @@ def test_systemone_images_reach_cloudflare_clef_in_the_callers_form(respx_mock: 
 
 
 @pytest.mark.asyncio
+class _InputRecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inputs: list[object] = []
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.inputs.append(kwargs.get("input"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize(("api", "request_kwargs"), _image_requests(_REMOTE_IMAGE_URL), ids=_PREDICATE_REQUEST_IDS)
+async def test_logging_callbacks_get_the_image_url_the_caller_sent_while_cloudflare_gets_its_bytes(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    async_only_image_fetch,
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+    recording_logger: Final = _InputRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    await getattr(litellm, f"a{api}")(model="cloudflare/clef", **request_kwargs)
+    await _drain_logging_worker()
+
+    wire_body: Final = json.loads(route.calls[0].request.content)
+    assert wire_body["images"] == [async_only_image_fetch.data_url]
+    assert recording_logger.inputs == [{**wire_body, "images": [_REMOTE_IMAGE_URL]}]
+
+
 @pytest.mark.usefixtures("cloudflare_account")
 @pytest.mark.parametrize(("api", "request_kwargs"), _image_requests(_REMOTE_IMAGE_URL), ids=_PREDICATE_REQUEST_IDS)
 async def test_remote_images_are_fetched_off_the_event_loop_and_inlined_for_cloudflare(
@@ -1878,7 +1901,9 @@ async def test_remote_image_downloads_use_the_callers_timeout(
     else:
         await litellm.asystemone(**request_kwargs)
 
-    assert image_route.calls.last.request.extensions["timeout"] == httpx.Timeout(7.0).as_dict()
+    sent_timeout: Final = image_route.calls.last.request.extensions["timeout"]
+    assert sent_timeout.keys() == httpx.Timeout(7.0).as_dict().keys()
+    assert all(6.0 < seconds <= 7.0 for seconds in sent_timeout.values()), sent_timeout
 
 
 @pytest.mark.asyncio
@@ -1944,12 +1969,24 @@ async def test_images_are_dropped_from_the_wire_under_drop_params(
     }
 
 
-_MALFORMED_IMAGE_ENTRIES: Final[tuple[Mapping[str, object], ...]] = (
+_MALFORMED_IMAGE_ENTRIES: Final[tuple[Mapping[str, object] | str, ...]] = (
     {"url": _PNG_DATA_URL},
     {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}},
     {"content_type": "image/png", "base64": "AA==", "detail": "high"},
+    {"content_type": "text/plain", "base64": "AA=="},
+    {"content_type": "image/png", "base64": ""},
+    "a" * 5000,
+    "data:text/plain;base64,AA==",
 )
-_MALFORMED_IMAGE_ENTRY_IDS: Final = ("url_object", "chat_image_url", "extra_key")
+_MALFORMED_IMAGE_ENTRY_IDS: Final = (
+    "url_object",
+    "chat_image_url",
+    "extra_key",
+    "non_image_type",
+    "empty_base64",
+    "not_a_url",
+    "non_image_data_url",
+)
 _MALFORMED_IMAGES: Final[tuple[object, ...]] = (_PNG_DATA_URL, *([entry] for entry in _MALFORMED_IMAGE_ENTRIES))
 _MALFORMED_IMAGE_IDS: Final = ("bare_string", *_MALFORMED_IMAGE_ENTRY_IDS)
 
@@ -1992,7 +2029,7 @@ async def test_malformed_images_are_dropped_from_the_wire_under_drop_params(
 @pytest.mark.usefixtures("cloudflare_account")
 @pytest.mark.parametrize("entry", _MALFORMED_IMAGE_ENTRIES, ids=_MALFORMED_IMAGE_ENTRY_IDS)
 async def test_a_malformed_image_under_drop_params_keeps_the_well_formed_ones(
-    entry: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    entry: Mapping[str, object] | str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
@@ -2034,6 +2071,84 @@ async def test_empty_images_next_to_input_are_ignored(
         "input": "review",
         "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
     }
+
+
+@pytest.mark.asyncio
+async def test_images_next_to_input_are_dropped_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        images=[_PNG_DATA_URL],
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+
+
+def _cloudflare_image_requests(count: int) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    return (
+        (
+            "decisions",
+            MappingProxyType(
+                {
+                    "input": (
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_image", "image_url": _PNG_DATA_URL} for _ in range(count)],
+                        },
+                    ),
+                    "questions": _PREDICATE_QUESTIONS,
+                }
+            ),
+        ),
+        (
+            "systemone",
+            MappingProxyType(
+                {"state": _SCREEN_TEXT, "questions": _SYSTEMONE_PREDICATE, "images": [_PNG_DATA_URL] * count}
+            ),
+        ),
+    )
+
+
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize(("api", "request_kwargs"), _cloudflare_image_requests(5), ids=_PREDICATE_REQUEST_IDS)
+def test_more_images_than_cloudflare_takes_are_refused_before_any_download_or_http(
+    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="at most 4 images per request, got 5") as caught:
+        getattr(litellm, api)(model="cloudflare/clef", **request_kwargs)
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize(("api", "request_kwargs"), _cloudflare_image_requests(4), ids=_PREDICATE_REQUEST_IDS)
+def test_the_four_images_cloudflare_takes_reach_it(
+    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    getattr(litellm, api)(model="cloudflare/clef", **request_kwargs)
+
+    assert json.loads(route.calls[0].request.content)["images"] == [_PNG_DATA_URL] * 4
 
 
 @pytest.mark.asyncio
