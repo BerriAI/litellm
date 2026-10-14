@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
@@ -375,6 +375,7 @@ CHAT_SHAPED_ENDPOINT_BY_ROUTE_TYPE: Final[Mapping[str, str]] = MappingProxyType(
         "agenerate_content_stream": "streamGenerateContent",
         "acreate_interaction": "/v1beta/interactions",
         "_aresponses_websocket": "/v1/responses",
+        "acompact_responses": "/v1/responses/compact",
     }
 )
 
@@ -504,23 +505,45 @@ def _next_fallback_groups(
     )
 
 
-def _frontier_reaches_chat(
-    frontier: tuple[str, ...],
-    seen: frozenset[str],
+@dataclass(frozen=True, slots=True)
+class _FallbackWalk:
+    frontier: tuple[str, ...]
+    seen: frozenset[str]
+    reaches_chat: bool = False
+
+
+def _walk_one_layer(
+    walk: _FallbackWalk,
+    data: Mapping[str, object],
+    fallbacks: list[object],  # mutable-ok: mirrors get_fallback_model_group's contract
+    llm_router: LitellmRouter,
+    team_id: str | None,
+) -> _FallbackWalk:
+    reached: Final = dict.fromkeys(
+        chain.from_iterable(_next_fallback_groups(m, data, fallbacks) for m in walk.frontier)
+    )
+    fresh: Final = tuple(group for group in reached if group not in walk.seen)
+    deployments_by_group: Final = tuple((group, _group_deployments(group, llm_router, team_id)) for group in fresh)
+    return _FallbackWalk(
+        frontier=tuple(group for group, deployments in deployments_by_group if deployments),
+        seen=walk.seen | frozenset(fresh),
+        reaches_chat=any(deployments and _any_serves_chat(deployments) for _, deployments in deployments_by_group),
+    )
+
+
+def _fallbacks_reach_chat(
+    model: str,
     data: Mapping[str, object],
     fallbacks: list[object],  # mutable-ok: mirrors get_fallback_model_group's contract
     llm_router: LitellmRouter,
     team_id: str | None,
 ) -> bool:
-    reached: Final = dict.fromkeys(chain.from_iterable(_next_fallback_groups(m, data, fallbacks) for m in frontier))
-    fresh: Final = tuple(group for group in reached if group not in seen)
-    if not fresh:
-        return False
-    deployments_by_group: Final = tuple((group, _group_deployments(group, llm_router, team_id)) for group in fresh)
-    if any(deployments and _any_serves_chat(deployments) for _, deployments in deployments_by_group):
-        return True
-    expandable: Final = tuple(group for group, deployments in deployments_by_group if deployments)
-    return _frontier_reaches_chat(expandable, seen | frozenset(fresh), data, fallbacks, llm_router, team_id)
+    walks: Final = accumulate(
+        repeat(None),
+        lambda walk, _: _walk_one_layer(walk, data, fallbacks, llm_router, team_id),
+        initial=_FallbackWalk(frontier=(model,), seen=frozenset({model})),
+    )
+    return any(walk.reaches_chat for walk in takewhile(lambda walk: walk.frontier or walk.reaches_chat, walks))
 
 
 def _fallback_would_answer(
@@ -538,7 +561,7 @@ def _fallback_would_answer(
         fallbacks: Final = _FALLBACK_LIST_ADAPTER.validate_python(raw_fallbacks)
     except ValidationError:
         return True
-    return _frontier_reaches_chat((model,), frozenset({model}), data, fallbacks, llm_router, team_id)
+    return _fallbacks_reach_chat(model, data, fallbacks, llm_router, team_id)
 
 
 def endpoint_unsupported_by_model(

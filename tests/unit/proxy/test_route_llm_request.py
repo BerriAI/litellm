@@ -1781,6 +1781,7 @@ CHAT_SHAPED_ROUTES: Final = (
     ("agenerate_content_stream", "streamGenerateContent"),
     ("acreate_interaction", "/v1beta/interactions"),
     ("_aresponses_websocket", "/v1/responses"),
+    ("acompact_responses", "/v1/responses/compact"),
 )
 
 CHAT_SHAPED_ROUTE_TYPES: Final = tuple(route_type for route_type, _ in CHAT_SHAPED_ROUTES)
