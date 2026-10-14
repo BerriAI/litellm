@@ -72,8 +72,6 @@ PROXY_SUB_CALL_METADATA_KEYS: Final = (
     "headers",
 )
 _USER_API_KEY_AUTH_METADATA_KEY: Final = "user_api_key_auth"
-_PROXY_SERVER_REQUEST_KWARG: Final = "proxy_server_request"
-_STRING_MAPPING: Final = TypeAdapter(Mapping[str, str])
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -109,39 +107,37 @@ def proxy_sub_call_metadata(
 
 class ProxySubCallLoggingKwargs(StandardCallbackDynamicParams, total=False):
     litellm_trusted_callback_vars: ReadOnly[Mapping[str, object]]
-    proxy_server_request: ReadOnly[Mapping[str, Mapping[str, str]]]
 
 
 def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxySubCallLoggingKwargs:
-    """The parent request's callback params, proxy-stamped callback vars, and request headers, so a sub-call
-    logs under the same message-logging, redaction, and callback-disable settings as the request it serves."""
+    """The parent request's callback params and proxy-stamped callback vars, so a sub-call logs under the same
+    message-logging and callback-disable settings as the request it serves. The parent's ``proxy_server_request``
+    stays behind: the router reads per-request routing inputs from it, such as the Claude Code session that would
+    pull a sub-call off its configured model, and redaction headers already ride in ``proxy_sub_call_metadata``."""
     parent_logging: Final = litellm_logging_obj_from_kwargs(parent_kwargs)
     dynamic_params: Final[ProxySubCallLoggingKwargs] = (
         {**parent_logging.standard_callback_dynamic_params} if parent_logging is not None else {}
     )
     trusted_vars: Final = _object_mapping(parent_kwargs.get(TRUSTED_CALLBACK_VARS_FIELD))
-    with_trusted_vars: Final[ProxySubCallLoggingKwargs] = (
-        {**dynamic_params, "litellm_trusted_callback_vars": trusted_vars}
-        if trusted_vars is not None
-        else dynamic_params
-    )
-    parent_request: Final = _object_mapping(parent_kwargs.get(_PROXY_SERVER_REQUEST_KWARG))
-    headers: Final = _string_mapping(parent_request.get("headers")) if parent_request is not None else None
-    if headers is None:
-        return with_trusted_vars
-    return {**with_trusted_vars, "proxy_server_request": {"headers": headers}}
+    if trusted_vars is None:
+        return dynamic_params
+    return {**dynamic_params, "litellm_trusted_callback_vars": trusted_vars}
+
+
+def proxy_sub_call_trace_id(parent_kwargs: Mapping[str, object]) -> str | None:
+    """The trace id the parent call resolved, whether the caller sent it in the body or the proxy minted it, so a
+    sub-call passes a team's ``require_trace_id`` check whenever the parent did."""
+    body_trace_id: Final = parent_kwargs.get("litellm_trace_id")
+    if isinstance(body_trace_id, str) and body_trace_id:
+        return body_trace_id
+    parent_logging: Final = litellm_logging_obj_from_kwargs(parent_kwargs)
+    logged_trace_id: Final = parent_logging.litellm_trace_id if parent_logging is not None else None
+    return logged_trace_id if isinstance(logged_trace_id, str) and logged_trace_id else None
 
 
 def _object_mapping(value: object) -> Mapping[str, object] | None:
     try:
         return _OBJECT_MAPPING.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def _string_mapping(value: object) -> Mapping[str, str] | None:
-    try:
-        return _STRING_MAPPING.validate_python(value)
     except ValidationError:
         return None
 

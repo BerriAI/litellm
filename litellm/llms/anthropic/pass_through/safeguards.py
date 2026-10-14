@@ -289,6 +289,7 @@ def build_safeguards_evaluator(
     user_api_key_auth: "UserAPIKeyAuth | None",
     llm_router: "Router | None",
     logging_kwargs: ProxySubCallLoggingKwargs,
+    parent_trace_id: str | None = None,
 ) -> SafeguardsEvaluator | None:
     request: Final = requested_dangerous_tool_use(safeguards)
     if request is None:
@@ -304,6 +305,7 @@ def build_safeguards_evaluator(
             model=model,
             llm_router=llm_router,
             parent_litellm_metadata=litellm_metadata,
+            parent_trace_id=parent_trace_id,
         )
 
     return SafeguardsEvaluator(

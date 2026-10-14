@@ -89,6 +89,7 @@ async def caller_model_verdict(
     model: str,
     llm_router: Optional["Router"],
     parent_litellm_metadata: Mapping[str, object] | None = None,
+    parent_trace_id: str | None = None,
 ) -> CallerModelVerdict:
     """``denied`` when an allowlist or a per-model budget refuses ``model`` for the caller, which only an
     admin or the next budget window changes; ``denied_for_now`` when a rate-limit window is full or a check
@@ -98,6 +99,7 @@ async def caller_model_verdict(
         model=model,
         llm_router=llm_router,
         parent_litellm_metadata=parent_litellm_metadata,
+        parent_trace_id=parent_trace_id,
     )
     if access != "allowed":
         return access
@@ -112,6 +114,7 @@ async def caller_can_call_model(
     model: str,
     llm_router: Optional["Router"],
     parent_litellm_metadata: Mapping[str, object] | None = None,
+    parent_trace_id: str | None = None,
 ) -> CallerModelVerdict:
     """Run the proxy's own model-access checks for ``model`` against the caller of the parent request.
 
@@ -139,7 +142,7 @@ async def caller_can_call_model(
 
     route: Final = user_api_key_auth.request_route or _DEFAULT_SUB_CALL_ROUTE
     request: Final = _sub_call_request(route, parent_litellm_metadata)
-    request_data: Final = _sub_call_request_data(model, parent_litellm_metadata)
+    request_data: Final = _sub_call_request_data(model, parent_litellm_metadata, parent_trace_id)
     caller: Final = user_api_key_auth.model_copy(update={"budget_reservation": None})
     try:
         await enforce_key_and_fallback_model_access(
@@ -190,11 +193,12 @@ def _parent_headers(parent_litellm_metadata: Mapping[str, object] | None) -> Map
 
 
 def _sub_call_request_data(
-    model: str, parent_litellm_metadata: Mapping[str, object] | None
+    model: str, parent_litellm_metadata: Mapping[str, object] | None, parent_trace_id: str | None
 ) -> dict[str, object]:  # mutable-ok: the proxy's checks merge metadata and tags into the body they are handed
     parent: Final[Mapping[str, object]] = parent_litellm_metadata or {}
     end_user_id: Final = parent.get("user_api_key_end_user_id")
-    trace_id: Final = parent.get("trace_id")
+    metadata_trace_id: Final = parent.get("trace_id")
+    trace_id: Final = metadata_trace_id if isinstance(metadata_trace_id, str) and metadata_trace_id else parent_trace_id
     return {
         "model": model,
         **({"user": end_user_id} if isinstance(end_user_id, str) and end_user_id else {}),

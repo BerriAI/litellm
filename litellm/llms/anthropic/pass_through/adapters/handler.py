@@ -33,6 +33,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     litellm_logging_obj_from_kwargs,
     local_model_name,
     proxy_sub_call_logging_kwargs,
+    proxy_sub_call_trace_id,
 )
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -126,6 +127,7 @@ def request_safeguards_evaluator(
         user_api_key_auth=user_api_key_auth,
         llm_router=_router_or_proxy_fallback(_requested_router(kwargs)),
         logging_kwargs=proxy_sub_call_logging_kwargs(kwargs),
+        parent_trace_id=proxy_sub_call_trace_id(kwargs),
     )
 
 
@@ -141,6 +143,7 @@ async def _prepare_context_managed_request(
     llm_router: "Router | None",
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
+    parent_trace_id: str | None = None,
 ) -> PolyfillResult | None:
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
@@ -181,6 +184,7 @@ async def _prepare_context_managed_request(
         llm_router=llm_router,
         user_api_key_auth=user_api_key_auth,
         sub_call_logging_kwargs=sub_call_logging_kwargs,
+        parent_trace_id=parent_trace_id,
     )
 
     if polyfill_result is not None:
@@ -304,6 +308,7 @@ async def _run_polyfill_if_enabled(
     llm_router: "Router | None",
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
+    parent_trace_id: str | None = None,
 ) -> PolyfillResult | None:
     """Run the async context_management polyfill if a spec is present.
 
@@ -331,6 +336,7 @@ async def _run_polyfill_if_enabled(
             llm_router=llm_router,
             user_api_key_auth=user_api_key_auth,
             sub_call_logging_kwargs=sub_call_logging_kwargs,
+            parent_trace_id=parent_trace_id,
         )
     except AnthropicContextManagementError:
         # Surface validation errors so the endpoint can emit an Anthropic-format
@@ -668,7 +674,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         litellm_router: Final[Router | None] = _router_or_proxy_fallback(kwargs.pop("litellm_router", None))
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
-        sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(_REQUEST_KWARGS.validate_python(kwargs))
+        request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+        sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
+        sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
 
         polyfill_result: Final = await _prepare_context_managed_request(
             model=model,
@@ -681,6 +689,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             llm_router=litellm_router,
             user_api_key_auth=user_api_key_auth,
             sub_call_logging_kwargs=sub_call_logging_kwargs,
+            parent_trace_id=sub_call_trace_id,
         )
 
         effective_messages: Final = polyfill_result.messages if polyfill_result is not None else messages
@@ -692,6 +701,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             user_api_key_auth=user_api_key_auth,
             llm_router=litellm_router,
             logging_kwargs=sub_call_logging_kwargs,
+            parent_trace_id=sub_call_trace_id,
         )
 
         (
@@ -814,6 +824,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             polyfill_result: PolyfillResult | None = None
         else:
             proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
+            request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
             polyfill_result = run_async_function(
                 _prepare_context_managed_request,
                 model=model,
@@ -825,7 +836,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 additional_drop_params=additional_drop_params,
                 llm_router=litellm_router,
                 user_api_key_auth=user_api_key_auth,
-                sub_call_logging_kwargs=proxy_sub_call_logging_kwargs(_REQUEST_KWARGS.validate_python(kwargs)),
+                sub_call_logging_kwargs=proxy_sub_call_logging_kwargs(request_kwargs),
+                parent_trace_id=proxy_sub_call_trace_id(request_kwargs),
             )
 
         effective_messages: Final = polyfill_result.messages if polyfill_result is not None else messages

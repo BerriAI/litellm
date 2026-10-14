@@ -641,6 +641,7 @@ async def apply_compact_20260112(
     llm_router: Optional["Router"] = None,
     user_api_key_auth: Optional["UserAPIKeyAuth"] = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
+    parent_trace_id: str | None = None,
 ) -> PolyfillResult:
     """Apply ``compact_20260112``; return a ``PolyfillResult``.
 
@@ -738,6 +739,7 @@ async def apply_compact_20260112(
         model=summary_model,
         llm_router=llm_router,
         parent_litellm_metadata=litellm_metadata,
+        parent_trace_id=parent_trace_id,
     )
     if summary_access != "allowed":
         verbose_logger.warning(
