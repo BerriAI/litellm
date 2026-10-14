@@ -60,6 +60,7 @@ from litellm.llms.azure_ai.cost_calculator import (
     is_azure_model_router as azure_ai_is_model_router_name,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.llms.bedrock.common_utils import get_bedrock_cross_region_inference_regions
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
 )
@@ -855,6 +856,22 @@ def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | Non
     return own_model_info["litellm_provider"]
 
 
+def _is_bedrock_region_stripped_form(deployment_model: str, response_model: str) -> bool:
+    """True when ``response_model`` is ``deployment_model`` with a Bedrock
+    cross-region inference-profile prefix (``eu.``/``us.``/``apac.``/...)
+    removed - the shape Bedrock reports back for cross-region profiles."""
+    deployment_bare: Final = deployment_model.split("/")[-1]
+    if deployment_bare == response_model:
+        return False
+    if not deployment_bare.endswith(response_model):
+        return False
+    prefix: Final = deployment_bare[: len(deployment_bare) - len(response_model)]
+    # Derived from get_bedrock_cross_region_inference_regions() so the two
+    # lists cannot drift: a profile abbreviation added there (e.g. ``jp.``)
+    # is priced at its regional rate without touching this module.
+    return prefix.rstrip(".") in get_bedrock_cross_region_inference_regions()
+
+
 def select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -902,13 +919,48 @@ def select_model_name_for_cost_calc(
 
     elif base_model is not None or provider_response_model is not None:
         return_model = base_model if base_model is not None else provider_response_model
+        # Streamed Bedrock invoke responses surface the region-stripped model
+        # as provider_response_model, which would otherwise win here and price
+        # cross-region profiles (eu./us./apac./...) at the global rate - the
+        # same gap the completion_response_model branch below closes for
+        # non-streamed responses (#46286).
+        if (
+            return_model == provider_response_model
+            and return_model is not None
+            and model is not None
+            and (custom_llm_provider == "bedrock" or model.startswith("bedrock/") or "/bedrock/" in model)
+            and _is_bedrock_region_stripped_form(model, return_model)
+        ):
+            return_model = model  # rebind-ok: prefer the prefixed deployment id over the region-stripped response id
 
     elif completion_response_model is None and hidden_params is not None:
         if hidden_params.get("model", None) is not None and len(hidden_params["model"]) > 0:
             return_model = hidden_params.get("model", model)
 
     if return_model is None and completion_response_model is not None:
-        return_model = completion_response_model
+        is_bedrock_deployment: Final = custom_llm_provider == "bedrock" or (
+            model is not None and (model.startswith("bedrock/") or "/bedrock/" in model)
+        )
+        # A Bedrock cross-region inference profile (eu./us./apac./...)
+        # reports the region-stripped model id in the response, which
+        # prices at the GLOBAL rate instead of the profile's regional
+        # rate. The deployment model keeps the prefix, so spend logs and
+        # budgets book the regional rate and stay consistent with the
+        # streamed usage.cost (#46286).
+        # isinstance narrows the getattr-derived str | Unknown back to str
+        # for the helper's response_model parameter.
+        response_model_str: Final = completion_response_model if isinstance(completion_response_model, str) else None
+        selected_response_model: Final = (
+            model
+            if (
+                is_bedrock_deployment
+                and model is not None
+                and response_model_str is not None
+                and _is_bedrock_region_stripped_form(model, response_model_str)
+            )
+            else response_model_str
+        )
+        return_model = selected_response_model
 
     if return_model is None and model is not None:
         return_model = model
