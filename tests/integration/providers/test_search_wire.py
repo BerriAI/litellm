@@ -99,6 +99,39 @@ def test_perplexity_spec_search_reaches_exa_with_only_mapped_fields_on_every_rou
         )
 
 
+def test_exa_native_fields_and_caller_contents_pass_through_while_unmapped_perplexity_fields_are_dropped(
+    gateway: Gateway,
+) -> None:
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", "/exa/search"), request.target
+        assert request.headers["x-api-key"] == _EXA_KEY, request.headers
+        assert json.loads(request.body) == {
+            "query": _QUERY,
+            "numResults": 5,
+            "includeDomains": list(_DOMAINS),
+            "userLocation": "US",
+            "category": "research paper",
+            "startPublishedDate": "2024-01-01T00:00:00.000Z",
+            "contents": {"highlights": {"numSentences": 2}},
+        }, request.body
+        return Reply(body=json.dumps(_EXA_RESULTS).encode())
+
+    tool: Final = f"exa-tool-{uuid.uuid4().hex}"
+    body: Final = {
+        **_PERPLEXITY_BODY,
+        "max_tokens_per_page": 512,
+        "category": "research paper",
+        "startPublishedDate": "2024-01-01T00:00:00.000Z",
+        "contents": {"highlights": {"numSentences": 2}},
+    }
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        _create_exa_tool(gateway, scenario, tool, f"{wire.url}/exa")
+        response: Final = gateway.request("POST", f"/v1/search/{tool}", body)
+        assert response.status_code == 200, response.text
+        assert _SearchResponse.model_validate_json(response.content) == _EXPECTED_RESPONSE, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/exa/search")]
+
+
 def test_list_query_reaches_exa_as_one_space_joined_query(gateway: Gateway) -> None:
     def respond(request: Request) -> Reply:
         assert (request.method, request.target) == ("POST", "/exa/search"), request.target
