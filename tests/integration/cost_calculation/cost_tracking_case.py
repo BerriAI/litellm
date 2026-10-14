@@ -43,6 +43,21 @@ class CostMapEntry(BaseModel):
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     supports_function_calling: bool | None = None
+    supports_none_reasoning_effort: bool | None = None
+    supports_reasoning: bool | None = None
+    supports_prompt_caching: bool | None = None
+    supported_endpoints: tuple[str, ...] | None = None
+    supports_bedrock_runtime_chat_completions_tools_with_reasoning: bool | None = None
+    supports_bedrock_runtime_chat_completions_response_format: bool | None = None
+    cache_creation_input_token_cost_above_100k_tokens: float | None = None
+    cache_creation_input_token_cost_above_1hr_above_100k_tokens: float | None = None
+    cache_read_input_token_cost_above_100k_tokens: float | None = None
+    input_cost_per_token_above_100k_tokens: float | None = None
+    input_cost_per_token_above_272k_tokens_flex: float | None = None
+    input_cost_per_token_above_272k_tokens_priority: float | None = None
+    output_cost_per_token_above_100k_tokens: float | None = None
+    output_cost_per_token_above_272k_tokens_flex: float | None = None
+    output_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token: float | None = None
     input_cost_per_token_decisions: float | None = None
     input_cost_per_query: float | None = None
@@ -105,6 +120,7 @@ class Deployment(BaseModel):
     base_model: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    search_cost_per_query: float | None = None
 
 
 class WavUpload(BaseModel):
@@ -249,6 +265,7 @@ class CostTrackingTestCase(BaseModel):
 
     name: str
     covers: str
+    known_bug: str | None = None
     model: str
     endpoint: (
         Literal[
@@ -509,6 +526,7 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
         "anthropic": "anthropic",
         "bedrock": "bedrock",
         "bedrock_converse": "bedrock/converse",
+        "bedrock_mantle": "bedrock_mantle",
         "deepgram": "deepgram",
         "text-completion-openai": "text-completion-openai",
         "cohere": "cohere",
@@ -550,6 +568,13 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "aws_region_name": "us-east-1",
             }
         ),
+        "bedrock_mantle": MappingProxyType(
+            {
+                "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
+                "aws_secret_access_key": "scripted-secret",
+                "aws_region_name": "us-east-1",
+            }
+        ),
         "deepgram": MappingProxyType({}),
         "text-completion-openai": MappingProxyType({}),
         "cohere": MappingProxyType({}),
@@ -585,3 +610,22 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
 COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(
     {model: CostMapEntry.model_validate(entry) for model, entry in COST_MAP_ENTRIES.items()}
 )
+
+
+def with_usage(
+    base: CostTrackingTestCase, name: str, usage: Mapping[str, JsonValue], expected: Expected
+) -> CostTrackingTestCase:
+    """Same request and stored body as ``base``, with the provider usage block and the expected row swapped."""
+    if not isinstance(base.response, JsonResponse):
+        raise TypeError(f"{base.name}: with_usage needs a JsonResponse base")
+    body: Final = base.response.body
+    current: Final = body["usage"]
+    if not isinstance(current, dict):
+        raise TypeError(f"{base.name}: stored body has no usage object")
+    return base.model_copy(
+        update={
+            "name": name,
+            "response": base.response.model_copy(update={"body": {**body, "usage": {**current, **usage}}}),
+            "expected": expected,
+        }
+    )

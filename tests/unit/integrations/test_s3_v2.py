@@ -4,6 +4,7 @@ import json
 import re
 import sys
 import textwrap
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
@@ -5291,12 +5292,15 @@ class _FakeS3Paginator:
 class _FakeS3Client:
     def __init__(self):
         self.objects = defaultdict(dict)
+        self.object_written = threading.Event()
 
     def clear(self):
         self.objects.clear()
+        self.object_written.clear()
 
     def put_object(self, Bucket, Key, Body, **_kwargs):
         self.objects[Bucket][Key] = Body
+        self.object_written.set()
         return {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
     def delete_object(self, Bucket, Key):
@@ -5363,7 +5367,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
                 response_id = chunk.id
         else:
             response_id = response.id
-        time.sleep(2)
+        assert _FAKE_S3_CLIENT.object_written.wait(timeout=5)
     else:
         response = await litellm.acompletion(
             model="gpt-5-mini",
@@ -5376,7 +5380,7 @@ async def test_basic_s3_logging(sync_mode, streaming):
                 response_id = chunk.id
         else:
             response_id = response.id
-        await asyncio.sleep(2)
+        assert await asyncio.to_thread(_FAKE_S3_CLIENT.object_written.wait, 5)
 
     total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
 
@@ -5411,9 +5415,11 @@ async def test_basic_s3_v2_logging(streaming):
     litellm.callbacks = [s3_v2_logger]
 
     uploaded_keys: list = []
+    uploaded = asyncio.Event()
 
     async def mock_upload(batch_logging_element):
         uploaded_keys.append(batch_logging_element.s3_object_key)
+        uploaded.set()
 
     s3_v2_logger.async_upload_data_to_s3 = mock_upload
 
@@ -5431,7 +5437,7 @@ async def test_basic_s3_v2_logging(streaming):
     else:
         response_id = response.id
 
-    await asyncio.sleep(5)
+    assert await asyncio.wait_for(uploaded.wait(), timeout=5)
 
     assert len(uploaded_keys) > 0, "S3 upload was never called"
     assert any(response_id in key for key in uploaded_keys), (
@@ -5465,6 +5471,7 @@ async def test_basic_s3_v2_logging_failure():
     s3_v2_logger.async_httpx_client.put.return_value = mock_response
 
     upload_called = False
+    uploaded = asyncio.Event()
 
     async def mock_upload(batch_logging_element):
         nonlocal upload_called
@@ -5474,6 +5481,7 @@ async def test_basic_s3_v2_logging_failure():
         data = '{"model": "gpt-5-mini"}'
 
         await s3_v2_logger.async_httpx_client.put(url=url, headers=headers, data=data)
+        uploaded.set()
 
     s3_v2_logger.async_upload_data_to_s3 = mock_upload
 
@@ -5496,7 +5504,7 @@ async def test_basic_s3_v2_logging_failure():
     except Exception:
         pass
 
-    await asyncio.sleep(5)
+    assert await asyncio.wait_for(uploaded.wait(), timeout=5)
 
     assert upload_called, "S3 upload method was not called"
 
