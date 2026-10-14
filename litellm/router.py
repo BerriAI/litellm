@@ -6110,7 +6110,7 @@ class Router:
     async def _ageneric_api_call_with_fallbacks_anthropic_messages_attempt(
         self,
         model: str,
-        original_generic_function: Callable,
+        original_generic_function: Callable[..., Awaitable[object]],
         **kwargs: object,  # kwargs-ok: forwarded verbatim to the per-attempt helper, shape varies per call site
     ) -> Union["AnthropicMessagesResponse", AsyncIterator[bytes]]:
         """
