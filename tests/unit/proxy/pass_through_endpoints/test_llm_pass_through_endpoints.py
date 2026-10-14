@@ -1995,7 +1995,13 @@ class TestBedrockPassthroughAwsErrors:
     @pytest.mark.parametrize("route", ("router", "direct"))
     async def test_bedrock_error_reaches_the_caller_with_bedrocks_status_header_and_body(self, route: str) -> None:
         error: Final = _bedrock_status_error(
-            429, _THROTTLE_BODY, {"x-amzn-errortype": _THROTTLE_TYPE, "x-amzn-requestid": "req-1"}
+            429,
+            _THROTTLE_BODY,
+            {
+                "x-amzn-errortype": _THROTTLE_TYPE,
+                "x-amzn-requestid": "req-1",
+                "content-type": "application/x-amz-json-1.1",
+            },
         )
 
         response: Final = await self._drive(route, error)
@@ -2004,6 +2010,7 @@ class TestBedrockPassthroughAwsErrors:
         assert response.status_code == 429
         assert response.body == _THROTTLE_BODY
         assert response.headers["x-amzn-errortype"] == _THROTTLE_TYPE
+        assert response.headers["content-type"] == "application/x-amz-json-1.1"
         assert response.headers["llm_provider-x-amzn-requestid"] == "req-1"
 
     @pytest.mark.asyncio

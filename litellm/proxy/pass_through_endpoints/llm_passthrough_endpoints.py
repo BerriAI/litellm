@@ -1085,11 +1085,13 @@ def _bedrock_error_response(error: Exception, handled: HTTPException) -> Respons
     upstream: Final = error.response
     if AWS_ERROR_TYPE_HEADER not in upstream.headers:
         return None
+    passed_through: Final = {
+        name: upstream.headers[name] for name in (AWS_ERROR_TYPE_HEADER, "content-type") if name in upstream.headers
+    }
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,
-        headers={**(handled.headers or {}), AWS_ERROR_TYPE_HEADER: upstream.headers[AWS_ERROR_TYPE_HEADER]},
-        media_type=upstream.headers["content-type"] if "content-type" in upstream.headers else "application/json",
+        headers={**(handled.headers or {}), **passed_through},
     )
 
 

@@ -317,6 +317,7 @@ def test_bedrock_error_reaches_the_caller_as_bedrock_sent_it(
     assert response.status_code == upstream.status, response.text
     assert response.headers.get("x-amzn-errortype") == upstream.errortype, (dict(response.headers), response.text)
     assert response.content == upstream.body, response.text
+    assert response.headers.get("content-type") == "application/json", dict(response.headers)
     assert response.headers.get("x-litellm-call-id"), dict(response.headers)
     assert rig.provider_calls(marker) == 1
 
