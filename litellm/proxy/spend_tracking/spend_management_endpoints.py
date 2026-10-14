@@ -552,6 +552,20 @@ async def spend_user_fn(
         )
 
 
+def _parse_utc_day(value: str | None, param_name: str) -> datetime | None:
+    """Parse an optional YYYY-MM-DD query param to a UTC datetime, so the SQL
+    day window never depends on the database session timezone."""
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": f"{param_name} must be a YYYY-MM-DD date, got {value!r}"},
+        )
+
+
 @router.get(
     "/spend/tags",
     tags=["Budget & Spend Tracking"],
@@ -611,8 +625,8 @@ async def view_spend_tags(
         response: Final = await get_spend_by_tags(
             prisma_client=prisma_client,
             read_scope=read_scope,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=_parse_utc_day(start_date, "start_date"),
+            end_date=_parse_utc_day(end_date, "end_date"),
         )
 
         return response
@@ -4390,8 +4404,8 @@ async def provider_budgets() -> ProviderBudgetResponse:
 async def get_spend_by_tags(
     prisma_client: PrismaClient,
     read_scope: ReadScope,
-    start_date: str | None = None,
-    end_date: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
 ):
     scope_clause, scope_params = read_scope_sql(read_scope, 1)
     start_clause: Final = (

@@ -1,4 +1,3 @@
-from typing import Final
 import asyncio
 import collections
 import datetime
@@ -7,6 +6,7 @@ import json
 import re
 import sqlite3
 from datetime import timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import prisma
@@ -278,8 +278,8 @@ from litellm.proxy._types import (
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.management.teams import authz as team_access
 from litellm.proxy.proxy_server import app
-from litellm.proxy.utils import PrismaClient
 from litellm.proxy.spend_tracking import spend_management_endpoints
+from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
 from litellm.types.utils import BudgetConfig
 
@@ -4213,7 +4213,10 @@ async def test_view_spend_tags_admin_sees_unscoped_aggregates_with_date_filter(c
         assert "team_id" not in sql_query
         assert '"startTime" >= ($1' in sql_query
         assert "$2::timestamptz + INTERVAL '1 day'" in sql_query
-        assert params == ("2024-01-01", "2024-01-31")
+        assert params == (
+            datetime.datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime.datetime(2024, 1, 31, tzinfo=timezone.utc),
+        ), "dates must be bound as UTC datetimes so the window is session-timezone independent"
         return [{"individual_request_tag": "any-tag", "log_count": 2, "total_spend": 0.05}]
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _tag_query_prisma_client(assert_query_raw))
@@ -4229,6 +4232,28 @@ async def test_view_spend_tags_admin_sees_unscoped_aggregates_with_date_filter(c
         )
         assert response.status_code == 200
         assert len(response.json()) == 1
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_tags_rejects_malformed_dates_with_400(client, monkeypatch):
+    def assert_query_raw(sql_query, params):
+        pytest.fail("malformed dates must never reach the database")
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _tag_query_prisma_client(assert_query_raw))
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        response = client.get(
+            "/spend/tags",
+            params={"start_date": "01/31/2024"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 400
+        assert "start_date" in response.text
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
