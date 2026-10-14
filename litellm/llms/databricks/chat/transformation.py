@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 import httpx
 from pydantic import BaseModel, TypeAdapter
 
+import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
@@ -55,6 +56,13 @@ from litellm.types.utils import (
     Usage,
 )
 
+from ...anthropic.chat.prompt_cache_breakpoints import (
+    PROMPT_CACHE_BREAKPOINT_ON_TOOLS,
+    claude_cache_marks,
+    reject_prompt_cache_options,
+    resolved_claude_cache_marks,
+    tools_carry_prompt_cache_breakpoint,
+)
 from ...anthropic.chat.transformation import (
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
@@ -375,6 +383,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             )
         if "tools" in mapped_params:
             mapped_params["tools"] = self._map_openai_to_dbrx_tool(model=model, tools=mapped_params["tools"])
+        requested_params: Final = cast(Mapping[str, object], non_default_params)  # cast-ok: base signature is untyped
+        if "claude" in model and tools_carry_prompt_cache_breakpoint(requested_params.get("tools")):
+            mapped_params[PROMPT_CACHE_BREAKPOINT_ON_TOOLS] = True
         if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
             mapped_params["max_tokens"] = non_default_params[
                 "max_completion_tokens"
@@ -433,6 +444,57 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         )
 
         return mapped_params
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: overrides BaseConfig.transform_request
+        optional_params: dict[str, object],  # mutable-ok: overrides BaseConfig.transform_request
+        litellm_params: dict[str, object],  # mutable-ok: overrides BaseConfig.transform_request
+        headers: dict[str, object],  # mutable-ok: overrides BaseConfig.transform_request
+    ) -> dict[str, object]:  # mutable-ok: overrides BaseConfig.transform_request
+        tools_carried_breakpoint: Final = bool(optional_params.pop(PROMPT_CACHE_BREAKPOINT_ON_TOOLS, False))
+        marked_messages: Final = (
+            self._messages_with_claude_cache_marks(
+                model, messages, optional_params, litellm_params, tools_carried_breakpoint
+            )
+            if "claude" in model
+            else messages
+        )
+        return cast(  # cast-ok: OpenAIGPTConfig.transform_request returns an untyped dict
+            dict[str, object],
+            super().transform_request(  # pyright: ignore[reportUnknownMemberType]  # base signature uses bare dict
+                model, list(marked_messages), optional_params, litellm_params, headers
+            ),
+        )
+
+    def _messages_with_claude_cache_marks(
+        self,
+        model: str,
+        messages: Sequence[AllMessageValues],
+        optional_params: dict[str, object],  # mutable-ok: the request body is built from this out-param
+        litellm_params: Mapping[str, object],
+        tools_carried_breakpoint: bool,
+    ) -> tuple[AllMessageValues, ...]:
+        """OpenAI ``prompt_cache_breakpoint`` marks as the ``cache_control`` Databricks forwards to Claude, held to
+        Claude's cap, with ``prompt_cache_options`` rejected or dropped. Tool definitions reach Databricks without
+        any mark, so only the message marks count toward the cap."""
+        drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
+        reject_prompt_cache_options(
+            model=model, options=optional_params.pop("prompt_cache_options", None), drop_params=drop_params
+        )
+        cache_marks: Final = resolved_claude_cache_marks(
+            claude_cache_marks(
+                messages=messages,
+                tools=(),
+                automatic_breakpoint=optional_params.get("cache_control") is not None,
+                drop_params=drop_params,
+                tools_carried_breakpoint=tools_carried_breakpoint,
+            ),
+            model=model,
+            llm_provider="databricks",
+        )
+        return cache_marks.messages
 
     def _should_fake_stream(self, optional_params: dict) -> bool:
         """

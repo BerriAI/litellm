@@ -57,6 +57,7 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
 from litellm.llms.bedrock.request_metadata import (
@@ -2026,13 +2027,17 @@ class AmazonConverseConfig(BaseConfig):
     ) -> tuple[AllMessageValues, ...]:
         """OpenAI ``prompt_cache_breakpoint`` marks as ``cache_control`` so the factory emits ``cachePoint`` blocks,
         held to the provider's cap, with ``prompt_cache_options`` rejected or dropped. Models that never emit
-        ``cachePoint`` blocks are left as written."""
-        if not bedrock_model_accepts_cache_points(model):
+        ``cachePoint`` blocks keep their marks as written, but a Claude model among them still has
+        ``prompt_cache_options`` rejected or dropped."""
+        emits_cache_points: Final = bedrock_model_accepts_cache_points(model)
+        if not emits_cache_points and BaseAWSLLM.get_bedrock_invoke_provider(model) != "anthropic":
             return tuple(messages)
         drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
         reject_prompt_cache_options(
             model=model, options=optional_params.pop("prompt_cache_options", None), drop_params=drop_params
         )
+        if not emits_cache_points:
+            return tuple(messages)
         cache_marks: Final = resolved_claude_cache_marks(
             claude_cache_marks(
                 messages=messages,

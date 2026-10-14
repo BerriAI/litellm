@@ -1393,9 +1393,10 @@ class TestBedrockAnthropicPromptCachingRegression:
                 {"type": "text", "text": "What are the payment terms?"},
             ]
 
+    @pytest.mark.parametrize("drop_params_source", ["litellm_params", "global"])
     @pytest.mark.parametrize("model_prefix", ["bedrock/invoke/", "bedrock/converse/"])
     def test_five_breakpoints_are_cut_to_four_only_under_drop_params_for_both_routes(
-        self, model_prefix: str, monkeypatch: pytest.MonkeyPatch
+        self, model_prefix: str, drop_params_source: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import litellm
 
@@ -1415,11 +1416,12 @@ class TestBedrockAnthropicPromptCachingRegression:
                 headers={},
             )
 
+        monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
         result: Final = config.transform_request(
             model="anthropic.claude-opus-5-5",
             messages=[{"role": "user", "content": marked}],
             optional_params={},
-            litellm_params={"drop_params": True},
+            litellm_params={"drop_params": True} if drop_params_source == "litellm_params" else {},
             headers={},
         )
         if "converse" in model_prefix:
@@ -1434,7 +1436,10 @@ class TestBedrockAnthropicPromptCachingRegression:
         else:
             assert result["messages"][0]["content"] == [
                 {"type": "text", "text": "part 0"},
-                *({"type": "text", "text": f"part {index}", "cache_control": {"type": "ephemeral"}} for index in range(1, 5)),
+                *(
+                    {"type": "text", "text": f"part {index}", "cache_control": {"type": "ephemeral"}}
+                    for index in range(1, 5)
+                ),
             ]
 
     @pytest.mark.parametrize(
@@ -1505,6 +1510,7 @@ class TestBedrockAnthropicPromptCachingRegression:
             additional_fields = result["additionalModelRequestFields"]
             if "anthropic_beta" in additional_fields:
                 assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropic1MContextRegression:
@@ -1690,6 +1696,7 @@ class TestBedrockAnthropic1MContextRegression:
         # Verify both headers are present
         assert "context-1m-2025-08-07" in beta_headers
         assert "computer-use-2024-10-22" in beta_headers
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicCombinedRegressions:

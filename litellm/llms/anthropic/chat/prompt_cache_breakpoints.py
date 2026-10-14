@@ -39,7 +39,7 @@ def _as_mapping(value: object) -> Mapping[str, object] | None:
 
 
 def _as_blocks(value: object) -> Sequence[object] | None:
-    return value if isinstance(value, list) else None  # pyright: ignore[reportUnknownVariableType]  # blocks are parsed one by one
+    return value if isinstance(value, (list, tuple)) else None  # pyright: ignore[reportUnknownVariableType]  # blocks are parsed one by one
 
 
 def _carries(block: object, key: str) -> bool:
@@ -56,11 +56,16 @@ def tools_carry_prompt_cache_breakpoint(tools: object) -> bool:
     return any(_tool_carries(tool, "prompt_cache_breakpoint") for tool in _as_blocks(tools) or ())
 
 
+def _renders_message_mark(message: Mapping[str, object]) -> bool:
+    """Claude's message builder keeps a message-level mark on string content and on tool results only."""
+    return isinstance(message.get("content"), str) or message.get("role") in ("tool", "function")
+
+
 def _message_sites(index: int, message: object, key: str) -> Iterator[_Site]:
     fields: Final = _as_mapping(message)
     if fields is None:
         return
-    if fields.get(key) is not None:
+    if fields.get(key) is not None and _renders_message_mark(fields):
         yield ("message", index, -1)
     for position, part in enumerate(_as_blocks(fields.get("content")) or ()):
         if _carries(part, key):

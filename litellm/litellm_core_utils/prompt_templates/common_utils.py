@@ -1827,7 +1827,7 @@ def _as_mapping(value: object) -> Mapping[str, object] | None:
 
 
 def _as_list(value: object) -> Sequence[object] | None:
-    return value if isinstance(value, list) else None  # pyright: ignore[reportUnknownVariableType]  # items are parsed one by one
+    return value if isinstance(value, (list, tuple)) else None  # pyright: ignore[reportUnknownVariableType]  # items are parsed one by one
 
 
 def message_fields(message: AllMessageValues) -> Mapping[str, object]:
@@ -1930,7 +1930,7 @@ def _tool_block_with_prompt_cache_breakpoint_as_cache_control(tool: object) -> o
 
 
 def tools_with_prompt_cache_breakpoints_as_cache_control(tools: object) -> tuple[object, ...]:
-    """Every tool definition in ``tools`` (anything but a list is treated as none) with its mark renamed."""
+    """Every tool definition in ``tools`` (anything but a list or tuple is treated as none) with its mark renamed."""
     return tuple(_tool_block_with_prompt_cache_breakpoint_as_cache_control(tool) for tool in _as_list(tools) or ())
 
 

@@ -216,10 +216,18 @@ class ImageUrl(BaseModel):
     url: str
 
 
+class PromptCacheBreakpoint(BaseModel):
+    """OpenAI's explicit cache marker on a content part, message, tool definition or tool call."""
+
+    mode: Literal["explicit"] = "explicit"
+    ttl: Literal["30m"] | None = None
+
+
 class TextContentPart(BaseModel):
     type: str = "text"
     text: str
     cache_control: CacheControl | None = None
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = None
 
 
 class ImageContentPart(BaseModel):
@@ -234,6 +242,7 @@ class ChatMessage(BaseModel):
     role: str
     content: str | list[ContentPart]
     cache_control: CacheControl | None = None
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = None
 
 
 class CacheControl(BaseModel):
@@ -271,6 +280,7 @@ class ChatToolFunction(BaseModel):
 class ChatTool(BaseModel):
     type: str = "function"
     function: ChatToolFunction
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = None
 
 
 class AnthropicToolBody(BaseModel, frozen=True):
@@ -318,6 +328,7 @@ class ToolCall(BaseModel):
     type: str | None = None
     function: ToolCallFunction = ToolCallFunction()
     cache_control: CacheControl | None = None
+    prompt_cache_breakpoint: PromptCacheBreakpoint | None = None
 
 
 class ThinkingBlock(BaseModel):
@@ -363,6 +374,7 @@ class ChatBody(BaseModel):
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
     prompt_cache_key: str | None = None
+    prompt_cache_options: PromptCacheOptions | None = None
     tools: Sequence[ChatTool | McpChatTool | GeminiUrlContextTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None

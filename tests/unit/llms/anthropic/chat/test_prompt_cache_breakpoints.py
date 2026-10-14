@@ -116,6 +116,44 @@ def test_a_request_without_breakpoints_is_forwarded_as_written_even_past_the_cap
     assert marks.messages[0] is messages[0]
 
 
+def test_a_message_level_mark_on_list_content_takes_no_slot_because_claude_never_renders_it() -> None:
+    marked_parts: Final = [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(3)]
+    messages: Final = [
+        {"role": "user", "content": "first", "prompt_cache_breakpoint": EXPLICIT},
+        {"role": "user", "content": [*marked_parts, _text("tail")], "prompt_cache_breakpoint": EXPLICIT},
+    ]
+
+    marks: Final = claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False)
+
+    assert marks == ClaudeCacheMarks(
+        messages=(
+            {"role": "user", "content": "first", "cache_control": EPHEMERAL},
+            {
+                "role": "user",
+                "content": [*(_text(f"part {index}", cache_control=EPHEMERAL) for index in range(3)), _text("tail")],
+                "cache_control": EPHEMERAL,
+            },
+        ),
+        tools=(),
+    )
+
+
+def test_a_message_level_mark_on_a_tool_result_with_list_content_takes_a_slot() -> None:
+    messages: Final = [
+        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]},
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [_text("sunny")],
+            "prompt_cache_breakpoint": EXPLICIT,
+        },
+    ]
+
+    assert claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False) == (
+        CacheBreakpointCapExceeded(found=5)
+    )
+
+
 def test_tools_already_mapped_to_the_anthropic_shape_still_arm_the_cap() -> None:
     mapped_tools: Final = [
         {"name": f"tool_{index}", "input_schema": {}, "cache_control": EPHEMERAL} for index in range(4)
@@ -165,11 +203,12 @@ def test_prompt_cache_options_are_rejected_unless_drop_params() -> None:
     [
         ([_tool(prompt_cache_breakpoint=EXPLICIT)], True),
         ([{"type": "function", "function": {"name": "lookup", "prompt_cache_breakpoint": EXPLICIT}}], True),
+        ((_tool(prompt_cache_breakpoint=EXPLICIT),), True),
         ([_tool(cache_control=EPHEMERAL), _tool()], False),
         (None, False),
         ("not a list", False),
     ],
-    ids=["top-level", "under-function", "cache-control-only", "none", "opaque"],
+    ids=["top-level", "under-function", "tuple", "cache-control-only", "none", "opaque"],
 )
 def test_tools_carry_prompt_cache_breakpoint_reads_both_tool_shapes(tools: object, expected: bool) -> None:
     assert tools_carry_prompt_cache_breakpoint(tools) is expected

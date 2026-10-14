@@ -8879,7 +8879,10 @@ async def test_a_cache_control_the_client_wrote_wins_over_the_breakpoint_on_the_
 
     assert "prompt_cache_breakpoint" not in request.content.decode()
     assert json.loads(request.content)["messages"] == [
-        {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]}
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+        }
     ]
 
 
@@ -9006,3 +9009,88 @@ async def test_five_native_cache_control_marks_are_forwarded_and_the_provider_an
 
     assert route.call_count == 1
     assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": marked}]
+
+
+async def test_a_breakpoint_only_on_a_tool_definition_still_holds_the_request_to_four_marks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marked: Final = [{"type": "text", "text": f"part {index}", "cache_control": EPHEMERAL} for index in range(4)]
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[{"role": "user", "content": marked}],
+        tools=[{"type": "function", "function": _WEATHER_FUNCTION, "prompt_cache_breakpoint": EXPLICIT}],
+        drop_params=True,
+    )
+
+    body: Final = json.loads(request.content)
+    assert body["tools"] == [_ANTHROPIC_WEATHER_TOOL]
+    assert body["messages"] == [{"role": "user", "content": marked}]
+
+
+async def test_the_automatic_cache_control_takes_one_of_the_four_slots(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": EXPLICIT} for index in range(4)
+                ],
+            }
+        ],
+        cache_control=EPHEMERAL,
+        drop_params=True,
+    )
+
+    body: Final = json.loads(request.content)
+    assert body["cache_control"] == EPHEMERAL
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "part 0"},
+                *({"type": "text", "text": f"part {index}", "cache_control": EPHEMERAL} for index in range(1, 4)),
+            ],
+        }
+    ]
+
+
+async def test_a_message_level_breakpoint_on_list_content_does_not_count_toward_the_cap(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": EXPLICIT} for index in range(4)
+                ],
+                "prompt_cache_breakpoint": EXPLICIT,
+            }
+        ],
+    )
+
+    assert json.loads(request.content)["messages"] == [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": f"part {index}", "cache_control": EPHEMERAL} for index in range(4)],
+        }
+    ]
+
+
+def test_map_openai_params_maps_a_tuple_of_tools() -> None:
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={"tools": ({"type": "function", "function": _WEATHER_FUNCTION},)},
+        optional_params={},
+        model=PROMPT_CACHING_MODEL,
+        drop_params=False,
+    )
+
+    assert optional_params["tools"] == [_ANTHROPIC_WEATHER_TOOL]
