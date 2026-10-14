@@ -7,53 +7,7 @@
 <style>__REPORT_CSS__</style>
 </head>
 <body>
-<aside class="sidebar">
-  <div class="wordmark"><span class="logo" aria-hidden="true">▥</span> LiteLLM</div>
-  <div class="workspace"><span class="workspace-icon">S</span><div>Sandbox workspace<small>Gateway analytics</small></div></div>
-  <div class="nav-label">OBSERVABILITY</div>
-  <a class="nav-item" href="#overview"><span aria-hidden="true">▤</span> Overview</a>
-  <a class="nav-item active" href="#rankings" aria-current="page"><span aria-hidden="true">▥</span> Semantic spend</a>
-  <a class="nav-item" href="request-lineage.csv" download><span aria-hidden="true">↓</span> Request export</a>
-  <div class="sidebar-bottom"><span class="status-dot"></span> Local report <small>Synthetic demo data</small></div>
-</aside>
-<div class="shell">
-  <header class="topbar"><div>Observability <span>/</span> <strong>Semantic spend</strong></div><span class="badge">POC</span></header>
-  <main id="overview">
-    <div class="page-heading"><div><div class="eyebrow">UNDERSTAND YOUR AI USAGE</div><h1>Session Rankings</h1><p>Where your AI spend goes, and the work behind it</p></div><a class="button" href="category-spend.csv" download>↓ Export full-run CSV</a></div>
-    <section class="filterbar" aria-label="Report filters">
-      <label>User<select id="user-filter" aria-label="Filter user"></select></label>
-      <label>Reporting window<select id="period-filter"><option value="all">Full demo</option><option value="first">First half</option><option value="last">Second half</option><option value="custom">Custom range</option></select></label>
-      <label>From · UTC<input id="start-filter" type="datetime-local" step="1"></label>
-      <label>To · UTC<input id="end-filter" type="datetime-local" step="1"></label>
-      <button class="button quiet" id="reset-filters">Reset</button>
-    </section>
-    <p id="filter-error" class="error" role="alert" hidden></p>
-    <div class="window-note"><span class="status-dot"></span><span id="window-caption"></span><span class="synthetic-label">Synthetic conversations · no measured ROI</span></div>
-    <section class="metrics" aria-label="Selected metrics">
-      <div class="metric"><span>Selected task spend</span><strong id="total-spend"></strong><small id="spend-caption">Gateway-recorded costs</small></div>
-      <div class="metric"><span>Active sessions</span><strong id="session-count"></strong><small>In the selected view</small></div>
-      <div class="metric"><span>Model requests</span><strong id="request-count"></strong><small>Counted once per request</small></div>
-      <div class="metric"><span>Report run overhead</span><strong id="overhead-spend"></strong><small id="overhead-caption"></small></div>
-    </section>
-    <div class="charts">
-      <section class="card timeline-card"><div class="card-heading"><div><h2>Session spend over time</h2><p>Spend per bucket, stacked by session</p></div><span class="badge" id="bucket-label"></span></div><div id="timeline" aria-label="Session spend over time"></div><div id="session-legend" class="legend"></div></section>
-      <section class="card share-card"><div class="card-heading"><div><h2>Spend share</h2><p>All work areas in the selected window</p></div></div><div id="share-bar" class="share-bar" aria-label="Category spend share"></div><div id="share-legend"></div></section>
-    </div>
-    <section class="card ranking-card" id="rankings">
-      <div class="ranking-heading"><div class="segmented" aria-label="Ranking view"><button data-view="sessions" aria-pressed="true">Sessions</button><button data-view="categories" aria-pressed="false">Work areas</button></div><div class="ranking-controls"><label>Rank by <select id="sort-filter"><option value="spend">Spend</option><option value="requests">Requests</option></select></label></div></div>
-      <div class="category-tabs" id="category-tabs" aria-label="Filter by work area"></div>
-      <div class="table-scroll"><table><thead id="ranking-head"></thead><tbody id="ranking-body"></tbody></table></div>
-      <div class="table-footer"><span id="ranking-caption"></span><span>Click a name to explore findings and quotes</span></div>
-    </section>
-    <footer><span>Recorded spend, not a productivity score. Unknown and mixed work stay visible.</span><a href="verification.json">Accounting evidence ↗</a></footer>
-  </main>
-</div>
-<dialog id="detail-drawer" aria-labelledby="drawer-title">
-  <div class="drawer-header"><div><span id="drawer-eyebrow" class="eyebrow"></span><h2 id="drawer-title"></h2></div><button id="close-drawer" class="icon-button" aria-label="Close details">✕</button></div>
-  <div id="drawer-content" class="drawer-content"></div>
-</dialog>
-<div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
-<noscript><p>This interactive report needs JavaScript. CSV exports are available alongside this file.</p></noscript>
+__REPORT_SHELL__
 <script id="report-data" type="application/octet-stream">__REPORT_DATA__</script>
 <script>__REPORT_JS__</script>
 </body>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import subprocess
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
@@ -188,10 +189,14 @@ def render_rankings() -> None:
         "presentation": load(ARTIFACTS / "presentation.json"),
     }
     encoded: Final = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode()).decode()
+    subprocess.run(["node", str(ROOT / "build-report.mjs")], cwd=ROOT, check=True)
     template: Final = (ROOT / "report-template.html").read_text()
     document: Final = (
         template.replace("__REPORT_DATA__", encoded)
-        .replace("__REPORT_CSS__", (ROOT / "litellm-tokens.css").read_text() + "\n" + (ROOT / "report.css").read_text())
+        .replace("__REPORT_SHELL__", (ROOT / "artifacts/report-shell.html").read_text())
+        .replace(
+            "__REPORT_CSS__", (ROOT / "artifacts/dashboard.css").read_text() + "\n" + (ROOT / "report.css").read_text()
+        )
         .replace("__REPORT_JS__", (ROOT / "report.js").read_text())
     )
     (ARTIFACTS / "report.html").write_text(document)

@@ -129,7 +129,13 @@
     el("window-caption").textContent = `${new Date(state.start).toISOString().slice(0, 10)} · ${time(state.start)}–${time(state.end)} UTC`;
     el("category-tabs").hidden = state.view !== "sessions";
     el("category-tabs").innerHTML = [{ id: "all", name: "All work areas" }, ...data.categories].map(c => `<button data-category="${esc(c.id)}" aria-pressed="${state.category === c.id}">${esc(c.id === "all" ? c.name : categoryName(c.id))}</button>`).join("");
-    document.querySelectorAll("[data-view]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.view === state.view)));
+    document.querySelectorAll("[data-view]").forEach(button => {
+      const active = button.dataset.view === state.view;
+      button.setAttribute("aria-pressed", String(active));
+      button.setAttribute("aria-selected", String(active));
+      button.toggleAttribute("data-active", active);
+      button.tabIndex = 0;
+    });
     renderTimeline(selected);
     renderShare(base);
     renderRankings(selected);
