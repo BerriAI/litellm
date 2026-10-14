@@ -77,7 +77,7 @@ async def _frames(*raw: bytes) -> list[object]:
         for chunk in raw:
             yield chunk
 
-    return [frame async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(chunks())]
+    return [frame async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(chunks(), "converse-stream")]
 
 
 @pytest.mark.asyncio
@@ -116,3 +116,82 @@ def test_passthrough_route_block_before_any_frame_uses_the_request_provider(prov
     )
 
     assert (chunks is not None) is ends_message
+
+
+_INVOKE_STREAM: Final = "model/anthropic.claude-sonnet-5-v1:0/invoke-with-response-stream"
+
+
+def _invoke_frame(event: dict) -> bytes:
+    import base64
+
+    return _converse_frame("chunk", {"bytes": base64.b64encode(json.dumps(event).encode()).decode()})
+
+
+@pytest.mark.parametrize(
+    ("provider", "endpoint", "model", "body", "relayable"),
+    [
+        ("bedrock", "model/x/converse-stream", "meta.llama4-maverick-17b-instruct-v1:0", None, True),
+        ("bedrock", _INVOKE_STREAM, "anthropic.claude-sonnet-5-v1:0", None, True),
+        ("bedrock", _INVOKE_STREAM, "meta.llama4-maverick-17b-instruct-v1:0", {"prompt": "hi"}, False),
+        ("bedrock", _INVOKE_STREAM, None, None, False),
+        ("bedrock", _INVOKE_STREAM, None, {"anthropic_version": "bedrock-2023-05-31"}, True),
+        ("bedrock", None, "anthropic.claude-sonnet-5-v1:0", None, False),
+        ("vertex_ai", "model/x/converse-stream", "anthropic.claude-sonnet-5-v1:0", None, False),
+    ],
+)
+def test_passthrough_route_relays_the_streams_its_provider_translation_scans(
+    provider: str, endpoint: str | None, model: str | None, body: object, relayable: bool
+):
+    from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
+
+    assert LlmPassthroughRouteHandler.supports_event_stream_relay(provider, endpoint, model, body) is relayable
+
+
+@pytest.mark.asyncio
+async def test_passthrough_route_frames_an_invoke_stream_for_the_bedrock_translation():
+    from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
+
+    async def chunks():
+        yield _invoke_frame({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi "}})
+        yield _invoke_frame({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "you"}})
+
+    items: Final = LlmPassthroughRouteHandler.event_stream_items("bedrock", _INVOKE_STREAM, chunks())
+    assert items is not None
+    frames: Final = [frame async for frame in items]
+
+    scan_key: Final = LlmPassthroughRouteHandler().get_streaming_scan_key(frames)
+
+    assert scan_key is not None and scan_key.texts == ("Hi you",)
+    assert LlmPassthroughRouteHandler()._check_streaming_has_ended(frames) is True
+    assert LlmPassthroughRouteHandler()._check_streaming_has_ended(frames[:2]) is False
+
+
+def test_passthrough_route_block_before_any_invoke_frame_is_a_whole_message_in_chunk_frames():
+    import base64
+
+    from botocore.eventstream import EventStreamBuffer
+
+    from litellm.exceptions import ModifyResponseException
+    from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
+
+    chunks: Final = LlmPassthroughRouteHandler().build_block_sse_chunks(
+        ModifyResponseException(
+            message="blocked", model="m", request_data={"custom_llm_provider": "bedrock", "endpoint": _INVOKE_STREAM}
+        ),
+        stream_started=False,
+        responses_so_far=[],
+    )
+
+    assert chunks is not None
+    buffer: Final = EventStreamBuffer()
+    buffer.add_data(b"".join(chunks))
+    events: Final = [json.loads(base64.b64decode(json.loads(message.payload)["bytes"])) for message in buffer]
+    assert [event["type"] for event in events] == [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    assert events[2]["delta"]["text"] == "blocked"

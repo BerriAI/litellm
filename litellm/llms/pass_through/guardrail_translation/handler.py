@@ -357,13 +357,15 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         return translation.build_block_sse_chunks(exc, stream_started=stream_started, responses_so_far=responses_so_far)
 
     @staticmethod
-    def event_stream_items(provider: object, chunks: AsyncIterable[bytes]) -> AsyncIterator[object] | None:
-        """The upstream event stream cut into the items the provider's guardrail translation scans, or None when the
-        provider has no streaming guardrail translation."""
-        framer: Final[Callable[[AsyncIterable[bytes]], AsyncIterator[object]] | None] = getattr(
+    def event_stream_items(
+        provider: object, endpoint: object, chunks: AsyncIterable[bytes]
+    ) -> AsyncIterator[object] | None:
+        """The upstream event stream of ``endpoint`` cut into the items the provider's guardrail translation scans, or
+        None when the provider has no streaming guardrail translation."""
+        framer: Final[Callable[[AsyncIterable[bytes], str], AsyncIterator[object]] | None] = getattr(
             _provider_handler(provider), "event_stream_items", None
         )
-        return framer(chunks) if framer is not None else None
+        return framer(chunks, endpoint if isinstance(endpoint, str) else "") if framer is not None else None
 
     @staticmethod
     def encode_event_stream_item(provider: object, item: object) -> bytes:
@@ -400,6 +402,17 @@ class LlmPassthroughRouteHandler(BaseTranslation):
     def _resolve_event_stream_de_anonymizer(provider: str | None):
         handler_cls: Final = _get_provider_handlers().get(provider or "")
         return getattr(handler_cls, "de_anonymize_event_stream", None)
+
+    @staticmethod
+    def supports_event_stream_relay(provider: object, endpoint: object, model: object, body: object) -> bool:
+        """Whether the provider's guardrail translation can scan this endpoint's event stream for ``model`` and the
+        request ``body`` frame by frame as it is relayed."""
+        relayable: Final[Callable[[str, str, object], bool] | None] = getattr(
+            _provider_handler(provider), "event_stream_endpoint_is_relayable", None
+        )
+        return relayable is not None and relayable(
+            endpoint if isinstance(endpoint, str) else "", model if isinstance(model, str) else "", body
+        )
 
     @staticmethod
     def supports_event_stream_de_anonymization(provider: str | None, endpoint: str | None) -> bool:

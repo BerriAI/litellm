@@ -6268,8 +6268,14 @@ class TestAllmPassthroughStreamingProviderGate:
         failure_hook=None,
         read_body=True,
         request=None,
+        endpoint="model/us.amazon.nova-lite-v1:0/converse-stream",
+        model="us.amazon.nova-lite-v1:0",
+        post_call_guarded=True,
+        request_body=None,
     ):
-        processing_obj = self._build_processing_obj("bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream")
+        processing_obj = self._build_processing_obj("bedrock", endpoint)
+        processing_obj.data["litellm_logging_obj"].model = model
+        processing_obj.data["data"] = request_body
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
         recorded: dict = {}
 
@@ -6288,7 +6294,7 @@ class TestAllmPassthroughStreamingProviderGate:
         ), patch.object(
             ProxyBaseLLMRequestProcessing,
             "_has_post_call_guardrails_for_passthrough",
-            return_value=True,
+            return_value=post_call_guarded,
         ), patch(
             "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
             "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
@@ -6634,6 +6640,104 @@ class TestAllmPassthroughStreamingProviderGate:
         assert events[-1] == "spend logged"
         assert "upstream closed" in events
         self._proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
+
+    def _invoke_stream(self) -> list[bytes]:
+        import base64
+
+        return [
+            self._converse_frame("chunk", {"bytes": base64.b64encode(json.dumps(event).encode()).decode()})
+            for event in (
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+            )
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "request_body"),
+        [
+            ("us.anthropic.claude-sonnet-5-v1:0", None),
+            (
+                "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
+                {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 8, "messages": []},
+            ),
+        ],
+        ids=["claude-model-id", "application-inference-profile-with-a-claude-body"],
+    )
+    async def test_bedrock_invoke_stream_of_a_claude_model_is_relayed_and_scanned_for_its_text(
+        self, monkeypatch, model, request_body
+    ):
+        from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
+
+        guardrail = self._apply_guardrail()
+        scanned: dict = {}
+
+        async def scan_relayed(response, user_api_key_dict, request_data, guardrails):
+            items = [item async for item in response]
+            scanned["guardrails"] = list(guardrails)
+            scanned["texts"] = LlmPassthroughRouteHandler().get_streaming_scan_key(items).texts
+            for item in items:
+                yield item
+
+        stream = b"".join(self._invoke_stream())
+        result, body, mock_handler, _ = await self._run_converse_stream(
+            monkeypatch,
+            guardrail,
+            [stream[:20], stream[20:]],
+            event_stream_hook=scan_relayed,
+            endpoint=f"model/{model}/invoke-with-response-stream",
+            model=model,
+            request_body=request_body,
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
+        assert body == stream
+        assert scanned == {"guardrails": [(guardrail, False)], "texts": ("Hello",)}
+        mock_handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_invoke_stream_of_a_claude_model_without_a_post_call_guardrail_streams_as_received(
+        self, monkeypatch
+    ):
+        result, body, mock_handler, recorded = await self._run_converse_stream(
+            monkeypatch,
+            self._apply_guardrail(),
+            [b"raw-1", b"raw-2"],
+            endpoint="model/us.anthropic.claude-sonnet-5-v1:0/invoke-with-response-stream",
+            model="us.anthropic.claude-sonnet-5-v1:0",
+            post_call_guarded=False,
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert body == b"raw-1raw-2"
+        assert recorded == {}
+        mock_handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "guardrail_factory"),
+        [
+            ("meta.llama4-maverick-17b-instruct-v1:0", "_apply_guardrail"),
+            ("us.anthropic.claude-sonnet-5-v1:0", "_success_hook_guardrail"),
+        ],
+        ids=["model-without-a-stream-translation", "guardrail-that-needs-the-whole-response"],
+    )
+    async def test_bedrock_invoke_stream_the_relay_cannot_scan_streams_as_received(
+        self, monkeypatch, model, guardrail_factory
+    ):
+        result, body, mock_handler, recorded = await self._run_converse_stream(
+            monkeypatch,
+            getattr(self, guardrail_factory)(),
+            [b"raw-1", b"raw-2"],
+            endpoint=f"model/{model}/invoke-with-response-stream",
+            model=model,
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert body == b"raw-1raw-2"
+        assert recorded == {}
+        mock_handler.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_bedrock_invoke_stream_is_not_buffered(self, monkeypatch):
