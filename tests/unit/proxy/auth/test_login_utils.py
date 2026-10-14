@@ -671,7 +671,7 @@ async def test_login_password_kdf_runs_off_event_loop_thread(monkeypatch):
             result = await authenticate_user(
                 username=user_email,
                 password=password,
-                master_key="sk-1234",
+                master_key="sk-master-for-tests",
                 prisma_client=mock_prisma_client,
                 throttle=_unlimited_throttle(),
                 general_settings=_POLICY_NO_BREACH_CHECK,
