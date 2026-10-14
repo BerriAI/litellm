@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     messages_with_prompt_cache_breakpoints_as_cache_control,
     tools_with_prompt_cache_breakpoints_as_cache_control,
 )
+from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
 from litellm.types.llms.openai import AllMessageValues
 
 PROMPT_CACHE_BREAKPOINT_ON_TOOLS: Final = "_litellm_prompt_cache_breakpoint_on_tools"
@@ -58,22 +59,33 @@ def tools_carry_prompt_cache_breakpoint(tools: object) -> bool:
     return any(_tool_carries(tool, "prompt_cache_breakpoint") for tool in _as_blocks(tools) or ())
 
 
-def _renders_message_mark(message: Mapping[str, object]) -> bool:
-    """Claude's message builder keeps a message-level mark on string content and on tool results only."""
-    return isinstance(message.get("content"), str) or message.get("role") in ("tool", "function")
+def _renders_message_mark(message: Mapping[str, object], wire: ClaudeWire) -> bool:
+    """Claude's message builder keeps a message-level mark on string content and on tool results only. Anthropic's
+    builder skips an empty assistant string, mark included, where Converse still emits its ``cachePoint``."""
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return bool(content) or message.get("role") != "assistant" or wire == "bedrock_converse"
+    return message.get("role") in ("tool", "function")
 
 
-def _message_sites(index: int, message: object, key: str) -> Iterator[_Site]:
+def _renders_tool_call_mark(message: Mapping[str, object], call: object, wire: ClaudeWire) -> bool:
+    """Anthropic rebuilds a tool call answered by a server tool as ``server_tool_use``, which carries no mark."""
+    return wire == "bedrock_converse" or not tool_call_is_rebuilt_as_server_tool_use(
+        (_as_mapping(call) or {}).get("id"), message.get("provider_specific_fields")
+    )
+
+
+def _message_sites(index: int, message: object, key: str, wire: ClaudeWire) -> Iterator[_Site]:
     fields: Final = _as_mapping(message)
     if fields is None:
         return
-    if fields.get(key) is not None and _renders_message_mark(fields):
+    if fields.get(key) is not None and _renders_message_mark(fields, wire):
         yield ("message", index, -1)
     for position, part in enumerate(_as_blocks(fields.get("content")) or ()):
         if _carries(part, key):
             yield ("part", index, position)
     for position, call in enumerate(_as_blocks(fields.get("tool_calls")) or ()):
-        if _carries(call, key):
+        if _carries(call, key) and _renders_tool_call_mark(fields, call, wire):
             yield ("tool_call", index, position)
 
 
@@ -81,7 +93,7 @@ def _converse_message_sites(index: int, message: object, key: str) -> Iterator[_
     """Converse emits a single ``cachePoint`` per tool message, however many of its blocks carry a mark."""
     fields: Final = _as_mapping(message)
     if fields is None or fields.get("role") != "tool":
-        yield from _message_sites(index, message, key)
+        yield from _message_sites(index, message, key, "bedrock_converse")
         return
     if fields.get(key) is not None or any(_carries(part, key) for part in _as_blocks(fields.get("content")) or ()):
         yield ("tool_message", index, -1)
@@ -90,11 +102,14 @@ def _converse_message_sites(index: int, message: object, key: str) -> Iterator[_
 def _sites(messages: Sequence[object], tools: Sequence[object], key: str, wire: ClaudeWire) -> tuple[_Site, ...]:
     """Every mark of ``key`` the ``wire`` renders, in wire order: tool definitions first, then the messages as
     listed. Converse reads only a tool definition's top-level mark."""
-    tool_carries: Final = _carries if wire == "bedrock_converse" else _tool_carries
-    message_sites: Final = _converse_message_sites if wire == "bedrock_converse" else _message_sites
+    if wire == "bedrock_converse":
+        return (
+            *(("tool", index, -1) for index, tool in enumerate(tools) if _carries(tool, key)),
+            *chain.from_iterable(_converse_message_sites(index, message, key) for index, message in enumerate(messages)),
+        )
     return (
-        *(("tool", index, -1) for index, tool in enumerate(tools) if tool_carries(tool, key)),
-        *chain.from_iterable(message_sites(index, message, key) for index, message in enumerate(messages)),
+        *(("tool", index, -1) for index, tool in enumerate(tools) if _tool_carries(tool, key)),
+        *chain.from_iterable(_message_sites(index, message, key, wire) for index, message in enumerate(messages)),
     )
 
 
@@ -151,7 +166,7 @@ def claude_cache_marks(
     shape, where the mark was renamed before this census ran. ``wire`` is the body the marks are rendered into, so
     the count matches the breakpoints the provider receives."""
     listed_tools: Final = _as_blocks(tools) or ()
-    if not tools_carried_breakpoint and not _sites(messages, listed_tools, "prompt_cache_breakpoint", "anthropic"):
+    if not tools_carried_breakpoint and not _sites(messages, listed_tools, "prompt_cache_breakpoint", wire):
         return ClaudeCacheMarks(tuple(messages), tuple(listed_tools))
     renamed_messages: Final = messages_with_prompt_cache_breakpoints_as_cache_control(messages)
     renamed_tools: Final = tools_with_prompt_cache_breakpoints_as_cache_control(listed_tools)

@@ -154,6 +154,55 @@ def test_a_message_level_mark_on_a_tool_result_with_list_content_takes_a_slot() 
     )
 
 
+def test_a_message_level_mark_on_a_function_result_with_list_content_takes_a_slot() -> None:
+    messages: Final = [
+        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]},
+        {"role": "function", "name": "lookup", "content": [_text("sunny")], "prompt_cache_breakpoint": EXPLICIT},
+    ]
+
+    assert claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False) == (
+        CacheBreakpointCapExceeded(found=5)
+    )
+
+
+def _four_marked_parts_then(message: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]},
+        message,
+    ]
+
+
+def test_a_mark_on_an_empty_assistant_string_takes_no_anthropic_slot_but_a_converse_slot() -> None:
+    messages: Final = _four_marked_parts_then({"role": "assistant", "content": "", "prompt_cache_breakpoint": EXPLICIT})
+
+    anthropic: Final = claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False)
+    converse: Final = claude_cache_marks(
+        messages, None, automatic_breakpoint=False, drop_params=False, wire="bedrock_converse"
+    )
+
+    assert isinstance(anthropic, ClaudeCacheMarks), anthropic
+    assert converse == CacheBreakpointCapExceeded(found=5)
+
+
+def test_a_mark_on_a_tool_call_rebuilt_as_server_tool_use_takes_no_anthropic_slot() -> None:
+    messages: Final = _four_marked_parts_then(
+        {
+            "role": "assistant",
+            "content": "searching",
+            "tool_calls": [_call("srvtoolu_web_search", prompt_cache_breakpoint=EXPLICIT)],
+            "provider_specific_fields": {"web_search_results": [{"tool_use_id": "srvtoolu_web_search"}]},
+        }
+    )
+
+    anthropic: Final = claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False)
+    converse: Final = claude_cache_marks(
+        messages, None, automatic_breakpoint=False, drop_params=False, wire="bedrock_converse"
+    )
+
+    assert isinstance(anthropic, ClaudeCacheMarks), anthropic
+    assert converse == CacheBreakpointCapExceeded(found=5)
+
+
 def test_tools_already_mapped_to_the_anthropic_shape_still_arm_the_cap() -> None:
     mapped_tools: Final = [
         {"name": f"tool_{index}", "input_schema": {}, "cache_control": EPHEMERAL} for index in range(4)

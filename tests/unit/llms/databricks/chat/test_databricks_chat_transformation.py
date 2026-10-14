@@ -2331,3 +2331,17 @@ def test_prompt_cache_options_toward_databricks_claude_are_rejected_unless_drop_
     litellm.completion(**request, drop_params=True)
 
     assert "prompt_cache_options" not in json.loads(route.calls.last.request.content)
+
+
+def test_prompt_cache_options_toward_a_non_claude_databricks_model_are_forwarded_as_before(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = _databricks_claude_route(respx_mock, monkeypatch)
+
+    litellm.completion(
+        model="databricks/databricks-meta-llama-3-3-70b-instruct",
+        messages=[{"role": "user", "content": "hi"}],
+        prompt_cache_options={"mode": "explicit"},
+    )
+
+    assert json.loads(route.calls.last.request.content)["prompt_cache_options"] == {"mode": "explicit"}
