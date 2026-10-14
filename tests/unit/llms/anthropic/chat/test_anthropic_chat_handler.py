@@ -2888,11 +2888,7 @@ def test_streamed_json_mode_partial_name_value_waits_for_the_value_to_close():
             id="string_first_key_on_a_schema_without_required_keys",
         ),
         pytest.param(
-            {
-                "type": "object",
-                "properties": {"summary": {"type": "string"}},
-                "additionalProperties": {"type": "object"},
-            },
+            {"type": "object", "properties": {"summary": {"type": "string"}}, "additionalProperties": {"type": "object"}},
             {"user_1": {"summary": "likes tea", "visits": 3}},
             id="undeclared_key_the_schema_allows",
         ),

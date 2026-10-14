@@ -3501,7 +3501,21 @@ def test_code_execution_tool_results_in_hidden_params():
     assert hidden["provider_specific_fields"]["tool_results"][0]["content"]["stdout"] == "hello\n"
 
 
-def test_tool_search_tool_result_round_trips_right_after_its_search_call():
+@pytest.mark.parametrize(
+    ("search_call_answers", "modify_params"),
+    [
+        pytest.param((), False, id="client_answers_only_its_own_tool"),
+        pytest.param(
+            ({"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"},),
+            False,
+            id="client_answers_every_tool_call",
+        ),
+        pytest.param((), True, id="modify_params_fills_in_missing_results"),
+    ],
+)
+def test_tool_search_tool_result_round_trips_right_after_its_search_call(
+    search_call_answers: tuple[dict[str, str], ...], modify_params: bool, monkeypatch: pytest.MonkeyPatch
+):
     import httpx
 
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
@@ -3553,16 +3567,19 @@ def test_tool_search_tool_result_round_trips_right_after_its_search_call():
     )
     assert message.provider_specific_fields["tool_results"] == [search_result]
 
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
     replayed: Final = anthropic_messages_pt(
         messages=[
             {"role": "user", "content": "What is the weather in Paris?"},
             message.model_dump(),
+            *search_call_answers,
             {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
         ],
         model="claude-opus-5-5",
         llm_provider="anthropic",
     )
     assert replayed[1]["content"] == anthropic_response["content"]
+    assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
 
 
 def test_web_search_tool_result_backwards_compatibility():
