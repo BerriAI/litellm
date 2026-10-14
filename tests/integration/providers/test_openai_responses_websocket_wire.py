@@ -1,29 +1,34 @@
 import asyncio
+import hashlib
 import itertools
 import json
 import ssl
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
-from typing import Final
+from typing import Final, TypeAlias
 
 import pytest
 import websockets
-from integration._support.client import Gateway, gateway_from_environment
-from integration._support.process import owned_proxy
+from integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
+from integration._support.database import read_rows
+from integration._support.process import graceful_stop_seconds, owned_proxy
+from integration._support.responses_stream import RATE_LIMIT_MESSAGE, openai_error_event
 from integration._support.tls import server_context, write_self_signed_cert
 from pydantic import JsonValue
 from websockets.asyncio.server import ServerConnection, serve
 
-pytestmark: Final = pytest.mark.timeout(180)
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 PROVIDER_MODEL: Final = "ws-peer-model"
 USAGE: Final = {"input_tokens": 5, "output_tokens": 2, "total_tokens": 7}
 TERMINAL: Final = frozenset({"response.completed", "response.failed", "error"})
+
+_Script: TypeAlias = Callable[[str], tuple[dict[str, JsonValue], ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,8 +63,20 @@ def _events(response_id: str, text: str) -> tuple[dict[str, JsonValue], ...]:
     )
 
 
+def _seven(response_id: str) -> tuple[dict[str, JsonValue], ...]:
+    return _events(response_id, "seven")
+
+
+def _top_level_rate_limit(response_id: str) -> tuple[dict[str, JsonValue], ...]:
+    created: Final = _events(response_id, "")[0]
+    return (created, dict(openai_error_event("rate_limit_exceeded", RATE_LIMIT_MESSAGE)))
+
+
 async def _answer(
-    connection: ServerConnection, paths: SimpleQueue[str], frames: SimpleQueue[dict[str, JsonValue]]
+    connection: ServerConnection,
+    paths: SimpleQueue[str],
+    frames: SimpleQueue[dict[str, JsonValue]],
+    script: _Script,
 ) -> None:
     paths.put(connection.request.path if connection.request is not None else "")
     turns: Final = itertools.count(1)
@@ -68,7 +85,7 @@ async def _answer(
         frames.put(frame)
         if frame.get("type") != "response.create":
             continue
-        for event in _events(f"resp_peer_{next(turns)}", "seven"):
+        for event in script(f"resp_peer_{next(turns)}"):
             await connection.send(json.dumps(event))
 
 
@@ -78,21 +95,24 @@ async def _serve(
     frames: SimpleQueue[dict[str, JsonValue]],
     ports: SimpleQueue[int],
     stop: asyncio.Event,
+    script: _Script,
 ) -> None:
-    async with serve(lambda connection: _answer(connection, paths, frames), "127.0.0.1", 0, ssl=tls) as server:
+    async with serve(lambda connection: _answer(connection, paths, frames, script), "127.0.0.1", 0, ssl=tls) as server:
         ports.put(next(iter(server.sockets)).getsockname()[1])
         await stop.wait()
 
 
 @contextmanager
-def responses_peer(cert: tuple[Path, Path]) -> Iterator[Peer]:
+def responses_peer(cert: tuple[Path, Path], script: _Script = _seven) -> Iterator[Peer]:
     loop: Final = asyncio.new_event_loop()
     stop: Final = asyncio.Event()
     paths: Final = SimpleQueue[str]()
     frames: Final = SimpleQueue[dict[str, JsonValue]]()
     ports: Final = SimpleQueue[int]()
     thread: Final = threading.Thread(
-        target=loop.run_until_complete, args=(_serve(server_context(*cert), paths, frames, ports, stop),), daemon=True
+        target=loop.run_until_complete,
+        args=(_serve(server_context(*cert), paths, frames, ports, stop, script),),
+        daemon=True,
     )
     thread.start()
     try:
@@ -207,3 +227,29 @@ def test_previous_response_id_from_the_first_turn_reaches_the_provider_as_its_ow
         assert [frame["input"][0]["content"][0]["text"] for frame in forwarded] == list(texts)
         assert "previous_response_id" not in forwarded[0]
         assert forwarded[1]["previous_response_id"] == "resp_peer_1"
+
+
+def test_a_top_level_error_frame_reaches_the_client_and_logs_the_provider_code_and_message(
+    candidate: Gateway, cert: tuple[Path, Path]
+) -> None:
+    with responses_peer(cert, _top_level_rate_limit) as peer, candidate.scenario() as scenario:
+        model: Final = scenario.model(model=f"openai/{PROVIDER_MODEL}", api_base=peer.url)
+        key: Final = scenario.key(models=[model])
+        text: Final = f"say seven {uuid.uuid4().hex}"
+        (events,) = asyncio.run(_session(str(candidate.client.base_url), key, model, (text,)))
+        assert [event["type"] for event in events] == ["response.created", "error"], events
+        assert (events[-1]["code"], events[-1]["message"]) == ("rate_limit_exceeded", RATE_LIMIT_MESSAGE), events
+        (forwarded,) = _drain(peer.frames)
+        assert forwarded["input"][0]["content"][0]["text"] == text
+        (row,) = eventually(
+            lambda: read_rows(
+                'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE api_key = %s',
+                (hashlib.sha256(key.encode()).hexdigest(),),
+            ),
+            lambda rows: len(rows) >= 1,
+            seconds=70,
+        )
+        assert row["status"] == "failure", row
+        error: Final = object_value(object_value(row["metadata"])["error_information"])
+        assert str(error["error_code"]) == "429", error
+        assert RATE_LIMIT_MESSAGE in string_value(error["error_message"]), error

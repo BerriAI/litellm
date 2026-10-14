@@ -226,7 +226,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _extract_error_message(self, parsed_chunk: dict[str, Any]) -> str | None:
         error_obj: Final = parsed_chunk.get("error") or (parsed_chunk.get("response") or {}).get("error")
         if error_obj is None:
-            return None
+            top_level_message: Final = parsed_chunk.get("message")
+            return top_level_message if isinstance(top_level_message, str) else None
         if isinstance(error_obj, dict):
             return error_obj.get("message") or str(error_obj)
         return str(error_obj)
