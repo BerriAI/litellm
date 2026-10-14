@@ -94,6 +94,7 @@ const OPENAI_COMPATIBLE_PROVIDERS: &[&str] = &[
     "docker_model_runner",
     "ragflow",
     "pinstripes",
+    "openinfer",
     "darkbloom",
     "meta",
     "cognition",
