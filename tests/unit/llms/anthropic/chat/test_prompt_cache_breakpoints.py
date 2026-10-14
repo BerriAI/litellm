@@ -19,9 +19,16 @@ def _cache(
     tools: list[object] | None = None,
     params: dict[str, object] | None = None,
     *,
+    accepts_automatic_caching: bool = True,
     drop_params: bool = False,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
-    return claude_prompt_cache(messages, tools, params or {}, drop_params=drop_params)
+    return claude_prompt_cache(
+        messages,
+        tools,
+        params or {},
+        accepts_automatic_caching=accepts_automatic_caching,
+        drop_params=drop_params,
+    )
 
 
 def _resolved(
@@ -29,9 +36,12 @@ def _resolved(
     tools: list[object] | None = None,
     params: dict[str, object] | None = None,
     *,
+    accepts_automatic_caching: bool = True,
     drop_params: bool = False,
 ) -> ClaudePromptCache:
-    outcome: Final = _cache(messages, tools, params, drop_params=drop_params)
+    outcome: Final = _cache(
+        messages, tools, params, accepts_automatic_caching=accepts_automatic_caching, drop_params=drop_params
+    )
     assert isinstance(outcome, ClaudePromptCache), outcome
     return outcome
 
@@ -72,12 +82,13 @@ def test_breakpoints_become_cache_control_on_every_block_that_carries_one():
     ]
 
 
-def test_a_request_without_breakpoints_is_returned_as_written():
+def test_a_request_without_breakpoints_or_options_is_returned_as_written():
     messages: Final = [{"role": "user", "content": [_part("hi", cache_control=_EPHEMERAL)] * 5}]
+    params: Final = {"temperature": 0.1}
 
-    result: Final = _resolved(messages, None, {"temperature": 0.1}, drop_params=True)
+    result: Final = _resolved(messages, None, params, drop_params=True)
 
-    assert result == ClaudePromptCache(tuple(messages), None)
+    assert result == ClaudePromptCache(tuple(messages), None, params)
 
 
 def test_a_client_cache_control_on_the_same_block_wins():
@@ -116,6 +127,52 @@ def test_an_unsupported_breakpoint_raises_a_400_naming_drop_params():
     assert "30m" in raised.value.message and "drop_params" in raised.value.message
 
 
+@pytest.mark.parametrize(
+    "options, automatic",
+    [({"mode": "implicit"}, _EPHEMERAL), ({"mode": "implicit", "ttl": "1h"}, {"type": "ephemeral", "ttl": "1h"})],
+)
+def test_implicit_options_become_claude_automatic_caching(options: object, automatic: object):
+    result: Final = _resolved([{"role": "user", "content": "hi"}], None, {"prompt_cache_options": options, "top_p": 1})
+
+    assert result.params == {"top_p": 1, "cache_control": automatic}
+
+
+def test_implicit_options_leave_a_client_top_level_cache_control_alone():
+    hour: Final = {"type": "ephemeral", "ttl": "1h"}
+
+    result: Final = _resolved([], None, {"prompt_cache_options": {"mode": "implicit"}, "cache_control": hour})
+
+    assert result.params == {"cache_control": hour}
+
+
+@pytest.mark.parametrize("options", [{"mode": "explicit"}, {}])
+def test_options_without_implicit_mode_add_nothing_and_never_reach_claude(options: object):
+    assert _resolved([], None, {"prompt_cache_options": options}).params == {}
+
+
+@pytest.mark.parametrize(
+    "options, accepts_automatic_caching, kept",
+    [
+        ({"mode": "implicit"}, False, {}),
+        ({"mode": "implicit", "ttl": "30m"}, True, {"cache_control": _EPHEMERAL}),
+        ({"mode": "explicit", "ttl": "30m"}, True, {}),
+        ({"mode": "always"}, True, {}),
+        ("on", True, {}),
+    ],
+)
+def test_options_claude_cannot_honor_are_reported_or_adjusted_under_drop_params(
+    options: object, accepts_automatic_caching: bool, kept: dict[str, object]
+):
+    params: Final = {"prompt_cache_options": options}
+
+    problem: Final = _cache([], None, params, accepts_automatic_caching=accepts_automatic_caching)
+    dropped: Final = _resolved([], None, params, accepts_automatic_caching=accepts_automatic_caching, drop_params=True)
+
+    assert isinstance(problem, UnsupportedPromptCacheParam)
+    assert (problem.param, problem.value) == ("prompt_cache_options", options)
+    assert dropped.params == kept
+
+
 def test_drop_params_keeps_the_latest_four_marks_in_the_order_claude_renders_them():
     tools: Final = [{"type": "function", "function": {"name": "t"}, "prompt_cache_breakpoint": _EXPLICIT}]
     messages: Final = [
@@ -123,13 +180,14 @@ def test_drop_params_keeps_the_latest_four_marks_in_the_order_claude_renders_the
         {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]},
     ]
 
-    result: Final = _resolved(messages, tools, {"cache_control": _EPHEMERAL}, drop_params=True)
+    result: Final = _resolved(messages, tools, {"prompt_cache_options": {"mode": "implicit"}}, drop_params=True)
 
     assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t"}}]
     assert list(result.messages) == [
         {"role": "system", "content": [_part("s")]},
         {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(3)]},
     ]
+    assert result.params == {"cache_control": _EPHEMERAL}
 
 
 def test_without_drop_params_more_than_four_marks_are_sent_for_claude_to_answer():

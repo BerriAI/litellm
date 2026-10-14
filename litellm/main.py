@@ -211,6 +211,7 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
 )
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.chat.prompt_cache_breakpoints import claude_prompt_cache, resolved_claude_prompt_cache
+from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -5566,6 +5567,7 @@ def completion(
                     cast(list[object], messages),  # cast-ok: completion types messages as a bare List
                     cast(list[object] | None, tools),  # cast-ok: completion types tools as a bare List
                     non_default_params,
+                    accepts_automatic_caching=isinstance(provider_config, AnthropicConfig),
                     drop_params=claude_drop_params,
                 ),
                 model=model,
@@ -5650,7 +5652,9 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
-        optional_params = get_optional_params(**optional_param_args, **non_default_params)
+        optional_params = get_optional_params(
+            **optional_param_args, **(non_default_params if claude_cache is None else claude_cache.params)
+        )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
