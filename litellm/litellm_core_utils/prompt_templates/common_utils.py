@@ -1788,7 +1788,8 @@ _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
-    if marker is None:
+    """A breakpoint the client already wrote on the block wins, TTL included."""
+    if marker is None or target.get("prompt_cache_breakpoint") is not None:
         return target
     marked: Final = {**target, "prompt_cache_breakpoint": marker}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
