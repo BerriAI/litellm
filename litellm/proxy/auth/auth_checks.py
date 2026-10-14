@@ -4550,9 +4550,11 @@ async def get_access_group_tables(
     check_db_only: bool = False,
     *,
     unreadable: Literal["skip", "raise"] = "skip",
+    missing: Literal["skip", "raise"] = "skip",
 ) -> tuple[LiteLLM_AccessGroupTable, ...]:
     """Load unified access groups by id (cache first, then DB). A group that provably does not exist is
-    skipped, it grants nothing. A group that exists but cannot be read is skipped too unless
+    skipped, it grants nothing, unless ``missing`` is ``"raise"`` and the caller wants to see
+    ``AccessGroupNotFoundError`` itself. A group that exists but cannot be read is skipped too unless
     ``check_db_only`` is set or ``unreadable`` is ``"raise"``, in which case the failure propagates so a
     caller enforcing policy can deny instead of shedding a restriction it could not read."""
     if not access_group_ids:
@@ -4580,6 +4582,8 @@ async def get_access_group_tables(
                 check_db_only=check_db_only,
             )
         except AccessGroupNotFoundError:
+            if missing == "raise":
+                raise
             verbose_proxy_logger.debug("One of the requested access groups does not exist, it grants nothing")
             return None
         except Exception:
@@ -4594,19 +4598,24 @@ async def get_access_group_tables(
 
 async def _get_resources_from_access_groups(
     access_group_ids: Sequence[str],
-    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
+    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids", "access_skill_names"],
     prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     check_db_only: bool = False,
+    strict_errors: bool = False,
 ) -> list[str]:
-    """Deduplicated ``resource_field`` values across the resolved access groups."""
+    """Deduplicated ``resource_field`` values across the resolved access groups. With ``strict_errors`` a
+    missing or unreadable group raises instead of being skipped, so policy code never loses a ceiling."""
+    strictness: Final[Literal["skip", "raise"]] = "raise" if strict_errors else "skip"
     groups: Final = await get_access_group_tables(
         access_group_ids=access_group_ids,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=check_db_only,
+        unreadable=strictness,
+        missing=strictness,
     )
     return list(
         {resource for ag in groups for resource in _access_group_field(ag, resource_field)}  # comprehension-ok: flatten
@@ -4615,7 +4624,7 @@ async def _get_resources_from_access_groups(
 
 def _access_group_field(
     group: LiteLLM_AccessGroupTable,
-    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
+    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids", "access_skill_names"],
 ) -> list[str]:
     match resource_field:
         case "access_model_names":
@@ -4624,6 +4633,8 @@ def _access_group_field(
             return group.access_mcp_server_ids
         case "access_agent_ids":
             return group.access_agent_ids
+        case "access_skill_names":
+            return list(group.access_skill_names or ())
 
 
 async def get_models_from_access_groups(
@@ -4694,6 +4705,28 @@ async def get_agent_ids_from_access_groups(
 
 
 _get_agent_ids_from_access_groups: Final = get_agent_ids_from_access_groups
+
+
+async def get_skill_names_from_access_groups(
+    access_group_ids: Sequence[str],
+    prisma_client: PrismaClient | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+    check_db_only: bool = False,
+    strict_errors: bool = False,
+) -> frozenset[str]:
+    """Claude Code plugin names granted by unified access groups, matched by plugin name."""
+    return frozenset(
+        await _get_resources_from_access_groups(
+            access_group_ids=access_group_ids,
+            resource_field="access_skill_names",
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=check_db_only,
+            strict_errors=strict_errors,
+        )
+    )
 
 
 def _resolve_all_team_model_sentinel_for_auth_check(
@@ -5615,7 +5648,9 @@ async def can_team_access_model(
 async def get_authorized_resources_from_key_access_groups(
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
-    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
+    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids", "access_skill_names"],
+    check_db_only: bool = False,
+    strict_errors: bool = False,
 ) -> list[str]:
     """
     For each access_group_id on the key, fetch the LiteLLM_AccessGroupTable row
@@ -5649,8 +5684,15 @@ async def get_authorized_resources_from_key_access_groups(
                 prisma_client=_prisma_client,
                 user_api_key_cache=_user_api_key_cache,
                 proxy_logging_obj=_proxy_logging_obj,
+                check_db_only=check_db_only,
             )
+        except AccessGroupNotFoundError:
+            if check_db_only or strict_errors:
+                raise
+            continue
         except Exception:
+            if check_db_only or strict_errors:
+                raise
             continue
         team_authorized = bool(key_team_id and key_team_id in (ag.assigned_team_ids or []))
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))

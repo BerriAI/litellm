@@ -58,6 +58,7 @@ const createMockAccessGroup = (overrides: Partial<AccessGroupResponse> = {}): Ac
   assigned_key_ids: ["key-1", "key-2"],
   access_mcp_servers: [{ id: "mcp-1", name: "GitHub MCP" }],
   access_agents: [{ id: "agent-1", name: "Support Agent" }],
+  access_skill_names: ["private-plugin"],
   assigned_teams: [{ id: "team-1", name: "Platform Team" }],
   assigned_keys: [
     { id: "key-1", name: "ci-key" },
@@ -393,6 +394,26 @@ describe("AccessGroupDetail", () => {
       await user.click(screen.getByRole("tab", { name: /Agents/i }));
 
       expect(screen.getByText("No agents assigned to this group")).toBeInTheDocument();
+    });
+  });
+
+  describe("Skills tab", () => {
+    it("should list the plugin names granted by the group", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
+
+      await user.click(screen.getByRole("tab", { name: /Skills/i }));
+
+      expect(screen.getByText("private-plugin")).toBeInTheDocument();
+    });
+
+    it("should show empty state when none assigned", async () => {
+      const user = userEvent.setup();
+      renderWith({ access_skill_names: [] });
+
+      await user.click(screen.getByRole("tab", { name: /Skills/i }));
+
+      expect(screen.getByText("No skills assigned to this group")).toBeInTheDocument();
     });
   });
 

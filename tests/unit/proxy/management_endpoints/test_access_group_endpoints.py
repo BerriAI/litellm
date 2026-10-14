@@ -29,6 +29,7 @@ def _make_access_group_record(
     access_model_names: list | None = None,
     access_mcp_server_ids: list | None = None,
     access_agent_ids: list | None = None,
+    access_skill_names: list | None = None,
     assigned_team_ids: list | None = None,
     assigned_key_ids: list | None = None,
     created_by: str | None = "admin-user",
@@ -44,6 +45,7 @@ def _make_access_group_record(
         "access_model_names": access_model_names or [],
         "access_mcp_server_ids": access_mcp_server_ids or [],
         "access_agent_ids": access_agent_ids or [],
+        "access_skill_names": access_skill_names or [],
         "assigned_team_ids": assigned_team_ids or [],
         "assigned_key_ids": assigned_key_ids or [],
         "created_at": created_at_val,
@@ -89,6 +91,7 @@ def client_and_mocks(monkeypatch):
             access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
+            access_skill_names=data.get("access_skill_names", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             created_by=data.get("created_by"),
@@ -106,6 +109,7 @@ def client_and_mocks(monkeypatch):
             access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
+            access_skill_names=data.get("access_skill_names", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             updated_by=data.get("updated_by"),
@@ -1664,3 +1668,69 @@ def test_get_access_group_returns_mcp_tool_permissions(client_and_mocks):
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["mcp_tool_permissions"] == {"mcp-1": []}
+
+
+def test_create_access_group_persists_and_returns_skill_names(client_and_mocks):
+    client, _, mock_table, *_ = client_and_mocks
+
+    resp = client.post(
+        "/v1/access_group",
+        json={"access_group_name": "skills-group", "access_skill_names": ["private-plugin", "other-plugin"]},
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["access_skill_names"] == ["private-plugin", "other-plugin"]
+    assert mock_table.create.await_args.kwargs["data"]["access_skill_names"] == ["private-plugin", "other-plugin"]
+
+
+def test_create_access_group_without_skills_stores_empty_list(client_and_mocks):
+    client, _, mock_table, *_ = client_and_mocks
+
+    resp = client.post("/v1/access_group", json={"access_group_name": "plain-group"})
+
+    assert resp.status_code == 201
+    assert resp.json()["access_skill_names"] == []
+    assert mock_table.create.await_args.kwargs["data"]["access_skill_names"] == []
+
+
+@pytest.mark.parametrize(
+    ("update_payload", "expected_skills"),
+    [
+        ({"access_skill_names": ["private-plugin"]}, ["private-plugin"]),
+        ({"access_skill_names": []}, []),
+        ({"access_skill_names": None}, []),
+    ],
+)
+def test_update_access_group_writes_skill_names(client_and_mocks, update_payload, expected_skills):
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(access_group_id="ag-skills", access_skill_names=["old-plugin"])
+    )
+
+    resp = client.put("/v1/access_group/ag-skills", json=update_payload)
+
+    assert resp.status_code == 200
+    assert resp.json()["access_skill_names"] == expected_skills
+    assert mock_table.update.await_args.kwargs["data"]["access_skill_names"] == expected_skills
+
+
+def test_update_access_group_without_skill_field_leaves_skills_untouched(client_and_mocks):
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(access_group_id="ag-skills", access_skill_names=["old-plugin"])
+    )
+
+    resp = client.put("/v1/access_group/ag-skills", json={"description": "renamed"})
+
+    assert resp.status_code == 200
+    assert "access_skill_names" not in mock_table.update.await_args.kwargs["data"]
+
+
+def test_get_and_list_access_group_return_skill_names(client_and_mocks):
+    client, _, mock_table, *_ = client_and_mocks
+    record = _make_access_group_record(access_group_id="ag-skills", access_skill_names=["private-plugin"])
+    mock_table.find_unique = AsyncMock(return_value=record)
+    mock_table.find_many = AsyncMock(return_value=[record])
+
+    assert client.get("/v1/access_group/ag-skills").json()["access_skill_names"] == ["private-plugin"]
+    assert client.get("/v1/access_group").json()[0]["access_skill_names"] == ["private-plugin"]
