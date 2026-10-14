@@ -340,11 +340,12 @@ class PromptCachingCache:
         if not positions:
             return
 
+        ttl: Final = await offload_token_count(PromptCachingCache.pin_ttl_seconds)(messages, tools)
         with service_target(_PROMPT_CACHE_PINS_TARGET):
             await self.cache.async_set_cache(
                 positions[-1].cache_key,
                 PromptCachingCacheValue(model_id=model_id),
-                ttl=PromptCachingCache.pin_ttl_seconds(messages, tools),
+                ttl=ttl,
             )
 
     async def async_get_model_id(

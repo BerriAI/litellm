@@ -26172,3 +26172,36 @@ async def test_prompt_caching_pins_do_not_evict_router_state():
         )
 
     assert router.cache.get_cache("deployment:dep-a:cooldown") is True
+
+
+@pytest.mark.asyncio
+async def test_flush_cache_drops_prompt_caching_pins():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "policy", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+        },
+        {"role": "user", "content": "ok"},
+    ]
+    pins: Final = PromptCachingCache(cache=router._prompt_caching_pin_cache)
+    await pins.async_add_model_id(model_id="dep-a", messages=messages, tools=None)
+    assert await pins.async_get_model_id(messages=messages, tools=None) == {"model_id": "dep-a"}
+
+    router.flush_cache()
+
+    assert await pins.async_get_model_id(messages=messages, tools=None) is None

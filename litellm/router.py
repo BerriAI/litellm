@@ -15333,6 +15333,7 @@ class Router:
         session_in_memory_cache: Final = self._claude_code_session_router_cache.in_memory_cache
         if session_in_memory_cache is not None:
             session_in_memory_cache.flush_cache()
+        self._prompt_caching_pin_cache.in_memory_cache.flush_cache()
 
     def reset(self):
         ## clean up on close
