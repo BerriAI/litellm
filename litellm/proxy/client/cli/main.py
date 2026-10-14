@@ -106,11 +106,16 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 
     stored_base_url: Final = get_config_value("base_url")
     base_url_provided: Final = base_url is not None
+    login_base_url: Final = (
+        stored_login_base_url(vault=context_secret_vault(ctx))
+        if base_url is None and not stored_base_url and api_key is None
+        else None
+    )
 
     # Normalize once here so every downstream command (login, agents, http, ...) can safely
     # do f"{base_url}/some/path" without producing a double slash.
     base_url = (
-        (stored_base_url or stored_login_base_url() or "http://localhost:4000") if base_url is None else base_url
+        (stored_base_url or login_base_url or "http://localhost:4000") if base_url is None else base_url
     ).rstrip("/")
 
     # If no API key provided via flag or environment variable, try to load from saved token.
@@ -126,7 +131,7 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = resolved_api_key
     ctx.obj["api_key_from_token_file"] = api_key_from_token_file
-    # `--base-url` defaults to localhost:4000 for local dev convenience, but
+    # `--base-url` falls back to the `lite login` server or localhost:4000, but
     # apiKeyHelper is invoked bare (no flags) -- commands that must work
     # unattended (print-token) need to tell "user didn't say" apart from
     # "user said localhost:4000 on purpose" so they can fall back to

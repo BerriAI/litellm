@@ -197,6 +197,41 @@ def test_a_named_server_beats_the_logged_in_one_and_never_gets_its_key(
     assert requests_mock.last_request.headers.get("Authorization") is None
 
 
+@pytest.mark.parametrize(
+    ("args", "env"),
+    [
+        (["--api-key", "sk-named-key"], {}),
+        ([], {"LITELLM_PROXY_API_KEY": "sk-named-key"}),
+    ],
+)
+def test_a_key_given_without_a_server_never_goes_to_the_logged_in_one(
+    cli_runner, isolated_home, monkeypatch, requests_mock, secret_vault_factory, args, env
+):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+
+    result = cli_runner.invoke(cli, [*args, "version"], obj={"secret_vault": secret_vault_factory()})
+
+    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert [request.url for request in requests_mock.request_history] == ["http://localhost:4000/health/readiness"]
+    assert requests_mock.last_request.headers.get("Authorization") == "Bearer sk-named-key"
+
+
+def test_lite_goes_back_to_localhost_after_logout_without_a_keychain(
+    cli_runner, isolated_home, requests_mock, secret_vault_factory
+):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    no_keychain: Final = secret_vault_factory(available=False)
+    cli_runner.invoke(cli, ["logout"], obj={"secret_vault": no_keychain})
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+
+    result = cli_runner.invoke(cli, ["version"], obj={"secret_vault": no_keychain})
+
+    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+
+
 def test_corrupt_config_file_falls_back_to_default(cli_runner, isolated_home):
     """A corrupt config file must never crash the CLI. Exactly one warning proves
     the config file is read once per invocation, not once per lookup."""

@@ -147,10 +147,10 @@ def load_cli_token(*, vault: SecretVault = SYSTEM_KEYRING) -> CliTokenRecord | N
     return _resolve_secret(record, vault)
 
 
-def stored_login_base_url() -> str | None:
-    """The server the stored `lite login` credential was issued for, read without touching the keychain"""
-    record: Final = _read_token_file()
-    return record.base_url if record is not None and record.base_url else None
+def stored_login_base_url(*, vault: SecretVault = SYSTEM_KEYRING) -> str | None:
+    """The server the stored `lite login` credential was issued for, while its key can still be read"""
+    record: Final = load_cli_token(vault=vault)
+    return record.base_url if record is not None and record.key and record.base_url else None
 
 
 def save_cli_token(record: CliTokenRecord, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:

@@ -10,6 +10,7 @@ import click
 from litellm._logging import verbose_logger
 
 ShellScope: TypeAlias = tuple[str, ...]
+QUOTES: Final = "'\""
 
 
 def styled_prompt(scope: ShellScope = ()):
@@ -154,6 +155,18 @@ def _group_at(group: click.Group, path: ShellScope) -> click.Group | None:
     return functools.reduce(_subgroup, path, group)
 
 
+def _unquoted(word: str) -> str:
+    return word[1:-1] if len(word) >= 2 and word[0] in QUOTES and word[-1] == word[0] else word
+
+
+def split_shell_line(line: str) -> ShellScope:
+    """Split on spaces and unwrap quoted words, keeping backslashes and quotes inside a word as typed"""
+    lexer: Final = shlex.shlex(line, posix=False)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return tuple(_unquoted(word) for word in lexer)
+
+
 def resolve_command_path(words: ShellScope, scope: ShellScope, cli: click.Group) -> ShellScope:
     """The full command path a line names: from the top after a leading `lite`, else inside the shell's group"""
     if words[0] == "lite":
@@ -193,7 +206,7 @@ def execute_command(path: ShellScope, ctx: click.Context, cli: click.Group) -> N
 def run_shell_line(user_input: str, scope: ShellScope, ctx: click.Context, cli: click.Group) -> ShellScope:
     """Run one line typed at the prompt and return the scope the next prompt starts in."""
     try:
-        words: Final = tuple(shlex.split(user_input))
+        words: Final = split_shell_line(user_input)
     except ValueError as e:
         click.echo(f"Could not read that command: {e}")
         return scope

@@ -53,13 +53,17 @@ def test_every_spelling_of_a_group_subcommand_runs_it(lines, credentials_endpoin
     assert credentials_endpoint.call_count == 1
 
 
-def test_quoted_arguments_reach_the_gateway_as_typed(requests_mock):
+@pytest.mark.parametrize(
+    "create_line",
+    [
+        """create shell-made --info '{"custom_llm_provider": "openai"}' --values '{"api_key": "sk-placeholder"}'""",
+        """create shell-made --info {"custom_llm_provider":"openai"} --values {"api_key":"sk-placeholder"}""",
+    ],
+)
+def test_quoted_and_compact_json_arguments_reach_the_gateway_as_typed(requests_mock, create_line):
     create: Final = requests_mock.post(f"{GATEWAY}/credentials", json={"credential_name": "shell-made"})
 
-    _shell(
-        "credentials",
-        """create shell-made --info '{"custom_llm_provider": "openai"}' --values '{"api_key": "sk-placeholder"}'""",
-    )
+    _shell("credentials", create_line)
 
     assert create.call_count == 1
     assert create.last_request.json() == {
@@ -113,3 +117,30 @@ def test_a_group_that_runs_on_its_own_does_not_become_the_scope(capsys):
 
     assert scope == ()
     assert "wizard ran" in capsys.readouterr().out
+
+
+def test_a_line_splits_on_spaces_and_unwraps_only_whole_quoted_words(capsys):
+    @click.group()
+    def root() -> None:
+        pass
+
+    @root.command()
+    @click.argument("words", nargs=-1)
+    def echo(words: tuple[str, ...]) -> None:
+        click.echo("\n".join(words))
+
+    run_shell_line(
+        r"""echo C:\Users\me\notes.txt "two words" '{"a": 1}' {"b":2} it's issue#1""",
+        (),
+        click.Context(root, info_name="lite", obj={}),
+        root,
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        r"C:\Users\me\notes.txt",
+        "two words",
+        '{"a": 1}',
+        '{"b":2}',
+        "it's",
+        "issue#1",
+    ]
