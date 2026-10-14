@@ -36,6 +36,8 @@ set -eu
 
 COMPOSE_URL="${LITELLM_COMPOSE_URL:-https://raw.githubusercontent.com/BerriAI/litellm/main/docker/docker-compose.quickstart.yml}"
 SCRIPT_URL="${LITELLM_SCRIPT_URL:-https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.sh}"
+# A port set by the caller is never moved; later steps export LITELLM_PORT too.
+PORT_PINNED="${LITELLM_PORT:+1}"
 
 # ---------------------------------------------------------------- output
 
@@ -338,29 +340,33 @@ port_free() {
 }
 
 # What holds a port: sets OWNER to a description, FREE_IT to the command that
-# frees it, and OWNER_KIND to container or process. All stay empty when the
-# holder cannot be named, such as another user's process.
+# frees it, and OWNER_PROJECT when it is another quickstart install. All stay
+# empty when the holder cannot be named, such as another user's process.
 port_owner() {
-  OWNER='' FREE_IT='' OWNER_KIND='' OWNER_PROJECT='' OWNER_NAME=''
+  OWNER='' FREE_IT='' OWNER_PROJECT=''
   name="$("$ENGINE" ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -E "[:]$1->" | head -n 1 | cut -d ' ' -f 1)"
   if [ -n "$name" ]; then
-    OWNER_KIND=container OWNER_NAME="$name"
     OWNER_PROJECT="$("$ENGINE" inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$name" 2>/dev/null)" ||
       OWNER_PROJECT=''
-    # Whoever started the container set this label, so anything Compose would
-    # not accept as a project name is treated as no project.
+    # Only another quickstart install keeps its project, since that is the one
+    # this script offers to stop. Whoever started the container set the label,
+    # so it must also be a name Compose would accept.
     case "$OWNER_PROJECT" in
-      '' | [!a-z0-9]* | *[!a-z0-9_-]*) OWNER_PROJECT='' OWNER="the $ENGINE_NAME container $name" FREE_IT="$ENGINE stop $name" ;;
-      litellm-gateway*) OWNER="another LiteLLM quickstart install ($ENGINE_NAME project $OWNER_PROJECT)" ;;
-      *) OWNER="the $ENGINE_NAME container $name (project $OWNER_PROJECT)" ;;
+      *[!a-z0-9_-]*) OWNER_PROJECT='' ;;
     esac
-    [ -n "$FREE_IT" ] || FREE_IT="$ENGINE compose -p $OWNER_PROJECT stop"
+    case "$OWNER_PROJECT" in
+      litellm-gateway*)
+        OWNER="another LiteLLM quickstart install ($ENGINE_NAME project $OWNER_PROJECT)"
+        FREE_IT="$ENGINE compose -p $OWNER_PROJECT stop"
+        ;;
+      *) OWNER_PROJECT='' OWNER="the $ENGINE_NAME container $name" FREE_IT="$ENGINE stop $name" ;;
+    esac
     return 0
   fi
   command -v lsof >/dev/null 2>&1 || return 0
   pid="$(lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -n 1)"
   [ -n "$pid" ] || return 0
-  OWNER_KIND=process FREE_IT="kill $pid"
+  FREE_IT="kill $pid"
   case "$(ps -o args= -p "$pid" 2>/dev/null)" in
     *litellm*) OWNER="a litellm server (pid $pid), maybe one started after pip install litellm" ;;
     *) OWNER="$(basename "$(ps -o comm= -p "$pid" 2>/dev/null || echo a program)") (pid $pid)" ;;
@@ -620,30 +626,73 @@ gateway_requests() {
     grep -o '"sum_api_requests": *[0-9]*' | grep -o '[0-9]*$'
 }
 
-# Stops the container port_owner found, or its whole Compose project.
+# Stops the other quickstart install port_owner found.
 stop_owner() {
-  if [ -n "$OWNER_PROJECT" ]; then
-    "$ENGINE" compose -p "$OWNER_PROJECT" stop
-  else
-    "$ENGINE" stop "$OWNER_NAME"
-  fi
+  "$ENGINE" compose -p "$OWNER_PROJECT" stop
 }
 
-# Before starting: if something else holds the port, say what and how to free it.
+# Sets NEXT_PORT to the first free port after $1, or empty when the next 100
+# are all taken.
+next_free_port() {
+  NEXT_PORT=$(($1 + 1))
+  while ! port_free "$NEXT_PORT"; do
+    NEXT_PORT=$((NEXT_PORT + 1))
+    if [ "$NEXT_PORT" -gt $(($1 + 100)) ]; then
+      NEXT_PORT=''
+      return 0
+    fi
+  done
+}
+
+# Moves this install to NEXT_PORT and saves it in .env, through a fresh mktemp
+# file (mode 600) and a rename so the keys are never half written.
+move_port() {
+  ENV_TMP="$(mktemp .env.XXXXXX)" || return 1
+  if ! awk '!/^LITELLM_PORT=/' .env >"$ENV_TMP" ||
+    ! printf 'LITELLM_PORT=%s\n' "$NEXT_PORT" >>"$ENV_TMP" || ! mv -f "$ENV_TMP" .env; then
+    rm -f "$ENV_TMP"
+    ENV_TMP=''
+    return 1
+  fi
+  ENV_TMP=''
+  PORT="$NEXT_PORT"
+  export LITELLM_PORT="$PORT"
+  url="http://localhost:$PORT/ui"
+}
+
+# Before starting: if something else holds the port, stop it when it is another
+# quickstart install, or move to a free port when it is anything else.
 check_port() {
   if is_running || port_free "$PORT"; then return 0; fi
   port_owner "$PORT"
-  if [ "$OWNER_KIND" = container ] && [ "$INTERACTIVE" = 1 ]; then
-    tab="$(printf '\t')" pick=2
-    case "$OWNER_PROJECT" in litellm-gateway*) pick=1 ;; esac
-    menu "Port $PORT is in use by $OWNER. Stop it and start this one?" "$pick" \
-      "Yes, stop it${tab}$FREE_IT" "No"
-    if [ "$CHOICE" = 1 ] && spin "Stopping it" "" stop_owner; then
-      step "Stopped $OWNER"
-      return 0
+  tab="$(printf '\t')" NEXT_PORT=''
+  if [ -n "$OWNER_PROJECT" ]; then
+    if [ "$INTERACTIVE" = 1 ]; then
+      menu "Port $PORT is in use by $OWNER. Stop it and start this one?" 1 \
+        "Yes, stop it${tab}$FREE_IT" "No"
+      if [ "$CHOICE" = 1 ] && spin "Stopping it" "" stop_owner; then
+        step "Stopped $OWNER"
+        return 0
+      fi
+    fi
+  elif [ -z "$PORT_PINNED" ]; then
+    next_free_port "$PORT"
+    if [ -n "$NEXT_PORT" ] && [ "$INTERACTIVE" = 1 ]; then
+      menu "Port $PORT is in use by ${OWNER:-another program}. Use port $NEXT_PORT instead?" 1 \
+        "Yes, use $NEXT_PORT${tab}saved in $(tildify "$DIR")/.env" "No"
+      if [ "$CHOICE" = 1 ]; then
+        old="$PORT"
+        if move_port; then
+          step "LiteLLM moved from port $old to ${C_BOLD}$PORT${C_OFF}"
+          return 0
+        fi
+        fail "Could not write $(tildify "$DIR")/.env."
+        exit 1
+      fi
     fi
   fi
-  fail "Port $PORT is in use by ${OWNER:-another program}." "Free it, or set LITELLM_PORT in $(tildify "$DIR")/.env to another port."
+  fail "Port $PORT is in use by ${OWNER:-another program}." \
+    "Free it, or set LITELLM_PORT in $(tildify "$DIR")/.env to another port${NEXT_PORT:+, such as $NEXT_PORT}."
   if [ -n "$FREE_IT" ]; then printf '  To free it:  %s\n' "$FREE_IT" >&2; fi
   exit 1
 }

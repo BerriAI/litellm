@@ -76,6 +76,8 @@ function Invoke-LiteLLMQuickstart {
 
   # Windows PowerShell passes -y and --yes through as plain arguments.
   $noQuestions = [bool]$Yes
+  # A port set by the caller is never moved; later steps set LITELLM_PORT too.
+  $portPinned = [bool]$env:LITELLM_PORT
   $action = ''
   foreach ($arg in $Rest) {
     $a = "$arg"
@@ -469,16 +471,15 @@ function Invoke-LiteLLMQuickstart {
   }
 
   # What holds a port: Owner describes it, FreeIt is the command that frees it,
-  # and Kind is container or process. All stay empty when the holder cannot be
-  # named, such as another user's process.
+  # and Project is set when it is another quickstart install. All stay empty
+  # when the holder cannot be named, such as another user's process.
   function Get-PortOwner([int]$Port) {
-    $o = @{ Owner = ''; FreeIt = ''; FreeArgs = @(); Kind = ''; Project = '' }
+    $o = @{ Owner = ''; FreeIt = ''; Project = '' }
     $name = ''
     foreach ($line in (Invoke-Native $docker @('ps', '--format', '{{.Names}} {{.Ports}}')).Out) {
       if ("$line" -match "[:]$Port->") { $name = ("$line" -split ' ')[0]; break }
     }
     if ($name) {
-      $o.Kind = 'container'
       # Labels come as JSON: Windows PowerShell mangles the quotes an index template needs.
       $labels = Invoke-Native $docker @('inspect', '--format', '{{json .Config.Labels}}', $name)
       if ($labels.Code -eq 0) {
@@ -487,18 +488,15 @@ function Invoke-LiteLLMQuickstart {
           if ($json -and $json.PSObject.Properties['com.docker.compose.project']) { $o.Project = "$($json.'com.docker.compose.project')" }
         } catch { <# unreadable labels: treat it as a plain container #> }
       }
-      # Whoever started the container set this label, so anything Compose would
-      # not accept as a project name is treated as no project.
-      if ($o.Project -cnotmatch '^[a-z0-9][a-z0-9_-]*$') { $o.Project = '' }
-      if (-not $o.Project) {
-        $o.Owner = "the $engineName container $name"; $o.FreeIt = "$engine stop $name"; $o.FreeArgs = @('stop', $name)
+      # Only another quickstart install keeps its project, since that is the one
+      # this script offers to stop. Whoever started the container set the label,
+      # so it must also be a name Compose would accept.
+      if ($o.Project -cmatch '^litellm-gateway[a-z0-9_-]*$') {
+        $o.Owner = "another LiteLLM quickstart install ($engineName project $($o.Project))"
+        $o.FreeIt = "$engine compose -p $($o.Project) stop"
       } else {
-        if ($o.Project -like 'litellm-gateway*') {
-          $o.Owner = "another LiteLLM quickstart install ($engineName project $($o.Project))"
-        } else {
-          $o.Owner = "the $engineName container $name (project $($o.Project))"
-        }
-        $o.FreeIt = "$engine compose -p $($o.Project) stop"; $o.FreeArgs = @('compose', '-p', $o.Project, 'stop')
+        $o.Project = ''
+        $o.Owner = "the $engineName container $name"; $o.FreeIt = "$engine stop $name"
       }
       return $o
     }
@@ -524,7 +522,6 @@ function Invoke-LiteLLMQuickstart {
       }
     }
     if (-not $procId) { return $o }
-    $o.Kind = 'process'
     if ($args0 -match 'litellm') {
       $o.Owner = "a litellm server (pid $procId), maybe one started after pip install litellm"
     } else {
@@ -724,20 +721,49 @@ function Invoke-LiteLLMQuickstart {
   }
 
   # Before starting: if something else holds the port, say what and how to free it.
+  # Moves this install to another port and saves it in .env. Writing the file in
+  # place keeps its permissions, so only you can still read the keys.
+  function Move-Port([int]$Port) {
+    $p = Join-Path $inst.Dir '.env'
+    $lines = @(Get-Content -LiteralPath $p -ErrorAction Stop | Where-Object { -not $_.StartsWith('LITELLM_PORT=') })
+    Write-PlainText $p ((($lines + "LITELLM_PORT=$Port") -join "`n") + "`n")
+    $env:LITELLM_PORT = "$Port"
+    $inst.Port = $Port
+    $inst.Url = "http://localhost:$Port/ui"
+  }
+
+  # Before starting: if something else holds the port, stop it when it is another
+  # quickstart install, or move to a free port when it is anything else.
   function Confirm-PortFree {
     $port = $inst.Port
     if ((Test-Running) -or (Test-PortFree $port)) { return }
     $o = Get-PortOwner $port
-    if ($o.Kind -eq 'container' -and $interactive) {
-      $pick = if ($o.Project -like 'litellm-gateway*') { 1 } else { 2 }
-      $choice = Menu "Port $port is in use by $($o.Owner). Stop it and start this one?" $pick @(@('Yes, stop it', $o.FreeIt), @('No'))
-      if ($choice -eq 1 -and (Invoke-WithSpinner 'Stopping it' '' $docker $o.FreeArgs) -eq 0) {
-        Step ('Stopped ' + (Lit $o.Owner))
-        return
+    $who = if ($o.Owner) { $o.Owner } else { 'another program' }
+    $next = 0
+    if ($o.Project) {
+      if ($interactive) {
+        $choice = Menu "Port $port is in use by $who. Stop it and start this one?" 1 @(@('Yes, stop it', $o.FreeIt), @('No'))
+        if ($choice -eq 1 -and (Invoke-WithSpinner 'Stopping it' '' $docker @('compose', '-p', $o.Project, 'stop')) -eq 0) {
+          Step ('Stopped ' + (Lit $o.Owner))
+          return
+        }
+      }
+    } elseif (-not $portPinned) {
+      foreach ($candidate in ($port + 1)..($port + 100)) {
+        if (Test-PortFree $candidate) { $next = $candidate; break }
+      }
+      if ($next -and $interactive) {
+        $where = 'saved in ' + (Join-Path (Tildify $inst.Dir) '.env')
+        $choice = Menu "Port $port is in use by $who. Use port $next instead?" 1 @(@("Yes, use $next", $where), @('No'))
+        if ($choice -eq 1) {
+          Move-Port $next
+          Step "LiteLLM moved from port $port to {b:$next}"
+          return
+        }
       }
     }
-    $who = if ($o.Owner) { $o.Owner } else { 'another program' }
-    Fail (Lit "Port $port is in use by $who.") ('Free it, or set LITELLM_PORT in ' + (Lit (Join-Path (Tildify $inst.Dir) '.env')) + ' to another port.')
+    $instead = if ($next) { ", such as $next" } else { '' }
+    Fail (Lit "Port $port is in use by $who.") ('Free it, or set LITELLM_PORT in ' + (Lit (Join-Path (Tildify $inst.Dir) '.env')) + " to another port$instead.")
     if ($o.FreeIt) { Say ('  To free it:  ' + (Lit $o.FreeIt)) -Err }
     Stop-Quickstart
   }
