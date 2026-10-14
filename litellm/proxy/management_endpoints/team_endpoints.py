@@ -163,11 +163,15 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    NO_TEAM_MEMBER_DEFAULTS,
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    TeamMemberDefaults,
     resolve_team_admin_editable_fields,
+    stored_team_member_budget_id,
     team_admin_edit_verdict,
     team_admin_may_raise_max_budget,
     team_admin_request_or_raise,
+    team_member_defaults,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
@@ -2372,6 +2376,7 @@ async def update_team(
                     permitted=resolve_team_admin_editable_fields(
                         _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
                     ),
+                    member_defaults=await _stored_team_member_defaults(prisma_client, existing_team),
                 )
             )
 
@@ -4897,6 +4902,13 @@ async def validate_membership(user_api_key_dict: UserAPIKeyAuth, team_table: Lit
         status_code=403,
         detail={"error": f"User={user_api_key_dict.user_id} not authorized to access this team={team_table.team_id}"},
     )
+
+
+async def _stored_team_member_defaults(prisma_client: PrismaClient, team: LiteLLM_TeamTable) -> TeamMemberDefaults:
+    budget_id: Final = stored_team_member_budget_id(team)
+    if budget_id is None:
+        return NO_TEAM_MEMBER_DEFAULTS
+    return team_member_defaults(await BudgetRepository(prisma_client).find_by_id(budget_id, "budget_id"))
 
 
 async def _add_team_member_budget_table(

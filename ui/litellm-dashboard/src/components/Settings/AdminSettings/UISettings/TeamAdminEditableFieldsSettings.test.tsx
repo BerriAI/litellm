@@ -127,6 +127,22 @@ describe("TeamAdminEditableFieldsSettings", () => {
     expect(mutate).toHaveBeenCalledWith({ team_admin_editable_team_fields: ["max_budget"] }, expect.anything());
   });
 
+  it("offers the member defaults as named checkboxes and saves the ticked ones", async () => {
+    mockSettings(["team_member_budget", "team_member_budget_duration", "tpm_limit"], []);
+    const mutate = mockSave({});
+
+    renderWithProviders(<TeamAdminEditableFieldsSettings />);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Member Default Budget (USD)" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Member Default Budget Duration" }));
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(mutate).toHaveBeenCalledWith(
+      { team_admin_editable_team_fields: ["team_member_budget", "team_member_budget_duration"] },
+      expect.anything(),
+    );
+  });
+
   it("disables Save again when the draft is ticked back to the saved list", () => {
     mockSettings(["tpm_limit"], []);
     mockSave({});

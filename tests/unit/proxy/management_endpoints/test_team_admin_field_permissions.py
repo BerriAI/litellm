@@ -7,11 +7,13 @@ from litellm.models.team import BudgetLimitEntry
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import LiteLLM_ModelTable, LiteLLM_TeamTable, UpdateKeyRequest, UpdateTeamRequest
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     TeamAdminEditAllowed,
     TeamAdminEditingDisabled,
     TeamAdminFieldNotPermitted,
     TeamAdminKeyEditAllowed,
     TeamAdminMemberKeyEditingDisabled,
+    TeamMemberDefaults,
     changed_key_fields,
     changed_team_fields,
     resolve_team_admin_editable_fields,
@@ -146,8 +148,8 @@ class TestChangedTeamFields:
         assert changed_team_fields(UpdateTeamRequest(team_id="team-1", model_aliases={}), _team()) == frozenset()
 
     def test_field_without_a_stored_counterpart_counts_as_changed_when_sent(self):
-        data = UpdateTeamRequest(team_id="team-1", team_member_budget=10.0)
-        assert changed_team_fields(data, _team()) == frozenset({"team_member_budget"})
+        data = UpdateTeamRequest(team_id="team-1", team_member_key_duration="30d")
+        assert changed_team_fields(data, _team()) == frozenset({"team_member_key_duration"})
 
 
 class TestTeamAdminEditVerdict:
@@ -176,6 +178,63 @@ class TestTeamAdminEditVerdict:
         data = UpdateTeamRequest(team_id="team-1", tpm_limit=6, rpm_limit=6, blocked=True)
         verdict = team_admin_edit_verdict(data, _team(), frozenset({"tpm_limit"}))
         assert verdict == TeamAdminFieldNotPermitted(field="blocked")
+
+
+def _permitted(*fields: str) -> frozenset[str]:
+    return resolve_team_admin_editable_fields(
+        {"team_admin_editable_team_fields": list(fields)}, SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+    )
+
+
+_STORED_MEMBER_DEFAULTS: Final = TeamMemberDefaults(
+    team_member_budget=10.0, team_member_budget_duration="30d", team_member_tpm_limit=100, team_member_rpm_limit=5
+)
+
+_MEMBER_DEFAULT_EDITS: Final = (
+    pytest.param("team_member_budget", 25.0, 10.0, id="team_member_budget"),
+    pytest.param("team_member_budget_duration", "7d", "30d", id="team_member_budget_duration"),
+    pytest.param("team_member_tpm_limit", 200, 100, id="team_member_tpm_limit"),
+    pytest.param("team_member_rpm_limit", 9, 5, id="team_member_rpm_limit"),
+)
+
+
+class TestTeamMemberDefaultEdits:
+    @pytest.mark.parametrize("field,new,stored", _MEMBER_DEFAULT_EDITS)
+    def test_enabled_field_change_is_allowed(self, field: str, new: object, stored: object):
+        data: Final = UpdateTeamRequest.model_validate({"team_id": "team-1", field: new})
+        verdict: Final = team_admin_edit_verdict(data, _team(), _permitted(field), _STORED_MEMBER_DEFAULTS)
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", field: new}
+
+    @pytest.mark.parametrize("field,new,stored", _MEMBER_DEFAULT_EDITS)
+    def test_change_without_the_field_enabled_names_it(self, field: str, new: object, stored: object):
+        data: Final = UpdateTeamRequest.model_validate({"team_id": "team-1", field: new})
+        verdict: Final = team_admin_edit_verdict(data, _team(), _permitted("tpm_limit"), _STORED_MEMBER_DEFAULTS)
+        assert verdict == TeamAdminFieldNotPermitted(field=field)
+
+    @pytest.mark.parametrize("field,new,stored", _MEMBER_DEFAULT_EDITS)
+    def test_resending_the_stored_value_is_dropped_without_the_field_enabled(
+        self, field: str, new: object, stored: object
+    ):
+        data: Final = UpdateTeamRequest.model_validate({"team_id": "team-1", field: stored, "tpm_limit": 6})
+        verdict: Final = team_admin_edit_verdict(
+            data, _team(tpm_limit=5), _permitted("tpm_limit"), _STORED_MEMBER_DEFAULTS
+        )
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "tpm_limit": 6}
+
+    def test_nulls_resent_for_a_team_without_member_defaults_are_dropped(self):
+        data: Final = UpdateTeamRequest(
+            team_id="team-1",
+            team_member_budget=None,
+            team_member_budget_duration=None,
+            team_member_tpm_limit=None,
+            team_member_rpm_limit=None,
+            tpm_limit=6,
+        )
+        verdict: Final = team_admin_edit_verdict(data, _team(tpm_limit=5), _permitted("tpm_limit"), TeamMemberDefaults())
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "tpm_limit": 6}
 
 
 class TestTeamAdminRequestOrRaise:
