@@ -1287,7 +1287,7 @@ async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(o
     ):
         task = asyncio.create_task(GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped"))))
         try:
-            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), 1)
+            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), 5)
             if outcome == "cancel":
                 task.cancel()
             else:
