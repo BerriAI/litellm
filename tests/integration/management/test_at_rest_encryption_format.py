@@ -10,7 +10,6 @@ import base64
 import hashlib
 import json
 import os
-import signal
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -248,7 +247,7 @@ def test_proxy_restart_mid_burst_reloads_every_encryption_format_from_the_databa
                     for index, marker in enumerate(markers)
                 )
                 eventually(lambda: sum(future.done() for future in futures), lambda done: done >= 6, seconds=60)
-                os.killpg(first.process.pid, signal.SIGTERM)
+                first.begin_shutdown()
                 outcomes: Final = tuple(future.result(timeout=120) for future in futures)
         served: Final = frozenset(marker for marker, status in outcomes if status == 200)
         assert served, outcomes

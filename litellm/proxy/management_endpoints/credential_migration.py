@@ -32,9 +32,11 @@ config rows, and the SSO config table.
 """
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, cast
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
@@ -48,9 +50,9 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # 
     _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     ALGO_AES_GCM,
     ENCRYPTION_ALGORITHM_SETTING,
-    V2_GCM_PREFIX,
+    V2_GCM_PREFIX,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     SecretMapDecodeError,
-    _get_encryption_algorithm,
+    _get_encryption_algorithm,  # pyright: ignore[reportPrivateUsage]  # algorithm selection has no public accessor
     _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decode_secret_map,
     decrypt_value_helper,
@@ -527,6 +529,22 @@ _COVERED_TABLE_SPECS: Final = [
 ]
 _MCP_CREDENTIAL_TABLES: Final = frozenset({"litellm_mcpservertable", "litellm_mcpserveroauthclient"})
 _PLAINTEXT_LITELLM_PARAMS: Final = frozenset({"complexity_router_config"})
+_OBJECT_MAP: Final = TypeAdapter(dict[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _object_map(raw: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT_MAP.validate_python(raw)
+    except ValidationError:
+        return None
+
+
+def _object_list(raw: object) -> tuple[object, ...]:
+    try:
+        return tuple(_OBJECT_LIST.validate_python(raw))
+    except ValidationError:
+        return ()
 
 
 def _iter_encrypted_strings(obj: object):
@@ -548,29 +566,28 @@ def _iter_encrypted_strings(obj: object):
 
 
 def _mcp_encrypted_leaves(col: str, raw: object) -> Iterator[str]:
-    """Only the strings an MCP column encrypts at rest: a credentials blob keeps auth_type, scopes and urls in
-    plaintext and env_vars keeps every name and every per user placeholder, so without PyNaCl those must not be
+    """MCP ``credentials`` and ``env_vars`` columns hold plaintext field names and
+    ``scope="user"`` placeholders next to encrypted values, so only the secret
+    leaves are yielded; a plaintext leaf would otherwise be
     mistaken for legacy ciphertext and refuse the scan"""
     from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS, is_global_env_var_scope
 
     if col == "credentials":
-        if not isinstance(raw, dict):
-            return iter(())
-        return (v for k, v in raw.items() if k in MCP_CREDENTIAL_SECRET_FIELDS and isinstance(v, str))
-    if not isinstance(raw, list):
-        return iter(())
+        credentials: Final = _object_map(raw) or {}
+        return (v for k, v in credentials.items() if k in MCP_CREDENTIAL_SECRET_FIELDS and isinstance(v, str))
+    entries: Final = tuple(entry for e in _object_list(raw) if (entry := _object_map(e)) is not None)
     return (
-        e["value"]
-        for e in raw
-        if isinstance(e, dict) and is_global_env_var_scope(e.get("scope")) and isinstance(e.get("value"), str)
+        value
+        for entry in entries
+        if is_global_env_var_scope(entry.get("scope")) and isinstance(value := entry.get("value"), str)
     )
 
 
 def _encrypted_leaves(db_attr: str, col: str, raw: object) -> Iterator[str]:
     if db_attr in _MCP_CREDENTIAL_TABLES and col in ("credentials", "env_vars"):
         return _mcp_encrypted_leaves(col, raw)
-    if db_attr == "litellm_proxymodeltable" and isinstance(raw, dict):
-        return _iter_encrypted_strings({k: v for k, v in raw.items() if k not in _PLAINTEXT_LITELLM_PARAMS})
+    if db_attr == "litellm_proxymodeltable" and (params := _object_map(raw)) is not None:
+        return _iter_encrypted_strings({k: v for k, v in params.items() if k not in _PLAINTEXT_LITELLM_PARAMS})
     return _iter_encrypted_strings(raw)
 
 
@@ -678,11 +695,11 @@ async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
 
 async def scan_covered_tables(prisma_client: object) -> list[LocationReport]:
     """Read-only classification of every rotation-covered table. No writes."""
-    reports: Final[list[LocationReport]] = []
-    for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS:
-        reports.append(await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols))
-    reports.append(await _scan_config_env_vars(prisma_client))
-    return reports
+    table_reports: Final = [
+        await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols)
+        for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS
+    ]
+    return [*table_reports, await _scan_config_env_vars(prisma_client)]
 
 
 # ---------------------------------------------------------------------------

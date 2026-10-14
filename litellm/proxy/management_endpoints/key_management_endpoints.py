@@ -5549,28 +5549,22 @@ async def rotate_master_key(
             # Side effect preserved: decrypted values are loaded into os.environ
             # (read compat), exactly as before. Keys that do NOT decrypt
             # (wrong-key ciphertext, corrupt blobs, stored plaintext) are absent
-            # from the decrypted dict — they must be written back byte-identical,
+            # from the decrypted dict so they must be written back byte-identical,
             # never silently dropped from the stored row.
-            decrypted_env_vars: Final = proxy_config.decrypt_and_set_db_env_variables(
+            decrypted_env_vars: Final[dict[str, str]] = proxy_config.decrypt_and_set_db_env_variables(
                 environment_variables=dict[str, str](environment_variables_dict)
             )
-            encrypted_env_vars: dict[str, str] = {}
-            preserved_env_var_keys: list[str] = []
-            for env_key, stored_value in environment_variables_dict.items():
-                decrypted_value = decrypted_env_vars.get(env_key)
-                if decrypted_value is None:
-                    # Undecryptable or plaintext: preserve the stored bytes as-is
-                    # so the entry stays readable via read-compat or a manual
-                    # rotation by the admin. Never delete.
-                    encrypted_env_vars[env_key] = stored_value
-                    preserved_env_var_keys.append(env_key)
-                else:
-                    # The empty string decrypts to itself (it round-trips), so it
-                    # lands here too and is re-encrypted like any other value.
-                    encrypted_env_vars[env_key] = encrypt_value_helper(
-                        value=decrypted_value,
-                        new_encryption_key=new_master_key,
-                    )
+            preserved_env_var_keys: Final = tuple(
+                env_key for env_key in environment_variables_dict if decrypted_env_vars.get(env_key) is None
+            )
+            encrypted_env_vars: Final = {
+                env_key: (
+                    stored_value
+                    if env_key in preserved_env_var_keys
+                    else encrypt_value_helper(value=decrypted_env_vars[env_key], new_encryption_key=new_master_key)
+                )
+                for env_key, stored_value in environment_variables_dict.items()
+            }
             if preserved_env_var_keys:
                 verbose_proxy_logger.warning(
                     "Master-key rotation preserved %d environment_variables entries "

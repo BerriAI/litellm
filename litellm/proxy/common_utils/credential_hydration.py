@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # narrows untyped credential values at the decrypt boundary
 
 import litellm
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, legacy_unreadable
@@ -71,8 +71,11 @@ def decrypted_or_stored(key: str, value: str) -> str | None:
     return None if legacy_unreadable(value) else value
 
 
-def decrypted_values(values: Mapping[str, str]) -> Mapping[str, str]:
-    resolved: Final = {key: decrypted_or_stored(key, value) for key, value in values.items()}
+def decrypted_values(values: Mapping[str, object]) -> Mapping[str, str]:
+    resolved: Final = {
+        key: decrypted_or_stored(key, cast("str", value))  # cast-ok: stored values are str
+        for key, value in values.items()
+    }
     return MappingProxyType({key: value for key, value in resolved.items() if value is not None})
 
 
