@@ -3941,7 +3941,7 @@ class TestDDSpanTaggerTagRequest:
 
         mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
 
-    def test_tags_user_email(self):
+    def test_tags_user_email(self):  # test-quality-ok: mock sink boundary
         """user_email is tagged so JWT-authenticated requests are traceable per person."""
         user_key = self._make_user_api_key_dict(user_email="user@example.com")
         tags: dict[str, str] = {}
@@ -3954,7 +3954,7 @@ class TestDDSpanTaggerTagRequest:
 
         assert tags == {"litellm.user_email": "user@example.com"}
 
-    def test_no_user_email_tag_when_absent(self):
+    def test_no_user_email_tag_when_absent(self):  # test-quality-ok: mock sink boundary
         """No user email tag when the authenticated identity has no email."""
         user_key = self._make_user_api_key_dict(key_alias="my-prod-key", user_email=None)
         tags: dict[str, str] = {}

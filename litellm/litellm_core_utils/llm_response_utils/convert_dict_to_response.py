@@ -4,7 +4,7 @@ import re
 import time
 import traceback
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal, cast
+from typing import Any, Final, Literal, cast  # noqa: TID251  # Provider response payloads span unrelated JSON shapes.
 
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
@@ -166,8 +166,73 @@ def _invalid_choices_message(response_object: Mapping[str, object]) -> str:
     )
 
 
+def _coerce_missing_choices_status(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 100 <= value <= 599 else None
+    if isinstance(value, str) and value.strip().isascii() and value.strip().isdecimal():
+        status_code: Final = int(value.strip())
+        return status_code if 100 <= status_code <= 599 else None
+    return None
+
+
+def _get_nested_error_values(
+    error: object,
+) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    nested_error: Final = cast(Mapping[str, object], error)  # cast-ok: JSON keys are strings
+    if not isinstance(error, Mapping):
+        return (), (error,) if isinstance(error, str) else ()
+
+    nested_code: Final = nested_error.get("code")
+    nested_status: Final = nested_error.get("status")
+    nested_status_code: Final = nested_error.get("status_code")
+    nested_message: Final = nested_error.get("message")
+    nested_response: Final = nested_error.get("response")
+    return (
+        (nested_code, nested_status, nested_status_code),
+        (nested_message, nested_response),
+    )
+
+
+def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
+    error: Final = response_object.get("error")
+    top_level_status_values: Final[tuple[object, ...]] = tuple(
+        response_object.get(field) for field in ("status", "status_code")
+    )
+    nested_values: Final[tuple[tuple[object, ...], tuple[object, ...]]] = _get_nested_error_values(error)
+    nested_status_values: Final[tuple[object, ...]] = nested_values[0]
+    nested_message_values: Final[tuple[object, ...]] = nested_values[1]
+
+    status_values: Final[tuple[object, ...]] = (
+        *(value for value in top_level_status_values if isinstance(value, int) and not isinstance(value, bool)),
+        *(value for value in top_level_status_values if isinstance(value, str)),
+        *nested_status_values,
+    )
+    status_code: Final[int] = next(
+        (value for candidate in status_values if (value := _coerce_missing_choices_status(candidate)) is not None),
+        500,
+    )
+    message_values: Final[tuple[object, ...]] = (
+        *(response_object.get(field) for field in ("response", "message")),
+        *nested_message_values,
+    )
+    message: Final[str] = next(
+        (value for value in message_values if isinstance(value, str) and value.strip()),
+        _invalid_choices_message(response_object),
+    )
+    return status_code, message
+
+
+def _get_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
+    choices: Final = response_object.get("choices")
+    if "choices" in response_object and choices is not None and not isinstance(choices, list):
+        return 500, _invalid_choices_message(response_object)
+    return _get_missing_choices_error_args(response_object)
+
+
 async def convert_to_streaming_response_async(
-    response_object: dict | None = None,
+    response_object: Mapping[str, Any] | None = None,
 ):
     """
     Asynchronously converts a response object to a streaming response.
@@ -197,9 +262,10 @@ async def convert_to_streaming_response_async(
     if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
+        status_code, message = _get_choices_error_args(response_object)
         raise APIError(
-            status_code=500,
-            message=_invalid_choices_message(response_object),
+            status_code=status_code,
+            message=message,
             llm_provider="",
             model="",
         )
@@ -291,7 +357,7 @@ async def convert_to_streaming_response_async(
 
 
 def convert_to_streaming_response(
-    response_object: dict | None = None,
+    response_object: Mapping[str, Any] | None = None,
 ):
     # used for yielding Cache hits when stream == True
     if response_object is None:
@@ -303,9 +369,10 @@ def convert_to_streaming_response(
     if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
+        status_code, message = _get_choices_error_args(response_object)
         raise APIError(
-            status_code=500,
-            message=_invalid_choices_message(response_object),
+            status_code=status_code,
+            message=message,
             llm_provider="",
             model="",
         )
@@ -574,7 +641,7 @@ _should_convert_tool_call_to_json_mode = should_convert_tool_call_to_json_mode
 
 
 def convert_to_model_response_object(
-    response_object: dict | None = None,
+    response_object: Mapping[str, Any] | None = None,
     model_response_object: ModelResponse
     | EmbeddingResponse
     | ImageResponse
@@ -630,15 +697,23 @@ def convert_to_model_response_object(
 
         if has_meaningful_error:
             error_args: Final = {"status_code": 422, "message": "Error in response object"}
-            if isinstance(error_obj, dict):
-                if "code" in error_obj:
-                    error_args["status_code"] = error_obj["code"]
-                if "message" in error_obj:
-                    if isinstance(error_obj["message"], dict):
-                        message_str = json.dumps(error_obj["message"])
-                    else:
-                        message_str = str(error_obj["message"])
-                    error_args["message"] = message_str
+            if response_type == "completion" and not response_object.get("choices"):
+                error_status, provider_message = _get_choices_error_args(response_object)
+                error_args["status_code"] = error_status
+                error_args["message"] = provider_message
+                if isinstance(error_obj, dict) and "message" in error_obj:
+                    nested_error_message: Final[object] = error_obj["message"]
+                    if isinstance(nested_error_message, dict):
+                        error_args["message"] = json.dumps(nested_error_message)
+            else:
+                if isinstance(error_obj, dict):
+                    if "code" in error_obj:
+                        error_args["status_code"] = error_obj["code"]
+                    if "message" in error_obj:
+                        if isinstance(error_obj["message"], dict):
+                            error_args["message"] = json.dumps(error_obj["message"])
+                        else:
+                            error_args["message"] = str(error_obj["message"])
             raised_exception: Final = Exception()
             setattr(raised_exception, "status_code", error_args["status_code"])
             setattr(raised_exception, "message", error_args["message"])
@@ -658,9 +733,10 @@ def convert_to_model_response_object(
             if not isinstance(response_object.get("choices"), list):
                 from litellm.exceptions import APIError
 
+                status_code, provider_message = _get_choices_error_args(response_object)
                 raise APIError(
-                    status_code=500,
-                    message=_invalid_choices_message(response_object),
+                    status_code=status_code,
+                    message=provider_message,
                     llm_provider="",
                     model="",
                 )
@@ -827,7 +903,7 @@ def convert_to_model_response_object(
                 raise Exception("Error in response object format")
 
             return LiteLLMResponseObjectHandler.convert_to_image_response(
-                response_object=response_object,
+                response_object=dict(response_object),
                 model_response_object=model_response_object,
                 hidden_params=hidden_params,
             )
