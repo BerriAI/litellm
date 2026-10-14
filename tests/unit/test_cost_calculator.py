@@ -4411,6 +4411,109 @@ def test_completion_cost_base_model_ignores_regional_row(_local_model_cost_map):
     ) == pytest.approx(1000 * flat["input_cost_per_token"])
 
 
+def _chatgpt_responses_result(model: str) -> ResponsesAPIResponse:
+    response: Final = ResponsesAPIResponse(
+        id="resp-chatgpt",
+        created_at=1700000000,
+        model=model,
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=1000, output_tokens=100, total_tokens=1100),
+    )
+    response._hidden_params = {"custom_llm_provider": "chatgpt"}
+    return response
+
+
+@pytest.mark.parametrize(
+    ("base_model", "priced_row"),
+    [
+        ("base-model-cost-sol", "base-model-cost-sol"),
+        ("openai/base-model-cost-sol", "base-model-cost-sol"),
+        ("azure/base-model-cost-sol", "azure/base-model-cost-sol"),
+    ],
+)
+def test_base_model_prices_deployment_whose_provider_row_has_no_rates(
+    monkeypatch: pytest.MonkeyPatch, base_model: str, priced_row: str
+) -> None:
+    """A chatgpt/ deployment's own cost-map row carries no rates, so an explicit base_model must be
+    priced from the base model's row instead of resolving back to the unpriced chatgpt/ row"""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "chatgpt/base-model-cost-sol",
+        {"litellm_provider": "chatgpt", "mode": "responses"},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "base-model-cost-sol",
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 8e-6,
+            "litellm_provider": "openai",
+            "mode": "responses",
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "azure/base-model-cost-sol",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 5e-6,
+            "litellm_provider": "azure",
+            "mode": "responses",
+        },
+    )
+    row: Final = litellm.model_cost[priced_row]
+
+    cost: Final = response_cost_calculator(
+        response_object=_chatgpt_responses_result("base-model-cost-sol"),
+        model="chatgpt/base-model-cost-sol",
+        custom_llm_provider="chatgpt",
+        call_type="aresponses",
+        optional_params={},
+        base_model=base_model,
+    )
+
+    assert cost == pytest.approx(1000 * row["input_cost_per_token"] + 100 * row["output_cost_per_token"])
+
+
+def test_base_model_keeps_deployment_provider_row_that_declares_rates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the deployment's provider row for the base model declares its own rates, those rates
+    still win over the base model's row from another provider"""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "chatgpt/base-model-rated-sol",
+        {
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": 4e-6,
+            "litellm_provider": "chatgpt",
+            "mode": "responses",
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "base-model-rated-sol",
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 8e-6,
+            "litellm_provider": "openai",
+            "mode": "responses",
+        },
+    )
+    deployment_row: Final = litellm.model_cost["chatgpt/base-model-rated-sol"]
+
+    cost: Final = response_cost_calculator(
+        response_object=_chatgpt_responses_result("base-model-rated-sol"),
+        model="chatgpt/base-model-rated-sol",
+        custom_llm_provider="chatgpt",
+        call_type="aresponses",
+        optional_params={},
+        base_model="base-model-rated-sol",
+    )
+
+    assert cost == pytest.approx(
+        1000 * deployment_row["input_cost_per_token"] + 100 * deployment_row["output_cost_per_token"]
+    )
+
+
 def test_select_model_name_unresolvable_alias_unchanged(_local_model_cost_map):
     """An alias that resolves to no known cost key keeps the legacy double-prefixed name."""
 
