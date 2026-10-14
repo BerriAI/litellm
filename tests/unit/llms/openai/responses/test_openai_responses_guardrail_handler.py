@@ -38,7 +38,13 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.responses.main import CustomToolCallOutputItem, GenericResponseOutputItem, OutputText
+from litellm.responses.litellm_completion_transformation.tool_search import build_tool_search_call
+from litellm.types.responses.main import (
+    CustomToolCallOutputItem,
+    GenericResponseOutputItem,
+    OutputText,
+    OutputToolSearchCall,
+)
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 
@@ -133,6 +139,40 @@ class PersimmonMaskingGuardrail(CustomGuardrail):
                     "arguments": tool_call["function"]["arguments"].replace("persimmon", "[MASKED]"),
                 },
             }
+            for tool_call in inputs.get("tool_calls", [])
+        ]
+        return {**inputs, "tool_calls": tool_calls}
+
+
+class RecordingPersimmonMaskingGuardrail(PersimmonMaskingGuardrail):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_tool_calls: list[tuple[str, str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_tool_calls.extend(
+            (tool_call["function"]["name"], tool_call["function"]["arguments"])
+            for tool_call in inputs.get("tool_calls", [])
+        )
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class ArgumentsRedactingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = [
+            {**tool_call, "function": {**tool_call["function"], "arguments": "[REDACTED]"}}
             for tool_call in inputs.get("tool_calls", [])
         ]
         return {**inputs, "tool_calls": tool_calls}
@@ -1065,6 +1105,49 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert "name" not in result["output"][0]
 
     @pytest.mark.asyncio
+    async def test_process_output_response_scans_and_rewrites_a_tool_search_call(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+        response = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=[build_tool_search_call("srvtoolu_1", '{"query": "persimmon"}', "completed")],
+        )
+
+        result = await handler.process_output_response(response, guardrail)
+
+        assert guardrail.seen_tool_calls == [("tool_search", '{"query": "persimmon"}')]
+        search_call = result.output[0]
+        assert isinstance(search_call, OutputToolSearchCall)
+        assert search_call.arguments == {"query": "[MASKED]"}
+        assert search_call.call_id == "srvtoolu_1"
+        assert "name" not in search_call.model_dump()
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_never_returns_original_search_arguments_after_a_non_json_rewrite(self):
+        response = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=[build_tool_search_call("srvtoolu_1", '{"query": "persimmon"}', "completed")],
+        )
+
+        result = await OpenAIResponsesHandler().process_output_response(
+            response, ArgumentsRedactingGuardrail(guardrail_name="redact")
+        )
+
+        search_call = result.output[0]
+        assert isinstance(search_call, OutputToolSearchCall)
+        assert search_call.arguments == {}
+        assert search_call.status == "incomplete"
+        assert "persimmon" not in result.model_dump_json()
+
+    @pytest.mark.asyncio
     async def test_process_output_response_with_tool_calls(self):
         """Test processing output response containing function tool calls"""
         handler = OpenAIResponsesHandler()
@@ -1856,6 +1939,56 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert typed_events[4].item.input == "echo [MASKED]"
         assert completed_event.response.output[0].input == "echo [MASKED]"
         assert completed_event.response.output[0].name == "exec"
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_a_tool_search_call(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            OutputItemDoneEvent,
+            ResponseCompletedEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        def search_call(arguments: str, status: Literal["in_progress", "completed"]) -> OutputToolSearchCall:
+            return build_tool_search_call("srvtoolu_1", arguments, status)
+
+        handler = OpenAIResponsesHandler()
+        added = OutputItemAddedEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(**search_call("", "in_progress").model_dump()),
+        )
+        done = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=2,
+            item=BaseLiteLLMOpenAIResponseObject(**search_call('{"query": "persimmon"}', "completed").model_dump()),
+        )
+        completed = ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse(
+                id="resp_1",
+                created_at=1,
+                model="claude-sonnet-5-5",
+                object="response",
+                status="completed",
+                output=[search_call('{"query": "persimmon"}', "completed")],
+            ),
+        )
+
+        await handler.process_output_streaming_response(
+            responses_so_far=[added, done, completed],
+            guardrail_to_apply=PersimmonMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert added.item.model_dump()["arguments"] == {}
+        assert done.item.model_dump()["arguments"] == {"query": "[MASKED]"}
+        assert isinstance(completed.response.output[0], OutputToolSearchCall)
+        assert completed.response.output[0].arguments == {"query": "[MASKED]"}
+        assert "name" not in done.item.model_dump()
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_custom_tool_call_rewrite_without_matching_events_fails_closed(self):

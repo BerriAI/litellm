@@ -5,6 +5,10 @@ Anthropic, Vertex, Azure AI and Bedrock Invoke transformation tests; these pin
 the pure placement rules on the OpenAI-format message list.
 """
 
+import time
+from itertools import chain
+from typing import Final
+
 import pytest
 
 import litellm
@@ -255,6 +259,13 @@ def test_flagged_placement_keeps_a_system_behind_a_user_turn_merged_with_an_empt
     assert _roles(placed) == ["user", "user", "system", "assistant"]
 
 
+_TOOL_SEARCH_USE = {
+    "id": "srvtoolu_01Search",
+    "type": "function",
+    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+}
+
+
 EMPTY_ASSISTANT = pytest.mark.parametrize(
     "empty_assistant",
     [
@@ -281,17 +292,7 @@ EMPTY_ASSISTANT = pytest.mark.parametrize(
             "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}],
         },
         litellm.Message(role="assistant", content=None),
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "srvtoolu_01Search",
-                    "type": "function",
-                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
-                }
-            ],
-        },
+        {"role": "assistant", "content": None, "tool_calls": [_TOOL_SEARCH_USE]},
     ],
     ids=[
         "none",
@@ -305,6 +306,50 @@ EMPTY_ASSISTANT = pytest.mark.parametrize(
         "unanswered-tool-search-use",
     ],
 )
+
+
+def test_flagged_placement_handles_a_long_run_of_unanswered_tool_search_uses_in_linear_time():
+    search_uses: Final = tuple(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{**_TOOL_SEARCH_USE, "id": f"srvtoolu_{index:06d}"}],
+        }
+        for index in range(3000)
+    )
+    reminders: Final = tuple(
+        chain.from_iterable(
+            ({"role": "system", "content": f"reminder {index}"}, {"role": "user", "content": f"q{index}"})
+            for index in range(10)
+        )
+    )
+    messages: Final = [
+        {"role": "user", "content": "start"},
+        *reminders,
+        *search_uses,
+        {"role": "user", "content": "end"},
+    ]
+
+    started: Final = time.perf_counter()
+    placed: Final = place_mid_conversation_system(messages, supports_mid_conversation_system=True)
+    elapsed: Final = time.perf_counter() - started
+
+    assert set(_roles(placed)[:21]) == {"user"}
+    assert elapsed < 1.0
+
+
+def test_flagged_placement_keeps_a_system_before_a_tool_search_use_the_caller_answered():
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "reminder"},
+            {"role": "assistant", "content": None, "tool_calls": [_TOOL_SEARCH_USE]},
+            {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "[]"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "system", "assistant", "tool"]
 
 
 @EMPTY_ASSISTANT
@@ -355,6 +400,14 @@ def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_th
             content="",
             tool_calls=[{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
         ),
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                _TOOL_SEARCH_USE,
+                {"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}},
+            ],
+        },
     ],
     ids=[
         "tool-calls",
@@ -363,6 +416,7 @@ def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_th
         "signed-thinking-part",
         "function-call",
         "pydantic-tool-calls",
+        "unanswered-tool-search-use-beside-a-client-call",
     ],
 )
 def test_flagged_placement_keeps_a_system_before_an_assistant_turn_that_renders_without_text(assistant_turn):

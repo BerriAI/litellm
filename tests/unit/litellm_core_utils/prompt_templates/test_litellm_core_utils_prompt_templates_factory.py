@@ -7144,22 +7144,18 @@ def test_anthropic_messages_pt_drops_replayed_tool_search_call_without_its_resul
     ]
 
 
-def _tool_search_call() -> dict:
-    return {
-        "id": "srvtoolu_01Search",
-        "type": "function",
-        "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
-    }
-
-
-def test_anthropic_messages_pt_drops_an_answered_tool_search_call_and_its_answer_beside_a_client_call():
+def test_anthropic_messages_pt_keeps_a_replayed_tool_search_call_the_caller_answered():
     messages: Final = [
         {"role": "user", "content": "What is the weather in Paris?"},
         {
             "role": "assistant",
             "content": None,
             "tool_calls": [
-                _tool_search_call(),
+                {
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                },
                 {
                     "id": "toolu_01Weather",
                     "type": "function",
@@ -7167,30 +7163,20 @@ def test_anthropic_messages_pt_drops_an_answered_tool_search_call_and_its_answer
                 },
             ],
         },
-        {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "Error: unknown tool tool_search_tool_regex"},
+        {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": '[{"name": "get_weather"}]'},
         {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C and cloudy"},
     ]
 
     result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
 
-    assert [(block["type"], block["id"]) for block in result[1]["content"]] == [("tool_use", "toolu_01Weather")]
+    assert [(block["type"], block["id"]) for block in result[1]["content"]] == [
+        ("tool_use", "srvtoolu_01Search"),
+        ("tool_use", "toolu_01Weather"),
+    ]
     assert [block["tool_use_id"] for block in result[2]["content"] if block["type"] == "tool_result"] == [
-        "toolu_01Weather"
+        "srvtoolu_01Search",
+        "toolu_01Weather",
     ]
-
-
-def test_anthropic_messages_pt_keeps_an_answered_tool_search_call_that_is_the_turns_only_call():
-    messages: Final = [
-        {"role": "user", "content": "What is the weather in Paris?"},
-        {"role": "assistant", "content": "Let me look for a weather tool.", "tool_calls": [_tool_search_call()]},
-        {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "Error: unknown tool tool_search_tool_regex"},
-    ]
-
-    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
-
-    assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    assert [block["type"] for block in result[1]["content"]] == ["text", "tool_use"]
-    assert [block["tool_use_id"] for block in result[2]["content"]] == ["srvtoolu_01Search"]
 
 
 def _merged_assistant_run_cost(run_length: int) -> float:
