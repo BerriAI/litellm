@@ -5,7 +5,7 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock
 
 import pytest
@@ -2187,6 +2187,48 @@ class TestPromptCacheBreakpointToResponses:
             "type": "function_call_output",
             "call_id": "toolu_01",
             "output": [{"type": "input_text", "text": "r", "prompt_cache_breakpoint": self.EXPLICIT}],
+        }
+
+    def test_a_marked_tool_result_with_screenshots_moves_its_breakpoint_to_the_last_screenshot(self):
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "t", "input": {}}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01",
+                            "content": [
+                                {"type": "text", "text": "r"},
+                                {
+                                    "type": "image",
+                                    "source": {"type": "base64", "media_type": "image/png", "data": "Zmlyc3Q="},
+                                },
+                                {
+                                    "type": "image",
+                                    "source": {"type": "base64", "media_type": "image/png", "data": "bGFzdA=="},
+                                },
+                            ],
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        }
+                    ],
+                },
+            ]
+        )
+        *_, tool_output, screenshots = items
+        assert tool_output == {
+            "type": "function_call_output",
+            "call_id": "toolu_01",
+            "output": f"r\n{TOOL_RESULT_IMAGE_PLACEHOLDER}",
+        }
+        *_, first_screenshot, last_screenshot = screenshots["content"]
+        assert first_screenshot == {"type": "input_image", "image_url": "data:image/png;base64,Zmlyc3Q="}
+        assert last_screenshot == {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,bGFzdA==",
+            "prompt_cache_breakpoint": self.EXPLICIT,
         }
 
     def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
