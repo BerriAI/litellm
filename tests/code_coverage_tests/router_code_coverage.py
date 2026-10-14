@@ -120,6 +120,7 @@ ignored_function_names = [
     "_pinned_deployment",  # Tested through the deployment-id scheduler test in test_router.py
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
+    "_deployment_configures_rpm",  # Tested through the rpm cache skip tests in test_router.py
     "_merged_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
     "_drops_malformed_request_tools",  # Tested through the _update_kwargs_with_deployment tools merge tests in test_router.py
     "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
