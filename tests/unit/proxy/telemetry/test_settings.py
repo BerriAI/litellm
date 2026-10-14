@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from pydantic import ValidationError
@@ -88,6 +90,13 @@ def test_set_variables_lists_every_telemetry_env_var_present_but_never_its_value
     policy = _policy(TelemetrySettings())
     assert policy.set_variables == ("LITELLM_TELEMETRY_DISABLED", "LITELLM_TELEMETRY_ENDPOINT")
     assert policy.vetoed is True
+
+
+def test_an_http_destination_without_an_endpoint_fails_settings_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_TELEMETRY_DESTINATION", "http")
+    error: Final = load_settings()
+    assert isinstance(error, ValidationError)
+    assert describe_errors(error).startswith("LITELLM_TELEMETRY_DESTINATION:")
 
 
 def test_a_negative_settle_timeout_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
