@@ -1444,7 +1444,7 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
 
         tls: Final = resolve_otlp_http_tls("LOGS")
         return HTTPLogExporter(
-            endpoint=_otlp_logs_endpoint(config.endpoint),
+            endpoint=config.logs_endpoint or _otlp_logs_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
             certificate_file=tls.certificate_file,
             session=tls.session,
@@ -1460,7 +1460,10 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
                 "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
             ) from exc
 
-        return GRPCLogExporter(endpoint=config.endpoint, headers=parse_headers(config.headers))
+        return GRPCLogExporter(
+            endpoint=config.logs_endpoint or config.endpoint,
+            headers=parse_headers(config.headers),
+        )
     return ConsoleLogExporter()
 
 
