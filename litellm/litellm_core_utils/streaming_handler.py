@@ -2017,6 +2017,7 @@ class CustomStreamWrapper:
             traceback_exception: Final = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
+            self.close()
             self._handle_stream_fallback_error(e)
 
     def fetch_sync_stream(self):
@@ -2158,12 +2159,15 @@ class CustomStreamWrapper:
                 asyncio.create_task(
                     self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
                 )
+            await self.aclose()
             self._handle_stream_fallback_error(e)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
             if self.received_finish_reason is None:
+                await self.aclose()
                 self._log_stream_failure_and_raise(e)
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except Exception as e:
+            await self.aclose()
             self._log_stream_failure_and_raise(e)
 
     async def _finalize_completed_stream(self, cache_hit: bool) -> "ModelResponseStream":

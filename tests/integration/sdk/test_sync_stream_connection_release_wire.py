@@ -195,3 +195,20 @@ async def test_async_stream_aclosed_after_its_first_chunk_releases_the_connectio
         assert _text_of(await follow_up.__anext__()) == _FIRST_WORDS
         gate.set()
         assert "".join([_text_of(chunk) async for chunk in follow_up]) == _LAST_WORD
+
+
+_ANTHROPIC_ERROR_MIDDLE: Final = _anthropic_event(
+    "error", {"type": "error", "error": {"type": "overloaded_error", "message": "peer overloaded mid stream"}}
+)
+
+
+def test_sync_stream_that_raises_mid_stream_releases_the_connection() -> None:
+    shape: Final = _SHAPES[0]
+    broken: Final = _Shape(shape.name, shape.model, shape.opening, (_ANTHROPIC_ERROR_MIDDLE, *shape.closing))
+    with wire_server(_peer(broken), keep_alive=True) as wire:
+        request: Final = _request_kwargs(broken, wire)
+        with pytest.raises(Exception, match="overloaded"):
+            "".join(_text_of(chunk) for chunk in litellm.completion(**request))
+        assert _open_sessions_settling_to(wire, at_most=0) == 0, (
+            "a stream that raised mid-way left its TCP session open"
+        )
