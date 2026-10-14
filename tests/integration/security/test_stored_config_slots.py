@@ -64,8 +64,6 @@ from integration.security._sweeps import (
     sweep_all,
     sweep_sink,
 )
-from pydantic import BaseModel, JsonValue
-
 from litellm.types.guardrails import (
     GuardrailInfoResponse,
     ListGuardrailsResponse,
