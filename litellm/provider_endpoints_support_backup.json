@@ -250,7 +250,8 @@
         "vector_stores_search": true,
         "count_tokens": true,
         "rag_ingest": true,
-        "rag_query": true
+        "rag_query": true,
+        "video_generations": true
       }
     },
     "s3_vectors": {
