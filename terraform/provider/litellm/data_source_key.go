@@ -119,6 +119,7 @@ func dataSourceLiteLLMKey() *schema.Resource {
 				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
+			"metadata_json": computedMetadataJSONSchema("Every metadata entry the proxy stores, JSON encoded with value types intact"),
 			"tags": {
 				Type:     schema.TypeList,
 				Computed: true,
@@ -197,6 +198,7 @@ func dataSourceLiteLLMKeyRead(d *schema.ResourceData, m interface{}) error {
 		}
 	}
 	d.Set("metadata", metadata)
+	d.Set("metadata_json", encodeMetadataJSON(info.Metadata))
 	d.Set("tags", toStringSlice(info.Metadata["tags"]))
 
 	if info.Blocked != nil {

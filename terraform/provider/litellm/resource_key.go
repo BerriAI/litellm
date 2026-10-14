@@ -75,8 +75,9 @@ func resourceKey() *schema.Resource {
 				Type:        schema.TypeMap,
 				Computed:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
-				Description: "Every metadata entry the proxy stores for this key, including ones not declared in metadata. Read-only, so drift on undeclared entries shows up on refresh without Terraform taking ownership of them. Entries the provider already exposes as their own attributes (model_rpm_limit, model_tpm_limit, tags, guardrails, enforced_params, allowed_passthrough_routes, rpm_limit_type, tpm_limit_type, prompts) are omitted, and non-string values are JSON encoded",
+				Description: "Every metadata entry the proxy stores for this key, including ones not declared in metadata or metadata_json. Read-only, so drift on undeclared entries shows up on refresh without Terraform taking ownership of them. Entries the provider already exposes as their own attributes (model_rpm_limit, model_tpm_limit, tags, guardrails, enforced_params, allowed_passthrough_routes, rpm_limit_type, tpm_limit_type, prompts) are omitted, and non-string values are JSON encoded",
 			},
+			"metadata_json": metadataJSONSchema("JSON object of metadata entries whose values are not strings. Merged with metadata; a key may appear in only one of them"),
 			"tpm_limit": {
 				Type:     schema.TypeInt,
 				Optional: true,
@@ -205,6 +206,7 @@ func resourceKey() *schema.Resource {
 				ForceNew: true,
 			},
 		},
+		CustomizeDiff: validateMetadataJSONKeys(keyFieldsStoredInMetadata),
 	}
 	r.StateUpgraders = []schema.StateUpgrader{{
 		Version: 0,
@@ -359,6 +361,10 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 	}
 
 	d.Set("server_metadata", serverKeyMetadata(key.Metadata))
+	metadataJSON := d.Get("metadata_json").(string)
+	if key.Metadata != nil {
+		d.Set("metadata_json", metadataJSONFromServer(key.Metadata, metadataJSON))
+	}
 	key.Metadata = declaredKeyMetadata(key.Metadata, d.Get("metadata").(map[string]interface{}))
 	mapKeyToResourceData(d, key)
 	return nil
@@ -467,7 +473,7 @@ func suppressUnconfiguredAllowedRoutes(k, old, new string, d *schema.ResourceDat
 var errKeyGone = errors.New("no longer exists")
 
 func plannedKeyMetadata(c *Client, d *schema.ResourceData) (map[string]interface{}, error) {
-	if !d.HasChange("metadata") {
+	if !d.HasChanges("metadata", "metadata_json") {
 		return nil, nil
 	}
 	current, err := c.GetKey(d.Id())
@@ -477,8 +483,11 @@ func plannedKeyMetadata(c *Client, d *schema.ResourceData) (map[string]interface
 	if current == nil {
 		return nil, fmt.Errorf("key %s %w", d.Id(), errKeyGone)
 	}
-	oldDeclared, newDeclared := d.GetChange("metadata")
-	return mergeKeyMetadata(current.Metadata, oldDeclared.(map[string]interface{}), newDeclared.(map[string]interface{})), nil
+	oldMetadata, newMetadata := d.GetChange("metadata")
+	oldJSON, newJSON := d.GetChange("metadata_json")
+	oldDeclared := declaredMetadata(oldMetadata.(map[string]interface{}), oldJSON.(string))
+	newDeclared := declaredMetadata(newMetadata.(map[string]interface{}), newJSON.(string))
+	return mergeKeyMetadata(current.Metadata, oldDeclared, newDeclared), nil
 }
 
 func declaredKeyMetadata(server, declared map[string]interface{}) map[string]interface{} {
@@ -552,7 +561,7 @@ func mapResourceDataToKey(d *schema.ResourceData, key *Key) {
 		val := v.(int)
 		key.MaxParallelRequests = &val
 	}
-	key.Metadata = d.Get("metadata").(map[string]interface{})
+	key.Metadata = declaredMetadata(d.Get("metadata").(map[string]interface{}), d.Get("metadata_json").(string))
 	if v, ok := d.GetOk("tpm_limit"); ok {
 		val := v.(int)
 		key.TPMLimit = &val

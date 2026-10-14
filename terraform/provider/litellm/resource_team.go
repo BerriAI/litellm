@@ -29,6 +29,7 @@ func ResourceLiteLLMTeam() *schema.Resource {
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
+		CustomizeDiff: validateMetadataJSONKeys(teamFieldsStoredInMetadata),
 
 		Schema: map[string]*schema.Schema{
 			"team_id": {
@@ -51,6 +52,7 @@ func ResourceLiteLLMTeam() *schema.Resource {
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
+			"metadata_json": metadataJSONSchema("JSON object of metadata entries whose values are not strings. Merged with metadata; a key may appear in only one of them"),
 			"tpm_limit": {
 				Type:     schema.TypeInt,
 				Optional: true,
@@ -225,8 +227,10 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("team_alias", GetStringValue(teamResp.TeamAlias, d.Get("team_alias").(string)))
 	d.Set("organization_id", GetStringValue(teamResp.OrganizationID, d.Get("organization_id").(string)))
 
+	metadataJSON := d.Get("metadata_json").(string)
 	metadata, tags, alertEmails := splitTeamMetadata(teamResp.Metadata)
-	d.Set("metadata", metadata)
+	d.Set("metadata", withoutKeys(metadata, decodeMetadataJSON(metadataJSON)))
+	d.Set("metadata_json", metadataJSONFromServer(teamResp.Metadata, metadataJSON))
 	d.Set("tags", tags)
 	d.Set("soft_budget_alerting_emails", alertEmails)
 
@@ -412,13 +416,13 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 // /team/update replaces metadata wholesale, so the full map must go out whenever either half changed.
 func buildTeamMetadata(d *schema.ResourceData) map[string]interface{} {
 	metadata := map[string]interface{}{}
-	for k, v := range d.Get("metadata").(map[string]interface{}) {
+	for k, v := range declaredMetadata(d.Get("metadata").(map[string]interface{}), d.Get("metadata_json").(string)) {
 		metadata[k] = v
 	}
 	if v, ok := d.GetOk("soft_budget_alerting_emails"); ok {
 		metadata["soft_budget_alerting_emails"] = v
 	}
-	if len(metadata) == 0 && !d.HasChange("metadata") && !d.HasChange("soft_budget_alerting_emails") {
+	if len(metadata) == 0 && !d.HasChanges("metadata", "metadata_json", "soft_budget_alerting_emails") {
 		return nil
 	}
 	return metadata
@@ -431,6 +435,8 @@ func teamModelLimit(topLevel, metadata map[string]interface{}, key string) map[s
 	nested, _ := metadata[key].(map[string]interface{})
 	return nested
 }
+
+var teamFieldsStoredInMetadata = []string{"tags", "soft_budget_alerting_emails", "team_member_budget_id", "model_rpm_limit", "model_tpm_limit"}
 
 func splitTeamMetadata(raw map[string]interface{}) (map[string]string, []string, []string) {
 	metadata := map[string]string{}

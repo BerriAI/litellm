@@ -37,6 +37,7 @@ In addition to all arguments above, the following attributes are exported:
 * `organization_id` - Organization the team belongs to.
 * `models` - Models the team can access.
 * `metadata` - Map of string metadata values for the team.
+* `metadata_json` - Every metadata entry the proxy stores for the team, JSON encoded with value types intact.
 * `tags` - Tags for spend tracking and tag-based routing.
 * `soft_budget_alerting_emails` - Email addresses alerted when the team crosses `soft_budget`.
 * `tpm_limit` - Tokens per minute limit.
