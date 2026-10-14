@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     TeamAdminEditAllowed,
     TeamAdminEditingDisabled,
     TeamAdminFieldNotPermitted,
@@ -189,6 +190,31 @@ class TestTeamAdminEditVerdict:
         data = UpdateTeamRequest(team_id="team-1", tpm_limit=6, rpm_limit=6, blocked=True)
         verdict = team_admin_edit_verdict(data, _team(), frozenset({"tpm_limit"}))
         assert verdict == TeamAdminFieldNotPermitted(field="blocked")
+
+
+def _enabled(*fields: str) -> frozenset[str]:
+    return resolve_team_admin_editable_fields(
+        {"team_admin_editable_team_fields": list(fields)}, SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+    )
+
+
+class TestSoftBudgetEdits:
+    def test_enabled_soft_budget_change_is_allowed(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", soft_budget=20.0)
+        verdict: Final = team_admin_edit_verdict(data, _team(soft_budget=10.0), _enabled("soft_budget"))
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "soft_budget": 20.0}
+
+    def test_soft_budget_change_without_it_enabled_names_it(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", soft_budget=20.0)
+        verdict: Final = team_admin_edit_verdict(data, _team(soft_budget=10.0), _enabled("max_budget"))
+        assert verdict == TeamAdminFieldNotPermitted(field="soft_budget")
+
+    def test_unchanged_soft_budget_resend_is_dropped_when_not_enabled(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", tpm_limit=6, soft_budget=10)
+        verdict: Final = team_admin_edit_verdict(data, _team(soft_budget=10.0), _enabled("tpm_limit"))
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "tpm_limit": 6}
 
 
 class TestTeamAdminRequestOrRaise:
