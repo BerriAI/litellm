@@ -256,6 +256,13 @@ def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
     return isinstance(tool, dict) and tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
+def _converse_tool_adds_cache_point(tool: object, model: str) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.factory import add_cache_point_tool_block
+
+    mapping: Final = _validated_object_mapping(tool)
+    return mapping is not None and ("cachePoint" in mapping or add_cache_point_tool_block(mapping, model) is not None)
+
+
 def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
 
@@ -276,6 +283,8 @@ def _created_cache_control(original: object, translated: object) -> bool:
 
 
 def _created_cache_controls(original: object, translated: object) -> tuple[bool, ...]:
+    if translated is original:
+        return ()
     original_parts: Final = _as_object_list(_attribute_or_key(original, "content")) or []
     translated_parts: Final = _as_object_list(_attribute_or_key(translated, "content")) or []
     return tuple(_created_cache_control(before, after) for before, after in zip(original_parts, translated_parts))
@@ -516,6 +525,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
     @staticmethod
+    def count_converse_external_cache_breakpoints(optional_params: object, model: str) -> int:
+        params: Final = _validated_object_mapping(optional_params) or {}
+        tools: Final = _as_object_list(params.get("tools")) or []
+        tool_cache_points: Final = sum(1 for tool in tools if _converse_tool_adds_cache_point(tool, model))
+        injection_points: Final = configured_injection_points(params.get("cache_control_injection_points"))
+        injects_tool_cache_point: Final = bool(tools) and any(
+            point.get("location") == "tool_config" for point in injection_points
+        )
+        return tool_cache_points + int(injects_tool_cache_point)
+
+    @staticmethod
     def count_external_cache_breakpoints_on_messages_route(
         tools: Iterable[object] | None, cache_control: object, request_kwargs: object
     ) -> int:
@@ -723,10 +743,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     def prompt_cache_breakpoints_as_cache_control(message: AllMessageValues, drop_params: bool) -> AllMessageValues:
         """Every OpenAI ``prompt_cache_breakpoint`` on a part OpenAI accepts one on moved to Anthropic's
         ``cache_control``. Marks with no OpenAI slot are left for the caller to strip."""
-        parts: Final = _as_object_list(_attribute_or_key(message, "content"))
-        if parts is None or not _may_carry_prompt_cache_breakpoint(message):
+        if not _may_carry_prompt_cache_breakpoint(message):
             return message
-        if not any(_carries_prompt_cache_breakpoint(part) for part in parts):
+        parts: Final = _as_object_list(_attribute_or_key(message, "content"))
+        if parts is None or not any(_carries_prompt_cache_breakpoint(part) for part in parts):
             return message
         return cast(  # cast-ok: the same message with its part marks renamed
             AllMessageValues,
@@ -744,6 +764,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             AnthropicCacheControlHook.prompt_cache_breakpoints_as_cache_control(message, drop_params)
             for message in messages
         )
+        if all(after is before for before, after in zip(messages, translated)):
+            return translated
         created: Final = tuple(_created_cache_controls(before, after) for before, after in zip(messages, translated))
         created_marks: Final = sum(sum(flags) for flags in created)
         breakpoints: Final = (

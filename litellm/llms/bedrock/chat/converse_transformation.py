@@ -106,6 +106,7 @@ from ..common_utils import (
     BedrockModelInfo,
     bedrock_converse_supports_parallel_tool_use_config,
     bedrock_model_accepts_cache_points,
+    bedrock_model_known_to_accept_cache_points,
     bedrock_reasoning_effort_disabled,
     bedrock_rejects_stop_sequences,
     get_anthropic_beta_from_headers,
@@ -1510,11 +1511,15 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _messages_with_cache_marks(
-        messages: Sequence[AllMessageValues], model: str, drop_params: bool
+        messages: Sequence[AllMessageValues], model: str, drop_params: bool, optional_params: object
     ) -> Sequence[AllMessageValues]:
-        if not bedrock_model_accepts_cache_points(model):
+        if not bedrock_model_known_to_accept_cache_points(model):
             return messages
-        return AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(messages, drop_params, 0)
+        return AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
+            messages,
+            drop_params,
+            AnthropicCacheControlHook.count_converse_external_cache_breakpoints(optional_params, model),
+        )
 
     def _transform_system_message(
         self, messages: Sequence[AllMessageValues], model: str | None = None
@@ -2031,7 +2036,13 @@ class AmazonConverseConfig(BaseConfig):
     ) -> RequestObject:
         request_drop_params: Final = litellm_params.get("drop_params") is True
         messages, system_content_blocks = self._transform_system_message(
-            self._messages_with_cache_marks(messages, model, litellm.drop_params or request_drop_params), model=model
+            self._messages_with_cache_marks(
+                messages,
+                model,
+                litellm.drop_params or request_drop_params,
+                cast(Mapping[str, object], optional_params),  # cast-ok: untyped provider param bag
+            ),
+            model=model,
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present
@@ -2102,7 +2113,13 @@ class AmazonConverseConfig(BaseConfig):
     ) -> RequestObject:
         request_drop_params: Final = litellm_params.get("drop_params") is True
         messages, system_content_blocks = self._transform_system_message(
-            self._messages_with_cache_marks(messages, model, litellm.drop_params or request_drop_params), model=model
+            self._messages_with_cache_marks(
+                messages,
+                model,
+                litellm.drop_params or request_drop_params,
+                cast(Mapping[str, object], optional_params),  # cast-ok: untyped provider param bag
+            ),
+            model=model,
         )
 
         # Convert last user message to guarded_text if guardrailConfig is present

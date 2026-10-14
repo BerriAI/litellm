@@ -9320,6 +9320,96 @@ def test_converse_keeps_the_earliest_prompt_cache_breakpoints_within_the_cap():
     ]
 
 
+_CONVERSE_CAP_TOOL: Final[dict[str, object]] = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize(
+    "tool_cache_params",
+    [
+        {"tools": [{**_CONVERSE_CAP_TOOL, "cache_control": {"type": "ephemeral"}}]},
+        {
+            "tools": [_CONVERSE_CAP_TOOL],
+            "cache_control_injection_points": [{"location": "tool_config", "control": {"type": "ephemeral"}}],
+        },
+    ],
+    ids=["client_tool_cache_control", "tool_config_injection_point"],
+)
+def test_converse_reserves_the_tool_cache_point_within_the_cap(tool_cache_params: dict[str, object]):
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                for index in range(4)
+            ],
+        }
+    ]
+
+    def transform(litellm_params: dict) -> dict:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model="anthropic.claude-sonnet-5-5",
+            messages=copy.deepcopy(messages),
+            optional_params=copy.deepcopy(tool_cache_params),
+            litellm_params=litellm_params,
+        )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="this request has 5"):
+        transform({})
+
+    request = transform({"drop_params": True})
+    cache_point = {"cachePoint": {"type": "default"}}
+    assert request["messages"][0]["content"] == [
+        {"text": "part 0"},
+        cache_point,
+        {"text": "part 1"},
+        cache_point,
+        {"text": "part 2"},
+        cache_point,
+        {"text": "part 3"},
+    ]
+    assert request["toolConfig"]["tools"][-1] == cache_point
+
+
+def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_when_flagged(local_model_cost_map):
+    from litellm import Router
+
+    flagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-flagged"
+    unflagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/mistral"
+    Router(
+        model_list=[
+            {
+                "model_name": "claude-profile",
+                "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": True},
+            },
+            {
+                "model_name": "mistral-profile",
+                "litellm_params": {"model": f"bedrock/{unflagged_arn}", "aws_region_name": "us-east-1"},
+            },
+        ]
+    )
+
+    def user_content(model: str, ttl: dict) -> list:
+        return litellm.AmazonConverseConfig()._transform_request(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", **ttl}}],
+                }
+            ],
+            optional_params={},
+            litellm_params={},
+        )["messages"][0]["content"]
+
+    assert user_content(flagged_arn, {}) == [{"text": "Hello"}, {"cachePoint": {"type": "default"}}]
+    assert user_content(unflagged_arn, {}) == [{"text": "Hello"}]
+    assert user_content(unflagged_arn, {"ttl": "30m"}) == [{"text": "Hello"}]
+
+
 def _converse_request_with_30m_breakpoint(model: str, litellm_params: dict) -> dict:
     return litellm.AmazonConverseConfig()._transform_request(
         model=model,

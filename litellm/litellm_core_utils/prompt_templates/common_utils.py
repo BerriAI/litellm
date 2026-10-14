@@ -1836,8 +1836,8 @@ def _cache_control_for_prompt_cache_breakpoint(marker: object, drop_params: bool
         if not drop_params:
             raise UnsupportedParamsError(
                 message=(
-                    f"prompt_cache_breakpoint must be {{'mode': 'explicit'}} with an optional ttl of '30m', "
-                    f"got {marker!r}. Fix the marker, or {PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to drop it."
+                    f"prompt_cache_breakpoint must be {{'mode': 'explicit'}}, got {marker!r}. Fix the marker, or "
+                    f"{PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT} to drop it."
                 ),
                 status_code=400,
             )

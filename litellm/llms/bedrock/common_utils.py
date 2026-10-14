@@ -1195,21 +1195,42 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
         return True
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
-    map_keys: Final = (model, get_bedrock_base_model(model))
+    explicit_marker_support: Final = _explicit_cache_point_support(model)
+    if explicit_marker_support is not None:
+        return explicit_marker_support
+    mapped_support: Final = _mapped_prompt_caching_support(model)
+    return mapped_support is None or mapped_support
+
+
+def bedrock_model_known_to_accept_cache_points(model: str) -> bool:
+    """Like ``bedrock_model_accepts_cache_points``, but an unmapped model gets no cachePoint: an OpenAI
+    ``prompt_cache_breakpoint`` reaches every model of a mixed fleet, not only the ones a client marked for
+    Bedrock caching, so an application inference profile ARN opts in through ``supports_prompt_cache_breakpoint``."""
+    if _OPENAI_FAMILY_MODEL_RE.search(model):
+        return False
+    explicit_marker_support: Final = _explicit_cache_point_support(model)
+    if explicit_marker_support is not None:
+        return explicit_marker_support
+    return _mapped_prompt_caching_support(model) is True
+
+
+def _explicit_cache_point_support(model: str) -> bool | None:
     registered_keys: Final = tuple(f"bedrock/{route}{model}" for route in ("", "converse/", "converse_like/"))
-    explicit_marker_support: Final = next(
+    return next(
         (
             entry.get("supports_prompt_cache_breakpoint") is True
-            for key in (*registered_keys, *map_keys)
+            for key in (*registered_keys, model, get_bedrock_base_model(model))
             if (entry := litellm.model_cost.get(key)) is not None
             and entry.get("supports_prompt_cache_breakpoint") is not None
         ),
         None,
     )
-    if explicit_marker_support is not None:
-        return explicit_marker_support
+
+
+def _mapped_prompt_caching_support(model: str) -> bool | None:
+    map_keys: Final = (model, get_bedrock_base_model(model))
     if not any(key in litellm.model_cost for key in map_keys):
-        return True
+        return None
     return any(
         entry.get("supports_prompt_caching") is True
         for key in map_keys

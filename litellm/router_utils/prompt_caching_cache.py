@@ -54,6 +54,17 @@ def _sorted_pairs(pairs: Iterable[tuple[str, JsonValue]]) -> tuple[tuple[str, Js
     return tuple(sorted(pairs, key=lambda pair: pair[0]))
 
 
+_CACHE_MARKER_KEYS: Final = frozenset(("cache_control", "prompt_cache_breakpoint"))
+
+
+def _is_cache_marked(block: Mapping[str, object]) -> bool:
+    match block:
+        case {"cache_control": {"type": "ephemeral"}}:
+            return True
+        case _:
+            return block.get("prompt_cache_breakpoint") is not None
+
+
 def _canonical_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
@@ -65,7 +76,7 @@ def _block_unit(
         return _canonical_bytes((envelope, block)), message_run_type
     block_type: Final = block.get("type")
     block_run_type: Final = block_type if isinstance(block_type, str) and block_type in _TOOL_RUN_BLOCK_TYPES else None
-    stripped: Final = _sorted_pairs(item for item in block.items() if item[0] != "cache_control")
+    stripped: Final = _sorted_pairs(item for item in block.items() if item[0] not in _CACHE_MARKER_KEYS)
     return _canonical_bytes((envelope, stripped)), message_run_type or block_run_type
 
 
@@ -180,15 +191,9 @@ class PromptCachingCache:
                 continue
 
             for content_idx, content_block in enumerate(content):
-                if isinstance(content_block, dict):
-                    cache_control = content_block.get("cache_control")
-                    if (
-                        cache_control is not None
-                        and isinstance(cache_control, dict)
-                        and cache_control.get("type") == "ephemeral"
-                    ):
-                        last_cacheable_message_idx = msg_idx
-                        last_cacheable_content_idx = content_idx
+                if isinstance(content_block, dict) and _is_cache_marked(content_block):
+                    last_cacheable_message_idx = msg_idx
+                    last_cacheable_content_idx = content_idx
 
         # If no cacheable block found, return empty list (no cacheable prefix)
         if last_cacheable_message_idx is None:
