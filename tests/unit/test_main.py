@@ -427,6 +427,7 @@ _LOADED_FUNCTION_CALL: Final = {
 }
 _USER_TURN: Final = {"role": "user", "content": "What is the weather in Paris?"}
 _WEATHER_RESULT: Final = {"role": "tool", "tool_call_id": "toolu_01weather", "content": "18C"}
+_SEARCH_RESULT: Final = {"role": "tool", "tool_call_id": "srvtoolu_01search", "content": "searched"}
 
 
 @pytest.mark.parametrize(
@@ -449,16 +450,26 @@ _WEATHER_RESULT: Final = {"role": "tool", "tool_call_id": "toolu_01weather", "co
             id="sdk-message-object",
         ),
         pytest.param(
-            [
-                {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL]},
-                {"role": "tool", "tool_call_id": "srvtoolu_01search", "content": "searched"},
-            ],
+            [{"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL]}],
             [],
-            id="answered-search-alone",
+            id="unanswered-search-alone",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+                _SEARCH_RESULT,
+                _WEATHER_RESULT,
+            ],
+            [
+                {"role": "assistant", "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+                _SEARCH_RESULT,
+                _WEATHER_RESULT,
+            ],
+            id="answered-search-kept",
         ),
     ],
 )
-def test_completion_drops_claude_tool_search_calls_from_history_sent_to_openai(
+def test_completion_drops_unanswered_claude_tool_search_calls_from_history_sent_to_openai(
     respx_mock: respx.MockRouter, openai_api_response, claude_turn, sent_after_user
 ):
     api_base: Final = "http://localhost:12346/v1"
@@ -480,7 +491,7 @@ def test_completion_drops_claude_tool_search_calls_from_history_sent_to_openai(
     ] == [_USER_TURN, *sent_after_user, {"role": "user", "content": "And tomorrow?"}]
 
 
-def test_completion_drops_claude_tool_search_calls_before_the_responses_bridge_sends_history_to_openai(
+def test_completion_drops_unanswered_claude_tool_search_calls_before_the_responses_bridge_sends_history_to_openai(
     respx_mock: respx.MockRouter,
 ):
     route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
@@ -510,7 +521,6 @@ def test_completion_drops_claude_tool_search_calls_before_the_responses_bridge_s
         messages=[
             _USER_TURN,
             {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
-            {"role": "tool", "tool_call_id": "srvtoolu_01search", "content": "searched"},
             _WEATHER_RESULT,
         ],
         tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],

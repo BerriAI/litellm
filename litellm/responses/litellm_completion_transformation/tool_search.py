@@ -20,15 +20,15 @@ __all__ = [
     "anthropic_tool_search_chat_tool",
     "build_tool_search_call",
     "chat_config_builds_anthropic_request",
-    "chat_messages_without_tool_search_uses",
+    "chat_messages_without_tool_search_calls",
     "has_server_tool_search",
-    "history_holds_tool_search_use",
     "holds_tool_search_use",
     "is_anthropic_tool_search_chat_tool",
     "is_anthropic_tool_search_use",
     "is_server_tool_search_tool",
     "provider_builds_anthropic_request",
     "tool_search_call_ids",
+    "unanswered_tool_search_call_ids",
     "without_tool_search_calls",
     "without_tool_search_uses",
 ]
@@ -177,10 +177,6 @@ def without_tool_search_uses(message: Message) -> Message | None:
     return message.model_copy(update={"tool_calls": list(kept) or None})
 
 
-def history_holds_tool_search_use(messages: Iterable[object]) -> bool:
-    return any(_is_assistant_message(message) and holds_tool_search_use(message) for message in messages)
-
-
 def _is_assistant_message(message: object) -> bool:
     match message:
         case {"role": "assistant"}:
@@ -191,33 +187,48 @@ def _is_assistant_message(message: object) -> bool:
             return _session_message_fields(message).role == "assistant"
 
 
-def _assistant_mapping_without_tool_search_uses(message: Mapping[str, object]) -> Mapping[str, object] | None:
-    kept_calls: Final = without_tool_search_calls(message)
-    if not kept_calls and not message.get("content"):
+def _tool_result_ids(messages: Iterable[object]) -> frozenset[str]:
+    return frozenset(
+        tool_call_id
+        for message in messages
+        if (tool_call_id := _session_message_fields(message).tool_call_id) is not None
+    )
+
+
+def unanswered_tool_search_call_ids(messages: Sequence[object]) -> frozenset[str]:
+    search_call_ids: Final = tool_search_call_ids(message for message in messages if _is_assistant_message(message))
+    if not search_call_ids:
+        return search_call_ids
+    return search_call_ids - _tool_result_ids(messages)
+
+
+def _assistant_mapping_with_tool_calls(
+    message: Mapping[str, object], tool_calls: tuple[object, ...]
+) -> Mapping[str, object] | None:
+    if not tool_calls and not message.get("content"):
         return None
     without_calls: Final = {key: value for key, value in message.items() if key != "tool_calls"}
-    return {**without_calls, "tool_calls": list(kept_calls)} if kept_calls else without_calls
+    return {**without_calls, "tool_calls": list(tool_calls)} if tool_calls else without_calls
 
 
-def _without_tool_search_use(message: object, search_call_ids: Set[str]) -> object | None:
-    if answers_tool_search(message, search_call_ids):
-        return None
-    if not holds_tool_search_use(message):
+def _without_tool_search_calls(message: object, call_ids: Set[str]) -> object | None:
+    tool_calls: Final = _assistant_tool_calls(message)
+    kept_calls: Final = tuple(tool_call for tool_call in tool_calls if _tool_search_call_id(tool_call) not in call_ids)
+    if len(kept_calls) == len(tool_calls):
         return message
     match message:
         case Message():
-            return without_tool_search_uses(message)
+            if not kept_calls and not message.content:
+                return None
+            return message.model_copy(update={"tool_calls": list(kept_calls) or None})
         case Mapping():
-            return _assistant_mapping_without_tool_search_uses(_MESSAGE_FIELDS_ADAPTER.validate_python(message))
+            return _assistant_mapping_with_tool_calls(_MESSAGE_FIELDS_ADAPTER.validate_python(message), kept_calls)
         case _:
             return message
 
 
-def chat_messages_without_tool_search_uses(messages: Sequence[object]) -> tuple[object, ...]:
-    search_call_ids: Final = tool_search_call_ids(messages)
-    return tuple(
-        kept for message in messages if (kept := _without_tool_search_use(message, search_call_ids)) is not None
-    )
+def chat_messages_without_tool_search_calls(messages: Sequence[object], call_ids: Set[str]) -> tuple[object, ...]:
+    return tuple(kept for message in messages if (kept := _without_tool_search_calls(message, call_ids)) is not None)
 
 
 def _parsed_arguments(arguments_json: str) -> Mapping[str, object] | None:
