@@ -1,13 +1,14 @@
 import json
 import os
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
-from litellm.proxy.proxy_server import app
+from litellm.proxy.proxy_server import _SAVED_ENVIRONMENT_HOLD_SECONDS, ProxyConfig, app
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
@@ -106,6 +107,14 @@ async def test_model_creation_policy_patch_applies_after_successful_persistence(
     }
 
 
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 @pytest.fixture
 def mock_proxy_config(monkeypatch):
     """Mock the proxy_config to avoid actual file operations during tests"""
@@ -152,19 +161,22 @@ def mock_proxy_config(monkeypatch):
     async def mock_save_environment_variables(updates):
         saved_env_updates.append(updates)
 
-    from litellm.proxy.proxy_server import proxy_config
-
+    clock = _ManualClock()
+    proxy_config = ProxyConfig(clock=clock)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", proxy_config)
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr(proxy_config, "save_config", mock_save_config)
     monkeypatch.setattr(proxy_config, "save_environment_variables", mock_save_environment_variables)
 
     # Return the config, the save_config call counter, and any env-var updates
     # the endpoint routed through the dedicated save_environment_variables path
-    return {
-        "config": mock_config,
-        "save_call_count": lambda: save_config_call_count,
-        "env_updates": lambda: saved_env_updates,
-    }
+    with patch.dict(os.environ):
+        yield {
+            "config": mock_config,
+            "save_call_count": lambda: save_config_call_count,
+            "env_updates": lambda: saved_env_updates,
+            "clock": clock,
+        }
 
 
 @pytest.fixture
@@ -1332,6 +1344,7 @@ class TestProxySettingEndpoints:
             "litellm.proxy.proxy_server.get_config_param",
             env_row_cleared_on_another_pod,
         )
+        mock_proxy_config["clock"].now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 1
         asyncio.run(
             proxy_config._update_config_from_db(
                 MagicMock(), {}, store_model_in_db=True
@@ -1370,6 +1383,7 @@ class TestProxySettingEndpoints:
         sso_table_cleared_on_another_pod.db.litellm_ssoconfig.find_unique = AsyncMock(
             return_value=SimpleNamespace(sso_settings={"google_client_id": None})
         )
+        mock_proxy_config["clock"].now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 1
         asyncio.run(
             proxy_config._init_sso_settings_in_db(
                 prisma_client=sso_table_cleared_on_another_pod

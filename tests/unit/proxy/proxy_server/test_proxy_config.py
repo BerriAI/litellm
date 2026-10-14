@@ -30,6 +30,7 @@ from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
+    _SAVED_ENVIRONMENT_HOLD_SECONDS,
     ProxyConfig,
     _is_remote_module_url,
     _scrub_db_overlay_remote_module_loads,
@@ -3991,6 +3992,14 @@ async def test_ProxyConfig_db_env_row_with_an_invalid_environment_entry_still_sy
     assert "LIT_DB_ENV_NUL" not in os.environ
 
 
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 def _encrypted_sso_table(sso_settings: Mapping[str, str | None] | None) -> Mapping[str, str | None] | None:
     if sso_settings is None:
         return None
@@ -4071,14 +4080,17 @@ async def test_ProxyConfig_db_env_var_saved_while_the_env_row_is_read_keeps_the_
     monkeypatch: pytest.MonkeyPatch, saved_logo: str | None, expected: str | None
 ) -> None:
     _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
-    pc: Final = ProxyConfig()
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
     saved_during_the_read: Final = asyncio.Event()
 
     async def env_row_read_before_a_save_finished(_, param_name: str) -> SimpleNamespace | None:
         if param_name != "environment_variables":
             return None
         if not saved_during_the_read.is_set():
+            clock.now = 1
             pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": saved_logo})
+            clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 2
             saved_during_the_read.set()
         return SimpleNamespace(param_name=param_name, param_value={"UI_LOGO_PATH": "https://example.com/older.png"})
 
@@ -4097,12 +4109,15 @@ async def test_ProxyConfig_sso_field_saved_while_the_sso_table_is_read_keeps_the
 ) -> None:
     _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
-    pc: Final = ProxyConfig()
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
     saved_during_the_read: Final = asyncio.Event()
 
     async def sso_row_read_before_a_save_finished(**_: object) -> SimpleNamespace:
         if not saved_during_the_read.is_set():
+            clock.now = 1
             pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": saved_client_id})
+            clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 2
             saved_during_the_read.set()
         return SimpleNamespace(sso_settings={"google_client_id": encrypt_value_helper("older-id")})
 
@@ -4113,6 +4128,71 @@ async def test_ProxyConfig_sso_field_saved_while_the_sso_table_is_read_keeps_the
 
     await pc._init_sso_settings_in_db(prisma_client)
     assert os.environ.get("GOOGLE_CLIENT_ID") == "older-id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("saved_logo", "stale_row", "expected_after_the_hold"),
+    [
+        ("https://example.com/saved.png", {"UI_LOGO_PATH": "https://example.com/older.png"}, "https://example.com/older.png"),
+        ("https://example.com/saved.png", {}, None),
+        (None, {"UI_LOGO_PATH": "https://example.com/older.png"}, "https://example.com/older.png"),
+    ],
+    ids=["set-then-older-value-read", "set-then-row-without-it-read", "reset-then-older-value-read"],
+)
+async def test_ProxyConfig_db_env_var_saved_before_a_stale_env_row_read_keeps_the_saved_value_until_the_hold_ends(
+    monkeypatch: pytest.MonkeyPatch,
+    saved_logo: str | None,
+    stale_row: Mapping[str, JsonValue],
+    expected_after_the_hold: str | None,
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    clock.now = 1
+    pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": saved_logo})
+
+    clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS
+    await _sync_db_env_row(monkeypatch, pc, stale_row, {})
+    within_the_hold: Final = os.environ.get("UI_LOGO_PATH")
+    clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 1
+    await _sync_db_env_row(monkeypatch, pc, stale_row, {})
+
+    assert (within_the_hold, os.environ.get("UI_LOGO_PATH")) == (saved_logo, expected_after_the_hold)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("saved_client_id", "stale_table", "expected_within_the_hold", "expected_after_the_hold"),
+    [
+        ("saved-id", {"google_client_id": "older-id"}, "saved-id", "older-id"),
+        ("saved-id", {}, "saved-id", None),
+        ("", {"google_client_id": "older-id"}, None, "older-id"),
+    ],
+    ids=["set-then-older-value-read", "set-then-empty-table-read", "cleared-then-older-value-read"],
+)
+async def test_ProxyConfig_sso_field_saved_before_a_stale_sso_table_read_keeps_the_saved_value_until_the_hold_ends(
+    monkeypatch: pytest.MonkeyPatch,
+    saved_client_id: str,
+    stale_table: Mapping[str, str | None],
+    expected_within_the_hold: str | None,
+    expected_after_the_hold: str | None,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    prisma_client: Final = _prisma_with_sso_table(_encrypted_sso_table(stale_table))
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    clock.now = 1
+    pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": saved_client_id})
+
+    clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS
+    await pc._init_sso_settings_in_db(prisma_client)
+    within_the_hold: Final = os.environ.get("GOOGLE_CLIENT_ID")
+    clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 1
+    await pc._init_sso_settings_in_db(prisma_client)
+
+    assert (within_the_hold, os.environ.get("GOOGLE_CLIENT_ID")) == (expected_within_the_hold, expected_after_the_hold)
 
 
 @pytest.mark.asyncio
@@ -4223,11 +4303,13 @@ async def test_ProxyConfig_db_env_var_an_endpoint_saved_then_cleared_takes_the_s
     _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
     if startup_logo is not None:
         monkeypatch.setenv("UI_LOGO_PATH", startup_logo)
-    pc: Final = ProxyConfig()
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
 
     pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": "https://example.com/saved-here.png"})
     assert os.environ.get("UI_LOGO_PATH") == "https://example.com/saved-here.png"
     if cleared_on_another_pod:
+        clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 1
         await _sync_db_env_row(monkeypatch, pc, {}, {})
     else:
         pc.apply_saved_db_environment_variables({"UI_LOGO_PATH": None})
@@ -4245,11 +4327,13 @@ async def test_ProxyConfig_sso_field_an_endpoint_saved_then_cleared_takes_the_st
     if startup_client_id is not None:
         monkeypatch.setenv("GOOGLE_CLIENT_ID", startup_client_id)
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
-    pc: Final = ProxyConfig()
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
 
     pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": "saved-here"})
     assert os.environ.get("GOOGLE_CLIENT_ID") == "saved-here"
     if cleared_on_another_pod:
+        clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 1
         await pc._init_sso_settings_in_db(_prisma_with_sso_table(_encrypted_sso_table({"google_client_id": ""})))
     else:
         pc.apply_saved_sso_environment_variables({"GOOGLE_CLIENT_ID": ""})
