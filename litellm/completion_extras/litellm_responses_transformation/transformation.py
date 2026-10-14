@@ -1376,7 +1376,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         for tool in tools:
             # convert function tool from chat completion to responses API format
             if tool.get("type") == "function" and isinstance(function_payload := tool.get("function"), dict):
-                function_tool = cast(ChatCompletionToolParamFunctionChunk, function_payload)
+                function_tool = cast(  # cast-ok: client tool payload
+                    ChatCompletionToolParamFunctionChunk, function_payload
+                )
                 converted_function: Final = FunctionToolParam(
                     name=function_tool["name"],
                     parameters=function_tool.get("parameters"),
@@ -1384,9 +1386,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     type="function",
                     description=function_tool.get("description"),
                 )
-                defer_loading: Final = tool.get(
-                    "defer_loading", cast(dict[str, object], function_payload).get("defer_loading")
-                )
+                payload_fields: Final = cast(dict[str, object], function_payload)  # cast-ok: key not in TypedDict
+                defer_loading: Final = tool.get("defer_loading", payload_fields.get("defer_loading"))
                 if isinstance(defer_loading, bool):
                     converted_function["defer_loading"] = defer_loading
                 responses_tools.append(converted_function)
