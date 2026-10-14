@@ -22,13 +22,21 @@ import {
 
 const numericInputSchema = z.union([z.string(), z.number()]).nullish();
 
-const teamAdminSettingsSchema = z.object({
+const teamAdminSettingsShape = {
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
   max_budget: numericInputSchema,
-});
+  soft_budget: numericInputSchema,
+};
 
-const INPUT_STEP: Readonly<Record<TeamAdminSettingsField, number>> = { tpm_limit: 1, rpm_limit: 1, max_budget: 0.01 };
+const teamAdminSettingsSchema = z.object(teamAdminSettingsShape);
+
+const INPUT_STEP: Readonly<Record<TeamAdminSettingsField, number>> = {
+  tpm_limit: 1,
+  rpm_limit: 1,
+  max_budget: 0.01,
+  soft_budget: 0.01,
+};
 
 const MAX_BUDGET_KEEP_OR_LOWER_HINT = "You can keep or lower this budget. Ask a proxy admin to raise it.";
 const MAX_BUDGET_RAISE_HINT =

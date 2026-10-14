@@ -13,6 +13,7 @@ describe("teamAdminFieldLabel", () => {
     ["tpm_limit", "Tokens per minute Limit (TPM)"],
     ["rpm_limit", "Requests per minute Limit (RPM)"],
     ["max_budget", "Max Budget (USD)"],
+    ["soft_budget", "Soft Budget (USD)"],
     ["raise_max_budget", "Raise the team's max budget"],
     ["projects", "Create and update projects"],
     ["create_member_keys", "Create keys for team members"],
@@ -73,6 +74,27 @@ describe("teamAdminSettingsChanges", () => {
     const values = { tpm_limit: "5000", rpm_limit: "50", max_budget: "5" };
 
     expect(teamAdminSettingsChanges(values, allStored, new Set(["rpm_limit"]))).toStrictEqual({ rpm_limit: 50 });
+  });
+});
+
+describe("teamAdminSettingsChanges for the soft budget", () => {
+  const stored = { soft_budget: 50 };
+  const enabled = new Set(["soft_budget"]);
+
+  it("sends a changed soft budget as a number", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "40" }, stored, enabled)).toStrictEqual({ soft_budget: 40 });
+  });
+
+  it("sends a cleared soft budget as no soft budget", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "" }, stored, enabled)).toStrictEqual({ soft_budget: null });
+  });
+
+  it("leaves out an unchanged soft budget", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "50" }, stored, enabled)).toStrictEqual({});
+  });
+
+  it("leaves out a changed soft budget when the proxy did not enable it", () => {
+    expect(teamAdminSettingsChanges({ soft_budget: "40" }, stored, new Set(["max_budget"]))).toStrictEqual({});
   });
 });
 
