@@ -290,10 +290,7 @@ def test_speech_falls_back_to_its_own_config(gradium_env, monkeypatch):
         assert response.content == _AUDIO
 
 
-def test_speech_tracks_cost_per_character(gradium_env, monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
+def test_speech_tracks_cost_per_character(gradium_env, local_model_cost_map):
     with respx.mock:
         respx.post(_URL).mock(return_value=httpx.Response(200, content=_AUDIO))
 
