@@ -1298,7 +1298,7 @@ async def test_server_disconnect_before_response_is_retried_on_a_fresh_connectio
         if next(attempts) > 1:
             writer.write(
                 b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n"
-                + b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+                b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
             )
             await writer.drain()
         writer.close()
