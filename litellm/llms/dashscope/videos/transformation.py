@@ -411,6 +411,22 @@ def _polled_model_id(logging_obj: object) -> str | None:
     return decode_video_id_with_provider(video_id).get("model_id") or None
 
 
+def _routed_model_group(logging_obj: object) -> str | None:
+    """
+    DashScope serves the same model name from several regional hosts, so a proxy with one deployment per
+    region has several deployments the router can only tell apart by the group each one is under. The
+    group the router picked is stamped onto the call, and a later status or content request resolves the
+    model encoded in the id to that group.
+    """
+    metadata: Final[object] = _logged_litellm_params(logging_obj).get("metadata")
+    try:
+        fields: Final = _PARAMETERS_ADAPTER.validate_python(metadata)
+    except ValidationError:
+        return None
+    model_group: Final = fields.get("deployment_model_name")
+    return model_group if isinstance(model_group, str) and model_group else None
+
+
 class DashScopeVideoConfig(BaseVideoConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseVideoConfig contract returns list
         return [
@@ -589,7 +605,8 @@ class DashScopeVideoConfig(BaseVideoConfig):
         requested: Final = self._requested_parameters(request_data)
         video_obj: Final = _video_object_from_task(task, raw_response, model=model, requested=requested)
         if custom_llm_provider and video_obj.id:
-            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
+            routed_group: Final = _routed_model_group(logging_obj) or model
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, routed_group)
         return video_obj
 
     @staticmethod

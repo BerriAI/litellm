@@ -12,6 +12,7 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -24,6 +25,7 @@ from litellm.llms.dashscope.videos.transformation import (
     _parse_task_response,
     _video_url_from_task,
 )
+from litellm.router import Router
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -399,6 +401,50 @@ class TestDashScopeVideoCreateResponse:
 
         # the 200 it arrived on would have the proxy retry a call the provider already rejected
         assert raised.value.status_code == 400
+
+
+BEIJING_HOST = "https://wan3-beijing.example"
+SINGAPORE_HOST = "https://wan3-singapore.example"
+
+
+def _two_region_router(singapore_model: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "wan3-singapore",
+                "litellm_params": {"model": singapore_model, "api_key": "sg-key", "api_base": SINGAPORE_HOST},
+            },
+            {
+                "model_name": "wan3-beijing",
+                "litellm_params": {"model": "dashscope/wan3.0-video", "api_key": "cn-key", "api_base": BEIJING_HOST},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize("singapore_model", ["qwencloud/wan3.0-video", "dashscope/wan3.0-video"])
+@respx.mock
+def test_created_video_id_resolves_back_to_the_region_that_created_the_task(singapore_model: str):
+    """Both regions serve the same upstream model name, under a different prefix or under the same
+    one, so neither that name nor the prefixed model string tells the two deployments apart. An id
+    carrying either resolves to whichever deployment is listed first, and the poll then leaves for
+    the other region's host and key with a task id that region never issued."""
+    router = _two_region_router(singapore_model)
+    respx.post(f"{BEIJING_HOST}/api/v1/services/aigc/video-generation/video-synthesis").mock(
+        return_value=httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+    )
+    task_get = respx.get(f"{BEIJING_HOST}/api/v1/tasks/{TASK_ID}").mock(
+        return_value=httpx.Response(200, json=_succeeded_task_payload())
+    )
+
+    created = router.video_generation(model="wan3-beijing", prompt="a cat on a roof")
+
+    resolved = router.resolve_model_name_from_model_id(decode_video_id_with_provider(created.id)["model_id"])
+    assert resolved == "wan3-beijing"
+
+    router.video_status(model=resolved, video_id=created.id)
+
+    assert [call.request.headers["authorization"] for call in task_get.calls] == ["Bearer cn-key"]
 
 
 class TestDashScopeVideoStatus:
