@@ -39,6 +39,8 @@ class PromptCachingCacheValue(TypedDict):
 PROMPT_CACHE_PIN_TTL_SECONDS: Final = 300
 _PROMPT_CACHE_PINS_TARGET: Final = "prompt_cache_pins"
 _TOOL_RUN_BLOCK_TYPES: Final = frozenset({"tool_use", "tool_result"})
+_MARK_KEYS: Final = frozenset({"cache_control", "prompt_cache_breakpoint"})
+_ENVELOPE_SKIPPED_KEYS: Final = _MARK_KEYS | {"content"}
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[JsonValue, ...])
 _PINS_ADAPTER: Final[TypeAdapter[tuple[JsonValue, ...] | None]] = TypeAdapter(tuple[JsonValue, ...] | None)
@@ -58,6 +60,14 @@ def _canonical_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def _carries_cache_mark(block: Mapping[str, object]) -> bool:
+    cache_control: Final = block.get("cache_control")
+    marker: Final = block.get("prompt_cache_breakpoint")
+    return (isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral") or (
+        isinstance(marker, dict) and marker.get("mode") == "explicit"
+    )
+
+
 def _block_unit(
     envelope: tuple[tuple[str, JsonValue], ...], message_run_type: str | None, block: JsonValue
 ) -> tuple[bytes, str | None]:
@@ -65,12 +75,12 @@ def _block_unit(
         return _canonical_bytes((envelope, block)), message_run_type
     block_type: Final = block.get("type")
     block_run_type: Final = block_type if isinstance(block_type, str) and block_type in _TOOL_RUN_BLOCK_TYPES else None
-    stripped: Final = _sorted_pairs(item for item in block.items() if item[0] != "cache_control")
+    stripped: Final = _sorted_pairs(item for item in block.items() if item[0] not in _MARK_KEYS)
     return _canonical_bytes((envelope, stripped)), message_run_type or block_run_type
 
 
 def _message_units(message: Mapping[str, JsonValue]) -> tuple[tuple[bytes, str | None], ...]:
-    envelope: Final = _sorted_pairs(item for item in message.items() if item[0] not in ("content", "cache_control"))
+    envelope: Final = _sorted_pairs(item for item in message.items() if item[0] not in _ENVELOPE_SKIPPED_KEYS)
     message_run_type: Final = "tool_result" if message.get("role") == "tool" else None
     content: Final = message.get("content")
     if isinstance(content, list) and content:
@@ -142,7 +152,7 @@ class PromptCachingCache:
         Extract the cacheable prefix from messages.
 
         The cacheable prefix is everything UP TO AND INCLUDING the LAST content block
-        (across all messages) that has cache_control. This includes ALL blocks before
+        (across all messages) that has cache_control or prompt_cache_breakpoint. This includes ALL blocks before
         the last cacheable block (even if they don't have cache_control).
 
         Args:
@@ -164,12 +174,7 @@ class PromptCachingCache:
             # Check for cache_control at message level (when content is a string)
             # This handles the case where cache_control is a sibling of string content:
             # {"role": "user", "content": "...", "cache_control": {"type": "ephemeral"}}
-            message_level_cache_control = message.get("cache_control")
-            if (
-                message_level_cache_control is not None
-                and isinstance(message_level_cache_control, dict)
-                and message_level_cache_control.get("type") == "ephemeral"
-            ):
+            if _carries_cache_mark(message):
                 last_cacheable_message_idx = msg_idx
                 # Set to None to indicate the entire message content is cacheable
                 # (not a specific content block index within a list)
@@ -180,15 +185,9 @@ class PromptCachingCache:
                 continue
 
             for content_idx, content_block in enumerate(content):
-                if isinstance(content_block, dict):
-                    cache_control = content_block.get("cache_control")
-                    if (
-                        cache_control is not None
-                        and isinstance(cache_control, dict)
-                        and cache_control.get("type") == "ephemeral"
-                    ):
-                        last_cacheable_message_idx = msg_idx
-                        last_cacheable_content_idx = content_idx
+                if isinstance(content_block, dict) and _carries_cache_mark(content_block):
+                    last_cacheable_message_idx = msg_idx
+                    last_cacheable_content_idx = content_idx
 
         # If no cacheable block found, return empty list (no cacheable prefix)
         if last_cacheable_message_idx is None:

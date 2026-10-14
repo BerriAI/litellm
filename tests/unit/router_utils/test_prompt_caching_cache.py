@@ -101,7 +101,11 @@ def test_extract_cacheable_prefix_mixed_string_and_list_content():
 
 
 @pytest.mark.asyncio
-async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
+@pytest.mark.parametrize(
+    "mark",
+    ({"cache_control": {"type": "ephemeral"}}, {"prompt_cache_breakpoint": {"mode": "explicit"}}),
+)
+async def test_same_cacheable_prefix_routes_to_same_deployment(mark: dict[str, dict[str, str]]) -> None:
     from litellm import Router
 
     def _messages(user_content: str):
@@ -116,7 +120,7 @@ async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
                     {
                         "type": "text",
                         "text": "Here is the full text of a complex legal agreement" * 400,
-                        "cache_control": {"type": "ephemeral"},
+                        **mark,
                     },
                 ],
             },

@@ -240,3 +240,66 @@ def test_without_drop_params_more_than_four_marks_are_sent_for_claude_to_answer(
     assert list(result.messages) == [
         {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(5)]}
     ]
+
+
+def test_a_message_level_breakpoint_on_list_content_takes_no_slot_under_drop_params():
+    messages: Final = [
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part("u", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "assistant", "content": [_part("a", prompt_cache_breakpoint=_EXPLICIT)]},
+        {
+            "role": "user",
+            "content": [_part("q", prompt_cache_breakpoint=_EXPLICIT)],
+            "prompt_cache_breakpoint": _EXPLICIT,
+        },
+    ]
+
+    result: Final = _resolved(messages, drop_params=True)
+
+    assert result.messages[0] == {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]}
+
+
+def test_a_message_level_breakpoint_on_a_tool_result_counts_toward_the_cap():
+    messages: Final = [
+        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(4)]},
+        {"role": "tool", "tool_call_id": "c1", "content": [_part("r")], "prompt_cache_breakpoint": _EXPLICIT},
+    ]
+
+    result: Final = _resolved(messages, drop_params=True)
+
+    assert list(result.messages) == [
+        {
+            "role": "user",
+            "content": [_part("0"), *(_part(str(index), cache_control=_EPHEMERAL) for index in range(1, 4))],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": [_part("r")], "cache_control": _EPHEMERAL},
+    ]
+
+
+def test_a_tool_marked_at_both_levels_takes_one_slot_under_drop_params():
+    tools: Final = [
+        {"type": "function", "function": {"name": "t", "cache_control": _EPHEMERAL}, "cache_control": _EPHEMERAL}
+    ]
+    messages: Final = [
+        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]}
+    ]
+
+    result: Final = _resolved(messages, tools, drop_params=True)
+
+    assert list(result.messages) == [
+        {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(3)]}
+    ]
+
+
+def test_a_null_tool_level_breakpoint_leaves_the_function_breakpoint_in_force():
+    tools: Final = [
+        {
+            "type": "function",
+            "prompt_cache_breakpoint": None,
+            "function": {"name": "t", "prompt_cache_breakpoint": _EXPLICIT},
+        }
+    ]
+
+    result: Final = _resolved([{"role": "user", "content": "hi"}], tools)
+
+    assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t"}, "cache_control": _EPHEMERAL}]

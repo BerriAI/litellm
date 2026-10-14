@@ -346,24 +346,33 @@ def test_injection_points_stand_down_behind_the_latest_four_breakpoints(gateway:
     assert gateway_injected(response_id) is False
 
 
+_PROFILE: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/scripted"
+
+
 @pytest.mark.parametrize(
-    ("base_model", "marked"), ((None, False), ("bedrock/mistral.mistral-large-2407-v1:0", False), (BEDROCK_MODEL, True))
+    ("provider", "model", "base_model", "marked"),
+    (
+        ("bedrock_converse", f"bedrock/converse/{_PROFILE}", None, False),
+        ("bedrock_converse", f"bedrock/converse/{_PROFILE}", "bedrock/mistral.mistral-large-2407-v1:0", False),
+        ("bedrock_converse", f"bedrock/converse/{_PROFILE}", BEDROCK_MODEL, True),
+        ("anthropic", "anthropic/glm-4.6", None, False),
+        ("anthropic", "anthropic/glm-4.6", f"anthropic/{ANTHROPIC_MODEL}", True),
+    ),
 )
-def test_an_application_inference_profile_is_marked_only_when_its_base_model_is_claude(
-    gateway: Gateway, base_model: str | None, marked: bool
+def test_a_model_id_without_claude_is_marked_only_when_its_base_model_is_claude(
+    gateway: Gateway, provider: Provider, model: str, base_model: str | None, marked: bool
 ) -> None:
     marker: Final = new_marker()
-    profile: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/scripted"
-    with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
+    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
+        deployment: Final = scenario.model(
             model_info=None if base_model is None else {"base_model": base_model},
-            **{**_litellm_params(gateway, wire, "bedrock_converse"), "model": f"bedrock/converse/{profile}"},
+            **{**_litellm_params(gateway, wire, provider), "model": model},
         )
-        status, _, text = post_chat(gateway, _body(model, marker, _marked(("system",))))
+        status, _, text = post_chat(gateway, _body(deployment, marker, _marked(("system",))))
         assert status == 200, text
         request: Final = _only_request(wire)
     assert b"prompt_cache_breakpoint" not in request.body, request.body
-    assert bedrock_labels(request) == ([_expected("bedrock_converse", "system", marker)] if marked else [])
+    assert _labels(provider, request) == ([_expected(provider, "system", marker)] if marked else [])
 
 
 def _drop_params_config(directory: Path) -> Path:

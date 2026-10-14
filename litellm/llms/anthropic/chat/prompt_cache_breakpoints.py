@@ -46,7 +46,7 @@ class _Placed:
 
 
 def _fields(value: object) -> _Fields | None:
-    return cast(_Fields, value) if isinstance(value, Mapping) else None  # cast-ok: request JSON has string keys
+    return cast(_Fields, value) if isinstance(value, dict) else None  # cast-ok: request JSON has string keys
 
 
 def _blocks(value: object) -> Sequence[object] | None:
@@ -157,7 +157,9 @@ def _with_function_breakpoint_hoisted(tool: _Fields) -> _Fields:
     marker: Final = None if function is None else function.get("prompt_cache_breakpoint")
     if function is None or marker is None:
         return tool
-    keeps_client_mark: Final = function.get("cache_control") is not None or "prompt_cache_breakpoint" in tool
+    keeps_client_mark: Final = (
+        function.get("cache_control") is not None or tool.get("prompt_cache_breakpoint") is not None
+    )
     return {
         **tool,
         "function": {key: value for key, value in function.items() if key != "prompt_cache_breakpoint"},
@@ -242,6 +244,15 @@ def _wire_position(path: _Path, messages: Sequence[object]) -> tuple[int, ...]:
     return (group, index, *block)
 
 
+def _on_wire(path: _Path, messages: Sequence[object], tools: Sequence[object]) -> bool:
+    """Claude sends a message-level mark on list content only for a tool result, and a mark under ``function`` only
+    when the tool carries none of its own."""
+    if path[0] == "tools":
+        return len(path) == 2 or (_fields(tools[int(path[1])]) or {}).get("cache_control") is None
+    message: Final = _fields(messages[int(path[1])]) or {}
+    return len(path) == 4 or not isinstance(message.get("content"), list) or message.get("role") == "tool"
+
+
 def _ttl(cache_control: object) -> Literal["5m", "1h"]:
     return "1h" if (_fields(cache_control) or {}).get("ttl") == "1h" else "5m"
 
@@ -252,17 +263,21 @@ def _kind(path: _Path, cache_control: object, translated: frozenset[_Path]) -> _
     return "free" if (_fields(cache_control) or {}).get("ttl") is None else "explicit"
 
 
-def _out_of_order(index: int, marks: Sequence[_Placed]) -> bool:
-    """Claude rejects a 1h mark read after a 5m one."""
-    if marks[index].ttl == "1h":
-        return any(other.kind != "free" and other.ttl == "5m" for other in marks[:index])
-    return any(other.kind != "free" and other.ttl == "1h" for other in marks[index + 1 :])
+def _chosen(mark: _Placed, ttl: Literal["5m", "1h"]) -> bool:
+    return mark.kind != "free" and mark.ttl == ttl
+
+
+def _last_chosen_hour(marks: Sequence[_Placed]) -> int:
+    return max((index for index, mark in enumerate(marks) if _chosen(mark, "1h")), default=-1)
 
 
 def _loosened(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]:
+    """Claude rejects a 1h mark read after a 5m one."""
+    first_five: Final = next((index for index, mark in enumerate(marks) if _chosen(mark, "5m")), len(marks))
+    last_hour: Final = _last_chosen_hour(marks)
     return tuple(
         _Placed(mark.path, "5m", "free")
-        if drop_params and mark.kind == "explicit" and _out_of_order(index, marks)
+        if drop_params and mark.kind == "explicit" and (index > first_five if mark.ttl == "1h" else index < last_hour)
         else mark
         for index, mark in enumerate(marks)
     )
@@ -272,10 +287,9 @@ def _settled(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]
     """A breakpoint without a ttl takes 1h when a 1h mark is read after it, so the request stays valid for Claude;
     under ``drop_params`` a ttl the client set on a breakpoint that breaks that order is dropped first."""
     loosened: Final = _loosened(marks, drop_params)
+    last_hour: Final = _last_chosen_hour(loosened)
     return tuple(
-        _Placed(mark.path, "1h", "free")
-        if mark.kind == "free" and any(later.kind != "free" and later.ttl == "1h" for later in loosened[index + 1 :])
-        else mark
+        _Placed(mark.path, "1h", "free") if mark.kind == "free" and index < last_hour else mark
         for index, mark in enumerate(loosened)
     )
 
@@ -306,7 +320,7 @@ def claude_prompt_cache(
         (
             _Placed(path, _ttl(block.get("cache_control")), _kind(path, block.get("cache_control"), translated))
             for path, block in _markable(renamed_messages, renamed_tools)
-            if block.get("cache_control") is not None
+            if block.get("cache_control") is not None and _on_wire(path, renamed_messages, renamed_tools)
         ),
         key=lambda mark: _wire_position(mark.path, messages),
     )
