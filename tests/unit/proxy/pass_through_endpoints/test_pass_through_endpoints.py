@@ -35,7 +35,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -3676,6 +3676,151 @@ async def test_pass_through_request_merge_query_params_rewrites_managed_ids_on_t
         "api-version": "preview",
         "file_id": "file-raw-123",
     }
+
+
+_UNISSUED_RESPONSE_ID: Final = "resp_0000000000000000unissued"
+
+
+def _passthrough_object_rows(owner_user_id: str | None) -> SimpleNamespace:
+    row: Final = None if owner_user_id is None else SimpleNamespace(created_by=owner_user_id, team_id=None)
+    return SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_managedobjecttable=SimpleNamespace(
+                find_first=AsyncMock(return_value=row), upsert=AsyncMock(), update=AsyncMock()
+            )
+        )
+    )
+
+
+async def _run_managed_responses_pass_through(
+    method: str,
+    target: str,
+    body: dict[str, object] | None,
+    general_settings: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: SimpleNamespace,
+) -> tuple[str, int]:
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    recorded_requests: Final[list[httpx.Request]] = []
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        recorded_requests.append(upstream_request)
+        return httpx.Response(200, json={"object": "list", "data": []})
+
+    real_handler: Final = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(None)},
+    )
+    cache_dict: Final = litellm.in_memory_llm_clients_cache.cache_dict
+    cache_key: Final = next(key for key, cached in cache_dict.items() if cached is real_handler)
+    cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
+
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = method
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams("")
+    mock_request.body = AsyncMock(return_value=b"")
+
+    mock_proxy_logging: Final = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, endpoint_type=None: data
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    mock_proxy_logging.get_proxy_hook = MagicMock(
+        return_value=_FakeManagedFilesHook(SimpleNamespace(created_by="user-1", team_id=None))
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"passthrough_managed_object_ids": True, **general_settings},
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test-master-key"),
+        ):
+            response: Final = await pass_through_request(
+                request=mock_request,
+                target=target,
+                custom_headers={},
+                user_api_key_dict=user_api_key_dict,
+                custom_body=body,
+                custom_llm_provider="openai",
+            )
+        return str(response.status_code), len(recorded_requests)
+    except ProxyException as refusal:
+        return f"{refusal.code} {refusal.message}", len(recorded_requests)
+    finally:
+        cache_dict[cache_key] = real_handler
+
+
+_RESPONSE_ID_ROUTES: Final = (
+    ("GET", f"https://api.openai.com/v1/responses/{_UNISSUED_RESPONSE_ID}", None),
+    ("GET", f"https://api.openai.com/v1/responses/{_UNISSUED_RESPONSE_ID}/input_items", None),
+    (
+        "POST",
+        "https://api.openai.com/v1/responses/compact",
+        {"model": "gpt-5.6", "previous_response_id": _UNISSUED_RESPONSE_ID},
+    ),
+    (
+        "POST",
+        "https://api.openai.com/v1/responses",
+        {"model": "gpt-5.6", "previous_response_id": _UNISSUED_RESPONSE_ID},
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "target", "body"), _RESPONSE_ID_ROUTES)
+async def test_managed_pass_through_refuses_a_response_id_it_never_issued(method, target, body):
+    outcome, upstream_calls = await _run_managed_responses_pass_through(
+        method, target, body, {}, UserAPIKeyAuth(user_id="user-2"), _passthrough_object_rows(None)
+    )
+
+    assert outcome.startswith("403 ")
+    assert "allow_unmanaged_response_ids" in outcome
+    assert upstream_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "target", "body"), _RESPONSE_ID_ROUTES)
+@pytest.mark.parametrize(
+    ("general_settings", "user_api_key_dict", "owner_user_id"),
+    [
+        ({"allow_unmanaged_response_ids": True}, UserAPIKeyAuth(user_id="user-2"), None),
+        ({"disable_responses_id_security": True}, UserAPIKeyAuth(user_id="user-2"), None),
+        ({}, UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN), None),
+        ({}, UserAPIKeyAuth(user_id="user-1"), "user-1"),
+    ],
+    ids=["allow_unmanaged_response_ids", "disable_responses_id_security", "proxy_admin", "issued_to_the_caller"],
+)
+async def test_managed_pass_through_forwards_ids_it_may_address(
+    method, target, body, general_settings, user_api_key_dict, owner_user_id
+):
+    outcome, upstream_calls = await _run_managed_responses_pass_through(
+        method, target, body, general_settings, user_api_key_dict, _passthrough_object_rows(owner_user_id)
+    )
+
+    assert (outcome, upstream_calls) == ("200", 1)
+
+
+@pytest.mark.asyncio
+async def test_managed_pass_through_still_hides_a_response_issued_to_someone_else():
+    outcome, upstream_calls = await _run_managed_responses_pass_through(
+        "GET",
+        f"https://api.openai.com/v1/responses/{_UNISSUED_RESPONSE_ID}",
+        None,
+        {"allow_unmanaged_response_ids": True},
+        UserAPIKeyAuth(user_id="user-2"),
+        _passthrough_object_rows("user-1"),
+    )
+
+    assert outcome.startswith("404 ")
+    assert upstream_calls == 0
 
 
 @pytest.mark.asyncio

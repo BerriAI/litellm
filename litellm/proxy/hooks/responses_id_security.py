@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 _RESPONSES_API_PROVIDER_PREFIX: Final = "/openai"
 _RESPONSES_API_CREATE_ROUTES: Final = frozenset({"/v1/responses", "/responses"})
 
-_UNMANAGED_RESPONSE_ID_DETAIL: Final = (
+UNMANAGED_RESPONSE_ID_DETAIL: Final = (
     "Forbidden. This response id was not issued by this proxy, so the proxy cannot tell who owns it. "
     "To let keys address responses this proxy did not issue, set "
     "general_settings::allow_unmanaged_response_ids to True in the config.yaml file."
@@ -46,13 +46,27 @@ def _proxy_general_settings() -> Mapping[str, object]:
     return general_settings
 
 
-def _proxy_signing_key() -> str | None:
+def proxy_signing_key() -> str | None:
     import os
 
     from litellm.proxy.proxy_server import master_key
 
     salt_key: Final = os.getenv("LITELLM_SALT_KEY", None)
     return master_key if salt_key is None else salt_key
+
+
+def unmanaged_response_ids_allowed(
+    general_settings: Mapping[str, object],
+    signing_key: str | None,
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> bool:
+    if general_settings.get("disable_responses_id_security", False):
+        return True
+    if general_settings.get("allow_unmanaged_response_ids", False):
+        return True
+    if signing_key is None:
+        return True
+    return user_api_key_dict.user_role in _PROXY_ADMIN_ROLES
 
 
 _RESPONSE_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -108,7 +122,7 @@ class ResponsesIDSecurity(CustomLogger):
     def __init__(
         self,
         general_settings_reader: Callable[[], Mapping[str, object]] = _proxy_general_settings,
-        signing_key_reader: Callable[[], str | None] = _proxy_signing_key,
+        signing_key_reader: Callable[[], str | None] = proxy_signing_key,
     ) -> None:
         self._general_settings_reader: Final = general_settings_reader
         self._signing_key_reader: Final = signing_key_reader
@@ -152,21 +166,10 @@ class ResponsesIDSecurity(CustomLogger):
             self.check_user_access_to_response_id(user_id, team_id, user_api_key_dict)
             return original_response_id
 
-        if self._unmanaged_response_ids_allowed(user_api_key_dict):
+        if unmanaged_response_ids_allowed(self._general_settings_reader(), self._get_signing_key(), user_api_key_dict):
             return response_id
 
-        raise HTTPException(status_code=403, detail=_UNMANAGED_RESPONSE_ID_DETAIL)
-
-    def _unmanaged_response_ids_allowed(self, user_api_key_dict: "UserAPIKeyAuth") -> bool:
-        general_settings: Final = self._general_settings_reader()
-
-        if general_settings.get("disable_responses_id_security", False):
-            return True
-        if general_settings.get("allow_unmanaged_response_ids", False):
-            return True
-        if self._get_signing_key() is None:
-            return True
-        return user_api_key_dict.user_role in _PROXY_ADMIN_ROLES
+        raise HTTPException(status_code=403, detail=UNMANAGED_RESPONSE_ID_DETAIL)
 
     def check_user_access_to_response_id(
         self,

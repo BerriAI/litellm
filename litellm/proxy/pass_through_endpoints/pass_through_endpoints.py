@@ -160,6 +160,7 @@ pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
+_REQUEST_BODY_VIEW: Final = TypeAdapter(Mapping[str, object])
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -1339,7 +1340,13 @@ async def pass_through_request(
             )
             _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook("managed_files")
             if _passthrough_managed_hook is not None:
+                from litellm.proxy.hooks.responses_id_security import (
+                    UNMANAGED_RESPONSE_ID_DETAIL,
+                    proxy_signing_key,
+                    unmanaged_response_ids_allowed,
+                )
                 from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+                    addresses_unissued_response_id,
                     rewrite_body_ids,
                     rewrite_path_ids,
                     rewrite_query_ids,
@@ -1347,6 +1354,16 @@ async def pass_through_request(
                 from litellm.proxy.proxy_server import (
                     prisma_client as _passthrough_prisma,
                 )
+
+                if not unmanaged_response_ids_allowed(
+                    general_settings_view(), proxy_signing_key(), user_api_key_dict
+                ) and await addresses_unissued_response_id(
+                    url.path,
+                    _REQUEST_BODY_VIEW.validate_python(_parsed_body or {}),
+                    _managed_id_provider,
+                    _passthrough_prisma,
+                ):
+                    raise HTTPException(status_code=403, detail=UNMANAGED_RESPONSE_ID_DETAIL)
 
                 _original_path: Final = url.path
                 _original_query_params: Final = requested_query_params
