@@ -150,7 +150,6 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         return data
 
     def uses_native_structured_output(self, model: str) -> bool:
-        """Vertex AI Claude only takes ``output_config.format`` when its own map entry says so."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         return (

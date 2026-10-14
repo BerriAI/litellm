@@ -1,6 +1,7 @@
 
 import copy
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -968,10 +969,20 @@ def test_vertex_ai_fable_5_1_response_format_uses_native_output_format(local_mod
     assert "tools" not in result_params
 
 
+def _is_tool_based_vertex_claude_rejecting_forced_tools(info: Mapping[str, object]) -> bool:
+    return (
+        info.get("litellm_provider") == "vertex_ai-anthropic_models"
+        and info.get("supports_forced_tool_use") is False
+        and info.get("supports_native_structured_output") is not True
+    )
+
+
 def test_vertex_ai_tool_based_response_format_skips_forced_tool_choice_when_model_rejects_it(local_model_cost_map):
-    """Regression: the vertex map entry for Sonnet 5.5 has no native structured output
-    and rejects forced tool use, so the tool-based path must emit the json tool without
-    forcing it. A stand-in model name used to hide the real model from that check."""
+    model: Final = next(
+        name.removeprefix("vertex_ai/")
+        for name, info in litellm.model_cost.items()
+        if _is_tool_based_vertex_claude_rejecting_forced_tools(info)
+    )
     result_params = VertexAIAnthropicConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -983,7 +994,7 @@ def test_vertex_ai_tool_based_response_format_skips_forced_tool_choice_when_mode
             }
         },
         optional_params={},
-        model="claude-sonnet-5-5",
+        model=model,
         drop_params=False,
     )
 

@@ -73,7 +73,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         return AnthropicConfig.get_supported_openai_params(self, model)
 
     def uses_native_structured_output(self, model: str) -> bool:
-        """Bedrock Invoke only takes ``output_config.format`` when its own map entry says so."""
         from litellm.utils import supports_native_structured_output
 
         return supports_native_structured_output(model=model, custom_llm_provider="bedrock")

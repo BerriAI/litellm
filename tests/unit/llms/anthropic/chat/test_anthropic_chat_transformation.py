@@ -8194,9 +8194,6 @@ def test_metadata_user_id_from_litellm_params_strips_extras():
 
 @pytest.mark.parametrize("user_id", [12345, {"id": "abc123"}, ["abc123"]])
 def test_metadata_non_string_user_id_is_skipped_instead_of_raising(user_id):
-    """Regression: a non-string user_id in litellm_params metadata used to hit re.match and
-    raise TypeError (a proxy 500). It is skipped, the same way the ``user`` param path skips
-    non-strings."""
     data = _make_transform_request(
         optional_params={},
         litellm_params={"metadata": {"user_id": user_id}},
