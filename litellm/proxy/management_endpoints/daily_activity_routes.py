@@ -19,6 +19,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     ScopeDenied,
     daily_activity_repository,
     get_daily_activity_aggregated,
+    get_user_api_key_filter,
     parse_canonical_date_range,
     raise_public,
     spend_logs_window,
@@ -286,6 +287,17 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 prisma_client,
                 user_aggregated=resolver.entity == "user",
             )
+            if resolver.entity == "user" and resolved.scope.entity_ids is not None:
+                user_ids: Final = resolved.scope.entity_ids
+                api_keys: Final = (
+                    await get_user_api_key_filter(prisma_client, user_ids[0], entity_query.api_key)
+                    if len(user_ids) == 1
+                    else ()
+                )
+                resolved = replace(
+                    resolved,
+                    scope=replace(resolved.scope, entity_ids=None, api_keys=tuple(api_keys)),
+                )
             return await get_daily_activity_aggregated(
                 repository,
                 resolved.scope,

@@ -534,7 +534,13 @@ def _prisma_client() -> object:
     db: Final = SimpleNamespace(
         litellm_usertable=_PrismaTable((user, other_user)),
         litellm_teamtable=_PrismaTable((team, other_team)),
-        litellm_verificationtoken=_PrismaTable((SimpleNamespace(token="key-alpha", user_id="user-a"),)),
+        litellm_verificationtoken=_PrismaTable(
+            tuple(
+                SimpleNamespace(token=token, user_id="user-a")
+                for token in ("key-alpha", "key-beta", "key-gamma", "key-cache")
+            )
+        ),
+        litellm_deletedverificationtoken=_PrismaTable((SimpleNamespace(token="key-target", user_id="user-a"),)),
         litellm_organizationmembership=_PrismaTable(
             (
                 SimpleNamespace(user_id="user-a", organization_id="org-a", user_role="org_admin"),
@@ -1375,9 +1381,43 @@ def test_user_aggregate_keeps_current_day_query_semantics(
     assert response.status_code == 200, response.text
     assert response.json()["metadata"]["total_spend"] == pytest.approx(14.5)
     scope: Final = repository.aggregated.call_args.args[0]
-    assert scope.entity_ids == ("user-a",)
+    assert scope.entity_ids is None
+    assert set(scope.api_keys or ()) == {"key-alpha", "key-beta", "key-gamma", "key-cache", "key-target"}
     assert scope.timezone_offset_minutes == 480
     assert scope.include_current_utc_day is True
+
+
+def test_user_aggregate_rejects_api_keys_not_owned_by_user(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        "/user/daily/activity/aggregated",
+        params={**_DATE_PARAMS, "user_id": "user-a", "api_key": "key-other-user"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["total_spend"] == 0
+    scope: Final = repository.aggregated.call_args.args[0]
+    assert scope.entity_ids is None
+    assert scope.api_keys == ()
+
+
+def test_user_aggregate_fails_closed_when_owned_key_lookup_errors(
+    daily_activity_client: tuple[TestClient, _FakeRepository], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.management_endpoints import daily_activity_routes
+
+    async def fail_key_lookup(*args: object, **kwargs: object) -> list[str]:
+        raise RuntimeError("key lookup failed")
+
+    client, repository = daily_activity_client
+    monkeypatch.setattr(daily_activity_routes, "get_user_api_key_filter", fail_key_lookup)
+    response: Final = client.get(
+        "/user/daily/activity/aggregated",
+        params={**_DATE_PARAMS, "user_id": "user-a"},
+    )
+    assert response.status_code == 500, response.text
+    repository.aggregated.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
