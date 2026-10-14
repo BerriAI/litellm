@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Final, Protocol, TypeVar, cast  # noqa: TID251  # trusts the native stub at the binding boundary
 
-_Call = TypeVar("_Call")
+_Call: Final = TypeVar("_Call")
 
 
 @dataclass(frozen=True, slots=True)
