@@ -13,6 +13,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
@@ -1803,6 +1805,33 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     return cast(  # cast-ok: same block shape as the input with the marker key renamed
         _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
     )
+
+
+_BREAKPOINT_BLOCK_LIST_KEYS: Final = frozenset({"content", "tool_calls"})
+_BREAKPOINT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_BREAKPOINT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _without_prompt_cache_breakpoint(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    fields: Final = _BREAKPOINT_FIELDS.validate_python(value)
+    return {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
+
+
+def _breakpoints_stripped_from(key: str, value: object) -> object:
+    if key in _BREAKPOINT_BLOCK_LIST_KEYS and isinstance(value, list):
+        return [_without_prompt_cache_breakpoint(block) for block in _BREAKPOINT_BLOCKS.validate_python(value)]
+    return _without_prompt_cache_breakpoint(value) if key == "function" else value
+
+
+def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
+    """A message or tool definition with every ``prompt_cache_breakpoint`` removed: its own, its content parts',
+    its tool calls' and its ``function``'s."""
+    stripped: Final = {
+        key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
+    }
+    return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
 
 
 LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
