@@ -23,6 +23,7 @@ import weakref
 from collections import defaultdict
 from collections.abc import (
     AsyncGenerator,
+    AsyncIterable,
     AsyncIterator,
     Awaitable,
     Callable,
@@ -724,6 +725,30 @@ def _prime_stream(stream: CustomStreamWrapper) -> _PrimedStream:
         return _PrimedStream(first_chunk=None)
     except MidStreamFallbackError as e:
         raise _mid_stream_retry_trigger(e) from e
+
+
+def _primed_items(model_response: Iterable[object], primed: _PrimedStream | None) -> Iterator[object]:
+    """The stream's items with the chunk _prime_stream already read put back in front (no primed: the stream as is)."""
+    if primed is None:
+        yield from model_response
+        return
+    if primed.first_chunk is None:
+        return
+    yield primed.first_chunk
+    yield from model_response
+
+
+async def _aprimed_items(model_response: AsyncIterable[object], primed: _PrimedStream | None) -> AsyncIterator[object]:
+    """Async twin of _primed_items for _aprime_stream."""
+    if primed is None:
+        async for item in model_response:
+            yield item
+        return
+    if primed.first_chunk is None:
+        return
+    yield primed.first_chunk
+    async for item in model_response:
+        yield item
 
 
 def _stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
@@ -3141,11 +3166,8 @@ class Router:
         async def stream_with_fallbacks():
             fallback_response = None  # Track for cleanup in finally
             try:
-                if primed is None or primed.first_chunk is not None:
-                    if primed is not None:
-                        yield primed.first_chunk
-                    async for item in model_response:
-                        yield item
+                async for item in _aprimed_items(model_response, primed):
+                    yield item
             except MidStreamFallbackError as e:
                 with anyio.CancelScope(shield=True):
                     await close_model_response()
@@ -3755,11 +3777,8 @@ class Router:
         def stream_with_fallbacks():
             fallback_response = None
             try:
-                if primed is None or primed.first_chunk is not None:
-                    if primed is not None:
-                        yield primed.first_chunk
-                    for item in model_response:
-                        yield item
+                for item in _primed_items(model_response, primed):
+                    yield item
             except MidStreamFallbackError as e:
                 if fallbacks_disabled_for_request(initial_kwargs) or (
                     not e.is_pre_first_chunk

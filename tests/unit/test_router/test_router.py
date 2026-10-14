@@ -26198,3 +26198,32 @@ async def test_aprime_stream_direct_call(first, expected, raised):
     with pytest.raises(type(raised)) as caught:
         await _aprime_stream(_PrimingStream(first))
     assert caught.value is raised
+
+
+def _primed_items_cases():
+    from litellm.router import _PrimedStream
+
+    return [
+        pytest.param(None, ["a", "b"], ["a", "b"], id="unprimed-stream-as-is"),
+        pytest.param(_PrimedStream(first_chunk=None), ["a", "b"], [], id="empty-stream-not-touched"),
+        pytest.param(_PrimedStream(first_chunk="first"), ["a", "b"], ["first", "a", "b"], id="first-chunk-put-back"),
+    ]
+
+
+@pytest.mark.parametrize("primed, rest, expected", _primed_items_cases())
+def test_primed_items_direct_call(primed, rest, expected):
+    from litellm.router import _primed_items
+
+    assert list(_primed_items(iter(rest), primed)) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primed, rest, expected", _primed_items_cases())
+async def test_aprimed_items_direct_call(primed, rest, expected):
+    from litellm.router import _aprimed_items
+
+    async def stream():
+        for item in rest:
+            yield item
+
+    assert [item async for item in _aprimed_items(stream(), primed)] == expected
