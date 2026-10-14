@@ -261,7 +261,6 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-guardrail-scan-id",
     "x-litellm-guardrail-scan-metadata",
     "x-litellm-cache-key",
-    "traceresponse",
 ]
 
 # Gemini model-specific minimal thinking budget constants

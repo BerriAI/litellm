@@ -1,3 +1,4 @@
+from contextvars import ContextVar
 from typing import Final
 
 from opentelemetry import trace
@@ -11,6 +12,14 @@ from opentelemetry.trace import Span, format_span_id, format_trace_id
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from litellm.integrations.otel.model.semconv import LiteLLM
+
+_LITELLM_SERVER_SPAN: Final[ContextVar[Span | None]] = ContextVar(
+    "litellm_otel_traceresponse_server_span", default=None
+)
+
+
+def claim_server_span(span: Span) -> None:
+    _LITELLM_SERVER_SPAN.set(span)
 
 
 def _response_header(message: dict[str, object], name: str) -> str | None:  # mutable-ok: asgi_getter takes a dict
@@ -43,6 +52,8 @@ class UpstreamFirstTraceResponsePropagator(ResponsePropagator):
         if start is None:
             return
         span: Final = trace.get_current_span(context)
+        if span is not _LITELLM_SERVER_SPAN.get():
+            return
         call_id: Final = _response_header(start, "x-litellm-call-id")
         if call_id:
             span.set_attribute(LiteLLM.CALL_ID, call_id)

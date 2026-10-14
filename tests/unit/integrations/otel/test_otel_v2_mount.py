@@ -5,6 +5,7 @@ surface and the server-span + shared-provider behavior it produces.
 """
 
 
+import contextvars
 from datetime import datetime, timezone
 
 import pytest
@@ -45,6 +46,8 @@ from litellm.integrations.otel.mount import (  # noqa: E402
     PASSTHROUGH_PREFIXES,
     _passthrough_span_name_hook,
     instrument_fastapi_app,
+    trace_response_expose_headers,
+    trace_response_headers,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: E402
     HttpPassThroughEndpointHelpers,
@@ -496,10 +499,50 @@ def test_an_operator_response_propagator_is_kept(monkeypatch):
 def test_browsers_can_read_traceresponse_through_cors(monkeypatch):
     provider, _ = _exporting_provider()
     app = _traced_app(monkeypatch, provider)
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], expose_headers=LITELLM_UI_ALLOW_HEADERS)
+    app.add_middleware(
+        CORSMiddleware, allow_origins=["*"], expose_headers=[*LITELLM_UI_ALLOW_HEADERS, *trace_response_expose_headers()]
+    )
 
     response = TestClient(app).get("/success", headers={"origin": "https://ui.example.com"})
 
     exposed = {name.strip() for name in response.headers["access-control-expose-headers"].split(",")}
     assert "traceresponse" in exposed
     assert response.headers["traceresponse"]
+
+
+def test_cors_leaves_traceresponse_unexposed_with_the_gate_off(monkeypatch):
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+
+    assert "traceresponse" not in [*LITELLM_UI_ALLOW_HEADERS, *trace_response_expose_headers()]
+
+
+def test_other_instrumented_apps_in_the_process_get_no_traceresponse(monkeypatch):
+    provider, _ = _exporting_provider()
+    litellm_client = TestClient(_traced_app(monkeypatch, provider))
+    operator_app = fastapi.FastAPI()
+
+    @operator_app.get("/operator")
+    async def operator_route():
+        return {"ok": True}
+
+    FastAPIInstrumentor.instrument_app(operator_app, tracer_provider=provider)
+    try:
+        operator_response = TestClient(operator_app).get("/operator")
+        litellm_response = litellm_client.get("/success")
+    finally:
+        FastAPIInstrumentor.uninstrument_app(operator_app)
+
+    assert "traceresponse" not in operator_response.headers
+    assert litellm_response.headers["traceresponse"]
+
+
+def test_the_unhandled_error_helper_names_the_span_it_is_given_in_any_context(monkeypatch):
+    provider, _ = _exporting_provider()
+    _traced_app(monkeypatch, provider)
+    span = provider.get_tracer(__name__).start_span("POST /v1/chat/completions", kind=SpanKind.SERVER)
+    context = span.get_span_context()
+
+    headers = contextvars.Context().run(trace_response_headers, span)
+
+    assert headers["traceresponse"] == f"00-{context.trace_id:032x}-{context.span_id:016x}-01"

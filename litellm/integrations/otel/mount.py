@@ -79,7 +79,7 @@ class _RenameableSpan(Protocol):
     def set_attribute(self, key: str, value: str) -> None: ...
 
 
-def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: dict) -> None:
+def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: Mapping[str, object]) -> None:
     """FastAPI ``server_request_hook``: give passthrough server spans a useful name.
 
     The instrumentation matches the route at span creation, so both the span name
@@ -92,8 +92,8 @@ def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: dict) -> 
     try:
         if span is None or not span.is_recording():
             return
-        path: Final = scope.get("path") or ""
-        method: Final = scope.get("method") or ""
+        path: Final = str(scope.get("path") or "")
+        method: Final = str(scope.get("method") or "")
         first_segment: Final = path.lstrip("/").split("/", 1)[0]
         if first_segment in PASSTHROUGH_PREFIXES:
             span.update_name(f"{method} {path}".strip())
@@ -115,9 +115,10 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
     after config load (see ``proxy_startup_event``), and the proxy delegates to it.
     That way server spans and gen-ai spans share one provider and the same trace.
 
-    Once instrumented, every sampled HTTP response carries a ``traceresponse``
-    header naming its server span, unless the response already relays an upstream's
-    ``traceresponse`` or another response propagator is already registered. A relayed
+    Once instrumented, every sampled HTTP response this app sends carries a
+    ``traceresponse`` header naming its server span, unless the response already
+    relays an upstream's ``traceresponse`` or another response propagator is already
+    registered. Other OTel-instrumented apps in the same process get no header. A relayed
     ``traceresponse`` from an upstream that restarted the trace becomes a link on the
     server span. The server span also gets ``litellm.call_id`` from the response's
     ``x-litellm-call-id`` header. ``tracer_provider`` defaults to the global provider.
@@ -137,7 +138,15 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
             set_global_response_propagator,  # pyright: ignore[reportUnknownVariableType]  # upstream leaves its parameter unannotated
         )
 
-        from litellm.integrations.otel.trace_response import UpstreamFirstTraceResponsePropagator
+        from litellm.integrations.otel.trace_response import (
+            UpstreamFirstTraceResponsePropagator,
+            claim_server_span,
+        )
+
+        def server_request_hook(span: "Span | None", scope: Mapping[str, object]) -> None:
+            if span is not None:
+                claim_server_span(span)
+            _passthrough_span_name_hook(span, scope)
 
         excluded_urls: Final = (
             os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
@@ -148,7 +157,7 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
             app,
             tracer_provider=tracer_provider,
             excluded_urls=excluded_urls,
-            server_request_hook=_passthrough_span_name_hook,
+            server_request_hook=server_request_hook,
             # Drop the ASGI "http receive"/"http send" lifecycle sub-spans: they
             # are low-value noise and (for passthrough) carry the catch-all route
             # template in their name, which can't be rewritten from a hook.
@@ -158,6 +167,10 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
             set_global_response_propagator(UpstreamFirstTraceResponsePropagator())
     except Exception as e:
         verbose_logger.debug("Skipping OTel V2 FastAPI instrumentation: %s", e)
+
+
+def trace_response_expose_headers() -> tuple[str, ...]:
+    return ("traceresponse",) if is_otel_v2_enabled() else ()
 
 
 def trace_response_headers(span: "Span | None") -> Mapping[str, str]:
@@ -175,8 +188,11 @@ def trace_response_headers(span: "Span | None") -> Mapping[str, str]:
             asgi_setter,
         )
         from opentelemetry.instrumentation.propagators import get_global_response_propagator
+
+        from litellm.integrations.otel.trace_response import claim_server_span
     except ImportError:
         return MappingProxyType({})
+    claim_server_span(span)
     propagator: Final = get_global_response_propagator()  # pyright: ignore[reportUnknownVariableType]  # upstream leaves inject unannotated
     if propagator is None:
         return MappingProxyType({})

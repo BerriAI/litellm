@@ -1869,7 +1869,11 @@ app = FastAPI(
 ## middleware after an application has started". See
 ## ``litellm.integrations.otel.mount`` for the full rationale; the call is a safe
 ## no-op when the gate is off or the instrumentation package is unavailable.
-from litellm.integrations.otel.mount import instrument_fastapi_app, trace_response_headers
+from litellm.integrations.otel.mount import (
+    instrument_fastapi_app,
+    trace_response_expose_headers,
+    trace_response_headers,
+)
 
 instrument_fastapi_app(app)
 
@@ -2575,7 +2579,7 @@ app.add_middleware(
     allow_credentials=allow_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=LITELLM_UI_ALLOW_HEADERS,
+    expose_headers=[*LITELLM_UI_ALLOW_HEADERS, *trace_response_expose_headers()],
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
