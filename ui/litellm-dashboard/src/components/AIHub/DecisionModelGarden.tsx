@@ -20,6 +20,8 @@ import { uiHref } from "@/utils/uiHref";
 
 const PREVIEW_COUNT = 8;
 
+const plural = (count: number, one: string, many: string): string => (count === 1 ? one : many);
+
 const ROUTE_LINKS: Readonly<Record<DecisionRoute, { readonly href: string; readonly label: string }>> = {
   decisions: { href: DECISIONS_DOCS_URL, label: "/v1/decisions docs" },
   "self-hosted": { href: DECISIONS_SELF_HOSTED_DOCS_URL, label: "Self-hosted, own route" },
@@ -118,12 +120,13 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ accessToken, 
         <div className="min-w-0 flex-1">
           <h3 className="m-0 text-base font-semibold text-foreground">Decision models LiteLLM supports</h3>
           <p className="m-0 mt-0.5 text-sm text-muted-foreground">
-            {routedRows.length} decision models across {routedProviderCount} providers answer on{" "}
-            <code>/v1/decisions</code> once added to this proxy.
+            {routedRows.length} decision {plural(routedRows.length, "model", "models")} across {routedProviderCount}{" "}
+            {plural(routedProviderCount, "provider", "providers")} {plural(routedRows.length, "answers", "answer")} on{" "}
+            <code>/v1/decisions</code>.
             {selfHostedCount > 0 &&
-              ` ${selfHostedCount} more ${selfHostedCount === 1 ? "is self-hosted and answers on its own route" : "are self-hosted and answer on their own routes"}.`}
+              ` ${selfHostedCount} more ${plural(selfHostedCount, "is self-hosted and answers on its own route", "are self-hosted and answer on their own routes")}.`}
             {needsUpgradeCount > 0 &&
-              ` ${needsUpgradeCount} more ${needsUpgradeCount === 1 ? "needs" : "need"} a newer LiteLLM version.`}
+              ` ${needsUpgradeCount} more ${plural(needsUpgradeCount, "needs", "need")} a newer LiteLLM version.`}
           </p>
         </div>
         <Button

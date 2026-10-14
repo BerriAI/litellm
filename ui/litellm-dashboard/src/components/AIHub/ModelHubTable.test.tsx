@@ -443,7 +443,7 @@ describe("ModelHubTable", () => {
       });
 
       const garden = await screen.findByTestId("decision-model-garden");
-      expect(garden).toHaveTextContent("1 decision models across 1 providers answer on /v1/decisions");
+      expect(garden).toHaveTextContent("1 decision model across 1 provider answers on /v1/decisions.");
       const card = within(garden).getByTestId("decision-model-card-gpt-6-luna");
       expect(await within(card).findByRole("link", { name: "Add model" })).toHaveAttribute(
         "href",
