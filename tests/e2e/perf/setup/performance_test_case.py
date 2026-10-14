@@ -18,6 +18,7 @@ GuardrailMode = Literal["pre_call", "post_call"]
 Metric = Literal[
     "unexpected_status_count",
     "gateway_added_seconds",
+    "time_to_first_token_seconds",
     "memory_growth_megabytes",
 ]
 UserRole = Literal["internal_user", "internal_user_viewer", "proxy_admin", "proxy_admin_viewer"]
