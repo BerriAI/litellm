@@ -37,10 +37,10 @@ import httpx
 import httpx2
 from fastapi import HTTPException
 from httpx import HTTPStatusError
-from mcp import ReadResourceResult, Resource
+from mcp import MCPError, ReadResourceResult, Resource
 from mcp.shared.auth import OAuthMetadata
-from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import (
+    INVALID_PARAMS,
     CallToolResult,
     GetPromptRequestParams,
     GetPromptResult,
@@ -57,6 +57,7 @@ from mcp.types import (
     Prompt,
     ResourceTemplate,
 )
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, assert_never
@@ -156,6 +157,12 @@ from litellm.proxy._experimental.mcp_server.result_conversion import (
 )
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
+)
+from litellm.proxy._experimental.mcp_server.skills import (
+    GetSkillRequestParams,
+    GetSkillResult,
+    ListSkillsRequest,
+    ListSkillsResult,
 )
 from litellm.proxy._experimental.mcp_server.stdio_gate import (
     MCP_STDIO_DISABLED_MESSAGE,
@@ -4767,31 +4774,17 @@ class MCPServerManager:
                     return ListResourcesResult(resources=[])
                 case ListResourceTemplatesRequest():
                     return ListResourceTemplatesResult(resource_templates=[])
+                case ListSkillsRequest():
+                    return ListSkillsResult(skills=())
                 case _:
                     raise RuntimeError("Unexpected catalog request type")
-        headers: Final = (
-            dict(
-                chain(
-                    extra_headers.items() if extra_headers else (),
-                    server.static_headers.items() if server.static_headers else (),
-                )
-            )
-            or None
-        )
-        stdio_env: Final = self.build_stdio_env(server, raw_headers)
-        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
-        client: Final = await self.create_mcp_client(
-            server=server,
-            mcp_auth_header=mcp_auth_header,
-            extra_headers=headers,
-            stdio_env=stdio_env,
-            subject_token=subject_token,
-            user_api_key_auth=user_api_key_auth,
-            raw_headers=raw_headers,
-            client_ip=client_ip,
+        client: Final = await self._create_catalog_client(
+            server, user_api_key_auth, mcp_auth_header, extra_headers, raw_headers, client_ip
         )
         page: Final = await client.list_page(request)
         match page:
+            case ListSkillsResult():
+                return page
             case ListPromptsResult():
                 return page.model_copy(update={"prompts": self._create_prefixed_prompts(page.prompts, server)})
             case ListResourcesResult():
@@ -4804,6 +4797,55 @@ class MCPServerManager:
                 )
             case _:
                 raise RuntimeError("Unexpected catalog result type")
+
+    async def get_skill_from_server(
+        self,
+        server: MCPServer,
+        params: GetSkillRequestParams,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        *,
+        mcp_auth_header: str | Mapping[str, str] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
+    ) -> GetSkillResult:
+        if self._skip_blocked_stdio_listing(server, "skill"):
+            raise MCPError(code=INVALID_PARAMS, message=f"No skill is served at {params.uri}")
+        client: Final = await self._create_catalog_client(
+            server, user_api_key_auth, mcp_auth_header, extra_headers, raw_headers, client_ip
+        )
+        return await client.get_skill(params)
+
+    async def _create_catalog_client(
+        self,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | Mapping[str, str] | None,
+        extra_headers: Mapping[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
+        client_ip: str | None,
+    ) -> MCPClient:
+        headers: Final = (
+            dict(
+                chain(
+                    extra_headers.items() if extra_headers else (),
+                    server.static_headers.items() if server.static_headers else (),
+                )
+            )
+            or None
+        )
+        return await self.create_mcp_client(
+            server=server,
+            mcp_auth_header=mcp_auth_header
+            if mcp_auth_header is None or isinstance(mcp_auth_header, str)
+            else dict(mcp_auth_header),
+            extra_headers=headers,
+            stdio_env=self.build_stdio_env(server, raw_headers),
+            subject_token=self._obo_subject_token(server, raw_headers, user_api_key_auth),
+            user_api_key_auth=user_api_key_auth,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
 
     async def get_prompts_from_server(
         self,

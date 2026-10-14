@@ -20276,3 +20276,30 @@ async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_con
     finally:
         active_mcp_request_ctx_var.reset(request_token)
         legacy_server.active_mcp_session_var.reset(session_token)
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_stdio_server_serves_no_skills(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp import MCPError
+    from mcp.types import INVALID_PARAMS, PaginatedRequestParams
+
+    from litellm.proxy._experimental.mcp_server.skills import GetSkillRequestParams, ListSkillsRequest, ListSkillsResult
+
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="stdio-skills",
+        name="stdio_skills",
+        transport=MCPTransport.stdio,
+        command="python",
+        args=["server.py"],
+    )
+    first: Final = await manager.get_optional_catalog_page(server, ListSkillsRequest(), None)
+    assert first == ListSkillsResult(skills=())
+    with pytest.raises(RuntimeError, match="Upstream catalog is unavailable"):
+        await manager.get_optional_catalog_page(
+            server, ListSkillsRequest(params=PaginatedRequestParams(cursor="next")), None
+        )
+    with pytest.raises(MCPError, match="No skill is served") as missing:
+        await manager.get_skill_from_server(server, GetSkillRequestParams(uri="skill://stdio/SKILL.md"), None)
+    assert missing.value.error.code == INVALID_PARAMS

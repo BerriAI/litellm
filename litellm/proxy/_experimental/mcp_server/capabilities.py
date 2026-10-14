@@ -11,6 +11,7 @@ from mcp_types.methods import CLIENT_REQUESTS
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION
 from pydantic import TypeAdapter
 
+from litellm.proxy._experimental.mcp_server.skills import SKILLS_EXTENSION
 from litellm.types.mcp import (
     MCP_LEGACY_VERSIONS,
     MCPAdvertisedVersion,
@@ -60,7 +61,7 @@ REVISION_SUPPORT: Final[Mapping[str, RevisionSupport]] = MappingProxyType(
             results=frozenset({"complete"})
             if version.value in HANDSHAKE_PROTOCOL_VERSIONS
             else frozenset({"complete", "input_required"}),
-            extensions=frozenset(),
+            extensions=frozenset({SKILLS_EXTENSION}) if version.value == "2026-07-28" else frozenset(),
             completed=version.value in HANDSHAKE_PROTOCOL_VERSIONS or version.value == "2026-07-28",
         )
         for version in MCPSpecVersion
