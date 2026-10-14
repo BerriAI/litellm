@@ -375,8 +375,6 @@ def _message_loaded_tools(message: object) -> Iterator[object]:
 
 
 def replayed_tool_search_tools(request: object) -> tuple[object, ...]:
-    if not _requests_tool_search(request):
-        return ()
     messages: Final = _json_list(_json_field(request, "messages")) or ()
     return tuple(chain.from_iterable(_message_loaded_tools(message) for message in messages))
 

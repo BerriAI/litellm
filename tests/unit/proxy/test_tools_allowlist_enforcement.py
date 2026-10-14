@@ -273,12 +273,19 @@ class TestCheckToolsAllowlist:
         assert "run_shell" in str(exc_info.value.message)
         assert "get_weather" not in str(exc_info.value.message)
 
+    @pytest.mark.parametrize(
+        "search_tools",
+        [{"extra_body": {"tools": [{"type": "tool_search"}]}}, {}],
+        ids=["extra_body_tool_search", "deployment_adds_tool_search"],
+    )
     @pytest.mark.asyncio
-    async def test_disallowed_tool_loaded_by_a_replayed_tool_search_raises_when_extra_body_enables_search(self):
+    async def test_disallowed_tool_loaded_by_a_replayed_tool_search_raises_without_tool_search_in_tools(
+        self, search_tools
+    ):
         token = _token(metadata={"allowed_tools": ["get_weather"]})
         body = {
             "tools": [{"type": "function", "function": {"name": "get_weather"}}],
-            "extra_body": {"tools": [{"type": "tool_search"}]},
+            **search_tools,
             "messages": [
                 {"role": "user", "content": "clean up the disk"},
                 {
@@ -302,33 +309,6 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "run_shell" in str(exc_info.value.message)
-
-    @pytest.mark.asyncio
-    async def test_replayed_tool_search_is_not_counted_when_the_request_cannot_send_it(self):
-        token = _token(metadata={"allowed_tools": ["get_weather"]})
-        body = {
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
-            "messages": [
-                {"role": "user", "content": "clean up the disk"},
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "provider_specific_fields": {
-                        "tool_search_items": [
-                            {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
-                            {"type": "tool_search_output", "call_id": "ts_1", "tools": [{"name": "run_shell"}]},
-                        ]
-                    },
-                },
-            ],
-        }
-        allowed = await check_tools_allowlist(
-            request_body=body,
-            valid_token=token,
-            team_object=None,
-            route="/v1/chat/completions",
-        )
-        assert allowed is None
 
     @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):
