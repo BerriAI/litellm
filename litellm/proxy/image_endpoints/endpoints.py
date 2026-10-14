@@ -376,8 +376,8 @@ async def image_edit_api(
 async def image_variation_api(
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    image: list[UploadFile] | None = File(None),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+    image: list[UploadFile] | None = File(None),  # noqa: B008  # FastAPI multipart upload declaration  # mutable-ok: mirrors the edits endpoint's multipart signature
     model: str | None = None,
 ):
     """
