@@ -4,11 +4,9 @@ Wrapper around router cache. Meant to store model id when prompt caching support
 
 import hashlib
 import json
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import JsonValue, TypeAdapter
@@ -40,8 +38,6 @@ class PromptCachingCacheValue(TypedDict):
 
 PROMPT_CACHE_PIN_TTL_SECONDS: Final = 300
 PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS: Final = 3600
-_CACHE_CONTROL_TTL: Final = re.compile(r"^(\d+(?:\.\d+)?)([smh])$")
-_TTL_UNIT_SECONDS: Final = MappingProxyType({"s": 1, "m": 60, "h": 3600})
 _PROMPT_CACHE_PINS_TARGET: Final = "prompt_cache_pins"
 _TOOL_RUN_BLOCK_TYPES: Final = frozenset({"tool_use", "tool_result"})
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
@@ -128,10 +124,7 @@ def _breakpoint_pin_ttl_seconds(carrier: JsonValue | Mapping[str, JsonValue]) ->
     cache_control: Final = carrier.get("cache_control")
     if not isinstance(cache_control, dict) or cache_control.get("type") != "ephemeral":
         return None
-    declared: Final = _CACHE_CONTROL_TTL.match(str(cache_control.get("ttl", "")))
-    if declared is None:
-        return PROMPT_CACHE_PIN_TTL_SECONDS
-    return max(PROMPT_CACHE_PIN_TTL_SECONDS, int(float(declared.group(1)) * _TTL_UNIT_SECONDS[declared.group(2)]))
+    return PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if cache_control.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS
 
 
 def _breakpoint_carriers(message: Mapping[str, JsonValue]) -> tuple[JsonValue | Mapping[str, JsonValue], ...]:
@@ -319,6 +312,7 @@ class PromptCachingCache:
         model_id: str,
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
+        honors_one_hour_ttl: bool = False,
     ) -> None:
         cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
         if cache_key is None:
@@ -327,7 +321,9 @@ class PromptCachingCache:
         self.cache.set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
-            ttl=PromptCachingCache.pin_ttl_seconds(messages, tools),
+            ttl=PromptCachingCache.pin_ttl_seconds(messages, tools)
+            if honors_one_hour_ttl
+            else PROMPT_CACHE_PIN_TTL_SECONDS,
         )
 
     async def async_add_model_id(
@@ -335,12 +331,17 @@ class PromptCachingCache:
         model_id: str,
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
+        honors_one_hour_ttl: bool = False,
     ) -> None:
         positions: Final = await PromptCachingCache.async_prefix_positions(messages, tools)
         if not positions:
             return
 
-        ttl: Final = await offload_token_count(PromptCachingCache.pin_ttl_seconds)(messages, tools)
+        ttl: Final = (
+            await offload_token_count(PromptCachingCache.pin_ttl_seconds)(messages, tools)
+            if honors_one_hour_ttl
+            else PROMPT_CACHE_PIN_TTL_SECONDS
+        )
         with service_target(_PROMPT_CACHE_PINS_TARGET):
             await self.cache.async_set_cache(
                 positions[-1].cache_key,

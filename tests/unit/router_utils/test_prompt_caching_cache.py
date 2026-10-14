@@ -127,14 +127,26 @@ def _tool(cache_control: dict[str, str] | None) -> ChatCompletionToolParam:
         pytest.param(
             _system_block_messages({"type": "ephemeral", "ttl": "3600s"}),
             None,
-            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
-            id="gemini-style-3600s",
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="seconds-form-keeps-the-floor",
         ),
         pytest.param(
             _system_block_messages({"type": "ephemeral", "ttl": "2h"}),
             None,
-            2 * PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
-            id="longer-than-1h",
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="longer-than-1h-keeps-the-floor",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral", "ttl": "99999999h"}),
+            None,
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="huge-ttl-keeps-the-floor",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral", "ttl": "9" * 400 + "h"}),
+            None,
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="overflowing-ttl-keeps-the-floor",
         ),
         pytest.param(
             _system_block_messages({"type": "ephemeral", "ttl": "90s"}),
@@ -165,8 +177,10 @@ async def test_one_hour_prefix_pin_outlives_the_five_minute_window() -> None:
     one_hour: Final = _system_block_messages({"type": "ephemeral", "ttl": "1h"}, document="a lease")
     five_minutes: Final = _system_block_messages({"type": "ephemeral"}, document="a will")
 
-    await cache.async_add_model_id(model_id="deployment-1h", messages=one_hour, tools=None)
-    await cache.async_add_model_id(model_id="deployment-5m", messages=five_minutes, tools=None)
+    await cache.async_add_model_id(model_id="deployment-1h", messages=one_hour, tools=None, honors_one_hour_ttl=True)
+    await cache.async_add_model_id(
+        model_id="deployment-5m", messages=five_minutes, tools=None, honors_one_hour_ttl=True
+    )
 
     clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
     assert await cache.async_get_model_id(messages=five_minutes, tools=None) is None
@@ -178,12 +192,26 @@ async def test_one_hour_prefix_pin_outlives_the_five_minute_window() -> None:
     assert await cache.async_get_model_id(messages=one_hour, tools=None) is None
 
 
+@pytest.mark.asyncio
+async def test_one_hour_prefix_on_a_deployment_without_one_hour_caching_keeps_the_five_minute_pin() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+    one_hour: Final = _system_block_messages({"type": "ephemeral", "ttl": "1h"})
+
+    await cache.async_add_model_id(
+        model_id="deployment-5m-only", messages=one_hour, tools=None, honors_one_hour_ttl=False
+    )
+
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+    assert await cache.async_get_model_id(messages=one_hour, tools=None) is None
+
+
 def test_sync_one_hour_message_level_pin_outlives_the_five_minute_window() -> None:
     clock: Final = _ManualClock()
     cache: Final = _pin_cache(clock)
     one_hour: Final = _message_level_messages({"type": "ephemeral", "ttl": "1h"})
 
-    cache.add_model_id(model_id="deployment-1h", messages=one_hour, tools=None)
+    cache.add_model_id(model_id="deployment-1h", messages=one_hour, tools=None, honors_one_hour_ttl=True)
 
     clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
     pinned: Final = cache.get_model_id(messages=one_hour, tools=None)

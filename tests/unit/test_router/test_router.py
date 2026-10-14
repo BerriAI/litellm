@@ -72,7 +72,7 @@ from litellm.router_utils.fallback_event_handlers import (
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
-from litellm.types.llms.openai import ChatCompletionRequest
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
@@ -26172,6 +26172,54 @@ async def test_prompt_caching_pins_do_not_evict_router_state():
         )
 
     assert router.cache.get_cache("deployment:dep-a:cooldown") is True
+
+
+@pytest.mark.asyncio
+async def test_one_hour_pins_do_not_push_out_fresh_five_minute_pins():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    pins: Final = PromptCachingCache(cache=router._prompt_caching_pin_cache)
+
+    def policy(index: int, ttl: str) -> list[AllMessageValues]:
+        return [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"policy {ttl} {index}",
+                        "cache_control": {"type": "ephemeral", "ttl": ttl},
+                    }
+                ],
+            },
+            {"role": "user", "content": "ok"},
+        ]
+
+    for index in range(DEFAULT_MAX_SIZE_IN_MEMORY):
+        await pins.async_add_model_id(
+            model_id="dep-a", messages=policy(index, "1h"), tools=None, honors_one_hour_ttl=True
+        )
+    for index in range(3):
+        await pins.async_add_model_id(
+            model_id="dep-b", messages=policy(index, "5m"), tools=None, honors_one_hour_ttl=True
+        )
+
+    assert [await pins.async_get_model_id(messages=policy(index, "5m"), tools=None) for index in range(3)] == [
+        {"model_id": "dep-b"}
+    ] * 3
 
 
 @pytest.mark.asyncio

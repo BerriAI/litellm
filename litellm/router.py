@@ -67,6 +67,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
+    PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
@@ -1123,7 +1124,7 @@ class Router:
         )
         self._prompt_caching_pin_cache: DualCache = DualCache(
             redis_cache=redis_cache,
-            in_memory_cache=InMemoryCache(),
+            in_memory_cache=InMemoryCache(max_size_in_memory=PROMPT_CACHE_PIN_CACHE_MAX_SIZE),
         )
 
         ### SCHEDULER ###

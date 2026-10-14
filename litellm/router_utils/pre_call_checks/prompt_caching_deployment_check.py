@@ -48,6 +48,11 @@ def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int
     )
 
 
+def _honors_one_hour_cache_ttl(standard_logging_object: StandardLoggingPayload) -> bool:
+    model_map_value: Final = standard_logging_object["model_map_information"]["model_map_value"]
+    return model_map_value is not None and model_map_value.get("cache_creation_input_token_cost_above_1hr") is not None
+
+
 class PromptCachingDeploymentCheck(CustomLogger):
     def __init__(self, cache: DualCache, is_priority_group: Callable[[str], bool] | None = None):
         super().__init__()
@@ -146,18 +151,20 @@ class PromptCachingDeploymentCheck(CustomLogger):
             )
             return
 
+        prompt_messages: Final = cast(list[AllMessageValues], messages)
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
         if await offload_token_count(is_prompt_caching_valid_prompt)(
             model=model,
-            messages=cast(list[AllMessageValues], messages),
+            messages=prompt_messages,
         ):
             cache: Final = PromptCachingCache(
                 cache=self.cache,
             )
             await cache.async_add_model_id(
                 model_id=model_id,
-                messages=messages,
+                messages=prompt_messages,
                 tools=None,  # [TODO]: add tools once standard_logging_object supports it
+                honors_one_hour_ttl=_honors_one_hour_cache_ttl(standard_logging_object),
             )
 
         return

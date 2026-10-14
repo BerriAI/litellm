@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT, PROMPT_CACHE_LOOKBACK_POSITIONS
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
@@ -16,7 +17,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     PromptCachingDeploymentCheck,
     _get_min_token_count_for_deployments,
 )
-from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt, token_counter
 
@@ -317,6 +318,7 @@ async def test_replayed_redacted_thinking_block_still_records_and_pins():
                 "model": model,
                 "messages": messages,
                 "model_id": "dep-2",
+                "model_map_information": {"model_map_key": model, "model_map_value": None},
             }
         },
         response_obj=None,
@@ -664,6 +666,7 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
         "model": "anthropic/claude-fable-5",
         "messages": messages,
         "model_id": "dep-1",
+        "model_map_information": {"model_map_key": "anthropic/claude-fable-5", "model_map_value": None},
     }
 
     _, took, lags = await timed_with_loop_lags(
@@ -679,6 +682,67 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
         "model_id": "dep-1"
     }
     assert_loop_stayed_free(took, lags)
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 1_700_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now = self.now + seconds
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_map_value", "pinned_past_five_minutes"),
+    [
+        pytest.param({"cache_creation_input_token_cost_above_1hr": 6e-06}, True, id="one-hour-cache-writes-priced"),
+        pytest.param({"cache_creation_input_token_cost_above_1hr": None}, False, id="no-one-hour-cache-writes"),
+        pytest.param(None, False, id="model-not-in-cost-map"),
+    ],
+)
+async def test_one_hour_pin_follows_the_deployments_one_hour_cache_support(
+    model_map_value: dict[str, float | None] | None, pinned_past_five_minutes: bool
+):
+    clock: Final = _ManualClock()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    model: Final = "anthropic/claude-sonnet-4-5"
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "word " * 3000, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+                ],
+            }
+        ],
+    )
+
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "model": model,
+                "messages": messages,
+                "model_id": "dep-1",
+                "model_map_information": {"model_map_key": model, "model_map_value": model_map_value},
+            }
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    pins: Final = PromptCachingCache(cache=cache)
+    assert await pins.async_get_model_id(messages=messages, tools=None) == {"model_id": "dep-1"}
+
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+
+    assert (await pins.async_get_model_id(messages=messages, tools=None) is not None) is pinned_past_five_minutes
 
 
 LONG_PROMPT = "word " * 3000
