@@ -200,6 +200,8 @@ class ApplyGuardrailMessageSelection(NamedTuple):
     scanned_role_subset: bool
     # True when there is nothing to scan (e.g. no user-role message).
     skip_scan: bool = False
+    # Why the scan was skipped; recorded as the `not_run` reason (#46455).
+    skip_reason: str | None = None
 
 
 def _redact_pii_matches(response_json: dict) -> dict:
@@ -704,14 +706,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     "user message, so scan_only_tool_results leaves nothing to scan for this request"
                 )
             verbose_proxy_logger.debug("Bedrock Guardrail: no user-role message in request, skipping INPUT scan")
-            return ApplyGuardrailMessageSelection(None, None, True, skip_scan=True)
+            return ApplyGuardrailMessageSelection(
+                None, None, True, skip_scan=True, skip_reason="no user-role message in request"
+            )
 
         selected_message: Final = structured_messages[latest_user_index]
         if self._count_message_texts(selected_message) == 0:
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: latest user message has no text content, skipping INPUT scan"
             )
-            return ApplyGuardrailMessageSelection(None, None, True, skip_scan=True)
+            return ApplyGuardrailMessageSelection(
+                None, None, True, skip_scan=True, skip_reason="latest user message has no text content"
+            )
 
         return ApplyGuardrailMessageSelection(
             filtered_messages=[selected_message],
@@ -3290,6 +3296,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         if not new_texts:
             verbose_proxy_logger.debug("Bedrock Guardrail: no new messages to scan for this session, skipping API call")
+            self._record_guardrail_not_run(
+                request_data=request_data,  # pyright: ignore[reportUnknownArgumentType]  # enclosing method's request_data param is a bare dict
+                reason="no new content to scan for this session",
+            )
             return inputs
 
         bedrock_response: Final = await self.make_bedrock_api_request(
@@ -3313,6 +3323,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             cache=cache,
         )
         return inputs
+
+    def _record_guardrail_not_run(
+        self,
+        request_data: dict[str, object],  # mutable-ok: request metadata bucket is appended by the logging helper
+        reason: str,
+    ) -> None:
+        """Record a ``not_run`` entry for a call that returned without calling Bedrock.
+
+        Monitoring cannot tell "checked and clean" apart from "not checked" when a
+        skipped scan is logged as ``success`` (#46455). Self-recording also suppresses
+        the ``log_guardrail_information`` decorator's automatic ``success`` entry.
+        """
+        self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # logging helper's own request_data param predates strict typing
+            guardrail_json_response=reason,
+            request_data=request_data,
+            guardrail_status="not_run",
+        )
 
     async def apply_guardrail(
         self,
@@ -3362,9 +3389,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data,
                 input_type=input_type,
             )
-            if selection.skip_scan:
-                return inputs
             filtered_messages: Final = selection.filtered_messages
+            if selection.skip_scan or not filtered_messages:
+                # These paths return without calling Bedrock (it rejects an empty
+                # content list). Record `not_run` so the entry does not read as a
+                # passed check (#46455).
+                self._record_guardrail_not_run(
+                    request_data=request_data,  # pyright: ignore[reportUnknownArgumentType]  # enclosing method's request_data param is a bare dict
+                    reason=selection.skip_reason or "no scannable content",
+                )
+                inputs["texts"] = texts  # rebind-ok: mirrors the scanned path's normalized texts write-back
+                return inputs
             scanned_slice: Final = selection.scanned_slice
             scanned_role_subset: Final = selection.scanned_role_subset
 

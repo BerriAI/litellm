@@ -8063,3 +8063,99 @@ async def test_during_call_masking_rewrites_only_pii_block_in_content_list(
     ]
     assert messages[1]["content"] == "Hello, how can I help you today?"
     assert messages[2]["content"] == "who is the president of the united states?"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_records_not_run_when_nothing_scanned():
+    """A call that returns without calling Bedrock must log `not_run`, not `success` (#46455).
+
+    Monitoring cannot tell "checked and clean" apart from "not checked" when a
+    skipped scan is logged as `success`. Exactly one entry must be recorded: the
+    self-recorded `not_run` suppresses the decorator's automatic `success` entry.
+    """
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api_request:
+        inputs = {
+            "texts": [],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"location":"Paris"}'},
+                }
+            ],
+        }
+        request_data: dict = {}
+
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="response",
+            logging_obj=None,
+        )
+
+        mock_api_request.assert_not_called()
+        assert result is inputs
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        assert entries[0]["guardrail_status"] == "not_run"
+        assert entries[0]["guardrail_response"] == "no scannable content"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_records_not_run_reason_for_role_scoped_skip():
+    """A role-scoped skip carries its reason into the `not_run` entry (#46455)."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api_request:
+        inputs = {
+            "texts": ["Sure, checking that for you."],
+            "structured_messages": [{"role": "assistant", "content": "Sure, checking that for you."}],
+        }
+        request_data: dict = {}
+
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+            logging_obj=None,
+        )
+
+        mock_api_request.assert_not_called()
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        assert entries[0]["guardrail_status"] == "not_run"
+        assert entries[0]["guardrail_response"] == "no user-role message in request"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_records_not_run_for_incremental_skip():
+    """A session with nothing new to scan logs `not_run` with its reason (#46455)."""
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    with (
+        patch.object(guardrail, "_incremental_scan_cache", return_value=object()),
+        patch.object(guardrail, "filter_new_texts_for_session", new_callable=AsyncMock, return_value=[]),
+        patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api_request,
+    ):
+        inputs = {"texts": ["hello"]}
+        request_data: dict = {}
+
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+            logging_obj=None,
+        )
+
+        mock_api_request.assert_not_called()
+        assert result is inputs
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        assert entries[0]["guardrail_status"] == "not_run"
+        assert entries[0]["guardrail_response"] == "no new content to scan for this session"
