@@ -450,6 +450,18 @@ def get_shared_realtime_ssl_context() -> bool | str | ssl.SSLContext:
     return _shared_realtime_ssl_context
 
 
+def realtime_ssl_for_url(url: str) -> bool | str | ssl.SSLContext | None:
+    if url.startswith("ws://"):
+        return None
+    shared: Final = get_shared_realtime_ssl_context()
+    if shared is not False:
+        return shared
+    unverified: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    unverified.check_hostname = False
+    unverified.verify_mode = ssl.CERT_NONE
+    return unverified
+
+
 def mask_sensitive_info(error_message):
     # Find the start of the key parameter
     if isinstance(error_message, str):
@@ -836,12 +848,13 @@ class AsyncHTTPHandler:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except httpx.ConnectError:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
+                return await self.single_connection_request(
                     url=url,
+                    method="POST",
                     client=new_client,
                     data=data,
                     json=json,
@@ -977,12 +990,13 @@ class AsyncHTTPHandler:
             response: Final = await self.client.send(req)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except httpx.ConnectError:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
+                return await self.single_connection_request(
                     url=url,
+                    method="PATCH",
                     client=new_client,
                     data=data,
                     json=json,
@@ -1048,8 +1062,9 @@ class AsyncHTTPHandler:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
+                return await self.single_connection_request(
                     url=url,
+                    method="DELETE",
                     client=new_client,
                     data=data,
                     json=json,
@@ -1065,9 +1080,10 @@ class AsyncHTTPHandler:
         except Exception as e:
             raise e
 
-    async def single_connection_post_request(
+    async def single_connection_request(
         self,
         url: str,
+        method: str,
         client: httpx.AsyncClient,
         data: dict | str | bytes | None = None,
         json: dict | None = None,
@@ -1077,7 +1093,7 @@ class AsyncHTTPHandler:
         content: _RequestContent | None = None,
     ):
         """
-        Making POST request for a single connection client.
+        Making request for a single connection client.
 
         Used for retrying connection client errors.
         """
@@ -1085,7 +1101,7 @@ class AsyncHTTPHandler:
         request_data, request_content = _prepare_request_data_and_content(data, content)
 
         req: Final = client.build_request(
-            "POST",
+            method,
             url,
             data=request_data,
             json=json,

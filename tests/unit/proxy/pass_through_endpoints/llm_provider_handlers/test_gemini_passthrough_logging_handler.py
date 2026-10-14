@@ -284,7 +284,7 @@ class TestGeminiPassthroughLoggingHandler:
         mock_logging_obj = self._create_mock_logging_obj()
 
         # Mock the _handle_logging method to capture the call
-        handler._handle_logging = AsyncMock()
+        handler.handle_logging = AsyncMock()
 
         # Mock httpx response
         mock_response = self._create_mock_httpx_response()
@@ -316,8 +316,8 @@ class TestGeminiPassthroughLoggingHandler:
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "gemini"
 
         # Verify that _handle_logging was called with the correct kwargs
-        handler._handle_logging.assert_called_once()
-        call_kwargs = handler._handle_logging.call_args[1]
+        handler.handle_logging.assert_called_once()
+        call_kwargs = handler.handle_logging.call_args[1]
         assert call_kwargs["response_cost"] == 0.000050
         assert call_kwargs["model"] == "gemini-2.0-flash"
         assert call_kwargs["custom_llm_provider"] == "gemini"

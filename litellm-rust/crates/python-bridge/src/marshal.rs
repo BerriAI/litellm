@@ -4,10 +4,12 @@ use std::{
 };
 
 use litellm_auth::InputSource;
-use litellm_host_python::{from_py, from_py_argument};
+use litellm_host_python::{from_py, from_py_argument, to_py};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
+
+const TIMEOUTS_MODULE: &str = "litellm.rust_bridge.host.timeouts";
 
 /// The keyword arguments every value route shares, validated at the Python boundary.
 pub(crate) struct RouteOptions {
@@ -17,13 +19,6 @@ pub(crate) struct RouteOptions {
     pub(crate) custom_llm_provider: Option<String>,
     pub(crate) extra_headers: Option<Map<String, Value>>,
     pub(crate) timeout: Option<Duration>,
-}
-
-pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
-    match from_py_argument(value)? {
-        Value::Array(values) => Ok(values),
-        _ => Err(PyValueError::new_err("messages must be a list")),
-    }
 }
 
 fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
@@ -54,7 +49,7 @@ pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration>
 }
 
 pub(crate) fn python_timeout_seconds(py: Python<'_>, timeout: Py<PyAny>) -> PyResult<Option<f64>> {
-    py.import("litellm.rust_bridge.timeouts")?
+    py.import(TIMEOUTS_MODULE)?
         .getattr("timeout_to_seconds")?
         .call1((timeout,))?
         .extract()
@@ -102,18 +97,33 @@ pub(crate) fn value_route_options(fields: &Bound<'_, PyDict>) -> PyResult<RouteO
     })
 }
 
-pub(crate) fn project_optional_fields(
-    kwargs: &Bound<'_, PyDict>,
-    names: &[&str],
+/// Builds a route's optional body fields from the caller's Python arguments, in `names` order.
+/// `lookup` decides what counts as unset: a name it returns `None` for is left out of the map.
+pub(crate) fn project_optional_fields<'a, 'py>(
+    names: impl IntoIterator<Item = &'a str>,
+    lookup: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
 ) -> PyResult<Map<String, Value>> {
     names
-        .iter()
-        .filter_map(|name| match kwargs.get_item(name) {
-            Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
+        .into_iter()
+        .filter_map(|name| match lookup(name) {
+            Ok(Some(value)) => Some(from_py(&value).map(|value| (name.to_string(), value))),
             Ok(None) => None,
             Err(error) => Some(Err(error)),
         })
         .collect()
+}
+
+/// Converts a Rust route response to Python and returns `module.response(...)` called on it,
+/// so each route's Python factory builds the public LiteLLM response object.
+pub(crate) fn public_response(
+    py: Python<'_>,
+    module: &str,
+    response: &(impl Serialize + ?Sized),
+) -> PyResult<Py<PyAny>> {
+    py.import(module)?
+        .getattr("response")?
+        .call1((to_py(py, response)?,))
+        .map(Bound::unbind)
 }
 
 struct RequestFieldSources<'py> {
@@ -183,6 +193,7 @@ pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String
 #[cfg(test)]
 mod tests {
     use pyo3::exceptions::PyTypeError;
+    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
@@ -191,6 +202,178 @@ mod tests {
         let locals = PyDict::new(py);
         py.run(source, Some(&locals), Some(&locals)).unwrap();
         locals
+    }
+
+    #[rstest]
+    #[case::keep_none(false)]
+    #[case::skip_none(true)]
+    fn selected_fields_preserve_lookup_order_and_caller_none_policy(#[case] skip_none: bool) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = eval(
+                py,
+                c"
+reads = []
+fields = {'first': {'future': [None, True, 2]}, 'second': None, 'unused': object()}
+def lookup(name):
+    reads.append(name)
+    if name == 'first':
+        fields['last'] = 'observed after first'
+    return fields.get(name)
+",
+            );
+            let lookup = locals.get_item("lookup").unwrap().unwrap();
+            let result = project_optional_fields(["first", "second", "last"], |name| {
+                let value = lookup.call1((name,))?;
+                Ok((!skip_none || !value.is_none()).then_some(value))
+            })
+            .unwrap();
+            let expected = if skip_none {
+                json!({"first": {"future": [null, true, 2]}, "last": "observed after first"})
+            } else {
+                json!({"first": {"future": [null, true, 2]}, "second": null, "last": "observed after first"})
+            };
+            assert_eq!(Value::Object(result), expected);
+            assert_eq!(
+                locals
+                    .get_item("reads")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<Vec<String>>()
+                    .unwrap(),
+                ["first", "second", "last"]
+            );
+        });
+    }
+
+    #[rstest]
+    fn selected_field_failure_stops_lookup_and_keeps_python_provenance() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = eval(
+                py,
+                c"
+reads = []
+failure = LookupError('selected field failed')
+cause = ValueError('cause')
+def lookup(name):
+    reads.append(name)
+    raise failure from cause
+",
+            );
+            let lookup = locals.get_item("lookup").unwrap().unwrap();
+            let error =
+                project_optional_fields(["first", "later"], |name| lookup.call1((name,)).map(Some))
+                    .unwrap_err();
+            assert!(
+                error
+                    .value(py)
+                    .is(locals.get_item("failure").unwrap().unwrap())
+            );
+            assert!(
+                error
+                    .cause(py)
+                    .unwrap()
+                    .value(py)
+                    .is(locals.get_item("cause").unwrap().unwrap())
+            );
+            assert!(error.traceback(py).is_some());
+            assert_eq!(
+                locals
+                    .get_item("reads")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<Vec<String>>()
+                    .unwrap(),
+                ["first"]
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::lookup_failure(false)]
+    #[case::factory_failure(true)]
+    fn public_response_resolves_factory_before_serializing_and_keeps_its_errors(
+        #[case] factory: bool,
+    ) {
+        struct Observed<'a>(&'a std::cell::Cell<bool>);
+
+        impl Serialize for Observed<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                self.0.set(true);
+                json!({"future": [null, true]}).serialize(serializer)
+            }
+        }
+
+        Python::initialize();
+        Python::attach(|py| {
+            let module_name = if factory {
+                "bridge_response_conversion_test_factory"
+            } else {
+                "bridge_response_conversion_test_lookup"
+            };
+            let locals = eval(
+                py,
+                c"
+import types
+failure = LookupError('response failed')
+cause = ValueError('cause')
+received = []
+def fail(name):
+    raise failure from cause
+def response(value):
+    received.append(value)
+    return fail('response')
+module = types.ModuleType('bridge_response_conversion_test')
+module.__getattr__ = fail
+",
+            );
+            py.import("sys")
+                .unwrap()
+                .getattr("modules")
+                .unwrap()
+                .set_item(module_name, locals.get_item("module").unwrap().unwrap())
+                .unwrap();
+            if factory {
+                locals
+                    .get_item("module")
+                    .unwrap()
+                    .unwrap()
+                    .setattr("response", locals.get_item("response").unwrap().unwrap())
+                    .unwrap();
+            }
+            let serialized = std::cell::Cell::new(false);
+            let error = public_response(py, module_name, &Observed(&serialized)).unwrap_err();
+            assert_eq!(serialized.get(), factory);
+            assert!(
+                error
+                    .value(py)
+                    .is(locals.get_item("failure").unwrap().unwrap())
+            );
+            assert!(
+                error
+                    .cause(py)
+                    .unwrap()
+                    .value(py)
+                    .is(locals.get_item("cause").unwrap().unwrap())
+            );
+            assert!(error.traceback(py).is_some());
+            let received: Value = from_py(&locals.get_item("received").unwrap().unwrap()).unwrap();
+            assert_eq!(
+                received,
+                if factory {
+                    json!([{"future": [null, true]}])
+                } else {
+                    json!([])
+                }
+            );
+            py.import("sys")
+                .unwrap()
+                .getattr("modules")
+                .unwrap()
+                .del_item(module_name)
+                .unwrap();
+        });
     }
 
     fn sources(
@@ -261,18 +444,6 @@ mod tests {
     fn argument_converters_keep_nested_values_and_accept_explicit_none() {
         Python::initialize();
         Python::attach(|py| {
-            let messages = py
-                .eval(
-                    c"[{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}]",
-                    None,
-                    None,
-                )
-                .unwrap();
-            assert_eq!(
-                Value::Array(messages_argument(&messages).unwrap()),
-                json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
-            );
-
             let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();
             assert_eq!(
                 optional_object("optional_params", &params).unwrap(),

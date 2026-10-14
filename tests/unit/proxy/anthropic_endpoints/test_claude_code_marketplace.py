@@ -5,18 +5,15 @@ Covers the git-subdir and archive source types added alongside the existing gith
 """
 
 import json
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
-from unittest.mock import AsyncMock, MagicMock
+from pydantic import ValidationError
 
 import litellm
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
-from litellm.proxy.proxy_server import LitellmUserRoles
-from litellm.types.proxy.claude_code_endpoints import (
-    RegisterPluginRequest,
-    UpdatePluginRequest,
-)
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints import claude_code_marketplace
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
     delete_plugin,
@@ -27,6 +24,12 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     list_plugins,
     register_plugin,
     update_plugin,
+)
+from litellm.proxy.proxy_server import LitellmUserRoles
+from litellm.types.proxy.claude_code_endpoints import (
+    MarketplaceResponse,
+    RegisterPluginRequest,
+    UpdatePluginRequest,
 )
 from tests._master_key import MASTER_KEY
 
@@ -365,6 +368,225 @@ async def test_get_marketplace_key_query_param_adds_granted_disabled_plugins(mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("preference", ["available", "auto_install", "required"])
+async def test_get_marketplace_emits_installation_preference(preference):
+    await register_plugin(
+        request=RegisterPluginRequest(
+            name="s3-skill",
+            source=_ARCHIVE_SOURCE,
+            installation_preference=preference,
+        ),
+        user_api_key_dict=_USER,
+    )
+
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+
+    assert marketplace["plugins"] == [
+        {"name": "s3-skill", "source": _ARCHIVE_SOURCE, "version": "1.0.0", "installationPreference": preference}
+    ]
+
+
+@pytest.mark.parametrize(
+    "build_request",
+    [
+        lambda preference: RegisterPluginRequest(
+            name="s3-skill", source=_ARCHIVE_SOURCE, installation_preference=preference
+        ),
+        lambda preference: UpdatePluginRequest(source=_ARCHIVE_SOURCE, installation_preference=preference),
+    ],
+    ids=["register", "update"],
+)
+def test_plugin_request_rejects_unknown_installation_preference(build_request):
+    with pytest.raises(ValidationError, match="installation_preference"):
+        build_request("auto-install")
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace_omits_installation_preference_when_unset():
+    await register_plugin(
+        request=RegisterPluginRequest(name="manual-install-plugin", source=_GIT_SUBDIR_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+
+    assert "installationPreference" not in marketplace["plugins"][0]
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_propagates_installation_preference_to_get_and_list():
+    name = "updated-install-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_ARCHIVE_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    response = await update_plugin(
+        plugin_name=name,
+        request=UpdatePluginRequest(
+            source=_ARCHIVE_SOURCE,
+            installation_preference="auto_install",
+        ),
+        user_api_key_dict=_USER,
+    )
+
+    plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
+    listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
+
+    assert response.plugin.installation_preference == "auto_install"
+    assert plugin["installation_preference"] == "auto_install"
+    assert listed_plugin.installation_preference == "auto_install"
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_without_installation_preference_clears_it():
+    name = "cleared-install-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_ARCHIVE_SOURCE, installation_preference="auto_install"),
+        user_api_key_dict=_USER,
+    )
+
+    await update_plugin(
+        plugin_name=name,
+        request=UpdatePluginRequest(source=_ARCHIVE_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    assert "installationPreference" not in marketplace["plugins"][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_value", ["auto-install", 1, True, None])
+async def test_stored_unknown_installation_preference_is_not_served(stored_value, caplog):
+    name = "hand-edited-plugin"
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    await table.create(
+        data={
+            "name": name,
+            "manifest_json": json.dumps(
+                {"name": name, "source": _ARCHIVE_SOURCE, "installation_preference": stored_value}
+            ),
+        }
+    )
+
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
+    plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
+
+    assert marketplace["plugins"] == [{"name": name, "source": _ARCHIVE_SOURCE}]
+    assert listed_plugin.installation_preference is None
+    assert plugin["installation_preference"] is None
+    unknown_value_warnings = [r for r in caplog.records if "unknown installation_preference" in r.getMessage()]
+    assert len(unknown_value_warnings) == (0 if stored_value is None else 3)
+
+
+@pytest.mark.asyncio
+async def test_register_accepts_the_camel_case_installation_preference_key():
+    request = RegisterPluginRequest.model_validate(
+        {"name": "s3-skill", "source": _ARCHIVE_SOURCE, "installationPreference": "auto_install"}
+    )
+
+    response = await register_plugin(request=request, user_api_key_dict=_USER)
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+
+    assert response.plugin.installation_preference == "auto_install"
+    assert (await _read_stored_manifest("s3-skill"))["installation_preference"] == "auto_install"
+    assert marketplace["plugins"][0]["installationPreference"] == "auto_install"
+
+
+_NON_ARCHIVE_SOURCES = [
+    {"source": "github", "repo": "org/repo"},
+    {"source": "url", "url": "https://github.com/org/repo.git"},
+    _GIT_SUBDIR_SOURCE,
+]
+_UNPINNED_ARCHIVE_SOURCE = {"source": "archive", "url": "https://artifacts.example.com/plugin.zip"}
+
+
+async def _assert_preference_refused(source, preference):
+    with pytest.raises(HTTPException) as register_error:
+        await register_plugin(
+            request=RegisterPluginRequest(name="no-op-plugin", source=source, installation_preference=preference),
+            user_api_key_dict=_USER,
+        )
+    await register_plugin(request=RegisterPluginRequest(name="no-op-plugin", source=source), user_api_key_dict=_USER)
+    with pytest.raises(HTTPException) as update_error:
+        await update_plugin(
+            plugin_name="no-op-plugin",
+            request=UpdatePluginRequest(source=source, installation_preference=preference),
+            user_api_key_dict=_USER,
+        )
+
+    assert register_error.value.status_code == 400
+    assert update_error.value.status_code == 400
+    assert "installationPreference" not in json.loads((await get_marketplace(request=MagicMock())).body)["plugins"][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preference", ["available", "auto_install", "required"])
+@pytest.mark.parametrize("source", _NON_ARCHIVE_SOURCES)
+async def test_every_preference_needs_an_archive_source(preference, source):
+    await _assert_preference_refused(source, preference)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preference", ["auto_install", "required"])
+async def test_self_installing_preference_needs_the_archive_sha256(preference):
+    await _assert_preference_refused(_UNPINNED_ARCHIVE_SOURCE, preference)
+
+
+@pytest.mark.asyncio
+async def test_available_preference_is_accepted_on_an_unpinned_archive():
+    response = await register_plugin(
+        request=RegisterPluginRequest(
+            name="listed-plugin", source=_UNPINNED_ARCHIVE_SOURCE, installation_preference="available"
+        ),
+        user_api_key_dict=_USER,
+    )
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+
+    assert response.plugin.installation_preference == "available"
+    assert marketplace["plugins"][0]["installationPreference"] == "available"
+
+
+@pytest.mark.parametrize(
+    "build_request",
+    [
+        lambda body: RegisterPluginRequest.model_validate({"name": "s3-skill", **body}),
+        UpdatePluginRequest.model_validate,
+    ],
+    ids=["register", "update"],
+)
+def test_plugin_request_rejects_both_preference_spellings(build_request):
+    with pytest.raises(ValidationError, match="not both"):
+        build_request(
+            {
+                "source": _ARCHIVE_SOURCE,
+                "installation_preference": "auto_install",
+                "installationPreference": "available",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "build_request",
+    [
+        lambda body: RegisterPluginRequest.model_validate({"name": "s3-skill", **body}),
+        UpdatePluginRequest.model_validate,
+    ],
+    ids=["register", "update"],
+)
+@pytest.mark.parametrize(
+    "null_key, value_key",
+    [("installation_preference", "installationPreference"), ("installationPreference", "installation_preference")],
+)
+def test_plugin_request_reads_the_spelling_that_carries_a_value(build_request, null_key, value_key):
+    request = build_request({"source": _ARCHIVE_SOURCE, null_key: None, value_key: "auto_install"})
+
+    assert request.installation_preference == "auto_install"
+
+
+@pytest.mark.asyncio
 async def test_register_plugin_git_subdir_missing_url():
     """git-subdir without url field raises HTTP 400."""
     request = RegisterPluginRequest(
@@ -597,3 +819,148 @@ async def test_enable_disable_delete_plugin_reject_non_admin():
 
     table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
     assert (await table.find_unique(where={"name": name})).enabled is True
+
+
+@pytest.mark.asyncio
+async def test_register_plugin():
+    plugin_name: Final = "test-plugin"
+
+    request: Final = RegisterPluginRequest(
+        name=plugin_name,
+        source={"source": "github", "repo": "test-org/test-repo"},
+        version="1.0.0",
+        description="Test plugin for unit tests",
+    )
+
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=MASTER_KEY,
+        user_id="test-user",
+    )
+
+    response: Final = await register_plugin(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.name == plugin_name
+    assert response.plugin.version == "1.0.0"
+    assert response.plugin.enabled is True
+
+    stored_plugin: Final = await litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable.find_unique(
+        where={"name": plugin_name}
+    )
+    assert stored_plugin is not None
+    assert stored_plugin.name == plugin_name
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace():
+    plugin_name: Final = "test-marketplace-plugin"
+
+    request: Final = RegisterPluginRequest(
+        name=plugin_name,
+        source={"source": "github", "repo": "test-org/marketplace-test"},
+        version="2.0.0",
+        description="Test plugin for marketplace test",
+    )
+
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=MASTER_KEY,
+        user_id="test-user",
+    )
+
+    await register_plugin(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    response: Final = await get_marketplace(request=MagicMock())
+
+    body: Final = json.loads(response.body.decode())
+
+    assert body["name"] == "litellm"
+    assert "plugins" in body
+
+    our_plugin: Final = next((p for p in body["plugins"] if p["name"] == plugin_name), None)
+    assert our_plugin is not None
+    assert our_plugin["source"] == {
+        "source": "github",
+        "repo": "test-org/marketplace-test",
+    }
+    assert our_plugin["version"] == "2.0.0"
+
+
+@pytest.mark.asyncio
+async def test_register_plugin_git_subdir():
+    plugin_name: Final = "test-subdir-plugin"
+
+    request: Final = RegisterPluginRequest(
+        name=plugin_name,
+        source={
+            "source": "git-subdir",
+            "url": "https://github.com/test-org/monorepo.git",
+            "path": "plugins/my-plugin",
+        },
+        version="1.0.0",
+        description="Test git-subdir plugin",
+    )
+
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=MASTER_KEY,
+        user_id="test-user",
+    )
+
+    response: Final = await register_plugin(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.name == plugin_name
+    assert response.plugin.source["source"] == "git-subdir"
+    assert response.plugin.source["url"] == "https://github.com/test-org/monorepo.git"
+    assert response.plugin.source["path"] == "plugins/my-plugin"
+    assert response.plugin.enabled is True
+
+
+def test_marketplace_response_round_trips_installation_preference():
+    catalog: Final = {
+        "name": "litellm",
+        "owner": {"name": "LiteLLM", "email": "support@litellm.ai"},
+        "plugins": [
+            {
+                "name": "auto",
+                "source": {"source": "url", "url": "https://example.com/auto.tgz"},
+                "installationPreference": "auto_install",
+            },
+            {"name": "manual", "source": {"source": "url", "url": "https://example.com/manual.tgz"}},
+        ],
+    }
+
+    round_tripped: Final = MarketplaceResponse.model_validate(catalog).model_dump(exclude_none=True)
+
+    assert round_tripped["plugins"][0]["installationPreference"] == "auto_install"
+    assert "installationPreference" not in round_tripped["plugins"][1]
+
+
+def test_marketplace_response_rejects_unknown_installation_preference():
+    catalog: Final = {
+        "name": "litellm",
+        "owner": {"name": "LiteLLM", "email": "support@litellm.ai"},
+        "plugins": [
+            {
+                "name": "auto",
+                "source": {"source": "url", "url": "https://example.com/auto.tgz"},
+                "installationPreference": "sometimes",
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        MarketplaceResponse.model_validate(catalog)

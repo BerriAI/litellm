@@ -13,6 +13,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
@@ -24,8 +26,10 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.types.router import Deployment
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 from .router_callbacks.track_deployment_metrics import (
@@ -45,6 +49,7 @@ else:
     Span = Any
 
 _ADVISOR_ORCHESTRATION_FAILURE_ATTR: Final = "_litellm_advisor_orchestration_failure"
+_CREDENTIAL_VALUES_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def mark_advisor_orchestration_failure(exception: BaseException) -> None:
@@ -266,12 +271,25 @@ def _is_cooldown_required(
         return True
 
 
+def _is_per_user_provider_request(request_kwargs: Mapping[str, object]) -> bool:
+    from litellm.llms.github_copilot.per_user_auth import (
+        github_copilot_user_session_from,
+        is_github_copilot_per_user_request,
+    )
+
+    return (
+        is_github_copilot_per_user_request(request_kwargs)
+        or github_copilot_user_session_from(request_kwargs.get("litellm_params")) is not None
+    )
+
+
 def _should_run_cooldown_logic(
     litellm_router_instance: LitellmRouter,
     deployment: str | None,
     exception_status: str | int,
     original_exception: Exception,
     time_to_cooldown: float | None = None,
+    request_kwargs: Mapping[str, object] | None = None,
 ) -> bool:
     """
     Helper that decides if cooldown logic should be run
@@ -289,6 +307,38 @@ def _should_run_cooldown_logic(
             "Should Not Run Cooldown Logic: deployment id is none or model group can't be found."
         )
         return False
+
+    if isinstance(
+        original_exception,
+        (
+            litellm.CallerCredentialAuthenticationError,
+            litellm.CallerCredentialRateLimitError,
+        ),
+    ):
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: caller-credential errors are scoped to one user's connection"
+        )
+        return False
+
+    if request_kwargs is not None and _is_per_user_provider_request(request_kwargs):
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: the failure came from one caller's per-user provider session"
+        )
+        return False
+
+    if deployment is not None:
+        failed_deployment: Final = litellm_router_instance.get_deployment(model_id=deployment)
+        if failed_deployment is not None:
+            from litellm.llms.github_copilot.per_user_auth import (
+                github_copilot_per_user_credential_name,
+            )
+
+            failed_litellm_params: Final = getattr(failed_deployment, "litellm_params", None)
+            if github_copilot_per_user_credential_name(failed_litellm_params) is not None:
+                verbose_router_logger.debug(
+                    "Should Not Run Cooldown Logic: the failed deployment authenticates per caller"
+                )
+                return False
 
     #########################################################
     # If time_to_cooldown is 0 or 0.0000000, don't run cooldown logic
@@ -437,6 +487,7 @@ def set_cooldown_deployments(
     deployment: str | None = None,
     time_to_cooldown: float | None = None,
     requested_model_group: str | None = None,
+    request_kwargs: Mapping[str, object] | None = None,
 ) -> bool:
     """
     Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
@@ -458,6 +509,7 @@ def set_cooldown_deployments(
             exception_status=exception_status,
             original_exception=original_exception,
             time_to_cooldown=time_to_cooldown,
+            request_kwargs=request_kwargs,
         )
         is False
         or deployment is None
@@ -688,3 +740,22 @@ def is_caller_timeout_408(
     if not isinstance(timeout, (int, float)) or not isinstance(started, datetime) or not isinstance(finished, datetime):
         return False
     return (finished - started).total_seconds() >= timeout
+
+
+def is_caller_scoped_auth_failure(deployment: Deployment | None, exception_status: str | int) -> bool:
+    if cast_exception_status_to_int(exception_status) not in (401, 403) or deployment is None:
+        return False
+
+    token_exchange_endpoint: Final = deployment.litellm_params.token_exchange_endpoint
+    if isinstance(token_exchange_endpoint, str) and token_exchange_endpoint:
+        return True
+
+    credential_name: Final = deployment.litellm_params.litellm_credential_name
+    if credential_name is None:
+        return False
+
+    credential_values: Final[Mapping[str, object]] = _CREDENTIAL_VALUES_ADAPTER.validate_python(
+        CredentialAccessor.get_credential_values(credential_name)
+    )
+    credential_token_exchange_endpoint: Final = credential_values.get("token_exchange_endpoint")
+    return isinstance(credential_token_exchange_endpoint, str) and bool(credential_token_exchange_endpoint)

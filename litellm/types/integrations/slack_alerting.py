@@ -1,3 +1,4 @@
+import enum
 import os
 import time
 from collections.abc import Mapping
@@ -292,3 +293,92 @@ class DigestEntry(TypedDict):
     start_time: dt
     last_time: dt
     webhook_url: str | list[str]
+
+
+class Litellm_EntityType(enum.Enum):
+    """
+    Enum for types of entities on litellm
+
+    This enum allows specifying the type of entity that is being tracked in the database.
+    """
+
+    KEY = "key"
+    USER = "user"
+    END_USER = "end_user"
+    TEAM = "team"
+    TEAM_MEMBER = "team_member"
+    ORGANIZATION = "organization"
+    ORGANIZATION_MEMBER = "organization_member"
+    PROJECT = "project"
+    TAG = "tag"
+    AGENT = "agent"
+    MODEL_ACCESS_GROUP = "model_access_group"
+
+    # global proxy level entity
+    PROXY = "proxy"
+
+
+class CallInfo(LiteLLMPydanticObjectBase):
+    """Used for slack budget alerting"""
+
+    spend: float
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    token: str | None = Field(default=None, description="Hashed value of that key")
+    customer_id: str | None = None
+    user_id: str | None = None
+    team_id: str | None = None
+    team_alias: str | None = None
+    organization_id: str | None = None
+    user_email: str | None = None
+    key_alias: str | None = None
+    projected_exceeded_date: str | None = None
+    projected_spend: float | None = None
+    event_group: Litellm_EntityType
+    alert_emails: list[str] | None = Field(
+        default=None,
+        description="Additional email addresses to send alerts to (e.g., from team metadata)",
+    )
+    max_budget_alert_emails: dict[str, list[str]] | None = Field(
+        default=None,
+        description="Map of threshold percentage to email recipients (e.g., {'50': ['a@co.com'], '75': ['a@co.com', 'b@co.com']})",
+    )
+
+
+class WebhookEvent(CallInfo):
+    event: Literal[
+        "budget_crossed",
+        "max_budget_alert",
+        "soft_budget_crossed",
+        "threshold_crossed",
+        "projected_limit_exceeded",
+        "key_created",
+        "key_rotated",
+        "internal_user_created",
+        "spend_tracked",
+    ]
+    event_message: str  # human-readable description of event
+    event_group: Litellm_EntityType
+
+
+class InvitationNew(LiteLLMPydanticObjectBase):
+    user_id: str
+
+
+class InvitationModel(LiteLLMPydanticObjectBase):
+    id: str
+    user_id: str
+    is_accepted: bool
+    accepted_at: dt | None
+    expires_at: dt
+    created_at: dt
+    created_by: str
+    updated_at: dt
+    updated_by: str
+
+
+class VirtualKeyEvent(LiteLLMPydanticObjectBase):
+    created_by_user_id: str
+    created_by_user_role: str
+    created_by_key_alias: str | None
+    request_kwargs: dict  # pyright: ignore[reportMissingTypeArgument]  # moved verbatim from proxy/_types.py
