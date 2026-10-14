@@ -30,3 +30,10 @@ def test_non_string_list_input_is_skipped(call_type: Literal["embedding", "moder
     data: Final = {"input": ["scan me", 1234, ["nested"], "and me"]}
 
     assert get_formatted_prompt(data=data, call_type=call_type) == "scan meand me"
+
+
+def test_text_completion_list_prompt_is_joined() -> None:
+    """/v1/completions accepts a prompt array, so the hook must still get a string."""
+    data: Final = {"prompt": ["scan me", 1234, ["nested"], "and me"]}
+
+    assert get_formatted_prompt(data=data, call_type="text_completion") == "scan meand me"

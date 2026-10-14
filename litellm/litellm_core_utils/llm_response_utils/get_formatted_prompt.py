@@ -35,7 +35,12 @@ def get_formatted_prompt(
                         function_arguments = tool_call["function"]["arguments"]
                         prompt += function_arguments
     elif call_type == "text_completion":
-        prompt = data["prompt"]
+        if isinstance(data["prompt"], str):
+            prompt = data["prompt"]
+        elif isinstance(data["prompt"], list):
+            for item in data["prompt"]:
+                if isinstance(item, str):
+                    prompt += item
     elif call_type == "embedding" or call_type == "moderation":
         if isinstance(data["input"], str):
             prompt = data["input"]
