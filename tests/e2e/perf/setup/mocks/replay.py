@@ -18,9 +18,9 @@ import re
 from collections.abc import AsyncIterator, Iterator
 from functools import cache
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 CAPTURES_DIR: Final = Path(__file__).resolve().parent / "captures"
 Provider = Literal["openai", "anthropic", "bedrock"]
@@ -64,10 +64,19 @@ class Capture(BaseModel):
 
     @property
     def usage(self) -> dict[str, object]:
-        if self.body is not None:
-            found: Final = self.body.get("usage")
-            return found if isinstance(found, dict) else {}
-        return _stream_usage(self)
+        return _mapping(self.body.get("usage")) if self.body is not None else _stream_usage(self)
+
+
+def _mapping(value: object) -> dict[str, object]:
+    return cast(dict[str, object], value) if isinstance(value, dict) else {}
+
+
+def _items(value: object) -> tuple[object, ...]:
+    return tuple(cast(list[object], value)) if isinstance(value, list) else ()
+
+
+def _str(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
 def _texts(capture: Capture) -> Iterator[str]:
@@ -75,93 +84,86 @@ def _texts(capture: Capture) -> Iterator[str]:
         yield from _stream_texts(capture)
         return
     body: Final = capture.body
-    choices: Final = body.get("choices")
-    if isinstance(choices, list) and choices:
-        message: Final = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
-        content: Final = message.get("content") if isinstance(message, dict) else None
-        yield content if isinstance(content, str) else ""
+    choices: Final = _items(body.get("choices"))
+    if choices:
+        yield _str(_mapping(_mapping(choices[0]).get("message")).get("content"))
         return
     output: Final = body.get("output")
     if isinstance(output, dict):
-        yield from _bedrock_texts(output)
+        yield from _bedrock_texts(_mapping(body.get("output")))
         return
-    for block in output if isinstance(output, list) else body.get("content", []):
+    for block in _items(body.get("output")) if isinstance(output, list) else _items(body.get("content")):
         yield from _block_texts(block)
 
 
 def _bedrock_texts(output: dict[str, object]) -> Iterator[str]:
-    message: Final = output.get("message")
-    content: Final = message.get("content", []) if isinstance(message, dict) else []
-    for block in content if isinstance(content, list) else []:
-        if isinstance(block, dict) and isinstance(block.get("text"), str):
-            yield str(block["text"])
+    for block in _items(_mapping(output.get("message")).get("content")):
+        yield _str(_mapping(block).get("text"))
 
 
 def _block_texts(block: object) -> Iterator[str]:
-    if not isinstance(block, dict):
-        return
-    if block.get("type") == "text" and isinstance(block.get("text"), str):
-        yield str(block["text"])
-    if block.get("type") == "message":
-        for part in block.get("content", []) if isinstance(block.get("content"), list) else []:
-            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                yield str(part["text"])
+    mapping: Final = _mapping(block)
+    if mapping.get("type") == "text":
+        yield _str(mapping.get("text"))
+    if mapping.get("type") == "message":
+        for part in _items(mapping.get("content")):
+            yield _str(_mapping(part).get("text"))
+
+
+_PAYLOAD: Final = TypeAdapter(dict[str, object])
+
+
+def _payload(line: str) -> dict[str, object]:
+    return _PAYLOAD.validate_json(line[6:])
 
 
 def _sse_payloads(capture: Capture) -> Iterator[dict[str, object]]:
     joined: Final = "".join(chunk.data for chunk in capture.chunks)
     for line in joined.split("\n"):
         if line.startswith("data: ") and line != "data: [DONE]":
-            parsed: Final = json.loads(line[6:])
-            if isinstance(parsed, dict):
-                yield parsed
+            yield _payload(line)
 
 
-def _event_texts(capture: Capture) -> Iterator[str]:
-    for event in capture.events:
-        payload: Final = event.get("payload")
-        delta: Final = payload.get("delta") if isinstance(payload, dict) else None
-        if isinstance(delta, dict) and isinstance(delta.get("text"), str):
-            yield str(delta["text"])
-        elif isinstance(payload, dict) and payload.get("type") == "content_block_delta":
-            inner: Final = payload.get("delta", {})
-            if isinstance(inner, dict) and inner.get("type") == "text_delta":
-                yield str(inner.get("text", ""))
+def _sse_text(payload: dict[str, object]) -> str:
+    choices: Final = _items(payload.get("choices"))
+    if choices:
+        return _str(_mapping(_mapping(choices[0]).get("delta")).get("content"))
+    if payload.get("type") == "response.output_text.delta":
+        return _str(payload.get("delta"))
+    delta: Final = _mapping(payload.get("delta"))
+    if payload.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
+        return _str(delta.get("text"))
+    return ""
+
+
+def _event_text(event: dict[str, object]) -> str:
+    payload: Final = _mapping(event.get("payload"))
+    delta: Final = _mapping(payload.get("delta"))
+    if payload.get("type") == "content_block_delta":
+        return _str(delta.get("text")) if delta.get("type") == "text_delta" else ""
+    return _str(delta.get("text"))
 
 
 def _stream_texts(capture: Capture) -> Iterator[str]:
     if capture.provider == "bedrock":
-        yield from _event_texts(capture)
+        yield from (_event_text(event) for event in capture.events)
         return
-    for payload in _sse_payloads(capture):
-        choices: Final = payload.get("choices")
-        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-            delta: Final = choices[0].get("delta", {})
-            text: Final = delta.get("content") if isinstance(delta, dict) else None
-            yield text if isinstance(text, str) else ""
-        elif payload.get("type") == "response.output_text.delta":
-            yield str(payload.get("delta", ""))
-        elif payload.get("type") == "content_block_delta":
-            delta_block: Final = payload.get("delta", {})
-            if isinstance(delta_block, dict) and delta_block.get("type") == "text_delta":
-                yield str(delta_block.get("text", ""))
+    yield from (_sse_text(payload) for payload in _sse_payloads(capture))
+
+
+def _payload_usage(payload: dict[str, object]) -> dict[str, object]:
+    direct: Final = _mapping(payload.get("usage"))
+    return direct if direct else _mapping(_mapping(payload.get("response")).get("usage"))
 
 
 def _stream_usage(capture: Capture) -> dict[str, object]:
-    if capture.provider == "bedrock":
-        for event in capture.events:
-            payload: Final = event.get("payload")
-            if isinstance(payload, dict) and isinstance(payload.get("usage"), dict):
-                return dict(payload["usage"])
-        return {}
-    for payload in _sse_payloads(capture):
-        usage: Final = payload.get("usage")
-        if isinstance(usage, dict) and usage:
-            return usage
-        response: Final = payload.get("response")
-        if isinstance(response, dict) and isinstance(response.get("usage"), dict):
-            return dict(response["usage"])
-    return {}
+    payloads: Final = (
+        tuple(_mapping(event.get("payload")) for event in capture.events)
+        if capture.provider == "bedrock"
+        else tuple(_sse_payloads(capture))
+    )
+    empty: Final[dict[str, object]] = {}
+    return next((usage for usage in (_payload_usage(payload) for payload in payloads) if usage), empty)
 
 
 @cache
@@ -203,7 +205,6 @@ async def paced(capture: Capture, seed: str, scale: float) -> AsyncIterator[byte
     loop: Final = asyncio.get_running_loop()
     start: Final = loop.time()
     for chunk in capture.chunks:
-        wait: Final = start + chunk.t * scale - loop.time()
-        if wait > 0:
+        if (wait := start + chunk.t * scale - loop.time()) > 0:
             await asyncio.sleep(wait)
         yield chunk_bytes(capture, chunk, seed)

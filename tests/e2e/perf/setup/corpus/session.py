@@ -6,6 +6,8 @@ the endpoint it goes to."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 import hashlib
 import json
 from dataclasses import dataclass
@@ -111,8 +113,7 @@ def build_session(marker: str, input_tokens: int, *, tools: bool) -> Session:
     steps: list[Step] = []  # mutable-ok: each step's size decides whether another fits
     spent = fixed + estimate_tokens(question)  # rebind-ok: running total over the steps
     while spent < input_tokens:
-        step: Final = _step(marker, len(steps), input_tokens - spent)
-        steps.append(step)
+        steps.append(step := _step(marker, len(steps), input_tokens - spent))
         spent += estimate_tokens(step.result) + 40
     return Session(system_prompt(), specs, tuple(steps), question)
 
@@ -121,7 +122,7 @@ def _read_arguments(step: Step) -> dict[str, object]:
     return {"file_path": f"/workspace/litellm/{step.path}", "offset": step.offset, "limit": step.limit}
 
 
-def _chat_turns(session: Session) -> list[dict[str, object]]:
+def _chat_turns(session: Session) -> Sequence[Mapping[str, object]]:
     if not session.tools:
         return [
             turn
@@ -151,7 +152,7 @@ def _chat_turns(session: Session) -> list[dict[str, object]]:
     ]
 
 
-def _responses_input(session: Session) -> list[dict[str, object]]:
+def _responses_input(session: Session) -> Sequence[Mapping[str, object]]:
     if not session.tools:
         return _chat_turns(session)
     return [
@@ -169,7 +170,7 @@ def _responses_input(session: Session) -> list[dict[str, object]]:
     ]
 
 
-def _messages_turns(session: Session) -> list[dict[str, object]]:
+def _messages_turns(session: Session) -> Sequence[Mapping[str, object]]:
     if not session.tools:
         return _chat_turns(session)
     last: Final = len(session.steps) - 1
