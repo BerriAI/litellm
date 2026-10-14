@@ -98,6 +98,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "output_format",
             "inference_geo",
             "speed",
+            "service_tier",
             "output_config",
             "reasoning_effort",
             "safeguards",
