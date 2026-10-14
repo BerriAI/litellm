@@ -107,6 +107,7 @@ async def test_acompletion_call_type_allows_safe_prompt():
         ("atranscription", {"model": "test-model", "prompt": INJECTION_ATTEMPT}),
         ("transcription", {"model": "test-model", "prompt": INJECTION_ATTEMPT}),
         ("atext_completion", {"model": "test-model", "prompt": INJECTION_ATTEMPT}),
+        ("atext_completion", {"model": "test-model", "prompt": [INJECTION_ATTEMPT]}),
         ("amoderation", {"model": "test-model", "input": INJECTION_ATTEMPT}),
     ],
 )
