@@ -357,7 +357,7 @@ def test_azure_ai_grok_bills_reasoning_tokens_reported_outside_completion_tokens
                 "id": "chatcmpl-grok",
                 "object": "chat.completion",
                 "created": 1700000000,
-                "model": "grok-4.6",
+                "model": "grok-4.7",
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
                 "usage": {
                     "prompt_tokens": 14,
@@ -370,12 +370,12 @@ def test_azure_ai_grok_bills_reasoning_tokens_reported_outside_completion_tokens
     )
 
     response: Final = litellm.completion(
-        model="azure_ai/grok-4.6",
+        model="azure_ai/grok-4.7",
         messages=[{"role": "user", "content": "What is the meaning of life?"}],
         api_base="https://example-resource.services.ai.azure.com/models",
         api_key="azure-ai-test-key",
     )
-    model_info: Final = litellm.get_model_info(model="grok-4.6", custom_llm_provider="azure_ai")
+    model_info: Final = litellm.get_model_info(model="grok-4.7", custom_llm_provider="azure_ai")
     expected_cost: Final = 14 * model_info["input_cost_per_token"] + 322 * model_info["output_cost_per_token"]
 
     assert route.call_count == 1
@@ -388,11 +388,11 @@ def test_azure_ai_grok_bills_reasoning_tokens_reported_outside_completion_tokens
 def test_azure_ai_grok_stream_folds_reasoning_tokens_into_the_usage_chunk(respx_mock: respx.MockRouter) -> None:
     api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
     stream_body: Final = (
-        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.6",'
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.7",'
         '"choices":[{"index":0,"delta":{"role":"assistant","content":"42"},"finish_reason":null}]}\n\n'
-        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.6",'
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.7",'
         '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
-        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.6",'
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.7",'
         '"choices":[],"usage":{"prompt_tokens":14,"completion_tokens":10,"total_tokens":336,'
         '"completion_tokens_details":{"reasoning_tokens":312}}}\n\n'
         "data: [DONE]\n\n"
@@ -403,7 +403,7 @@ def test_azure_ai_grok_stream_folds_reasoning_tokens_into_the_usage_chunk(respx_
 
     chunks: Final = tuple(
         litellm.completion(
-            model="azure_ai/grok-4.6",
+            model="azure_ai/grok-4.7",
             messages=[{"role": "user", "content": "What is the meaning of life?"}],
             api_base="https://example-resource.services.ai.azure.com/models",
             api_key="azure-ai-test-key",

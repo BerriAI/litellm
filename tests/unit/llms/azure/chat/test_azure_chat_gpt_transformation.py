@@ -757,12 +757,12 @@ def test_azure_deployment_id_selects_chat_completions_endpoint(respx_mock: MockR
 
 @pytest.mark.respx(assert_all_called=True)
 def test_responses_api_version_leaves_the_chat_route_and_body_untouched(respx_mock: MockRouter) -> None:
-    url: Final = "https://example-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions"
+    url: Final = "https://example-resource.openai.azure.com/openai/deployments/gpt-5.4-nano/chat/completions"
     payload: Final = {
         "id": "chatcmpl-dated",
         "object": "chat.completion",
         "created": 1700000000,
-        "model": "gpt-4.1-mini",
+        "model": "gpt-5.4-nano",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
     }
@@ -770,7 +770,7 @@ def test_responses_api_version_leaves_the_chat_route_and_body_untouched(respx_mo
     messages: Final = [{"role": "user", "content": "Hello"}]
 
     response: Final = litellm.completion(
-        model="azure/gpt-4.1-mini",
+        model="azure/gpt-5.4-nano",
         messages=messages,
         api_base="https://example-resource.openai.azure.com",
         api_key="azure-test-key",
@@ -781,5 +781,5 @@ def test_responses_api_version_leaves_the_chat_route_and_body_untouched(respx_mo
 
     assert route.call_count == 1
     assert request.url.params["api-version"] == "2024-12-01-preview"
-    assert json.loads(request.content) == {"model": "gpt-4.1-mini", "messages": messages}
+    assert json.loads(request.content) == {"model": "gpt-5.4-nano", "messages": messages}
     assert response.choices[0].message.content == "Hello"
