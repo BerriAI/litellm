@@ -182,6 +182,7 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.db_url_settings import (
     DatabaseURLSettings,
     add_missing_query_params,
+    schema_from_database_url,
     token_refresh_params_from_url,
 )
 from litellm.proxy.db.exception_handler import (
@@ -4931,7 +4932,9 @@ class PrismaClient:
             ]
             required_view: Final = "LiteLLM_VerificationTokenView"
             expected_views_str: Final = ", ".join(f"'{view}'" for view in expected_views)
-            pg_schema: Final = os.getenv("DATABASE_SCHEMA", "public")
+            pg_schema: Final = (
+                os.getenv("DATABASE_SCHEMA") or schema_from_database_url(os.getenv("DATABASE_URL", "")) or "public"
+            )
             ret: Final[Sequence[_ViewCountRow]] = await self.db.query_raw(f"""
                 WITH existing_views AS (
                     SELECT viewname

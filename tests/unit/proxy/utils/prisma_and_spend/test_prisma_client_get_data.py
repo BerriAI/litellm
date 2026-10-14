@@ -428,6 +428,38 @@ async def test_check_view_exists_raises_when_query_raw_fails(
 
 
 @pytest.mark.asyncio
+async def test_check_view_exists_checks_the_schema_pinned_on_database_url(
+    prisma_client: PrismaClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DATABASE_URL pinned directly (no DATABASE_SCHEMA env var) must still
+    be checked against its own ``?schema=`` rather than defaulting to public."""
+    monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://db.example.com:5432/app?schema=litellm"
+    )
+    prisma_client.db.query_raw = AsyncMock(
+        return_value=[{"view_count": 8, "view_names": ["LiteLLM_VerificationTokenView"]}]
+    )
+    await prisma_client.check_view_exists()
+    assert "schemaname = 'litellm'" in prisma_client.db.query_raw.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_check_view_exists_falls_back_to_public_without_a_pinned_schema(
+    prisma_client: PrismaClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db.example.com:5432/app")
+    prisma_client.db.query_raw = AsyncMock(
+        return_value=[{"view_count": 8, "view_names": ["LiteLLM_VerificationTokenView"]}]
+    )
+    await prisma_client.check_view_exists()
+    assert "schemaname = 'public'" in prisma_client.db.query_raw.await_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_get_data_token_find_unique_returns_record(
     prisma_client: PrismaClient,
 ) -> None:
