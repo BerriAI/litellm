@@ -6,7 +6,8 @@ Maps OpenAI TTS spec to Gradium's REST TTS API.
 Reference: https://docs.gradium.ai/api-reference/endpoint/tts-post
 """
 
-from typing import TYPE_CHECKING, ClassVar, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, ClassVar, Final, TypeAlias
 
 import httpx
 from httpx import Headers
@@ -25,8 +26,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
-    LiteLLMLoggingObj = object
-    HttpxBinaryResponseContent = object
+    LiteLLMLoggingObj: TypeAlias = object
+    HttpxBinaryResponseContent: TypeAlias = object
 
 
 class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
@@ -42,7 +43,7 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
 
     # OpenAI canonical voice names → Gradium library voice IDs. Anything not
     # listed is forwarded verbatim, so callers can pass raw Gradium voice IDs.
-    VOICE_MAPPINGS: ClassVar[dict[str, str]] = {
+    VOICE_MAPPINGS: ClassVar[Mapping[str, str]] = {
         "alloy": "YTpq7expH9539ERJ",
         "echo": "s0PhgjzOTRD5wo5L",
         "fable": "1VAVLmmbQFDw7TMn",
@@ -53,32 +54,30 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
 
     # Gradium serves raw PCM and Ogg-wrapped Opus, plus WAV. It has no mp3,
     # aac or flac encoder, so those OpenAI formats have no mapping.
-    FORMAT_MAPPINGS: ClassVar[dict[str, str]] = {
+    FORMAT_MAPPINGS: ClassVar[Mapping[str, str]] = {
         "wav": "wav",
         "pcm": "pcm_24000",
         "opus": "opus",
     }
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseTextToSpeechConfig declares list
         return ["voice", "response_format"]
 
-    def _resolve_voice_id(self, voice: str | dict | None, params: dict) -> str:
+    def _resolve_voice_id(
+        self,
+        voice: str | dict | None,  # mutable-ok: mirrors the dict|str the base class passes through
+        params: Mapping[str, object],
+    ) -> str:
         """Normalize the caller's `voice` into a Gradium voice_id."""
-        candidate: str | None = None
-
-        if isinstance(voice, str) and voice.strip():
-            candidate = voice.strip()
-        elif isinstance(voice, dict):
-            for key in ("voice_id", "id", "name"):
-                value = voice.get(key)
-                if isinstance(value, str) and value.strip():
-                    candidate = value.strip()
-                    break
-
-        if candidate is None:
-            override = params.pop("voice_id", None)
-            if isinstance(override, str) and override.strip():
-                candidate = override.strip()
+        sources: Final = (
+            (voice,)
+            if isinstance(voice, str)
+            else ((voice.get("voice_id"), voice.get("id"), voice.get("name")) if isinstance(voice, dict) else ())
+        )
+        candidate: Final = next(
+            (value.strip() for value in (*sources, params.get("voice_id")) if isinstance(value, str) and value.strip()),
+            None,
+        )
 
         if candidate is None:
             raise ValueError("Gradium voice_id is required. Pass `voice` when calling `litellm.speech()`.")
@@ -88,109 +87,111 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
     def map_openai_params(
         self,
         model: str,
-        optional_params: dict,
-        voice: str | dict | None = None,
+        optional_params: dict,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
+        voice: str | dict | None = None,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
         drop_params: bool = False,
-        kwargs: dict | None = None,
-    ) -> tuple[str | None, dict]:
+        kwargs: dict | None = None,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
+    ) -> tuple[str | None, dict]:  # mutable-ok: callers mutate the returned params further down the TTS path
         params: Final = dict(optional_params) if optional_params else {}
-        mapped_params: Final[dict[str, object]] = {}
-
         mapped_voice: Final = self._resolve_voice_id(voice, params)
 
         response_format: Final = params.pop("response_format", None)
-        if isinstance(response_format, str):
-            mapped_format = self.FORMAT_MAPPINGS.get(response_format)
-            if mapped_format is None:
-                if not (drop_params or litellm.drop_params):
-                    raise litellm.UnsupportedParamsError(
-                        status_code=400,
-                        message=(
-                            f"Gradium TTS does not support response_format={response_format!r}. "
-                            f"Supported: {sorted(self.FORMAT_MAPPINGS)}. "
-                            "Set `litellm.drop_params = True` to fall back to the default format."
-                        ),
-                    )
-            else:
-                mapped_params["output_format"] = mapped_format
+        output_format: Final = self.FORMAT_MAPPINGS.get(response_format) if isinstance(response_format, str) else None
+
+        if isinstance(response_format, str) and output_format is None and not (drop_params or litellm.drop_params):
+            raise litellm.UnsupportedParamsError(
+                status_code=400,
+                message=(
+                    f"Gradium TTS does not support response_format={response_format!r}. "
+                    f"Supported: {sorted(self.FORMAT_MAPPINGS)}. "
+                    "Set `litellm.drop_params = True` to fall back to the default format."
+                ),
+            )
 
         # Gradium synthesizes at the voice's native rate; there is no speed
         # control and no instructions field on the REST endpoint.
-        params.pop("speed", None)
-        params.pop("instructions", None)
-
-        for key, value in params.items():
-            if value is not None:
-                mapped_params[key] = value
+        passthrough: Final = {
+            key: value
+            for key, value in params.items()
+            if value is not None and key not in ("speed", "instructions", "voice_id")
+        }
+        mapped_params: Final[dict[str, object]] = (  # mutable-ok: the declared return type is dict
+            {**passthrough, "output_format": output_format} if output_format is not None else dict(passthrough)
+        )
 
         return mapped_voice, mapped_params
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
-        api_key = api_key or litellm.api_key or get_secret_str("GRADIUM_API_KEY")
+    ) -> dict:  # mutable-ok: signature fixed by BaseTextToSpeechConfig
+        resolved_key: Final = api_key or litellm.api_key or get_secret_str("GRADIUM_API_KEY")
 
-        if api_key is None:
+        if resolved_key is None:
             raise ValueError("Gradium API key is required. Set GRADIUM_API_KEY environment variable.")
 
-        headers.update(
-            {
-                "x-api-key": api_key,
-                "Content-Type": "application/json",
-            }
-        )
+        return {
+            **headers,
+            "x-api-key": resolved_key,
+            "Content-Type": "application/json",
+        }
 
-        return headers
-
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | Headers,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
+    ) -> BaseLLMException:
         return GradiumException(message=error_message, status_code=status_code, headers=headers)
 
     def get_complete_url(
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
     ) -> str:
         base_url: Final = (api_base or get_secret_str("GRADIUM_API_BASE") or self.TTS_BASE_URL).rstrip("/")
-        return f"{base_url}{self.TTS_ENDPOINT_PATH}"
+        # Gradium documents its regional bases with the /api suffix already on
+        # them (https://eu.api.gradium.ai/api), so appending the full endpoint
+        # path to one would request /api/api/post/speech/tts.
+        root: Final = base_url.removesuffix("/api")
+        return f"{root}{self.TTS_ENDPOINT_PATH}"
 
     def transform_text_to_speech_request(
         self,
         model: str,
         input: str,
         voice: str | None,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
+        litellm_params: dict,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
+        headers: dict,  # mutable-ok: signature fixed by BaseTextToSpeechConfig
     ) -> TextToSpeechRequestData:
         params: Final = dict(optional_params) if optional_params else {}
         extra_body: Final = params.pop("extra_body", None)
 
-        request_body: Final[dict[str, object]] = {
+        passthrough: Final = {key: value for key, value in params.items() if value is not None}
+        extras: Final = (
+            {key: value for key, value in extra_body.items() if value is not None}
+            if isinstance(extra_body, dict)
+            else {}
+        )
+        model_name: Final = {"model_name": model} if model and model != "default" else {}
+
+        request_body: Final[dict[str, object]] = {  # mutable-ok: TextToSpeechRequestData.dict_body is dict
             "text": input,
             "voice_id": voice,
-            "output_format": params.pop("output_format", self.DEFAULT_OUTPUT_FORMAT),
+            "output_format": params.get("output_format", self.DEFAULT_OUTPUT_FORMAT),
             # Without this Gradium answers a line-delimited JSON message
             # stream instead of audio bytes, which `/v1/audio/speech` callers
             # cannot read.
             "only_audio": True,
+            **model_name,
+            **passthrough,
+            **extras,
         }
-
-        if model and model != "default":
-            request_body["model_name"] = model
-
-        for key, value in params.items():
-            if value is not None:
-                request_body[key] = value
-
-        if isinstance(extra_body, dict):
-            for key, value in extra_body.items():
-                if value is not None:
-                    request_body[key] = value
 
         return TextToSpeechRequestData(
             dict_body=request_body,
