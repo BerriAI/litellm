@@ -37,9 +37,10 @@ LONG_HEADER_IP: Final = "203.0.113.79"
 ADDRESS_FORMS_FAILURE: Final = "synthetic-requester-ip-address-forms-failure"
 UPSTREAM_ADDRESS_FORMS: Final = MappingProxyType(
     {
-        "2001:db8::62": "connect to [2001:db8::62]:443 failed",
-        "2001:db8::63": "peer 2001:db8::63 reset",
-        "192.0.2.65": "socket 192.0.2.65:443 closed",
+        "2001:db8::62": "connect to host:2001:db8::62 failed",
+        "2001:db8::63": "peer_2001:db8::63",
+        "2001:db8:1:2:3:4:5:64": "upstream 2001:db8:1:2:3:4:5:64:443 refused",
+        "192.0.2.65": "socket_192.0.2.65 closed",
     }
 )
 CLIENT_IP_HEADERS: Final = MappingProxyType(
@@ -604,7 +605,7 @@ def test_provider_failure_row_follows_the_setting(rigs: Mapping[bool, Rig], disa
 
 
 @DISABLED
-def test_provider_error_row_masks_ipv6_addresses_and_addresses_with_ports(
+def test_provider_error_row_masks_addresses_after_labels_and_before_ports(
     rigs: Mapping[bool, Rig], disabled: bool
 ) -> None:
     rig: Final = rigs[disabled]
