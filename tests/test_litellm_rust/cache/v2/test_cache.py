@@ -8,16 +8,22 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import _v2
 from litellm._v2.cache import NativeBackend
+from litellm.chat_completions.dispatch import COMPLETION
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the existing background cache writer before the next request
 )
+from litellm.embeddings.dispatch import AEMBEDDING
+from litellm.messages.dispatch import ANTHROPIC_MESSAGES
+from litellm.responses.dispatch import ARESPONSES, RESPONSES
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.rust_bridge.catalog import Route
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_RESPONSE, RESPONSES_TEXT
 from tests.test_litellm_rust.cache.support import cache_key, invoke, payload
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.routing import python_only
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -60,11 +66,15 @@ async def test_v2_cache_skips_provider_and_reports_one_success_per_call(
 @pytest.mark.asyncio
 async def test_v2_global_cache_leaves_legacy_only_calls_usable() -> None:
     litellm.cache = _v2.Cache.memory()
-    response: Final = await litellm.aembedding(
-        model="openai/cache-test-embedding",
-        input=["hello"],
-        api_key="test-key",
-        mock_response=[0.25, 0.75],
+    response: Final = await AEMBEDDING.arun(
+        (),
+        {
+            "model": "openai/cache-test-embedding",
+            "input": ["hello"],
+            "api_key": "test-key",
+            "mock_response": [0.25, 0.75],
+        },
+        rules=python_only(Route.EMBEDDINGS),
     )
     assert response.model_dump(include={"data"}) == {
         "data": [{"embedding": [0.25, 0.75], "index": 0, "object": "embedding"}]
@@ -73,22 +83,21 @@ async def test_v2_global_cache_leaves_legacy_only_calls_usable() -> None:
 
 @pytest.mark.parametrize("route", ("chat", "responses"))
 def test_v2_cache_works_through_python_inference(
-    recording_server: RecordingServer, route: Literal["chat", "messages", "responses"], monkeypatch: pytest.MonkeyPatch
+    recording_server: RecordingServer, route: Literal["chat", "messages", "responses"]
 ) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "0")
     litellm.cache = _v2.Cache.memory()
     common: Final = {"api_key": "test-key", "api_base": recording_server.base_url}
     if route == "responses":
         recording_server.default_response = ResponseSpec(body=RESPONSES_RESPONSE)
         parameters: Final = {"model": RESPONSES_MODEL, "input": "hello", **common}
-        first: Final = litellm.responses(**parameters)
-        second: Final = litellm.responses(**parameters)
+        first: Final = RESPONSES.run((), parameters, rules=python_only(Route.RESPONSES))
+        second: Final = RESPONSES.run((), parameters, rules=python_only(Route.RESPONSES))
         assert payload(first) == payload(second)
     else:
         recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
         arguments: Final = {"model": MESSAGES_MODEL, "messages": list(MESSAGES), "max_tokens": 32, **common}
-        initial: Final = litellm.completion(**arguments)
-        cached: Final = litellm.completion(**arguments)
+        initial: Final = COMPLETION.run((), arguments, rules=python_only(Route.CHAT_COMPLETIONS))
+        cached: Final = COMPLETION.run((), arguments, rules=python_only(Route.CHAT_COMPLETIONS))
         assert isinstance(initial, ModelResponse) and isinstance(cached, ModelResponse)
         assert (
             initial.choices[0].message.content
@@ -127,10 +136,7 @@ async def test_v2_native_cache_accepts_existing_freshness_aliases(
 
 
 @pytest.mark.asyncio
-async def test_v2_cache_does_not_force_native_responses_streaming(
-    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "0")
+async def test_v2_cache_does_not_force_native_responses_streaming(recording_server: RecordingServer) -> None:
     litellm.cache = _v2.Cache.memory()
     recording_server.default_response = ResponseSpec(
         body=None,
@@ -142,13 +148,17 @@ async def test_v2_cache_does_not_force_native_responses_streaming(
             ),
         ),
     )
-    response: Final = await litellm.aresponses(
-        model=RESPONSES_MODEL,
-        input="hello",
-        stream=True,
-        caching=False,
-        api_key="test-key",
-        api_base=recording_server.base_url,
+    response: Final = await ARESPONSES.arun(
+        (),
+        {
+            "model": RESPONSES_MODEL,
+            "input": "hello",
+            "stream": True,
+            "caching": False,
+            "api_key": "test-key",
+            "api_base": recording_server.base_url,
+        },
+        rules=python_only(Route.RESPONSES),
     )
     assert isinstance(response, AsyncIterator)
     chunks: Final = [chunk async for chunk in response]
@@ -157,10 +167,7 @@ async def test_v2_cache_does_not_force_native_responses_streaming(
 
 
 @pytest.mark.asyncio
-async def test_v2_cache_works_through_python_messages(
-    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("LITELLM_RUST", "0")
+async def test_v2_cache_works_through_python_messages(recording_server: RecordingServer) -> None:
     litellm.cache = _v2.Cache.memory()
     recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
     parameters: Final = {
@@ -170,9 +177,9 @@ async def test_v2_cache_works_through_python_messages(
         "api_key": "test-key",
         "api_base": recording_server.base_url,
     }
-    first: Final = await litellm.anthropic_messages(**parameters)
+    first: Final = await ANTHROPIC_MESSAGES.arun((), parameters, rules=python_only(Route.MESSAGES))
     await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
-    second: Final = await litellm.anthropic_messages(**parameters)
+    second: Final = await ANTHROPIC_MESSAGES.arun((), parameters, rules=python_only(Route.MESSAGES))
     assert payload(first) == payload(second)
     assert len(recording_server.requests) == 1
 

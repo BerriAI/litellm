@@ -6,19 +6,16 @@ from typing import Final, Literal
 
 from pydantic import BaseModel, TypeAdapter
 
-import litellm
+from litellm.chat_completions.dispatch import ACOMPLETION
+from litellm.messages.dispatch import ANTHROPIC_MESSAGES
+from litellm.responses.dispatch import ARESPONSES
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
-from litellm.rust_bridge import runtime
-from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
-from litellm.rust_bridge.chat_completions.entrypoints import NATIVE_ACOMPLETION
-from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
-from litellm.rust_bridge.public_call import NativeCall
-from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES
+from litellm.rust_bridge.catalog import Route
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_RESPONSE
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.routing import python_only, rust_required
 
 
 def payload(value: object) -> object:
@@ -43,32 +40,11 @@ async def invoke(
     native: bool = True,
 ) -> object:
     common: Final = {"api_key": "test-key", "api_base": server.base_url, **options}
+    rules: Final = rust_required if native else python_only
     if route == "responses":
         server.default_response = ResponseSpec(body=RESPONSES_RESPONSE)
         arguments: Final = {"model": RESPONSES_MODEL, "input": "hello", **common}
-        if not native:
-            return await litellm.aresponses(**arguments)
-        request: Final = NativeCall(
-            args=(),
-            kwargs=arguments,
-            base={
-                "model": RESPONSES_MODEL,
-                "input": "hello",
-                "stream": None,
-                "api_key": "test-key",
-                "api_base": server.base_url,
-                "custom_llm_provider": "openai",
-                "extra_headers": None,
-                **arguments,
-            },
-        )
-        return await runtime.arun(
-            RouteContext(Route.RESPONSES),
-            binding=NATIVE_ARESPONSES,
-            native=lambda hook: hook(request),
-            python=runtime.NO_PYTHON,
-            rules=(RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),),
-        )
+        return await ARESPONSES.arun((), arguments, rules=rules(Route.RESPONSES))
     server.default_response = (
         ResponseSpec(body=None, events=MESSAGES_EVENTS)
         if options.get("stream")
@@ -76,39 +52,8 @@ async def invoke(
     )
     parameters: Final = {"model": MESSAGES_MODEL, "messages": list(MESSAGES), "max_tokens": 32, **common}
     if route == "chat":
-        if not native:
-            return await litellm.acompletion(**parameters)
-        chat: Final = NativeCall(args=(), kwargs=parameters, base={})
-        return await runtime.arun(
-            RouteContext(Route.CHAT_COMPLETIONS),
-            binding=NATIVE_ACOMPLETION,
-            native=lambda hook: hook(chat),
-            python=runtime.NO_PYTHON,
-            rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
-        )
-    if not native:
-        return await litellm.anthropic_messages(**parameters)
-    messages: Final = NativeCall(
-        args=(),
-        kwargs=parameters,
-        base={
-            "model": MESSAGES_MODEL,
-            "messages": list(MESSAGES),
-            "max_tokens": 32,
-            "stream": None,
-            "api_key": "test-key",
-            "api_base": server.base_url,
-            "custom_llm_provider": "anthropic",
-            **parameters,
-        },
-    )
-    return await runtime.arun(
-        RouteContext(Route.MESSAGES),
-        binding=NATIVE_AMESSAGES,
-        native=lambda hook: hook(messages),
-        python=runtime.NO_PYTHON,
-        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
-    )
+        return await ACOMPLETION.arun((), parameters, rules=rules(Route.CHAT_COMPLETIONS))
+    return await ANTHROPIC_MESSAGES.arun((), parameters, rules=rules(Route.MESSAGES))
 
 
 async def collect(stream: object) -> bytes:

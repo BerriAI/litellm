@@ -153,25 +153,20 @@ def test_tokenizers_share_the_native_process_guard(warm_fast_counter: bool) -> N
     script: Final = """
 import asyncio
 import os
-import litellm
 from litellm.proxy.spend_tracking.input_tokens import count_input_tokens
-from litellm.rust_bridge import _native, catalog
+from litellm.rust_bridge import _native
+from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer
 from litellm.utils import claude_json_str
 
-catalog.RULES = (
-    RouteRule(Route.TOKENIZER, Rollout.RUST_OPT_IN),
-    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_OPT_IN),
-    *catalog.RULES,
-)
-litellm.anthropic_models = {*litellm.anthropic_models, "tokenizer-fork-fixture"}
+RULES = (RouteRule(Route.TOKENIZER, Rollout.RUST_REQUIRED), RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_REQUIRED))
 _native.reserve_process_for_forking()
 for create in (
     lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
     lambda: _native.Tokenizer.from_json(claude_json_str),
-    lambda: litellm.token_counter(model="tokenizer-fork-fixture", text="hello"),
+    lambda: tokenizer_dispatch.anthropic(rules=RULES),
 ):
     try:
         create()
@@ -199,7 +194,9 @@ if pid == 0:
             lambda: _native.TokenCounter.from_tokenizer(encoding),
             lambda: _native.TokenCounter.from_tokenizer(encoding, fast=True),
             lambda: _native.Tokenizer.from_tiktoken("cl100k_base"),
-            lambda: asyncio.run(count_input_tokens({"prompt": "hello"}, b'{"prompt": "hello"}', ("counter-fork-fixture",))),
+            lambda: asyncio.run(
+                count_input_tokens({"prompt": "hello"}, b'{"prompt": "hello"}', ("counter-fork-fixture",), rules=RULES)
+            ),
         ):
             try:
                 call()

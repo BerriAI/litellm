@@ -8,7 +8,7 @@ from litellm.rust_bridge import configuration
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, PublicDispatch, PublicRoute
 from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementationError
 
 
@@ -312,3 +312,67 @@ async def test_dispatch_without_python_never_falls_back(
         await dispatch_without_python(
             ocr_dispatch(request_value, bypass=bypass), bound, rules, asynchronous=asynchronous
         )
+
+
+def messages_route(result: object) -> PublicRoute[Request, NativeRoute, object]:
+    bound: Final[NativeBinding[NativeRoute]] = NativeBinding("messages", validate=lambda _: None)
+    bound.override(lambda request, args, kwargs: (result, request.model))
+    return PublicRoute(
+        dispatch=PublicDispatch(
+            route=Route.MESSAGES,
+            request=lambda args, kwargs: Request(model=str(args[0])),
+            context=lambda value: RouteContext(Route.MESSAGES, model=value.model),
+        ),
+        binding=bound,
+        native=lambda hook, value, args, kwargs: hook(value, args, kwargs),
+        python=lambda *args, **kwargs: ("python", args, dict(kwargs)),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rules", "expected"),
+    (
+        ((RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),), ("rust", "bound-model")),
+        ((RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),), ("python", ("bound-model",), {"page": 1})),
+    ),
+    ids=("rust", "python"),
+)
+def test_public_route_selects_a_backend_for_its_bound_call_with_the_given_rules(rules: Rules, expected: object) -> None:
+    assert messages_route("rust").run(("bound-model",), {"page": 1}, rules=rules) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rules", "expected"),
+    (
+        ((RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),), ("rust", "bound-model")),
+        ((RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),), ("python", ("bound-model",), {"page": 1})),
+    ),
+    ids=("rust", "python"),
+)
+async def test_async_public_route_selects_a_backend_for_its_bound_call_with_the_given_rules(
+    rules: Rules, expected: object
+) -> None:
+    bound: Final[NativeBinding[NativeRoute]] = NativeBinding("messages", validate=lambda _: None)
+    bound.override(lambda request, args, kwargs: ("rust", request.model))
+
+    async def native(
+        hook: NativeRoute, value: Request, args: tuple[object, ...], kwargs: Mapping[str, object]
+    ) -> object:
+        return hook(value, args, kwargs)
+
+    async def python(*args: object, **kwargs: object) -> object:  # kwargs-ok: public pass-through shape
+        return ("python", args, dict(kwargs))
+
+    route: Final = AsyncPublicRoute(
+        dispatch=PublicDispatch(
+            route=Route.MESSAGES,
+            request=lambda args, kwargs: Request(model=str(args[0])),
+            context=lambda value: RouteContext(Route.MESSAGES, model=value.model),
+        ),
+        binding=bound,
+        native=native,
+        python=python,
+    )
+
+    assert await route.arun(("bound-model",), {"page": 1}, rules=rules) == expected

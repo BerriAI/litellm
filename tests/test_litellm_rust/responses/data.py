@@ -1,6 +1,6 @@
 from typing import Final
 
-import litellm
+from litellm.responses.dispatch import ARESPONSES, RESPONSES
 from litellm.rust_bridge.catalog import Route
 from tests.test_litellm_rust.support.gaps import gap
 from tests.test_litellm_rust.support.recording_server import RecordingServer
@@ -61,8 +61,8 @@ RATE_LIMITED: Final = _error("rate_limit_exceeded")
 async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: object) -> object:
     return await call_natively(
         Route.RESPONSES,
-        litellm.responses,
-        litellm.aresponses,
+        RESPONSES.run,
+        ARESPONSES.arun,
         REQUEST,
         server,
         asynchronous=asynchronous,

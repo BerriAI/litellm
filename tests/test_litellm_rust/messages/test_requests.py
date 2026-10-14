@@ -3,10 +3,11 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.messages.dispatch import ANTHROPIC_MESSAGES
 from litellm.rust_bridge.catalog import Route
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, call
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.routing import assert_served_natively, native_route
+from tests.test_litellm_rust.support.routing import assert_served_natively, rust_required
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -141,8 +142,9 @@ async def test_optional_positional_body_parameters_reach_the_wire(server: Record
     metadata: Final = {"user_id": "caller"}
     args: Final = (16, list(MESSAGES), "anthropic/claude-test", metadata, None, False, "Be brief", 0.25)
 
-    with native_route(Route.MESSAGES):
-        response: Final = await litellm.anthropic_messages(*args, api_key="test-key", api_base=server.base_url)
+    response: Final = await ANTHROPIC_MESSAGES.arun(
+        args, {"api_key": "test-key", "api_base": server.base_url}, rules=rust_required(Route.MESSAGES)
+    )
 
     assert isinstance(response, dict)
     assert response["id"] == MESSAGES_RESPONSE["id"]
