@@ -1375,6 +1375,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # 2. Process tool calls
             tool_calls = getattr(message, "tool_calls", None)
             if tool_calls:
+                tool_call: object
                 for tool_call in tool_calls:
                     function = getattr(tool_call, "function", None)
                     if function and hasattr(function, "arguments"):

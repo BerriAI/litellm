@@ -2985,11 +2985,14 @@ export interface paths {
          *
          *     Updates the cost_discount_config in litellm_settings.
          *     Discounts should be between 0 and 1 (e.g., 0.05 = 5% discount).
+         *     A key may also be <provider>/<model-pattern>, where the pattern is an
+         *     fnmatch glob matched against the model name.
          *
          *     Example:
          *     ```json
          *     {
          *         "vertex_ai": 0.05,
+         *         "vertex_ai/claude-*": 0.20,
          *         "gemini": 0.05,
          *         "openai": 0.01
          *     }
@@ -9139,6 +9142,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/live/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: live_sessions_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_live_sessions_websocket_endpoint_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/login": {
         parameters: {
             query?: never;
@@ -10813,6 +10836,26 @@ export interface paths {
         put?: never;
         /** Image Generation */
         post: operations["image_generation_openai_deployments__model__images_generations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/openai/v1/live/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: live_sessions_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_live_sessions_websocket_endpoint_get_3"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13451,9 +13494,9 @@ export interface paths {
         };
         /**
          * Get Litellm Blog Posts
-         * @description Public endpoint to get the latest LiteLLM blog posts.
+         * @description Public endpoint to get the latest LiteLLM blog posts, each with its RSS categories as ``tags``.
          *
-         *     Fetches from GitHub with a 1-hour in-process cache.
+         *     Fetches the docs RSS feed with a 1-hour in-process cache.
          *     Falls back to the bundled local backup on any failure.
          */
         get: operations["get_litellm_blog_posts_public_litellm_blog_posts_get"];
@@ -17271,6 +17314,7 @@ export interface paths {
          *         - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
          *           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
          *           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
+         *         - excluded_services: For OTel v2 callbacks, a comma-separated list of datastore names such as "redis,postgres", or "none" to exclude nothing. An explicit value replaces the global exclusions; omitted follows them
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -20258,6 +20302,26 @@ export interface paths {
          *     ```
          */
         post: operations["index_create_v1_indexes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/live/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * WebSocket: live_sessions_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_live_sessions_websocket_endpoint_get_2"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -26776,6 +26840,16 @@ export interface components {
              */
             mask_response_content?: boolean | null;
             /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
+             * Max Input Chars
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             */
+            max_input_chars?: number | null;
+            /**
              * Model
              * @description Optional field if guardrail requires a 'model' parameter
              */
@@ -26864,7 +26938,7 @@ export interface components {
             skip_tool_message_in_guardrail?: boolean | null;
             /**
              * Skip Unscannable Attachments
-             * @description Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.
+             * @description Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them.
              * @default false
              */
             skip_unscannable_attachments: boolean | null;
@@ -26893,7 +26967,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. Also implemented by guardrail='decision_model'.
              * @default fail_closed
              * @enum {string}
              */
@@ -27017,6 +27091,11 @@ export interface components {
             date: string;
             /** Description */
             description: string;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
             /** Title */
             title: string;
             /** Url */
@@ -27198,7 +27277,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, resolved the way /health does: the deployment's model_info.mode (only while the request tests the deployment's own model), then the mode the provider requires for that model, then the model cost map.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation" | "decisions") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -29562,7 +29641,7 @@ export interface components {
             enable_public_model_hub: boolean;
             /**
              * Enforce Fallback Model Access
-             * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.
+             * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is True. Set False to disable fallback model access enforcement.
              */
             enforce_fallback_model_access?: boolean | null;
             /**
@@ -31069,6 +31148,27 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /**
+         * DecisionModelCheck
+         * @description One predicate the decision model scores the request or response against.
+         */
+        DecisionModelCheck: {
+            /**
+             * Action
+             * @default block
+             * @enum {string}
+             */
+            action: "block" | "log";
+            /** Instructions */
+            instructions: string;
+            /** Name */
+            name: string;
+            /**
+             * Threshold
+             * @default 0.7
+             */
+            threshold: number;
         };
         /** DecisionsResponse */
         DecisionsResponse: {
@@ -32651,6 +32751,8 @@ export interface components {
             content_filter_settings?: {
                 [key: string]: unknown;
             } | null;
+            /** Decision Model Providers */
+            decision_model_providers?: string[];
             /** Pii Entity Categories */
             pii_entity_categories: components["schemas"]["PiiEntityCategoryMap"][];
             /** Providers Without Directional Logging Only Scope */
@@ -35899,8 +36001,11 @@ export interface components {
              * @default true
              */
             ccr_retrieval: boolean;
-            /** @description Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier. */
-            checks?: components["schemas"]["BedrockChecksConfigModel"] | null;
+            /**
+             * Checks
+             * @description Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate checks a decision_model guardrail scores for guardrail='decision_model'
+             */
+            checks?: components["schemas"]["BedrockChecksConfigModel"] | components["schemas"]["DecisionModelCheck"][] | null;
             /**
              * Chunk Budget Chars
              * @description ApplyGuardrail: batch size, in characters, used to re-send content after AWS has rejected a request as too large. Requests AWS accepts are always sent in a single call, so this has no effect until a rejection happens. Defaults to 25,000; a batch AWS still rejects is bisected automatically, so this value only trades round trips against batch size and cannot fail a request on its own.
@@ -35962,6 +36067,11 @@ export interface components {
              * @description Python-like code containing the apply_guardrail function for custom guardrail logic
              */
             custom_code?: string | null;
+            /**
+             * Decision Model
+             * @description For guardrail='decision_model': the Decisions-API model that scores each check
+             */
+            decision_model?: string | null;
             /**
              * Deepkeep Firewall Id
              * @description The DeepKeep Firewall ID to use for guardrail evaluation. If not provided, the `DEEPKEEP_FIREWALL_ID` environment variable is checked.
@@ -36167,6 +36277,16 @@ export interface components {
              * @description Will mask response content if guardrail makes any changes
              */
             mask_response_content?: boolean | null;
+            /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
+             * Max Input Chars
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             */
+            max_input_chars?: number | null;
             /**
              * Metadata
              * @description Additional metadata to include in the request
@@ -36467,7 +36587,7 @@ export interface components {
             skip_tool_message_in_guardrail?: boolean | null;
             /**
              * Skip Unscannable Attachments
-             * @description Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.
+             * @description Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them.
              * @default false
              */
             skip_unscannable_attachments: boolean | null;
@@ -36544,6 +36664,11 @@ export interface components {
              * @description Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.
              */
             violation_message_template?: string | null;
+            /**
+             * Wingback App Id
+             * @description Wingback external gateway integration name for request attribution (sent as additional_provider_specific_params.wingback_app_id).
+             */
+            wingback_app_id?: string | null;
             /**
              * Xecguard Model
              * @description XecGuard scanning model identifier. Defaults to 'xecguard_v2'.
@@ -37551,6 +37676,8 @@ export interface components {
             reasoning_content?: string | null;
             /** Reasoning Items */
             reasoning_items?: components["schemas"]["ChatCompletionReasoningItem"][] | null;
+            /** Refusal */
+            refusal?: string | null;
             /**
              * Role
              * @enum {string}
@@ -37675,6 +37802,8 @@ export interface components {
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Output"])[] | null;
+            /** Description */
+            description?: string | null;
             /** Health Checked At */
             health_checked_at?: string | null;
             /** Health Response Time */
@@ -39133,6 +39262,8 @@ export interface components {
              * @default true
              */
             circuit_breaker_enabled: boolean;
+            /** Deployment Name */
+            deployment_name?: string | null;
             /**
              * Instructions
              * @description Replaces the built-in classification instructions
@@ -51841,6 +51972,7 @@ export interface operations {
                 code_challenge_method?: string | null;
                 response_type?: string | null;
                 resource?: string | null;
+                scope?: string | null;
             };
             header?: never;
             path?: never;
@@ -56852,6 +56984,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Input
                      * @description The text being judged, or user messages whose content mixes input_text and input_image parts
                      */
@@ -56972,6 +57121,23 @@ export interface operations {
                      * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
                      */
                     safety_identifier?: string | null;
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
@@ -62682,6 +62848,24 @@ export interface operations {
             };
         };
     };
+    websocket_live_sessions_websocket_endpoint_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     login_login_post: {
         parameters: {
             query?: never;
@@ -65290,6 +65474,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_live_sessions_websocket_endpoint_get_3: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -71126,6 +71328,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Model
                      * @description A decision model from the proxy model_list
                      */
@@ -71214,6 +71433,23 @@ export interface operations {
                     state: string | {
                         [key: string]: unknown;
                     } | unknown[];
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
@@ -76433,6 +76669,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Input
                      * @description The text being judged, or user messages whose content mixes input_text and input_image parts
                      */
@@ -76553,6 +76806,23 @@ export interface operations {
                      * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
                      */
                     safety_identifier?: string | null;
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
@@ -77458,6 +77728,24 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    websocket_live_sessions_websocket_endpoint_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -79763,6 +80051,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Model
                      * @description A decision model from the proxy model_list
                      */
@@ -79851,6 +80156,23 @@ export interface operations {
                     state: string | {
                         [key: string]: unknown;
                     } | unknown[];
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };

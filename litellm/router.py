@@ -3384,7 +3384,7 @@ class Router:
     async def _aresponses_streaming_iterator(
         self,
         response: "BaseResponsesAPIStreamingIterator",
-        initial_kwargs: dict[str, Any],
+        initial_kwargs: dict[str, object],
     ) -> "BaseResponsesAPIStreamingIterator":
         """
         Wrap a Responses-API streaming iterator so MidStreamFallbackError
@@ -5596,7 +5596,7 @@ class Router:
     async def _aanthropic_messages_streaming_iterator(
         self,
         response: AsyncIterator[bytes],
-        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        initial_kwargs: dict[str, object],  # mutable-ok: mutated in-place before re-entering the fallback chain
     ) -> AsyncIterator[bytes]:
         """
         Wrap an anthropic_messages (/v1/messages) streaming response so a
@@ -11396,6 +11396,10 @@ class Router:
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
         model_list: Final = self.get_model_list_of_routed_group(model_group)
+        model_group_description: Final[str | None] = next(
+            (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
+            None,
+        )
         for model in model_list:
             is_match = False
             if (
@@ -11501,6 +11505,7 @@ class Router:
                     **{
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
+                        "description": model_group_description,
                         **model_info,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,

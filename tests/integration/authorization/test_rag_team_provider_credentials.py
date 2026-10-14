@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import signal
 import socket
 import threading
 import time
@@ -1260,13 +1259,13 @@ async def test_worker_sigkill_mid_query_burst_leaves_the_sibling_on_team_credent
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, upstream.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert [response.status_code for response in served] == [200] * held_by[survivor_pid], held_by
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert [response.status_code for response in served] == [200] * held_by[survivor_pid], held_by
             (follow_up,) = await _query_burst(owned.gateway, key, model, 1)
             assert follow_up.status_code == 200, follow_up.text
             calls: Final = tuple(_call(request) for request in upstream.drain())

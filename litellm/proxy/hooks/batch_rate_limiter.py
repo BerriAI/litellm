@@ -1142,6 +1142,24 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     },
                 )
 
+    @staticmethod
+    async def _check_managed_file_ownership(
+        managed_files_obj: object,
+        file_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """Deny before the input file is read, so a caller cannot make the proxy
+        download, count, or charge its own limits for another tenant's file."""
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedResourceAccessChecker
+
+        if not isinstance(managed_files_obj, ManagedResourceAccessChecker):
+            raise HTTPException(status_code=500, detail="Managed resource ownership validation is unavailable.")
+        if not await managed_files_obj.can_user_call_unified_file_id(file_id, user_api_key_dict):
+            raise HTTPException(
+                status_code=403,
+                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+            )
+
     async def _fetch_managed_file_content(
         self,
         file_id: str,
@@ -1183,6 +1201,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         if llm_router is None:
             raise ValueError("llm_router not available. Cannot access managed files.")
+
+        await self._check_managed_file_ownership(managed_files_obj, file_id, user_api_key_dict)
 
         # Use the managed files hook to get file content
         # This properly handles user permissions and file ownership

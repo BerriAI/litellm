@@ -44,7 +44,7 @@ import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
 import { uiHref } from "@/utils/uiHref";
-import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE, isDecisionMode } from "@/lib/decisionModels";
+import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE, displayMode, isDecisionMode } from "@/lib/decisionModels";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -672,7 +672,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </div>
                   <div>
                     <p className="font-medium">Mode:</p>
-                    <p>{selectedModel.mode || "Not specified"}</p>
+                    <p>{displayMode(selectedModel.mode) ?? "Not specified"}</p>
                   </div>
                   <div>
                     <p className="font-medium">Providers:</p>
@@ -684,6 +684,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                       ))}
                     </div>
                   </div>
+                  {selectedModel.description && (
+                    <div className="col-span-2">
+                      <p className="font-medium">Description:</p>
+                      <p className="mt-1">{selectedModel.description}</p>
+                    </div>
+                  )}
                 </div>
               </div>
 

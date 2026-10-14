@@ -26,6 +26,7 @@ import promptguardLogo from "../../../../../public/assets/logos/promptguard.svg"
 import qohashLogo from "../../../../../public/assets/logos/qohash.jpg";
 import repelloAiLogo from "../../../../../public/assets/logos/repelloai.png";
 import straikerLogo from "../../../../../public/assets/logos/straiker.svg";
+import wingbackLogo from "../../../../../public/assets/logos/wingback.png";
 import xecguardLogo from "../../../../../public/assets/logos/xecguard.svg";
 import zscalerLogo from "../../../../../public/assets/logos/zscaler.svg";
 
@@ -89,6 +90,12 @@ export const guardrail_provider_map: Record<string, string> = {
   Alice: "alice",
   "LLM Shield Proxy": "llm_shield_proxy",
   Conduct: "conduct",
+  DecisionModel: "decision_model",
+};
+
+// Search aliases matched alongside the provider label in the add-guardrail provider combobox
+export const guardrail_provider_search_aliases: Record<string, string[]> = {
+  decision_model: ["jev", "typesafe", "prompt injection", "jailbreak", "decision"],
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -276,6 +283,11 @@ export const shouldRenderLLMJudgeFields = (provider: string | null) => {
   return guardrail_provider_map[provider] === "llm_as_a_judge";
 };
 
+export const shouldRenderDecisionModelFields = (provider: string | null) => {
+  if (!provider) return false;
+  return guardrail_provider_map[provider] === "decision_model";
+};
+
 export const guardrailLogoMap = {
   "Zscaler AI Guard": zscalerLogo.src,
   "Presidio PII": microsoftAzureLogo.src,
@@ -312,6 +324,8 @@ export const guardrailLogoMap = {
   "Microsoft Agent 365": microsoftAzureLogo.src,
   "LLM Shield Proxy": llmShieldProxyLogo.src,
   "Conduct Guard": conductLogo.src,
+  Wingback: wingbackLogo.src,
+  "Decision Model": litellmLogo.src,
 } satisfies Record<string, string>;
 
 export const getGuardrailLogo = (displayName: string): string | undefined =>
