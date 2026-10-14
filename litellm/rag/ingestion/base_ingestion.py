@@ -34,6 +34,10 @@ if TYPE_CHECKING:
     from litellm import Router
 
 
+class RAGIngestBadRequestError(ValueError):
+    status_code: Final = 400
+
+
 class BaseRAGIngestion(ABC):
     """
     Base class for RAG ingestion.

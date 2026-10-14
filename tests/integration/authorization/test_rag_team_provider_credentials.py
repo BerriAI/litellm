@@ -1275,35 +1275,64 @@ async def test_worker_sigkill_mid_query_burst_leaves_the_sibling_on_team_credent
             assert sum(1 for call in calls if call.route == "/v1/chat/completions") == held_by[survivor_pid] + 1, calls
 
 
-def test_a_team_with_two_openai_deployments_ingests_through_the_older_one_after_it_is_edited(tmp_path: Path) -> None:
+def _ingest_and_drain(
+    gateway: Gateway, scenario: Scenario, key: str, upstream: Wire
+) -> tuple[str, tuple[Signature, ...]]:
+    upstream.drain()
+    response: Final = _ingest(gateway, key)
+    assert response.status_code == 200, response.text
+    store_id: Final = string_value(object_value(response.json())["vector_store_id"])
+    scenario.cleanups.callback(gateway.post, "/vector_store/delete", {"vector_store_id": store_id})
+    calls: Final = tuple(_call(request) for request in upstream.drain())
+    return store_id, tuple(call.signature for call in calls if call.route != "/v1/models")
+
+
+def _ingests_after_editing(
+    gateway: Gateway, scenario: Scenario, key: str, upstream: Wire, model_id: str
+) -> tuple[tuple[str, tuple[Signature, ...]], ...]:
+    edited: Final = gateway.request("PATCH", f"/model/{model_id}/update", {"litellm_params": {"timeout": 30}})
+    assert edited.status_code == 200, edited.text
+    return tuple(_ingest_and_drain(gateway, scenario, key, upstream) for _ in range(4))
+
+
+def test_a_team_with_two_openai_deployments_ingests_through_the_same_one_after_either_is_edited(
+    tmp_path: Path,
+) -> None:
     with (
         gateway_from_environment() as admin_gateway,
         admin_gateway.scenario() as scenario,
         wire_server(_responder(threading.Event())) as upstream,
     ):
-        older_model: Final = f"integration-rag-older-{uuid.uuid4().hex}"
-        newer_model: Final = f"integration-rag-newer-{uuid.uuid4().hex}"
-        team_id: Final = scenario.team(models=[older_model, newer_model])
-        older_id: Final = _deployment(
-            admin_gateway,
-            scenario,
-            name=older_model,
-            model="openai/gpt-4o-mini",
-            api_key=TEAM_API_KEY,
-            api_base=f"{upstream.url}/team/v1",
-            team_id=team_id,
+        team_model: Final = f"integration-rag-team-{uuid.uuid4().hex}"
+        wildcard_model: Final = f"integration-rag-wildcard-{uuid.uuid4().hex}"
+        team_id: Final = scenario.team(models=[team_model, wildcard_model])
+        team_deployment: Final = (
+            _deployment(
+                admin_gateway,
+                scenario,
+                name=team_model,
+                model="openai/gpt-4o-mini",
+                api_key=TEAM_API_KEY,
+                api_base=f"{upstream.url}/team/v1",
+                team_id=team_id,
+            ),
+            "team",
+            TEAM_API_KEY,
         )
-        _deployment(
-            admin_gateway,
-            scenario,
-            name=newer_model,
-            model="openai/gpt-4o-mini",
-            api_key=WILDCARD_API_KEY,
-            api_base=f"{upstream.url}/wildcard/v1",
-            team_id=team_id,
+        wildcard_deployment: Final = (
+            _deployment(
+                admin_gateway,
+                scenario,
+                name=wildcard_model,
+                model="openai/gpt-4o-mini",
+                api_key=WILDCARD_API_KEY,
+                api_base=f"{upstream.url}/wildcard/v1",
+                team_id=team_id,
+            ),
+            "wildcard",
+            WILDCARD_API_KEY,
         )
-        edited: Final = admin_gateway.request("PATCH", f"/model/{older_id}/update", {"litellm_params": {"timeout": 30}})
-        assert edited.status_code == 200, edited.text
+        (picked_id, picked_prefix, picked_key), (other_id, _, _) = sorted((team_deployment, wildcard_deployment))
         key: Final = scenario.key(team_id=team_id)
         with (
             owned_proxy(
@@ -1315,12 +1344,12 @@ def test_a_team_with_two_openai_deployments_ingests_through_the_older_one_after_
             ) as gateway,
             gateway.scenario() as owned_scenario,
         ):
-            upstream.drain()
-            response: Final = _ingest(gateway, key)
-            assert response.status_code == 200, response.text
-            store_id: Final = string_value(object_value(response.json())["vector_store_id"])
-            owned_scenario.cleanups.callback(gateway.post, "/vector_store/delete", {"vector_store_id": store_id})
-
-            assert tuple(_call(request).signature for request in upstream.drain()) == _ingest_signatures(
-                "team", TEAM_API_KEY, store_id
+            ingests: Final = (
+                _ingest_and_drain(gateway, owned_scenario, key, upstream),
+                *_ingests_after_editing(gateway, owned_scenario, key, upstream, picked_id),
+                *_ingests_after_editing(gateway, owned_scenario, key, upstream, other_id),
             )
+
+            assert [calls for _, calls in ingests] == [
+                _ingest_signatures(picked_prefix, picked_key, store_id) for store_id, _ in ingests
+            ]

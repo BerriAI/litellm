@@ -556,6 +556,7 @@ def test_rag_ingest_failed_upstream_status_is_returned_without_persisting_store(
             "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
             new=AsyncMock(
                 return_value={
+                    "id": "ingest_abc",
                     "status": "failed",
                     "error": "unauthorized",
                     "error_status_code": 401,
@@ -571,7 +572,7 @@ def test_rag_ingest_failed_upstream_status_is_returned_without_persisting_store(
         )
 
     assert response.status_code == 401, response.json()
-    assert response.json() == {"detail": {"error": "unauthorized"}}
+    assert response.json() == {"detail": {"id": "ingest_abc", "status": "failed", "error": "unauthorized"}}
     managed_vector_store_table.create.assert_not_called()
 
 

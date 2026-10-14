@@ -690,7 +690,7 @@ async def rag_ingest(
         if response.get("status") == "failed":
             raise HTTPException(
                 status_code=response.get("error_status_code") or 500,
-                detail={"error": response.get("error")},
+                detail={"id": response.get("id"), "status": "failed", "error": response.get("error")},
             )
 
         # Save vector store to database if it was newly created and prisma_client is available

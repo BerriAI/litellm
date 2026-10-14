@@ -464,9 +464,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 
 
-def _completed_batch_for_retire(
-    output_file_id: str | None, counts: BatchRequestCounts | None = None
-) -> LiteLLMBatch:
+def _completed_batch_for_retire(output_file_id: str | None, counts: BatchRequestCounts | None = None) -> LiteLLMBatch:
     kwargs = dict(
         id="batch-1",
         completion_window="24h",
@@ -714,3 +712,30 @@ def test_a_restricted_key_resolves_the_team_deployment_its_wildcard_or_model_cov
 @pytest.mark.parametrize("key_models", [["claude-opus-4-6"], ["anthropic/*"]])
 def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentials(key_models: list[str]):
     assert _team_only_openai_credentials("openai/*", "openai/*", key_models) is None
+
+
+def _team_openai_deployment(deployment_id: str, api_key: str) -> dict:
+    return {
+        "model_name": f"team-gpt-{deployment_id}",
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": api_key},
+        "model_info": {"id": deployment_id, "team_id": "team-a"},
+    }
+
+
+@pytest.mark.parametrize("deployment_ids", [("deployment-a", "deployment-b"), ("deployment-b", "deployment-a")])
+def test_a_team_with_two_openai_deployments_resolves_the_same_one_in_any_router_order(
+    deployment_ids: tuple[str, str],
+):
+    router: Final = Router(
+        model_list=[_team_openai_deployment(deployment_id, f"{deployment_id}-key") for deployment_id in deployment_ids]
+    )
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "deployment-a-key"

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import CreateVectorStore from "./CreateVectorStore";
 import * as networking from "@/components/networking";
+import { toast } from "@/lib/toast";
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
@@ -213,6 +214,43 @@ describe("CreateVectorStore", () => {
     await waitFor(() => {
       expect(screen.getByText("Vector Store Created Successfully")).toBeInTheDocument();
     });
+  });
+
+  it("should report the created store and the failed file when a later file fails to ingest", async () => {
+    vi.mocked(networking.ragIngestCall)
+      .mockResolvedValueOnce({ id: "ingest-1", status: "completed", vector_store_id: "vs_123", file_id: "file_1" })
+      .mockRejectedValueOnce(new Error("upstream rejected the file"));
+    const onSuccess = vi.fn();
+    render(<CreateVectorStore accessToken="test-token" onSuccess={onSuccess} />);
+
+    const uploadInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(uploadInput, {
+        target: {
+          files: [
+            new File(["first"], "first.txt", { type: "text/plain" }),
+            new File(["second"], "second.txt", { type: "text/plain" }),
+          ],
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Uploaded Documents (2)")).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Create Vector Store/i }));
+    });
+
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith(
+        "Vector store vs_123 was created with 1 document(s), but second.txt failed to ingest",
+        { description: "upstream rejected the file" },
+      );
+    });
+    expect(toast.fromError).not.toHaveBeenCalled();
+    expect(onSuccess).toHaveBeenCalledWith("vs_123");
+    expect(screen.getByText("Vector Store Created Successfully")).toBeInTheDocument();
   });
 
   it("should exclude valkey from the provider dropdown since it has no RAG ingestion", async () => {

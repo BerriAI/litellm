@@ -8307,7 +8307,7 @@ class ProxyConfig:
         try:
             new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(
                 WriterPinnedClient(prisma_client.db)
-            ).table.find_many(order=[{"created_at": "asc"}, {"model_id": "asc"}])
+            ).table.find_many()
             self.auto_router_db_catalog = build_auto_router_catalog(new_models)
             return new_models
         except Exception as e:

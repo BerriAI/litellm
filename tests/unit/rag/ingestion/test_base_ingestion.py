@@ -8,6 +8,8 @@ import respx
 import litellm
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
+from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
+from litellm.rag.ingestion.vertex_ai_ingestion import VertexAIRAGIngestion
 from litellm.types.utils import CredentialItem
 
 _FILE_URL: Final = "https://files.example/docs/report.pdf"
@@ -148,3 +150,24 @@ async def test_an_existing_file_id_on_a_store_that_cannot_take_one_fails_as_a_ba
     assert response["status"] == "failed"
     assert response["error_status_code"] == 400
     assert "does not support ingesting an existing file_id" in str(response["error"])
+
+
+@pytest.mark.parametrize(
+    ("ingestion_class", "ingest_kwargs"),
+    [
+        (OpenAIRAGIngestion, {"file_id": "file-abc"}),
+        (VertexAIRAGIngestion, {"file_data": ("report.txt", b"plain text", "text/plain")}),
+    ],
+)
+async def test_a_vector_store_config_missing_a_caller_field_fails_as_a_bad_request(
+    ingestion_class: type[BaseRAGIngestion],
+    ingest_kwargs: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+    ingestion: Final = ingestion_class(ingest_options={"vector_store": {"api_key": "caller-key"}})
+
+    response: Final = await ingestion.ingest(**ingest_kwargs)
+
+    assert response["status"] == "failed"
+    assert response["error_status_code"] == 400

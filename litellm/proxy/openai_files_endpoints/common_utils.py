@@ -559,20 +559,28 @@ def get_team_provider_credentials(
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
 
-    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id.
+    def _usable_team_deployment_id(deployment: dict) -> str | None:
+        model_info: Final = deployment.get("model_info") or {}
+        if model_info.get("team_id") != team_id:
+            return None
+        if not _key_may_use(model_info.get("team_public_model_name") or deployment.get("model_name")):
+            return None
+        return model_info.get("id")
+
+    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id. The lowest
+    #    deployment id wins so every worker picks the same one in any load or edit order.
     if team_id is not None:
-        for deployment in llm_router.model_list or []:
-            model_info = deployment.get("model_info") or {}
-            if model_info.get("team_id") != team_id:
-                continue
-            deployment_id = model_info.get("id")
-            if deployment_id is None:
-                continue
-            if not _key_may_use(model_info.get("team_public_model_name") or deployment.get("model_name")):
-                continue
-            credentials = _provider_credentials(deployment_id)
-            if credentials is not None:
-                return credentials
+        team_deployment_ids: Final = sorted(
+            deployment_id
+            for deployment in llm_router.model_list or []
+            if (deployment_id := _usable_team_deployment_id(deployment)) is not None
+        )
+        team_credentials: Final = next(
+            (credentials for credentials in map(_provider_credentials, team_deployment_ids) if credentials is not None),
+            None,
+        )
+        if team_credentials is not None:
+            return team_credentials
 
     if not include_accessible_deployments:
         return None
