@@ -926,6 +926,7 @@ def select_model_name_for_cost_calc(
         # non-streamed responses (#46286).
         if (
             return_model == provider_response_model
+            and return_model is not None
             and model is not None
             and (custom_llm_provider == "bedrock" or model.startswith("bedrock/") or "/bedrock/" in model)
             and _is_bedrock_region_stripped_form(model, return_model)
@@ -946,14 +947,18 @@ def select_model_name_for_cost_calc(
         # rate. The deployment model keeps the prefix, so spend logs and
         # budgets book the regional rate and stay consistent with the
         # streamed usage.cost (#46286).
+        # isinstance narrows the getattr-derived str | Unknown back to str
+        # for the helper's response_model parameter.
+        response_model_str: Final = completion_response_model if isinstance(completion_response_model, str) else None
         selected_response_model: Final = (
             model
             if (
                 is_bedrock_deployment
                 and model is not None
-                and _is_bedrock_region_stripped_form(model, completion_response_model)
+                and response_model_str is not None
+                and _is_bedrock_region_stripped_form(model, response_model_str)
             )
-            else completion_response_model
+            else response_model_str
         )
         return_model = selected_response_model
 
