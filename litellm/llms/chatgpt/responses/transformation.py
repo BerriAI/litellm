@@ -221,8 +221,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             # Pydantic validation to fail, which leaves `output` empty and
             # raises "Unknown items in responses API response: []".  Strip the
             # extra fields before building the response object.
-            _EXTRA_FIELDS = {"phase", "logprobs"}
-            clean_items = []
+            _EXTRA_FIELDS: Final = frozenset(("phase", "logprobs"))
+            clean_items: Final = []
             for _, item in sorted(streamed_output_items.items()):
                 ci = {k: v for k, v in item.items() if k not in _EXTRA_FIELDS}
                 content_parts: object = ci.get("content", [])
