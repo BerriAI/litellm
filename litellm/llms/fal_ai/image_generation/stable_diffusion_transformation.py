@@ -1,9 +1,10 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
 
@@ -268,12 +269,15 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
                     )
 
         # Add additional metadata from Stable Diffusion response
-        if hasattr(model_response, "_hidden_params"):
+        if hasattr(model_response, HIDDEN_PARAMS_ATTR):
+            hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+            )
             if "seed" in response_object:
-                model_response._hidden_params["seed"] = response_object["seed"]
+                hidden_params["seed"] = response_object["seed"]
             if "timings" in response_object:
-                model_response._hidden_params["timings"] = response_object["timings"]
+                hidden_params["timings"] = response_object["timings"]
             if "has_nsfw_concepts" in response_object:
-                model_response._hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
+                hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
 
         return model_response

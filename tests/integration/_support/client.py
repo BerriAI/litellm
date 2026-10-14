@@ -28,6 +28,11 @@ def string_value(value: JsonValue) -> str:
     return value
 
 
+def list_value(value: JsonValue) -> Sequence[JsonValue]:
+    assert isinstance(value, list), f"Expected a list, received {type(value).__name__}"
+    return value
+
+
 def delete_key_if_present(candidate: Gateway, key: str) -> None:
     digest: Final = sha256(key.encode()).hexdigest()
     if read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)):
@@ -50,6 +55,28 @@ def eventually(
             return observed
         assert time.monotonic() < deadline, f"State did not converge: {observed!r}"
         time.sleep(0.1)
+
+
+def held(read: Callable[[], T], satisfied: Callable[[T], bool], *, holding: float, seconds: float = 10) -> T:
+    """`eventually`, and then `satisfied` must hold on every read for `holding` more seconds; a miss restarts the hold."""
+    deadline: Final = time.monotonic() + seconds
+    while True:
+        converged: Final = eventually(read, satisfied, seconds=max(deadline - time.monotonic(), 0.0))
+        misses: Final = _misses_within(read, satisfied, holding)
+        if not misses:
+            return converged
+        assert time.monotonic() < deadline, f"State did not hold: {misses[0]!r}"
+        time.sleep(0.1)
+
+
+def _misses_within(read: Callable[[], T], satisfied: Callable[[T], bool], holding: float) -> tuple[T, ...]:
+    until: Final = time.monotonic() + holding
+    while time.monotonic() < until:
+        time.sleep(0.1)
+        observed: Final = read()
+        if not satisfied(observed):
+            return (observed,)
+    return ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,11 +240,20 @@ class Scenario:
         info: Final = object_value(self.gateway.get("/key/info", {"key": hashed})["info"])
         assert info["status"] == "deleted", f"Deleted key still served as live: {info['status']}"
 
-    def delete_model(self, identity: str) -> None:
-        self.gateway.post("/model/delete", {"id": identity})
+    def served_model_ids(self) -> frozenset[JsonValue]:
         entries: Final = self.gateway.get("/model/info")["data"]
         assert isinstance(entries, list)
-        assert all(object_value(object_value(entry)["model_info"])["id"] != identity for entry in entries)
+        return frozenset(object_value(object_value(entry)["model_info"])["id"] for entry in entries)
+
+    def delete_model(self, identity: str) -> None:
+        from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
+
+        self.gateway.post("/model/delete", {"id": identity})
+        eventually(
+            self.served_model_ids,
+            lambda served: identity not in served,
+            seconds=2 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+        )
         assert read_rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == []
 
     def model(self, *, model_info: Mapping[str, JsonValue] | None = None, **parameters: JsonValue) -> str:
