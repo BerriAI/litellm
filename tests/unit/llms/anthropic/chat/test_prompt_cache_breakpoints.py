@@ -12,6 +12,7 @@ from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
 
 _EXPLICIT: Final = {"mode": "explicit"}
 _EPHEMERAL: Final = {"type": "ephemeral"}
+_ONE_HOUR: Final = {"type": "ephemeral", "ttl": "1h"}
 
 
 def _cache(
@@ -58,8 +59,8 @@ def test_breakpoints_become_cache_control_on_every_block_that_carries_one():
     result: Final = _resolved(messages, tools)
 
     assert list(result.messages) == [
-        {"role": "system", "content": [_part("sys", cache_control=_EPHEMERAL)]},
-        {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        {"role": "system", "content": [_part("sys", cache_control=_ONE_HOUR)]},
+        {"role": "user", "content": "hi", "cache_control": _ONE_HOUR},
         {
             "role": "assistant",
             "content": None,
@@ -67,8 +68,8 @@ def test_breakpoints_become_cache_control_on_every_block_that_carries_one():
         },
     ]
     assert list(result.tools or ()) == [
-        {"type": "function", "function": {"name": "a"}, "cache_control": _EPHEMERAL},
-        {"type": "function", "function": {"name": "b"}, "cache_control": _EPHEMERAL},
+        {"type": "function", "function": {"name": "a"}, "cache_control": _ONE_HOUR},
+        {"type": "function", "function": {"name": "b"}, "cache_control": _ONE_HOUR},
     ]
 
 
@@ -116,19 +117,116 @@ def test_an_unsupported_breakpoint_raises_a_400_naming_drop_params():
     assert "30m" in raised.value.message and "drop_params" in raised.value.message
 
 
-def test_drop_params_keeps_the_latest_four_marks_in_the_order_claude_renders_them():
+def test_drop_params_drops_the_earliest_breakpoints_and_keeps_every_mark_the_client_wrote():
     tools: Final = [{"type": "function", "function": {"name": "t"}, "prompt_cache_breakpoint": _EXPLICIT}]
     messages: Final = [
-        {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
         {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]},
+        {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
     ]
 
     result: Final = _resolved(messages, tools, {"cache_control": _EPHEMERAL}, drop_params=True)
 
     assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t"}}]
     assert list(result.messages) == [
+        {
+            "role": "user",
+            "content": [_part("0"), _part("1", cache_control=_EPHEMERAL), _part("2", cache_control=_EPHEMERAL)],
+        },
+        {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
+    ]
+
+
+def test_marks_the_client_wrote_past_the_cap_reach_claude_as_written_under_drop_params():
+    messages: Final = [
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(5)]},
+    ]
+
+    result: Final = _resolved(messages, drop_params=True)
+
+    assert list(result.messages) == [
         {"role": "system", "content": [_part("s")]},
-        {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(3)]},
+        {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(5)]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("later", "params"),
+    [
+        ({"cache_control": _ONE_HOUR}, {}),
+        ({"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}, {}),
+        ({}, {"cache_control": _ONE_HOUR}),
+    ],
+    ids=["client-mark", "breakpoint", "top-level-cache-control"],
+)
+def test_a_breakpoint_read_before_a_one_hour_mark_is_sent_as_one_hour(
+    later: dict[str, object], params: dict[str, object]
+):
+    messages: Final = [
+        {"role": "user", "content": [_part("doc", prompt_cache_breakpoint=_EXPLICIT), _part("ask", **later)]},
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+    ]
+
+    result: Final = _resolved(messages, params=params)
+
+    ask: Final = _part("ask", cache_control=_ONE_HOUR) if later else _part("ask")
+    assert list(result.messages) == [
+        {"role": "user", "content": [_part("doc", cache_control=_ONE_HOUR), ask]},
+        {"role": "system", "content": [_part("s", cache_control=_ONE_HOUR)]},
+    ]
+
+
+def test_a_breakpoint_read_after_the_last_one_hour_mark_keeps_the_default_ttl():
+    messages: Final = [
+        {"role": "system", "content": [_part("s", cache_control=_ONE_HOUR)]},
+        {"role": "user", "content": [_part("ask", prompt_cache_breakpoint=_EXPLICIT)]},
+    ]
+
+    result: Final = _resolved(messages)
+
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s", cache_control=_ONE_HOUR)]},
+        {"role": "user", "content": [_part("ask", cache_control=_EPHEMERAL)]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("system", "ask", "as_written", "under_drop_params"),
+    [
+        (
+            {"cache_control": _EPHEMERAL},
+            {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+            ({"cache_control": _EPHEMERAL}, {"cache_control": _ONE_HOUR}),
+            ({"cache_control": _EPHEMERAL}, {"cache_control": _EPHEMERAL}),
+        ),
+        (
+            {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "5m"}},
+            {"cache_control": _ONE_HOUR},
+            ({"cache_control": {"type": "ephemeral", "ttl": "5m"}}, {"cache_control": _ONE_HOUR}),
+            ({"cache_control": _ONE_HOUR}, {"cache_control": _ONE_HOUR}),
+        ),
+    ],
+    ids=["one-hour-breakpoint-after-a-five-minute-mark", "five-minute-breakpoint-before-a-one-hour-mark"],
+)
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_ttl_the_client_set_out_of_claude_order_is_sent_as_written_or_dropped_under_drop_params(
+    system: dict[str, object],
+    ask: dict[str, object],
+    as_written: tuple[dict[str, object], dict[str, object]],
+    under_drop_params: tuple[dict[str, object], dict[str, object]],
+    drop_params: bool,
+):
+    messages: Final = [
+        {"role": "system", "content": [_part("s", **system)]},
+        {"role": "user", "content": [_part("ask", **ask)]},
+    ]
+
+    result: Final = _resolved(messages, drop_params=drop_params)
+
+    expected_system, expected_ask = under_drop_params if drop_params else as_written
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s", **expected_system)]},
+        {"role": "user", "content": [_part("ask", **expected_ask)]},
     ]
 
 

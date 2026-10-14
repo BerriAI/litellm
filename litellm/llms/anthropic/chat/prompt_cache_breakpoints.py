@@ -3,9 +3,7 @@
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, NoReturn, TypeAlias
-
-from pydantic import TypeAdapter
+from typing import Final, Literal, NoReturn, TypeAlias, cast  # noqa: TID251  # isinstance-checked hot-path JSON
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
@@ -15,9 +13,9 @@ from litellm.types.llms.openai import ChatCompletionCachedContent
 _Path: TypeAlias = tuple[str | int, ...]
 _Fields: TypeAlias = Mapping[str, object]
 _Mark: TypeAlias = Callable[[_Path, _Fields], _Fields]
+_Kind: TypeAlias = Literal["written", "explicit", "free"]
 _MESSAGE_BLOCK_KEYS: Final = ("content", "tool_calls")
-_FIELDS: Final = TypeAdapter(Mapping[str, object])
-_BLOCKS: Final = TypeAdapter(Sequence[object])
+_REQUEST: Final[_Path] = ("cache_control",)
 _CLAUDE_TTL_MARKS: Final = MappingProxyType(
     {
         "5m": ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
@@ -40,12 +38,19 @@ class UnsupportedPromptCacheParam:
     fallback: ChatCompletionCachedContent | None
 
 
+@dataclass(frozen=True, slots=True)
+class _Placed:
+    path: _Path
+    ttl: Literal["5m", "1h"]
+    kind: _Kind
+
+
 def _fields(value: object) -> _Fields | None:
-    return _FIELDS.validate_python(value) if isinstance(value, Mapping) else None
+    return cast(_Fields, value) if isinstance(value, Mapping) else None  # cast-ok: request JSON has string keys
 
 
 def _blocks(value: object) -> Sequence[object] | None:
-    return _BLOCKS.validate_python(value) if isinstance(value, list) else None
+    return cast(Sequence[object], value) if isinstance(value, list) else None  # cast-ok: elements checked per use
 
 
 def _ttl_mark(ttl: object, param: str, value: object) -> ChatCompletionCachedContent | UnsupportedPromptCacheParam:
@@ -90,6 +95,28 @@ def _markable_in_tool(index: int, tool: _Fields) -> Iterator[tuple[_Path, _Field
     function: Final = _fields(tool.get("function"))
     if function is not None:
         yield ("tools", index, "function"), function
+
+
+def _carries_breakpoint(value: object) -> bool:
+    fields: Final = _fields(value)
+    return fields is not None and fields.get("prompt_cache_breakpoint") is not None
+
+
+def _any_block_carries_breakpoint(blocks: object) -> bool:
+    return any(map(_carries_breakpoint, _blocks(blocks) or ()))
+
+
+def _message_carries_breakpoint(message: object) -> bool:
+    fields: Final = _fields(message) or {}
+    return (
+        fields.get("prompt_cache_breakpoint") is not None
+        or _any_block_carries_breakpoint(fields.get("content"))
+        or _any_block_carries_breakpoint(fields.get("tool_calls"))
+    )
+
+
+def _tool_carries_breakpoint(tool: object) -> bool:
+    return _carries_breakpoint(tool) or _carries_breakpoint((_fields(tool) or {}).get("function"))
 
 
 def _markable(messages: Sequence[object], tools: Sequence[object]) -> Iterator[tuple[_Path, _Fields]]:
@@ -177,11 +204,80 @@ def _marked_request(
     )
 
 
-def _without_cache_control(dropped: frozenset[_Path]) -> _Mark:
+def _settled_marks(dropped: frozenset[_Path], replacements: Mapping[_Path, ChatCompletionCachedContent]) -> _Mark:
     def mark(path: _Path, block: _Fields) -> _Fields:
-        return {key: value for key, value in block.items() if key != "cache_control"} if path in dropped else block
+        if path in dropped:
+            return {key: value for key, value in block.items() if key != "cache_control"}
+        replacement: Final = replacements.get(path)
+        return block if replacement is None else {**block, "cache_control": replacement}
 
     return mark
+
+
+def _unchanged(_path: _Path, block: _Fields) -> _Fields:
+    return block
+
+
+def _translated(messages: Sequence[object], tools: Sequence[object]) -> frozenset[_Path]:
+    """Blocks whose mark comes from a breakpoint rather than a ``cache_control`` the client wrote."""
+    hoisted_messages, hoisted_tools = _marked_request(messages, tools, _unchanged)
+    return frozenset(
+        path
+        for path, block in _markable(hoisted_messages, hoisted_tools)
+        if block.get("prompt_cache_breakpoint") is not None and block.get("cache_control") is None
+    )
+
+
+def _wire_position(path: _Path, messages: Sequence[object]) -> tuple[int, ...]:
+    """Where Claude reads a mark: tool definitions, then system messages wherever they sit, then the other messages,
+    with a message-level mark on the message's last block."""
+    if path[0] == "tools":
+        return (0, *(index for index in path if isinstance(index, int)))
+    index: Final = int(path[1])
+    role: Final = (_fields(messages[index]) or {}).get("role")
+    group: Final = 1 if role in ("system", "developer") else 2
+    block: Final = (
+        (_MESSAGE_BLOCK_KEYS.index(str(path[2])), int(path[3])) if len(path) == 4 else (len(_MESSAGE_BLOCK_KEYS),)
+    )
+    return (group, index, *block)
+
+
+def _ttl(cache_control: object) -> Literal["5m", "1h"]:
+    return "1h" if (_fields(cache_control) or {}).get("ttl") == "1h" else "5m"
+
+
+def _kind(path: _Path, cache_control: object, translated: frozenset[_Path]) -> _Kind:
+    if path not in translated:
+        return "written"
+    return "free" if (_fields(cache_control) or {}).get("ttl") is None else "explicit"
+
+
+def _out_of_order(index: int, marks: Sequence[_Placed]) -> bool:
+    """Claude rejects a 1h mark read after a 5m one."""
+    if marks[index].ttl == "1h":
+        return any(other.kind != "free" and other.ttl == "5m" for other in marks[:index])
+    return any(other.kind != "free" and other.ttl == "1h" for other in marks[index + 1 :])
+
+
+def _loosened(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]:
+    return tuple(
+        _Placed(mark.path, "5m", "free")
+        if drop_params and mark.kind == "explicit" and _out_of_order(index, marks)
+        else mark
+        for index, mark in enumerate(marks)
+    )
+
+
+def _settled(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]:
+    """A breakpoint without a ttl takes 1h when a 1h mark is read after it, so the request stays valid for Claude;
+    under ``drop_params`` a ttl the client set on a breakpoint that breaks that order is dropped first."""
+    loosened: Final = _loosened(marks, drop_params)
+    return tuple(
+        _Placed(mark.path, "1h", "free")
+        if mark.kind == "free" and any(later.kind != "free" and later.ttl == "1h" for later in loosened[index + 1 :])
+        else mark
+        for index, mark in enumerate(loosened)
+    )
 
 
 def claude_prompt_cache(
@@ -193,30 +289,56 @@ def claude_prompt_cache(
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     """``prompt_cache_breakpoint`` marks renamed to ``cache_control``. A mark Claude cannot honor is reported unless
     ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
-    breakpoints, the latest four. A request-level ``cache_control`` in ``params`` takes one of the four. A request
-    carrying no breakpoint is returned as written."""
+    breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` takes one of the
+    four. A request carrying no breakpoint is returned as written."""
     listed_tools: Final = tools or ()
-    blocks: Final = tuple(block for _, block in _markable(messages, listed_tools))
-    if all(block.get("prompt_cache_breakpoint") is None for block in blocks):
+    if not any(map(_message_carries_breakpoint, messages)) and not any(map(_tool_carries_breakpoint, listed_tools)):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
+    blocks: Final = tuple(block for _, block in _markable(messages, listed_tools))
     problem: Final = next(filter(None, map(_breakpoint_problem, blocks)), None)
     if problem is not None and not drop_params:
         return problem
     if problem is not None:
         verbose_logger.debug("Claude: adjusting %s=%r because %s", problem.param, problem.value, problem.reason)
     renamed_messages, renamed_tools = _marked_request(messages, listed_tools, _renamed)
-    sites: Final = tuple(
-        path for path, block in _markable(renamed_messages, renamed_tools) if block.get("cache_control") is not None
+    translated: Final = _translated(messages, listed_tools)
+    block_marks: Final = sorted(
+        (
+            _Placed(path, _ttl(block.get("cache_control")), _kind(path, block.get("cache_control"), translated))
+            for path, block in _markable(renamed_messages, renamed_tools)
+            if block.get("cache_control") is not None
+        ),
+        key=lambda mark: _wire_position(mark.path, messages),
     )
-    excess: Final = len(sites) + int(params.get("cache_control") is not None) - MAX_CACHE_CONTROL_BLOCKS
-    if excess > 0 and drop_params:
-        verbose_logger.debug("Claude: dropping the earliest %d cache breakpoints", excess)
-    trimmed_messages, trimmed_tools = (
-        _marked_request(renamed_messages, renamed_tools, _without_cache_control(frozenset(sites[:excess])))
+    request_mark: Final = params.get("cache_control")
+    marks: Final = (
+        *block_marks,
+        *(() if request_mark is None else (_Placed(_REQUEST, _ttl(request_mark), "written"),)),
+    )
+    excess: Final = len(marks) - MAX_CACHE_CONTROL_BLOCKS
+    dropped: Final[frozenset[_Path]] = (
+        frozenset(tuple(mark.path for mark in marks if mark.kind != "written")[:excess])
         if excess > 0 and drop_params
-        else (renamed_messages, renamed_tools)
+        else frozenset()
     )
-    return ClaudePromptCache(trimmed_messages, None if tools is None else trimmed_tools)
+    if dropped:
+        verbose_logger.debug("Claude: dropping the earliest %d prompt_cache_breakpoint marks", len(dropped))
+    kept: Final = tuple(mark for mark in marks if mark.path not in dropped)
+    replacements: Final = MappingProxyType(
+        {
+            settled.path: (
+                ChatCompletionCachedContent(type="ephemeral", ttl="1h")
+                if settled.ttl == "1h"
+                else ChatCompletionCachedContent(type="ephemeral")
+            )
+            for mark, settled in zip(kept, _settled(kept, drop_params))
+            if settled.ttl != mark.ttl
+        }
+    )
+    final_messages, final_tools = _marked_request(
+        renamed_messages, renamed_tools, _settled_marks(dropped, replacements)
+    )
+    return ClaudePromptCache(final_messages, None if tools is None else final_tools)
 
 
 def resolved_claude_prompt_cache(

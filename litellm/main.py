@@ -1090,6 +1090,12 @@ def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     return False
 
 
+def _is_claude_prompt_cache_target(custom_llm_provider: str | None, model: str, base_model: str | None) -> bool:
+    if custom_llm_provider == "bedrock" and "claude" not in model.lower():
+        return base_model is not None and "claude" in base_model.lower()
+    return _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model)
+
+
 def _without_anthropic_only_tool_keys(tool: dict[str, object]) -> dict[str, object]:
     kept: Final = {key: value for key, value in tool.items() if key not in _ANTHROPIC_ONLY_TOOL_KEYS}
     function: Final = tool.get("function")
@@ -5572,7 +5578,11 @@ def completion(
                 llm_provider=custom_llm_provider,
             )
             if provider_config is not None
-            and _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model)
+            and _is_claude_prompt_cache_target(
+                custom_llm_provider=custom_llm_provider,
+                model=model,
+                base_model=base_model if isinstance(base_model, str) else None,
+            )
             else None
         )
         claude_messages: Final = (

@@ -53,11 +53,13 @@ _PROVIDERS: Final[tuple[Provider, ...]] = (
     "vertex_ai",
     "azure_ai",
 )
+_ANTHROPIC_BODY_PROVIDERS: Final = tuple(provider for provider in _PROVIDERS if provider != "bedrock_converse")
 _SITES: Final[tuple[Site, ...]] = ("tool", "system", "user_part", "tool_call", "tool_result", "string_message")
 _FIVE_SITES: Final[tuple[Site, ...]] = ("tool", "system", "user_part", "tool_call", "string_message")
 _EXPLICIT: Final[dict[str, JsonValue]] = {"mode": "explicit"}
 _BREAKPOINT: Final[Mapping[str, JsonValue]] = MappingProxyType({"prompt_cache_breakpoint": _EXPLICIT})
 _NATIVE: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache_control": EPHEMERAL})
+_ONE_HOUR: Final[dict[str, JsonValue]] = {"type": "ephemeral", "ttl": "1h"}
 _CITY: Final = CITIES[0]
 _BEDROCK_TOKEN: Final = "synthetic-bedrock-bearer"
 _VERTEX_PROJECT: Final = "scripted-project"
@@ -290,6 +292,48 @@ def test_five_marks_without_drop_params_reach_the_provider_and_its_error_reaches
     assert [len(_labels(provider, request)) for request in received] == [5], [request.target for request in received]
 
 
+@pytest.mark.parametrize("provider", _PROVIDERS)
+def test_drop_params_drops_the_breakpoint_past_the_cap_and_keeps_every_mark_the_client_wrote(
+    gateway: Gateway, provider: Provider
+) -> None:
+    marker: Final = new_marker()
+    written: Final = _FIVE_SITES[:-1]
+    marks: Final = MappingProxyType({**_marked(written, _NATIVE), _FIVE_SITES[-1]: _BREAKPOINT})
+    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire, provider, drop_params=True)
+        status, _, text = post_chat(gateway, _body(model, marker, marks))
+        assert status == 200, text
+        request: Final = _only_request(wire)
+    assert _labels(provider, request) == [_expected(provider, site, marker) for site in written]
+
+
+@pytest.mark.parametrize("provider", _ANTHROPIC_BODY_PROVIDERS)
+def test_a_breakpoint_ahead_of_a_one_hour_mark_reaches_claude_as_one_hour(gateway: Gateway, provider: Provider) -> None:
+    marker: Final = new_marker()
+    marks: Final = MappingProxyType(
+        {"system": _BREAKPOINT, "user_part": MappingProxyType({"cache_control": _ONE_HOUR})}
+    )
+    with wire_server(lambda request: _respond(provider, request)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire, provider)
+        status, _, text = post_chat(gateway, _body(model, marker, marks))
+        assert status == 200, text
+        request: Final = _only_request(wire)
+    assert anthropic_marks(request) == (Mark(SYSTEM_LABEL, "1h"), Mark(ASK_LABEL, "1h"))
+
+
+def test_a_one_hour_breakpoint_after_a_five_minute_mark_loses_its_ttl_under_drop_params(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    marks: Final = MappingProxyType(
+        {"system": _NATIVE, "user_part": MappingProxyType({"prompt_cache_breakpoint": {**_EXPLICIT, "ttl": "1h"}})}
+    )
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire, "anthropic", drop_params=True)
+        status, _, text = post_chat(gateway, _body(model, marker, marks))
+        assert status == 200, text
+        request: Final = _only_request(wire)
+    assert anthropic_marks(request) == (Mark(SYSTEM_LABEL, None), Mark(ASK_LABEL, None))
+
+
 def test_injection_points_stand_down_behind_the_latest_four_breakpoints(gateway: Gateway) -> None:
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
@@ -300,6 +344,26 @@ def test_injection_points_stand_down_behind_the_latest_four_breakpoints(gateway:
         assert status == 200, text
         assert anthropic_labels(_only_request(wire)) == _latest_four("anthropic", marker)
     assert gateway_injected(response_id) is False
+
+
+@pytest.mark.parametrize(
+    ("base_model", "marked"), ((None, False), ("bedrock/mistral.mistral-large-2407-v1:0", False), (BEDROCK_MODEL, True))
+)
+def test_an_application_inference_profile_is_marked_only_when_its_base_model_is_claude(
+    gateway: Gateway, base_model: str | None, marked: bool
+) -> None:
+    marker: Final = new_marker()
+    profile: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/scripted"
+    with wire_server(bedrock_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model_info=None if base_model is None else {"base_model": base_model},
+            **{**_litellm_params(gateway, wire, "bedrock_converse"), "model": f"bedrock/converse/{profile}"},
+        )
+        status, _, text = post_chat(gateway, _body(model, marker, _marked(("system",))))
+        assert status == 200, text
+        request: Final = _only_request(wire)
+    assert b"prompt_cache_breakpoint" not in request.body, request.body
+    assert bedrock_labels(request) == ([_expected("bedrock_converse", "system", marker)] if marked else [])
 
 
 def _drop_params_config(directory: Path) -> Path:
