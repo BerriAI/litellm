@@ -8,12 +8,16 @@ hosted_vllm (and any OpenAI-compatible provider using add_provider_specific_para
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-
+import respx
+from openai.types.responses import EasyInputMessage
 
 import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.hosted_vllm.responses.transformation import (
     HostedVLLMResponsesAPIConfig,
 )
@@ -183,3 +187,128 @@ def test_hosted_vllm_validate_environment_custom_api_key():
     )
 
     assert headers.get("Authorization") == "Bearer my-custom-key"
+
+
+VLLM_API_BASE: Final = "https://vllm.invalid/v1"
+CODEX_INSTRUCTIONS: Final = "You are Codex, a coding agent. Follow the repository's AGENTS.md."
+
+
+def _sent_input(input: object) -> object:
+    request: Final = HostedVLLMResponsesAPIConfig().transform_responses_api_request(
+        model="kimi-k3",
+        input=input,
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    return request["input"]
+
+
+@pytest.mark.parametrize(
+    ("input", "expected"),
+    [
+        pytest.param(
+            [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": CODEX_INSTRUCTIONS}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "fix the failing test"}],
+                },
+            ],
+            [
+                {"type": "message", "role": "system", "content": [{"type": "input_text", "text": CODEX_INSTRUCTIONS}]},
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "fix the failing test"}],
+                },
+            ],
+            id="codex-leading-developer-item",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "developer", "content": "Answer in French from now on."},
+                {"role": "user", "content": "how are you?"},
+            ],
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "system", "content": "Answer in French from now on."},
+                {"role": "user", "content": "how are you?"},
+            ],
+            id="mid-conversation-developer-item",
+        ),
+        pytest.param(
+            [
+                EasyInputMessage(role="developer", content=CODEX_INSTRUCTIONS, type="message"),
+                EasyInputMessage(role="user", content="hi", type="message"),
+            ],
+            [
+                {"role": "system", "content": CODEX_INSTRUCTIONS, "type": "message"},
+                {"role": "user", "content": "hi", "type": "message"},
+            ],
+            id="pydantic-developer-item",
+        ),
+    ],
+)
+def test_hosted_vllm_responses_sends_developer_items_as_system(input: object, expected: object) -> None:
+    assert _sent_input(input) == expected
+
+
+def test_hosted_vllm_responses_keeps_everything_but_the_developer_role() -> None:
+    input: Final = [
+        {"type": "message", "role": "developer", "id": "msg_dev_1", "status": "completed", "content": "Be terse."},
+        {"type": "message", "role": "system", "content": "You are helpful."},
+        {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "Paris"}'},
+        {"type": "function_call_output", "call_id": "call_1", "output": "21C"},
+    ]
+    assert _sent_input(input) == [
+        {"type": "message", "role": "system", "id": "msg_dev_1", "status": "completed", "content": "Be terse."},
+        *input[1:],
+    ]
+
+
+def test_hosted_vllm_responses_passes_string_input_and_instructions_through() -> None:
+    request: Final = HostedVLLMResponsesAPIConfig().transform_responses_api_request(
+        model="kimi-k3",
+        input="hello",
+        response_api_optional_request_params={"instructions": CODEX_INSTRUCTIONS},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["input"] == "hello"
+    assert request["instructions"] == CODEX_INSTRUCTIONS
+
+
+@pytest.fixture
+def vllm_responses_route(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    return respx_mock.post(f"{VLLM_API_BASE}/responses").mock(
+        return_value=httpx.Response(200, json=_make_mock_responses_api_response())
+    )
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_aresponses_sends_codex_developer_item_as_system_on_the_wire(
+    vllm_responses_route: respx.Route,
+) -> None:
+    response: Final = await litellm.aresponses(
+        model="hosted_vllm/kimi-k3",
+        input=[
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": CODEX_INSTRUCTIONS}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fix the failing test"}]},
+        ],
+        api_base=VLLM_API_BASE,
+    )
+    body: Final = json.loads(vllm_responses_route.calls.last.request.content)
+    assert [item["role"] for item in body["input"]] == ["system", "user"]
+    assert body["input"][0]["content"] == [{"type": "input_text", "text": CODEX_INSTRUCTIONS}]
+    assert response.output[0].role == "assistant"  # type: ignore[union-attr]
