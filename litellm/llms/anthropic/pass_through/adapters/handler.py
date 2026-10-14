@@ -82,9 +82,7 @@ def _store_response_cost_before_usage_flattening(completion_response: object, kw
     litellm_logging_obj = litellm_logging_obj_from_kwargs(kwargs)
     if litellm_logging_obj is None:
         return
-    # cast-ok: the adapter hands back an OpenAI-shaped ModelResponse; the calculator
-    # accepts it as-is and only the usage fields are read.
-    model_response: Final = cast(ModelResponse, completion_response)
+    model_response: Final = cast(ModelResponse, completion_response)  # cast-ok: adapter returns ModelResponse
     usage: Final = getattr(model_response, "usage", None)
     if not isinstance(usage, Usage):
         return
