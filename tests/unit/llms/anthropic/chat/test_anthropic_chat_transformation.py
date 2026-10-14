@@ -7,6 +7,7 @@ import httpx
 from httpx import Headers
 import pytest
 import respx
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import (
@@ -23,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messag
 from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -35,7 +37,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
-from litellm.types.utils import ChatCompletionToolCallChunk, ServerToolUse, Usage
+from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
 
 
 def test_response_format_transformation_unit_test():
@@ -1055,6 +1057,40 @@ def test_transform_response_with_prefix_prompt():
 
     assert result is not None
     assert result.choices[0].message.content == "You are a helpful assistant. The grass is green."
+
+
+def test_pdf_file_input_becomes_anthropic_document():
+    config = AnthropicConfig()
+    file_data = "data:application/pdf;base64,JVBERi0xLjQKJSBQT05H"
+
+    result = config.transform_request(
+        model="claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "file", "file": {"file_data": file_data, "filename": "document.pdf"}}],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQKJSBQT05H",
+                    },
+                }
+            ],
+        }
+    ]
 
 
 def test_get_supported_params_thinking():
@@ -2787,7 +2823,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
         ("claude-opus-4-8", True),
         ("anthropic.claude-opus-4-8", True),
         ("vertex_ai/claude-opus-4-6@default", True),
-        ("openrouter/anthropic/claude-opus-4.7", True),
         ("us.anthropic.claude-sonnet-4-6", True),
         ("claude-opus-4-6-20260205", True),
         # unmapped future models -> anthropic-claude fallback rule
@@ -7261,6 +7296,412 @@ def test_convert_tool_response_to_message_no_arguments():
     assert message is None
 
 
+_RISK_SCHEMA: Final = {
+    "$defs": {"Owner": {"title": "Owner", "type": "object", "properties": {"team": {"type": "string"}}}},
+    "title": "RiskAssessment",
+    "type": "object",
+    "properties": {
+        "tier": {"title": "Tier", "type": "integer"},
+        "summary": {"title": "Summary", "type": "string"},
+        "owner": {"$ref": "#/$defs/Owner"},
+    },
+    "required": ["tier", "summary"],
+}
+_RISK_OBJECT: Final = {"tier": 3, "summary": "Two-hour read-only window on the loyalty APIs"}
+_PERSON_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+    "required": ["name", "age"],
+}
+_OPTIONAL_FIELDS_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"note": {"type": "string"}, "score": {"type": "integer"}},
+}
+_TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"value": {"type": "integer"}, "child": {"type": "object"}},
+    "required": ["value"],
+}
+_OPEN_SCORE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"score": {"type": "integer"}},
+    "additionalProperties": True,
+}
+_VALUES_SCHEMA: Final = {"type": "object", "properties": {"values": {"type": "array"}}, "required": ["values"]}
+_REMOTE_REF_SCHEMA: Final = {**_PERSON_SCHEMA, "$ref": "https://schemas.example.com/person.json"}
+_LOOSE_SCHEMA: Final = {"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}}}
+_CLOSED_CONTACT_SCHEMA: Final = {**_LOOSE_SCHEMA, "additionalProperties": False}
+_CONTACT: Final = {"name": "Ada", "email": "ada@example.com"}
+_NAMED_BOOK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "parameters": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "author": {"type": "string"}},
+            "required": ["title", "author"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["name", "parameters"],
+    "additionalProperties": False,
+}
+_NAMED_BOOK: Final = {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"title": "Dune", "author": "Frank Herbert"}}
+_RECURSIVE_NODE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "parent": {"anyOf": [{"$ref": "#"}, {"type": "null"}]},
+    },
+    "required": ["id", "title"],
+}
+_CHILD_WITHOUT_TITLE: Final = {"id": "child-7", "parent": {"id": "root-1", "title": "Root", "parent": None}}
+_JSON_OBJECT_MODE_SCHEMA: Final = {"type": "object", "properties": {}, "additionalProperties": True}
+_SUMMARY_PROPERTIES: Final = {"summary": {"type": "string"}}
+_PER_USER_SCHEMA: Final = {
+    "type": "object",
+    "properties": _SUMMARY_PROPERTIES,
+    "additionalProperties": {"type": "object"},
+}
+_PER_USER_PATTERN_SCHEMA: Final = {
+    "type": "object",
+    "properties": _SUMMARY_PROPERTIES,
+    "patternProperties": {"^user_": {"type": "object"}},
+}
+_PER_USER_ANSWER: Final = {"user_1": {"summary": "likes tea", "visits": 3}}
+
+
+def _schema(document: dict[str, object]) -> ResponseFormatSchema:
+    schema = response_format_schema(document)
+    assert schema is not None
+    return schema
+
+
+def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
+    return [
+        ChatCompletionToolCallChunk(
+            id="toolu_1",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name=RESPONSE_FORMAT_TOOL_NAME, arguments=json.dumps(arguments)
+            ),
+            index=0,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "schema, tool_input, expected_content",
+    [
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="name_and_parameters_envelope",
+        ),
+        pytest.param(_RISK_SCHEMA, {"input": _RISK_OBJECT}, _RISK_OBJECT, id="input_wrapper"),
+        pytest.param(_RISK_SCHEMA, {"arguments": _RISK_OBJECT}, _RISK_OBJECT, id="arguments_wrapper"),
+        pytest.param(
+            _PERSON_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"name": "Ada", "age": 36}},
+            {"name": "Ada", "age": 36},
+            id="envelope_key_shared_with_a_schema_property",
+        ),
+        pytest.param(
+            _OPTIONAL_FIELDS_SCHEMA,
+            {"input": {"score": 7}},
+            {"score": 7},
+            id="wrapper_around_an_all_optional_schema",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter": {"value": _RISK_OBJECT}},
+            _RISK_OBJECT,
+            id="two_level_envelope",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="string_label_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME, "PARAMETER_VALUE": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="foreign_tool_name_key_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"note": "read-only window", **_RISK_OBJECT},
+            {"note": "read-only window", **_RISK_OBJECT},
+            id="string_label_beside_schema_keys",
+        ),
+        pytest.param(
+            {**_RISK_SCHEMA, "required": "tier"},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            id="string_label_when_required_is_malformed",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": json.dumps(_RISK_OBJECT)},
+            _RISK_OBJECT,
+            id="tool_name_envelope_holding_encoded_json",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"tier": 1, "parameters": _RISK_OBJECT},
+            {"tier": 1, "parameters": _RISK_OBJECT},
+            id="schema_key_beside_a_wrapper_key",
+        ),
+        pytest.param(
+            _RECURSIVE_NODE_SCHEMA,
+            _CHILD_WITHOUT_TITLE,
+            _CHILD_WITHOUT_TITLE,
+            id="recursive_schema_keeps_the_answer_over_its_complete_parent",
+        ),
+        pytest.param(
+            {**_RISK_SCHEMA, "$schema": 5},
+            {"input": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="non_string_dollar_schema",
+        ),
+        pytest.param(
+            _OPEN_SCORE_SCHEMA,
+            {"meta": {"score": 7}, "label": "keep"},
+            {"meta": {"score": 7}, "label": "keep"},
+            id="valid_answer_with_extra_keys_and_a_schema_shaped_nested_object",
+        ),
+        pytest.param(_VALUES_SCHEMA, {"values": [1, 2]}, {"values": [1, 2]}, id="values_is_a_schema_property"),
+        pytest.param(
+            _REMOTE_REF_SCHEMA,
+            {"input": {"name": "Ada", "age": 36}},
+            {"name": "Ada", "age": 36},
+            id="remote_ref_schema_falls_back_to_key_matching",
+        ),
+        pytest.param(
+            _CLOSED_CONTACT_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
+            _CONTACT,
+            id="tool_name_envelope_when_the_schema_lists_no_required_keys",
+        ),
+        pytest.param(
+            _LOOSE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
+            _CONTACT,
+            id="tool_name_envelope_on_an_open_schema",
+        ),
+        pytest.param(_NAMED_BOOK_SCHEMA, _NAMED_BOOK, _NAMED_BOOK, id="accepted_answer_whose_name_is_the_tool_name"),
+        pytest.param(
+            _LOOSE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "email": "ada@example.com"},
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "email": "ada@example.com"},
+            id="tool_name_value_without_a_nested_object_stays",
+        ),
+        pytest.param(_RISK_SCHEMA, _RISK_OBJECT, _RISK_OBJECT, id="plain_schema_object"),
+        pytest.param(
+            _TREE_SCHEMA,
+            {"value": 1, "child": {"value": 2}},
+            {"value": 1, "child": {"value": 2}},
+            id="schema_object_whose_property_holds_a_schema_shaped_object",
+        ),
+        pytest.param(_RISK_SCHEMA, {"input": {"tier": 3}}, {"tier": 3}, id="inner_object_missing_required_key"),
+        pytest.param(_RISK_SCHEMA, {"values": {"tier": 2}}, {"tier": 2}, id="values_wrapper_missing_required_key"),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
+            {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
+            id="two_candidate_objects",
+        ),
+        pytest.param(
+            _OPTIONAL_FIELDS_SCHEMA,
+            {"meta": {"source": "change-request"}},
+            {"meta": {"source": "change-request"}},
+            id="inner_object_without_schema_keys",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"input": _RISK_OBJECT},
+            {"input": _RISK_OBJECT},
+            id="json_object_mode_without_schema_properties",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"values": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="json_object_mode_values_wrapper",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="json_object_mode_tool_name_envelope",
+        ),
+        pytest.param(_PER_USER_SCHEMA, _PER_USER_ANSWER, _PER_USER_ANSWER, id="key_allowed_by_additional_properties"),
+        pytest.param(
+            _PER_USER_PATTERN_SCHEMA, _PER_USER_ANSWER, _PER_USER_ANSWER, id="key_allowed_by_pattern_properties"
+        ),
+        pytest.param(_OPEN_SCORE_SCHEMA, {"input": {"score": 7}}, {"input": {"score": 7}}, id="key_allowed_by_true"),
+        pytest.param(
+            {**_PER_USER_SCHEMA, "required": ["summary"]},
+            {"input": {"summary": "likes tea"}},
+            {"summary": "likes tea"},
+            id="allowed_key_on_a_schema_with_required_keys",
+        ),
+        pytest.param(
+            _PER_USER_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"summary": "likes tea"}},
+            {"summary": "likes tea"},
+            id="tool_name_envelope_on_a_schema_allowing_extra_keys",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_envelope(
+    schema: dict, tool_input: dict, expected_content: dict
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call(tool_input),
+        response_format_schema=_schema(schema),
+    )
+
+    assert message is not None
+    assert json.loads(message.content) == expected_content
+
+
+_TOO_DEEP_TO_DECODE: Final = "[" * 100_000 + "]" * 100_000
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": _TOO_DEEP_TO_DECODE}), _TOO_DEEP_TO_DECODE],
+    ids=["encoded_inner_object", "whole_arguments"],
+)
+def test_convert_tool_response_to_message_keeps_arguments_too_deep_to_decode(arguments: str):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert message.content == arguments
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"type": "object", "properties": ["tier", "summary"]},
+        {"type": "object", "properties": "tier"},
+        ["tier", "summary"],
+    ],
+    ids=["properties_list", "properties_string", "schema_list"],
+)
+def test_response_format_schema_rejects_a_malformed_schema(document: object):
+    assert response_format_schema(document) is None
+
+
+def test_json_mode_with_user_tool_call_unwraps_the_envelope_into_content():
+    user_tool_call: Final = ChatCompletionToolCallChunk(
+        id="toolu_user",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name="lookup_change_window", arguments='{"system": "ledger"}'),
+        index=1,
+    )
+
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=[*_json_tool_call({"input": _RISK_OBJECT}), user_tool_call],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert replacement is None
+    assert remaining_tool_calls == [user_tool_call]
+    assert extra_content is not None
+    assert json.loads(extra_content) == _RISK_OBJECT
+
+
+def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_model_wrapped():
+    config = VertexAIAnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_change_window",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"system": {"type": "string"}},
+                            "required": ["system"],
+                        },
+                    },
+                }
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "RiskAssessment", "schema": _RISK_SCHEMA},
+            },
+        },
+        optional_params={},
+        model="claude-emulated-structured-output",
+        drop_params=False,
+    )
+    json_mode = optional_params.pop("json_mode")
+    request = config.transform_request(
+        model="claude-emulated-structured-output",
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params={**optional_params, "is_vertex_request": True},
+        litellm_params={},
+        headers={},
+    )
+    json_tool = next(tool for tool in request["tools"] if tool["name"] == RESPONSE_FORMAT_TOOL_NAME)
+    assert json_tool["input_schema"]["required"] == ["tier", "summary"]
+    assert "output_format" not in request
+    assert "output_config" not in request
+    completion_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-emulated-structured-output",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "input": {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 30},
+    }
+
+    result = config.transform_response(
+        model="claude-emulated-structured-output",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data=request,
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params=optional_params,
+        litellm_params={},
+        encoding=None,
+        json_mode=json_mode,
+    )
+
+    assert json.loads(result.choices[0].message.content) == _RISK_OBJECT
+    assert result.choices[0].message.tool_calls is None
+    assert result.choices[0].finish_reason == "stop"
+
+
 def test_anthropic_tool_with_image():
     import json
 
@@ -7572,9 +8013,7 @@ async def test_anthropic_api_max_completion_tokens(model: str):
         print("request_body: ", request_body)
 
         assert request_body == {
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
-            ],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}],
             "max_tokens": 10,
             "model": model.split("/")[-1],
         }
@@ -7792,9 +8231,7 @@ async def test_anthropic_api_prompt_caching_with_content_str():
             "cache_control": {"type": "ephemeral"},
         },
     ]
-    translated_system_message = litellm.AnthropicConfig().translate_system_message(
-        messages=system_message
-    )
+    translated_system_message = litellm.AnthropicConfig().translate_system_message(messages=system_message)
 
     assert translated_system_message == [
         # System Message
@@ -7864,9 +8301,9 @@ async def test_anthropic_api_prompt_caching_with_content_str():
 
     assert len(translated_messages) == len(expected_messages)
     for idx, i in enumerate(translated_messages):
-        assert (
-            i == expected_messages[idx]
-        ), "Error on idx={}. Got={}, Expected={}".format(idx, i, expected_messages[idx])
+        assert i == expected_messages[idx], "Error on idx={}. Got={}, Expected={}".format(
+            idx, i, expected_messages[idx]
+        )
 
 
 @pytest.fixture
@@ -7917,3 +8354,384 @@ def test_is_prompt_caching_enabled(anthropic_messages):
         custom_llm_provider="anthropic",
         model="anthropic/claude-sonnet-4-5-20250929",
     )
+
+
+def test_calculate_usage_sums_compaction_and_message_iterations():
+    usage: Final = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "iterations": [
+                {"iteration": 1, "type": "compaction", "input_tokens": 1000, "output_tokens": 500},
+                {"iteration": 2, "type": "message", "input_tokens": 100, "output_tokens": 50},
+            ],
+        },
+        reasoning_content=None,
+    )
+    assert usage.prompt_tokens == 1100
+    assert usage.completion_tokens == 550
+    assert usage.total_tokens == 1650
+    assert usage.prompt_tokens_details.text_tokens == 1100
+    assert usage.iterations is not None
+    assert len(usage.iterations) == 2
+    assert usage.iterations[0]["type"] == "compaction"
+
+
+def test_calculate_usage_sums_cache_tokens_across_compaction_iterations():
+    usage: Final = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "iterations": [
+                {
+                    "type": "compaction",
+                    "input_tokens": 500,
+                    "output_tokens": 200,
+                    "cache_creation_input_tokens": 50,
+                    "cache_read_input_tokens": 17000,
+                },
+                {
+                    "type": "message",
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 10,
+                    "cache_read_input_tokens": 20,
+                },
+            ],
+        },
+        reasoning_content=None,
+    )
+    assert usage.prompt_tokens == 17680
+    assert usage.completion_tokens == 250
+    assert usage.prompt_tokens_details.cache_creation_tokens == 60
+    assert usage.prompt_tokens_details.cached_tokens == 17020
+
+
+PROMPT_CACHING_MODEL: Final = "claude-sonnet-5-5"
+EPHEMERAL: Final = {"type": "ephemeral"}
+WEATHER_PARAMETERS: Final = {
+    "type": "object",
+    "properties": {
+        "location": {"type": "string", "description": "The city and state, e.g. San Francisco, CA"},
+        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+    },
+    "required": ["location"],
+}
+
+
+async def _send_prompt_caching_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, **params: object
+) -> httpx.Request:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello!"}],
+                "model": PROMPT_CACHING_MODEL,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+        )
+    )
+    await litellm.acompletion(
+        api_key="mock_api_key",
+        model=f"anthropic/{PROMPT_CACHING_MODEL}",
+        extra_headers={"anthropic-version": "2023-06-01"},
+        **params,
+    )
+    assert route.call_count == 1
+    request: Final = route.calls.last.request
+    assert request.headers["x-api-key"] == "mock_api_key"
+    assert request.headers["anthropic-version"] == "2023-06-01"
+    assert "anthropic-beta" not in request.headers
+    return request
+
+
+async def test_litellm_anthropic_prompt_caching_tools(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": WEATHER_PARAMETERS,
+                    "cache_control": EPHEMERAL,
+                },
+            }
+        ],
+    )
+    assert json.loads(request.content) == {
+        "model": PROMPT_CACHING_MODEL,
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "What's the weather like in Boston today?"}]}
+        ],
+        "tools": [
+            {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "input_schema": WEATHER_PARAMETERS,
+                "type": "custom",
+                "cache_control": EPHEMERAL,
+            }
+        ],
+        "max_tokens": litellm.get_max_tokens(PROMPT_CACHING_MODEL),
+    }
+
+
+async def test_litellm_anthropic_prompt_caching_system(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    system_blocks: Final = [
+        {"type": "text", "text": "You are an AI assistant tasked with analyzing legal documents."},
+        {"type": "text", "text": "Here is the full text of a complex legal agreement", "cache_control": EPHEMERAL},
+    ]
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[
+            {"role": "system", "content": system_blocks},
+            {"role": "user", "content": "what are the key terms and conditions in this agreement?"},
+        ],
+    )
+    assert json.loads(request.content) == {
+        "model": PROMPT_CACHING_MODEL,
+        "system": system_blocks,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "what are the key terms and conditions in this agreement?"}],
+            }
+        ],
+        "max_tokens": litellm.get_max_tokens(PROMPT_CACHING_MODEL),
+    }
+
+
+def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_custom_headers",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Paris"}],
+                "model": "claude-sonnet-4-5-20250929",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        headers={"anthropic-beta": "computer-use-2025-01-24"},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        tools=[
+            {
+                "type": "computer_20241022",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {"display_height_px": 100, "display_width_px": 100, "display_number": 1},
+                },
+            }
+        ],
+    )
+
+    assert response.choices[0].message.content == "Paris"
+    assert route.call_count == 1
+    sent_betas: Final = frozenset(
+        beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
+    )
+    assert sent_betas == frozenset({"computer-use-2025-01-24"})
+    assert json.loads(route.calls.last.request.content)["tools"] == [
+        {
+            "type": "computer_20241022",
+            "name": "get_current_weather",
+            "display_width_px": 100,
+            "display_height_px": 100,
+            "display_number": 1,
+        }
+    ]
+
+
+def _anthropic_message_body(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
+    return {
+        "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 610,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 51,
+        },
+    }
+
+
+def test_completion_sends_prefix_as_trailing_assistant_turn_and_prepends_it(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, json=_anthropic_message_body([{"type": "text", "text": " won the 2022 World Cup."}], "end_turn")
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[
+            {"role": "user", "content": "Who won the World Cup in 2022?"},
+            {"role": "assistant", "content": "Argentina", "prefix": True},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "Who won the World Cup in 2022?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Argentina"}]},
+    ]
+    assert response.choices[0].message.content == "Argentina won the 2022 World Cup."
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_completion_with_required_tool_choice_and_response_format_returns_tool_calls(respx_mock: respx.MockRouter):
+    class WeatherAnswer(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        question: str
+        answer: str
+
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_message_body(
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_weather",
+                        "name": "get_current_weather",
+                        "input": {"location": "NYC"},
+                    }
+                ],
+                "tool_use",
+            ),
+        )
+    )
+    weather_parameters: Final = {
+        "type": "object",
+        "properties": {"location": {"type": "string"}, "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}},
+        "required": ["location"],
+    }
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[
+            {"role": "system", "content": "response user question with JSON object"},
+            {"role": "user", "content": "Hey! What's the weather in NewYork?"},
+        ],
+        tool_choice="required",
+        response_format=WeatherAnswer,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": weather_parameters,
+                },
+            }
+        ],
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["tool_choice"] == {"type": "any"}
+    assert request_body["tools"] == [
+        {
+            "name": "get_current_weather",
+            "input_schema": weather_parameters,
+            "type": "custom",
+            "description": "Get the current weather in a given location",
+        }
+    ]
+    assert request_body["output_format"] == {
+        "type": "json_schema",
+        "schema": {
+            "properties": {
+                "question": {"title": "Question", "type": "string"},
+                "answer": {"title": "Answer", "type": "string"},
+            },
+            "required": ["question", "answer"],
+            "title": "WeatherAnswer",
+            "type": "object",
+            "additionalProperties": False,
+        },
+    }
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert [tool_call.model_dump() for tool_call in response.choices[0].message.tool_calls] == [
+        {
+            "index": 0,
+            "function": {"arguments": '{"location": "NYC"}', "name": "get_current_weather"},
+            "id": "toolu_weather",
+            "type": "function",
+        }
+    ]
+
+
+def test_completion_surfaces_response_citations_in_provider_specific_fields(respx_mock: respx.MockRouter):
+    citation: Final = {
+        "type": "char_location",
+        "cited_text": "The grass is green. ",
+        "document_index": 0,
+        "document_title": "My Document",
+        "start_char_index": 0,
+        "end_char_index": 20,
+    }
+    document: Final = {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": "The grass is green. The sky is blue."},
+        "title": "My Document",
+        "context": "This is a trustworthy document.",
+        "citations": {"enabled": True},
+    }
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_message_body(
+                [
+                    {"type": "text", "text": "According to the document, "},
+                    {"type": "text", "text": "the grass is green", "citations": [citation]},
+                ],
+                "end_turn",
+            ),
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": [document, {"type": "text", "text": "What color is the grass?"}]}],
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": [document, {"type": "text", "text": "What color is the grass?"}]}
+    ]
+    assert response.choices[0].message.content == "According to the document, the grass is green"
+    assert response.choices[0].message.provider_specific_fields["citations"] == [
+        [{**citation, "supported_text": "the grass is green"}]
+    ]

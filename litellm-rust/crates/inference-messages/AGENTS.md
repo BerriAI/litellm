@@ -7,8 +7,8 @@
   - delegate authentication policy, beta selection, payload rewriting, and response interpretation to those adapters
   - keep provider policy out of request preparation and transport handlers
   - calling a concrete provider helper for every provider is still a policy dependency
-- Route types such as `MessagesCall`, prepared requests, and response wrappers containing live streams describe execution; reuse the shared Messages payload types inside them instead of defining another request or response schema here
+- Route types such as `MessagesCall`, prepared requests, and response wrappers containing live streams describe execution. Reuse the shared Messages payload types inside them instead of defining another request or response schema here
 - The route returns `litellm_host::call::CallOutput`: a completed response, or a stream head and chunks
-- Per-call dependencies are grouped in `litellm_inference::context::CallContext`; `src/lib.rs` explicitly sequences cache lookup, provider execution, result acceptance (`CallContext::result_ready`), and cache storage
+- Per-call dependencies are grouped in `litellm_inference::context::CallContext`. `src/lib.rs` explicitly sequences cache lookup, provider execution, result acceptance (`CallContext::result_ready`), and cache storage
 - Preserve the order of validation, normalization, caller-requested parameter removal, and provider transformation when that order affects observable behavior
 - Test provider dispatch, auth precedence, header handling, transformations, and responses through behavior, not source structure
