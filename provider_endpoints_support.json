@@ -2491,6 +2491,24 @@
         "rerank": false
       }
     },
+    "stackit": {
+      "display_name": "STACKIT (`stackit`)",
+      "url": "https://docs.litellm.ai/docs/providers/stackit",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "synthetic": {
       "display_name": "Synthetic (`synthetic`)",
       "endpoints": {
