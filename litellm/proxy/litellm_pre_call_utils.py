@@ -228,6 +228,7 @@ from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
     CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
@@ -235,6 +236,8 @@ from litellm.types.utils import (
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
+
+_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset({CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR})
 
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}
@@ -976,7 +979,7 @@ def convert_key_logging_metadata_to_callback(
             team_callback_settings_obj.callbacks.append(data.callback_name)
 
     for var, value in data.callback_vars.items():
-        if var == CAPTURE_MESSAGE_CONTENT_VAR:
+        if var in _DESTINATION_ONLY_CALLBACK_VARS:
             continue
         # New Relic routing reads these from the trusted-vars overlay with no
         # callback-name check, so scope them to the newrelic entry: a team that
@@ -1195,7 +1198,7 @@ def resolve_tenant_otel_destinations(
 def _tenant_destination(
     name: str, callbacks: Sequence[AddTeamCallback], service_name: str | None
 ) -> "OtelDestination | None":
-    from litellm.integrations.otel.model.config import parse_capture_message_content
+    from litellm.integrations.otel.model.config import parse_capture_message_content, parse_excluded_services
     from litellm.integrations.otel.presets.destinations import destination_for
 
     callback_vars: Final = MappingProxyType(
@@ -1210,6 +1213,7 @@ def _tenant_destination(
         _tenant_otel_params(callback_vars),
         service_name,
         parse_capture_message_content(callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)),
+        parse_excluded_services(callback_vars.get(EXCLUDED_SERVICES_VAR)),
     )
 
 
@@ -1546,7 +1550,7 @@ class LiteLLMProxyRequestSetup:
         headers: dict,
         request_data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        general_settings: dict[str, Any] | None = None,
+        general_settings: dict[str, object] | None = None,
     ) -> LitellmDataForBackendLLMCall:
         """
         - Adds user from headers
