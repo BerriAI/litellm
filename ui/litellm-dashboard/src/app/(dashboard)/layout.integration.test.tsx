@@ -50,6 +50,8 @@ beforeEach(() => {
           return Response.json([]);
         case "/health/readiness/details":
           return Response.json({ status: "healthy" });
+        case "/health/deployment_warnings":
+          return Response.json({ warnings: [], ignore_available: true });
         case "/health/license": {
           const license = {
             has_license: false,
