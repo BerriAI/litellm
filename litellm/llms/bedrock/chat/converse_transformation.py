@@ -54,7 +54,7 @@ from litellm.llms.anthropic.chat.transformation import (
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
-from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
+from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround, bedrock_supports_tool_search
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
@@ -138,6 +138,7 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 
 _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _TOOLS_AS_RECEIVED: Final = TypeAdapter(list[object])
+CLAUDE_ON_BEDROCK_INVOKE_REMEDY: Final = " This model runs tool search on Bedrock through `bedrock/invoke/<model>`."
 
 
 def _tools_the_model_accepts(
@@ -1093,8 +1094,9 @@ class AmazonConverseConfig(BaseConfig):
                             tools_without_unsupported_tool_search(
                                 tools=_TOOLS_AS_RECEIVED.validate_python(value),
                                 model=model,
-                                route="bedrock converse",
+                                route="bedrock",
                                 drop_params=drop_params,
+                                remedy=CLAUDE_ON_BEDROCK_INVOKE_REMEDY if bedrock_supports_tool_search(model) else "",
                             )
                         ),
                     ),

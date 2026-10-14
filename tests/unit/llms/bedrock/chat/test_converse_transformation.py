@@ -10166,17 +10166,29 @@ def _openai_tool_search_with_deferred_functions() -> list[dict[str, object]]:
     ]
 
 
-def test_map_openai_params_answers_400_for_the_openai_tool_search_tool_without_drop_params(monkeypatch):
+@pytest.mark.parametrize(
+    ("model", "names_invoke_route"),
+    [
+        pytest.param("us.anthropic.claude-sonnet-5-5", True, id="claude-that-runs-tool-search-on-invoke"),
+        pytest.param("anthropic.claude-3-haiku-20240307-v1:0", False, id="claude-without-tool-search"),
+        pytest.param("us.amazon.nova-pro-v1:0", False, id="nova"),
+    ],
+)
+def test_map_openai_params_answers_400_for_the_openai_tool_search_tool_without_drop_params(
+    monkeypatch, model, names_invoke_route
+):
     monkeypatch.setattr(litellm, "drop_params", False)
     with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
         AmazonConverseConfig().map_openai_params(
             non_default_params={"tools": _openai_tool_search_with_deferred_functions()},
             optional_params={},
-            model="us.anthropic.claude-sonnet-5-5",
+            model=model,
             drop_params=False,
         )
     assert raised.value.status_code == 400
     assert "tool_search" in str(raised.value)
+    assert "drop_params: true" in str(raised.value)
+    assert ("bedrock/invoke/" in str(raised.value)) is names_invoke_route
 
 
 def test_map_openai_params_drops_the_openai_tool_search_tool_and_every_deferral_under_drop_params(monkeypatch):

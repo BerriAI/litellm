@@ -29,6 +29,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -8809,6 +8810,9 @@ def _deferral_by_function_name(tools: list[dict[str, object]]) -> dict[object, o
         pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-sonnet-5-5", "bedrock", id="bedrock-invoke"),
         pytest.param(VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", id="vertex_ai"),
         pytest.param(AzureAnthropicConfig(), "claude-sonnet-5-5", "azure_ai", id="azure_ai"),
+        pytest.param(
+            BedrockClaudePlatformConfig(), "claude_platform/claude-opus-5-5", "bedrock", id="bedrock-claude-platform"
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -8916,6 +8920,25 @@ def test_map_openai_params_answers_400_for_an_openai_tool_search_tool_it_cannot_
     assert raised.value.status_code == 400
     assert "tool_search" in str(raised.value)
     assert "drop_params: true" in str(raised.value)
+    assert ("supports_tool_search: true" in str(raised.value)) is (execution == "server")
+
+
+def test_map_openai_params_runs_tool_search_on_a_custom_named_deployment_whose_model_info_says_it_can(monkeypatch):
+    from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    tools: Final = _openai_tool_search_with_deferred_functions()
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        AzureAnthropicConfig().map_openai_params(
+            non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
+        )
+    litellm.register_model({"azure_ai/my-claude-deployment": {"supports_tool_search": True, "litellm_provider": "azure_ai"}})
+    mapped: Final = AzureAnthropicConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
+    )
+    assert _search_tools_sent(mapped["tools"]) == [anthropic_tool_search_chat_tool()]
+    assert _deferral_by_function_name(mapped["tools"]) == dict.fromkeys(_DEFERRED_FUNCTION_NAMES, True)
 
 
 @pytest.mark.parametrize(("config", "model", "provider", "execution"), _UNRUNNABLE_TOOL_SEARCH_CASES)

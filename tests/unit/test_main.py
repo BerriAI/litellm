@@ -415,6 +415,135 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     assert sent_tool["function"]["name"] == "write_file"
 
 
+_CLAUDE_TOOL_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01search",
+    "type": "function",
+    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+}
+_LOADED_FUNCTION_CALL: Final = {
+    "id": "toolu_01weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+_USER_TURN: Final = {"role": "user", "content": "What is the weather in Paris?"}
+_WEATHER_RESULT: Final = {"role": "tool", "tool_call_id": "toolu_01weather", "content": "18C"}
+
+
+@pytest.mark.parametrize(
+    ("claude_turn", "sent_after_user"),
+    [
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+                _WEATHER_RESULT,
+            ],
+            [{"role": "assistant", "tool_calls": [_LOADED_FUNCTION_CALL]}, _WEATHER_RESULT],
+            id="search-beside-a-function-call",
+        ),
+        pytest.param(
+            [
+                litellm.Message(content="Looking", tool_calls=[_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]),
+                _WEATHER_RESULT,
+            ],
+            [{"role": "assistant", "content": "Looking", "tool_calls": [_LOADED_FUNCTION_CALL]}, _WEATHER_RESULT],
+            id="sdk-message-object",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL]},
+                {"role": "tool", "tool_call_id": "srvtoolu_01search", "content": "searched"},
+            ],
+            [],
+            id="answered-search-alone",
+        ),
+    ],
+)
+def test_completion_drops_claude_tool_search_calls_from_history_sent_to_openai(
+    respx_mock: respx.MockRouter, openai_api_response, claude_turn, sent_after_user
+):
+    api_base: Final = "http://localhost:12346/v1"
+    respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.6",
+        messages=[_USER_TURN, *claude_turn, {"role": "user", "content": "And tomorrow?"}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)["messages"]
+    assert [
+        {key: message[key] for key in ("role", "content", "tool_calls", "tool_call_id") if key in message}
+        for message in sent
+    ] == [_USER_TURN, *sent_after_user, {"role": "user", "content": "And tomorrow?"}]
+
+
+def test_completion_drops_claude_tool_search_calls_before_the_responses_bridge_sends_history_to_openai(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_turn2",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_turn2",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "18C and clear", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 40, "output_tokens": 5, "total_tokens": 45},
+        }
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.6",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+            {"role": "tool", "tool_call_id": "srvtoolu_01search", "content": "searched"},
+            _WEATHER_RESULT,
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+    )
+
+    sent_input: Final = json.loads(route.calls.last.request.content)["input"]
+    assert [(item.get("type"), item.get("call_id")) for item in sent_input if "call_id" in item] == [
+        ("function_call", "toolu_01weather"),
+        ("function_call_output", "toolu_01weather"),
+    ]
+
+
+def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
+    respx_mock: respx.MockRouter, openai_api_response
+):
+    api_base: Final = "http://localhost:12346/v1"
+    respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+    lookalike_call: Final = {**_LOADED_FUNCTION_CALL, "id": "srvtoolu_01weather"}
+    history: Final = [
+        _USER_TURN,
+        {"role": "assistant", "content": None, "tool_calls": [lookalike_call]},
+        {"role": "tool", "tool_call_id": "srvtoolu_01weather", "content": "18C"},
+    ]
+
+    litellm.completion(model="openai/gpt-5.6", messages=history, api_base=api_base, api_key="fake_openai_api_key")
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)["messages"]
+    assert [message["role"] for message in sent] == ["user", "assistant", "tool"]
+    assert sent[1]["tool_calls"][0]["id"] == "srvtoolu_01weather"
+
+
 def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "http://localhost:12346/v1"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/embeddings.*").mock(

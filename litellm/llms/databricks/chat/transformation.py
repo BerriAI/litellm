@@ -332,6 +332,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                     model=model,
                     route="databricks",
                     drop_params=drop_params,
+                    remedy="",
                 )
             )
         )  # unclear how mcp tool calling on databricks works

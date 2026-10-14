@@ -197,15 +197,26 @@ def _namespace_members_without_deferral(members: object) -> object:
             return members
 
 
+def _field_without_deferral(key: str, value: object) -> object:
+    match key:
+        case "function":
+            return _without_defer_loading(value)
+        case "tools":
+            return _namespace_members_without_deferral(value)
+        case _:
+            return value
+
+
 def _without_deferral(tool: object) -> object:
-    match _member_without_deferral(tool):
-        case Mapping() as stripped:
+    match tool:
+        case Mapping():
             return {
-                key: _namespace_members_without_deferral(value) if key == "tools" else value
-                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(stripped).items()
+                key: _field_without_deferral(key, value)
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(tool).items()
+                if key != "defer_loading"
             }
-        case stripped:
-            return stripped
+        case _:
+            return tool
 
 
 def _validated_defer_loading(value: object) -> bool:
@@ -370,8 +381,14 @@ DROP_UNSUPPORTED_TOOL_SEARCH_WARNING: Final = (
 )
 
 
+TOOL_SEARCH_MODEL_INFO_REMEDY: Final = (
+    " If this model does run tool search, set `supports_tool_search: true` in its `model_info`, or for the SDK "
+    "with `litellm.register_model`."
+)
+
+
 def tools_without_unsupported_tool_search(
-    tools: Sequence[object], model: str, route: str, drop_params: bool
+    tools: Sequence[object], model: str, route: str, drop_params: bool, remedy: str
 ) -> Sequence[object]:
     if not any(_is_openai_tool_search_tool(tool) for tool in tools):
         return tools
@@ -379,9 +396,9 @@ def tools_without_unsupported_tool_search(
         raise litellm.utils.UnsupportedParamsError(
             message=(
                 f"{model} on {route} cannot run the OpenAI `tool_search` tool as sent. Only a server-executed "
-                "`tool_search` on a route that supports tool search becomes Anthropic's tool search. To drop it "
-                "and the `defer_loading` of the other tools, set `litellm.drop_params=True` or for proxy:\n\n"
-                "`litellm_settings:\n drop_params: true`\n"
+                f"`tool_search` on a route that supports tool search becomes Anthropic's tool search.{remedy} "
+                "To drop it and the `defer_loading` of the other tools, set `litellm.drop_params=True` or for "
+                "proxy:\n\n`litellm_settings:\n drop_params: true`\n"
             ),
             status_code=400,
         )
@@ -1107,12 +1124,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return tools
         if any(_is_anthropic_tool_search_tool(tool) for tool in tools):
             return [tool for tool in tools if not _is_openai_tool_search_tool(tool)]
-        route_runs_the_search: Final = all(
+        model_runs_tool_search: Final = litellm.supports_tool_search(model, self._resolved_provider)
+        search_runs_on_the_server: Final = all(
             is_server_tool_search_tool(tool) for tool in tools if _is_openai_tool_search_tool(tool)
-        ) and litellm.supports_tool_search(model, self._resolved_provider)
-        if not route_runs_the_search:
+        )
+        if not (model_runs_tool_search and search_runs_on_the_server):
             return tools_without_unsupported_tool_search(
-                tools=tools, model=model, route=self._resolved_provider, drop_params=drop_params
+                tools=tools,
+                model=model,
+                route=self._resolved_provider,
+                drop_params=drop_params,
+                remedy="" if model_runs_tool_search else TOOL_SEARCH_MODEL_INFO_REMEDY,
             )
         return [
             *tools[:first_search_tool_index],

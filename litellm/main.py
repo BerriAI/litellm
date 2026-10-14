@@ -1076,6 +1076,7 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 
 _ANTHROPIC_ONLY_TOOL_KEYS: Final = frozenset({"input_examples", "eager_input_streaming"})
+_CHAT_HISTORY_ADAPTER: Final = TypeAdapter(Sequence[object])
 
 
 def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
@@ -1087,6 +1088,15 @@ def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
         return "claude" in model_lower
     return False
+
+
+def _route_drops_tool_search_uses(messages: Sequence[object], provider_config: BaseConfig) -> bool:
+    from litellm.responses.litellm_completion_transformation.tool_search import (
+        chat_config_builds_anthropic_request,
+        history_holds_tool_search_use,
+    )
+
+    return not chat_config_builds_anthropic_request(provider_config) and history_holds_tool_search_use(messages)
 
 
 def _without_anthropic_only_tool_keys(tool: dict[str, object]) -> dict[str, object]:
@@ -5557,6 +5567,15 @@ def completion(
 
         if provider_config is not None:
             messages = provider_config.translate_developer_role_to_system_role(messages=messages)
+            chat_history: Final = _CHAT_HISTORY_ADAPTER.validate_python(messages)
+            if _route_drops_tool_search_uses(chat_history, provider_config):
+                from litellm.responses.litellm_completion_transformation.tool_search import (
+                    chat_messages_without_tool_search_uses,
+                )
+
+                messages = list(  # rebind-ok: completion() rewrites messages step by step for the provider
+                    chat_messages_without_tool_search_uses(chat_history)
+                )
 
         if (
             supports_system_message is not None

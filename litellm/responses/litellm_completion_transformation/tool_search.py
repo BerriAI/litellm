@@ -19,7 +19,10 @@ __all__ = [
     "answers_tool_search",
     "anthropic_tool_search_chat_tool",
     "build_tool_search_call",
+    "chat_config_builds_anthropic_request",
+    "chat_messages_without_tool_search_uses",
     "has_server_tool_search",
+    "history_holds_tool_search_use",
     "holds_tool_search_use",
     "is_anthropic_tool_search_chat_tool",
     "is_anthropic_tool_search_use",
@@ -35,6 +38,7 @@ ANTHROPIC_TOOL_SEARCH_TOOL_NAME: Final = "tool_search_tool_regex"
 ToolSearchCallStatus: TypeAlias = Literal["in_progress", "completed", "incomplete"]
 
 _ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_MESSAGE_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class _ToolSearchFields(LiteLLMBaseModel):
@@ -66,8 +70,6 @@ def is_anthropic_tool_search_chat_tool(tool: Mapping[str, object]) -> bool:
 
 def provider_builds_anthropic_request(model: str, custom_llm_provider: str | None) -> bool:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
     from litellm.utils import ProviderConfigManager
 
     _, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
@@ -75,7 +77,15 @@ def provider_builds_anthropic_request(model: str, custom_llm_provider: str | Non
         llm_provider: Final = LlmProviders(provider)
     except ValueError:
         return False
-    chat_config: Final = ProviderConfigManager.get_provider_chat_config(model=model, provider=llm_provider)
+    return chat_config_builds_anthropic_request(
+        ProviderConfigManager.get_provider_chat_config(model=model, provider=llm_provider)
+    )
+
+
+def chat_config_builds_anthropic_request(chat_config: object) -> bool:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
 
 
@@ -165,6 +175,49 @@ def without_tool_search_uses(message: Message) -> Message | None:
     if not kept and not message.content:
         return None
     return message.model_copy(update={"tool_calls": list(kept) or None})
+
+
+def history_holds_tool_search_use(messages: Iterable[object]) -> bool:
+    return any(_is_assistant_message(message) and holds_tool_search_use(message) for message in messages)
+
+
+def _is_assistant_message(message: object) -> bool:
+    match message:
+        case {"role": "assistant"}:
+            return True
+        case Mapping():
+            return False
+        case _:
+            return _session_message_fields(message).role == "assistant"
+
+
+def _assistant_mapping_without_tool_search_uses(message: Mapping[str, object]) -> Mapping[str, object] | None:
+    kept_calls: Final = without_tool_search_calls(message)
+    if not kept_calls and not message.get("content"):
+        return None
+    without_calls: Final = {key: value for key, value in message.items() if key != "tool_calls"}
+    return {**without_calls, "tool_calls": list(kept_calls)} if kept_calls else without_calls
+
+
+def _without_tool_search_use(message: object, search_call_ids: Set[str]) -> object | None:
+    if answers_tool_search(message, search_call_ids):
+        return None
+    if not holds_tool_search_use(message):
+        return message
+    match message:
+        case Message():
+            return without_tool_search_uses(message)
+        case Mapping():
+            return _assistant_mapping_without_tool_search_uses(_MESSAGE_FIELDS_ADAPTER.validate_python(message))
+        case _:
+            return message
+
+
+def chat_messages_without_tool_search_uses(messages: Sequence[object]) -> tuple[object, ...]:
+    search_call_ids: Final = tool_search_call_ids(messages)
+    return tuple(
+        kept for message in messages if (kept := _without_tool_search_use(message, search_call_ids)) is not None
+    )
 
 
 def _parsed_arguments(arguments_json: str) -> Mapping[str, object] | None:
