@@ -968,6 +968,30 @@ def test_vertex_ai_fable_5_1_response_format_uses_native_output_format(local_mod
     assert "tools" not in result_params
 
 
+def test_vertex_ai_tool_based_response_format_skips_forced_tool_choice_when_model_rejects_it(local_model_cost_map):
+    """Regression: the vertex map entry for Sonnet 5.5 has no native structured output
+    and rejects forced tool use, so the tool-based path must emit the json tool without
+    forcing it. A stand-in model name used to hide the real model from that check."""
+    result_params = VertexAIAnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=False,
+    )
+
+    assert "output_format" not in result_params
+    assert "tools" in result_params
+    assert "tool_choice" not in result_params
+
+
 def test_vertex_ai_anthropic_tool_based_response_format_still_upgrades_legacy_thinking(local_model_cost_map):
     result_params = VertexAIAnthropicConfig().map_openai_params(
         non_default_params={

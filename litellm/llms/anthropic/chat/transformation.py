@@ -335,6 +335,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
 
+    def uses_native_structured_output(self, model: str) -> bool:
+        return AnthropicConfig._supports_model_capability(
+            model, "supports_native_structured_output", self._resolved_provider
+        )
+
     @classmethod
     def get_config(cls, *, model: str | None = None):
         config: Final = super().get_config()
@@ -1600,11 +1605,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if AnthropicConfig._supports_model_capability(
-                    model,
-                    "supports_native_structured_output",
-                    self._resolved_provider,
-                ):
+                if self.uses_native_structured_output(model):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
