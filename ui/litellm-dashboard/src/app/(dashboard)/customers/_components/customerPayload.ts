@@ -4,11 +4,16 @@ import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
 import { extractMcpEntitlement, type McpEntitlementUpdate } from "@/components/mcp_server_management/mcpEntitlement";
 
-export const hasSharedCustomerBudget = (customer: EndUser, customers: readonly EndUser[]): boolean =>
-  Boolean(
-    customer.budget_id &&
-      customers.some((other) => other.user_id !== customer.user_id && other.budget_id === customer.budget_id),
+export const getCustomerBudgetCounts = (customers: readonly EndUser[]): ReadonlyMap<string, number> =>
+  new Map(
+    Array.from(
+      Map.groupBy(customers, (customer) => customer.budget_id ?? ""),
+      ([budgetId, linkedCustomers]) => [budgetId, linkedCustomers.length] as const,
+    ).filter(([budgetId]) => Boolean(budgetId)),
   );
+
+export const hasSharedCustomerBudget = (customer: EndUser, budgetCounts: ReadonlyMap<string, number>): boolean =>
+  Boolean(customer.budget_id && (budgetCounts.get(customer.budget_id) ?? 0) > 1);
 
 export type CustomerFormValues = {
   user_id: string;

@@ -55,7 +55,7 @@ def test_dashscope_chat_forwards_reasoning_effort_none_to_the_provider(gateway: 
             {
                 "finish_reason": "stop",
                 "index": 0,
-                "message": {"role": "assistant", "content": "27", "provider_specific_fields": {"refusal": None}},
+                "message": {"role": "assistant", "content": "27"},
                 "provider_specific_fields": {},
             }
         ]

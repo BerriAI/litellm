@@ -102,7 +102,9 @@ def _validate_tool_arguments(schema: Mapping[str, JsonValue], arguments: Mapping
 
 
 async def _tool_argument_validation_error(
-    schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]
+    schema: Mapping[str, JsonValue],
+    arguments: Mapping[str, JsonValue],
+    timeout_seconds: float = _VALIDATION_TIMEOUT_SECONDS,
 ) -> str | None:
     limit_error: Final = _validation_limit_error(schema, arguments)
     if limit_error is not None:
@@ -112,7 +114,7 @@ async def _tool_argument_validation_error(
     if existing is None:
         _SCHEMA_VALIDATION_LIMITER.set(limiter)
     try:
-        with anyio.fail_after(_VALIDATION_TIMEOUT_SECONDS):
+        with anyio.fail_after(timeout_seconds):
             return await to_process.run_sync(
                 _validate_tool_arguments, schema, arguments, cancellable=True, limiter=limiter
             )
@@ -256,9 +258,11 @@ def _split_core_tools(tools: Sequence[Tool], core_tools: Sequence[str]) -> tuple
 
 
 def _top_hits(
-    tools: Sequence[Tool], scores: Sequence[float], minimum: float, limit: int
+    tools: Sequence[Tool], scores: Sequence[float | None], minimum: float, limit: int
 ) -> tuple[tuple[float, Tool], ...]:
-    hits: Final = ((score, tool) for score, tool in zip(scores, tools, strict=True) if score >= minimum)
+    hits: Final = (
+        (score, tool) for score, tool in zip(scores, tools, strict=True) if score is not None and score >= minimum
+    )
     return tuple(sorted(hits, key=lambda hit: hit[0], reverse=True)[:limit])
 
 

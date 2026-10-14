@@ -163,7 +163,11 @@ export function CustomerForm({
           control={form.control}
           name="max_budget"
           label="Max Budget (USD)"
-          description={isEdit ? "Leave empty to keep the maximum. Updates require more than zero" : undefined}
+          description={
+            isEdit
+              ? "Leave empty to keep the maximum. Budgets shared with other resources cannot be changed here. Updates require more than zero"
+              : undefined
+          }
         >
           {({ ref, ...control }) => (
             <Input
@@ -246,7 +250,7 @@ export function CustomerForm({
           )}
         </FormField>
         <MCPToolPermissions
-          initializeDefaultPermissions={!isEdit}
+          preserveUnrestrictedServers={isEdit ? initialValues.mcp_servers_and_groups.servers : undefined}
           accessToken={accessToken ?? ""}
           selectedServers={selection.servers}
           selectedAccessGroups={selection.accessGroups}

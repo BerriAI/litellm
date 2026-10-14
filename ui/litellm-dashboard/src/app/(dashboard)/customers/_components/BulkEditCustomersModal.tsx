@@ -29,7 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { extractProxyErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
 import { buildBulkCustomerPayload, emptyBulkCustomerEdits, type BulkCustomerEdits } from "./bulkCustomerPayload";
-import { hasSharedCustomerBudget } from "./customerPayload";
+import { getCustomerBudgetCounts, hasSharedCustomerBudget } from "./customerPayload";
 
 type BulkEditCustomersModalProps = {
   allCustomers: readonly EndUser[];
@@ -244,7 +244,8 @@ function BulkEditSession({
   const toolsets = useMCPToolsets();
   const mutation = useBulkUpdateCustomers();
   const pending = submitting || mutation.isPending;
-  const hasSharedBudget = customers.some((customer) => hasSharedCustomerBudget(customer, allCustomers));
+  const budgetCounts = getCustomerBudgetCounts(allCustomers);
+  const hasSharedBudget = customers.some((customer) => hasSharedCustomerBudget(customer, budgetCounts));
   const modelOptions = (models.data ?? []).map((model) => ({ label: model, value: model }));
   const modelsUnavailable = models.isLoading || models.isError;
   const actionLabel = results ? "Retry failed customers" : "Apply changes";

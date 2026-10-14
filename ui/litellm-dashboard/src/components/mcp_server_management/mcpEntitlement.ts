@@ -1,6 +1,6 @@
 import { ALL_PROXY_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
-import { mcpServersForIdentifier } from "./effectiveMcpServers";
+import { mcpAllowedToolsFor, mcpServersForIdentifier } from "./effectiveMcpServers";
 
 export interface McpEntitlementUpdate {
   mcp_servers: string[];
@@ -19,29 +19,6 @@ const asToolPermissions = (value: unknown): Record<string, string[]> => {
   );
 };
 
-/**
- * The `object_permission` a save sends, derived from what the editor currently shows.
- *
- * A tool allowlist is what narrows a grant and an absent one reads as no restriction, so dropping
- * an entry is the direction that widens. An entry is kept while its own server is still reachable,
- * directly or through a retained access group or toolset, and dropped once nothing reaches it, which
- * is what makes removing a grant actually remove it. Reachability is resolved per server rather than
- * per selection: the gateway treats every allowlist key as an independent server grant, so keeping
- * every key because some unrelated group survived would leave a deselected server callable.
- *
- * The catalog carries `mcp_access_groups` on each server and `tools[].server_id` on each toolset,
- * which is the same membership the gateway resolves against. A selected toolset missing from the
- * catalog is unresolvable, so nothing is pruned in that save.
- *
- * A key matching a server id names only that server. Other keys fall back to names and aliases.
- * `allServers` is what resolves a key to its servers, plural: names and aliases are not unique, and
- * the gateway unions such a key into EVERY server answering to it, so the entry is kept while any
- * one of them is still granted. Resolving to the first match instead would make the outcome depend
- * on catalog order and could drop a restriction that was also covering a server still granted. A key
- * that resolves to nothing is kept too, since a server we cannot identify is one we cannot confirm
- * was deselected; that also covers a catalog that has not loaded or failed to load, where every key
- * is unresolvable and nothing is pruned.
- */
 export const extractMcpEntitlement = (
   formValues: Record<string, unknown>,
   allServers: MCPServer[],
@@ -80,14 +57,39 @@ export const extractMcpEntitlement = (
     return named.some(grants);
   };
 
+  const toolPermissions = asToolPermissions(formValues.mcp_tool_permissions);
+  const splitKeys = new Set(
+    Object.keys(toolPermissions).filter((key) => {
+      const named = mcpServersForIdentifier(allServers, key);
+      return !grantsEveryServer && named.length > 1 && named.some((server) => !grants(server));
+    }),
+  );
+  const retainedServerIds = new Set(
+    Array.from(splitKeys).flatMap((key) =>
+      mcpServersForIdentifier(allServers, key)
+        .filter(grants)
+        .map((server) => server.server_id),
+    ),
+  );
+  const keepPermissionKey = (key: string): boolean => {
+    if (splitKeys.has(key)) return false;
+    const named = mcpServersForIdentifier(allServers, key);
+    if (named.length === 1 && retainedServerIds.has(named[0].server_id)) return false;
+    return grantsEveryServer || grantsServerNamedBy(key);
+  };
+  const retainedPermissions = Object.fromEntries(
+    Object.entries(toolPermissions).filter(([key]) => keepPermissionKey(key)),
+  );
+  const canonicalPermissions = Object.fromEntries(
+    allServers
+      .filter((server) => retainedServerIds.has(server.server_id))
+      .map((server) => [server.server_id, [...(mcpAllowedToolsFor(server, toolPermissions, allServers) ?? [])]]),
+  );
+
   return {
     mcp_servers: mcpServers,
     mcp_access_groups: mcpAccessGroups,
     mcp_toolsets: mcpToolsets,
-    mcp_tool_permissions: Object.fromEntries(
-      Object.entries(asToolPermissions(formValues.mcp_tool_permissions)).filter(
-        ([permissionKey]) => grantsEveryServer || grantsServerNamedBy(permissionKey),
-      ),
-    ),
+    mcp_tool_permissions: { ...retainedPermissions, ...canonicalPermissions },
   };
 };

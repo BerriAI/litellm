@@ -4,7 +4,7 @@ import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import type { MCPServer } from "@/components/mcp_tools/types";
 import { mcpAllowedToolsFor, mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
 
-import { hasSharedCustomerBudget } from "./customerPayload";
+import { getCustomerBudgetCounts, hasSharedCustomerBudget } from "./customerPayload";
 
 export const MAX_BULK_CUSTOMERS = 500;
 
@@ -48,7 +48,8 @@ const validateBulkCustomerEdits = (
     return "Select an existing budget";
   }
   if (edits.budget.enabled && edits.budget.mode === "max") {
-    if (customers.some((customer) => hasSharedCustomerBudget(customer, allCustomers))) {
+    const budgetCounts = getCustomerBudgetCounts(allCustomers);
+    if (customers.some((customer) => hasSharedCustomerBudget(customer, budgetCounts))) {
       return "Max Budget cannot be changed for customers with shared budgets. Select an existing budget instead";
     }
     if (!Number.isFinite(Number(edits.budget.maxBudget)) || Number(edits.budget.maxBudget) <= 0) {

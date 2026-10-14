@@ -32,7 +32,7 @@ export const buildCustomersCsvRows = (customers: EndUser[]): Record<string, stri
   });
 
 export const buildCustomersCsv = (customers: EndUser[]): string =>
-  Papa.unparse(buildCustomersCsvRows(customers), { escapeFormulae: true });
+  Papa.unparse(buildCustomersCsvRows(customers), { escapeFormulae: /^[=+\-@\t\r]/ });
 
 export const exportCustomersToCsv = (customers: EndUser[]): number => {
   const blob = new Blob([buildCustomersCsv(customers)], { type: "text/csv;charset=utf-8;" });

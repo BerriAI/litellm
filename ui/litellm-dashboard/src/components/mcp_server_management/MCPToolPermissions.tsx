@@ -15,8 +15,8 @@ import {
   applyToolPermissionWrite,
   emptyMcpAccessGroups,
   mcpAllowedToolsFor,
-  mcpGrantsAllTools,
   mcpServersForIdentifier,
+  mcpGrantsAllTools,
   resolveEffectiveMcpServers,
 } from "./effectiveMcpServers";
 
@@ -28,7 +28,7 @@ interface MCPToolPermissionsProps {
   toolPermissions: Record<string, string[]>;
   onChange: (toolPermissions: Record<string, string[]>) => void;
   disabled?: boolean;
-  initializeDefaultPermissions?: boolean;
+  preserveUnrestrictedServers?: readonly string[];
 }
 
 const NO_SELECTION: readonly string[] = [];
@@ -59,7 +59,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   toolPermissions,
   onChange,
   disabled = false,
-  initializeDefaultPermissions = true,
+  preserveUnrestrictedServers = NO_SELECTION,
 }) => {
   const {
     data: allServers = [],
@@ -73,7 +73,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
   const [viewModes, setViewModes] = useState<Record<string, "crud" | "flat">>({});
-  const initialSelectedServers = useRef(selectedServers);
 
   // Keep a ref to the latest toolPermissions so async fetch callbacks always
   // read the current value and do not overwrite sibling servers' results when
@@ -100,6 +99,16 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
 
   // Fetch tools for a specific server; applies delete-blocked-by-default for new servers.
   // `token` is passed explicitly so the closure never captures a stale accessToken.
+  const preservedServerIds = useMemo(
+    () =>
+      new Set(
+        preserveUnrestrictedServers.flatMap((identifier) =>
+          mcpServersForIdentifier(allServers, identifier).map((server) => server.server_id),
+        ),
+      ),
+    [allServers, preserveUnrestrictedServers],
+  );
+
   const fetchToolsForServer = async (entry: EffectiveMcpServer, token: string) => {
     const serverId = entry.server.server_id;
     setLoadingTools((prev) => ({ ...prev, [serverId]: true }));
@@ -114,14 +123,6 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       } else {
         const fetchedTools: MCPTool[] = response.tools || [];
         setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
-        if (
-          !initializeDefaultPermissions &&
-          initialSelectedServers.current.some((identifier) =>
-            mcpServersForIdentifier(allServers, identifier).some((server) => server.server_id === serverId),
-          )
-        ) {
-          return;
-        }
 
         // Default only unrestricted direct servers to non-delete tools.
         // Read latest permissions from the ref to avoid clobbering concurrent results.
@@ -130,7 +131,13 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const unrestricted =
           mcpAllowedToolsFor(entry.server, latestPermissions, allServers) === undefined &&
           entry.toolsetTools === undefined;
-        if (isDirect && unrestricted && (selectedToolsets.length === 0 || !toolsetsFailed) && fetchedTools.length > 0) {
+        if (
+          !preservedServerIds.has(serverId) &&
+          isDirect &&
+          unrestricted &&
+          (selectedToolsets.length === 0 || !toolsetsFailed) &&
+          fetchedTools.length > 0
+        ) {
           const nonDeleteTools = fetchedTools
             .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
             .map((t) => t.name);

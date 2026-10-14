@@ -128,12 +128,15 @@ describe("buildCustomersCsv", () => {
     expect(parsed.data[1]["Customer ID"]).toBe("customer-2");
   });
 
-  it.each(["=SUM(A1:A9)", "+cmd", "-cmd", "@cmd", "\tcmd", "\rcmd"])("neutralizes formula-leading text %j", (alias) => {
-    const csv = buildCustomersCsv([customer({ alias })]);
-    const parsed = Papa.parse<Record<string, string>>(csv, { header: true });
+  it.each(["=SUM(A1:A9)", "+cmd", "-cmd", "@cmd", "\tcmd", "\rcmd", "=SUM(A1:A9)\nsecond line", "+cmd\r\nsecond line"])(
+    "neutralizes formula-leading text %j",
+    (alias) => {
+      const csv = buildCustomersCsv([customer({ alias })]);
+      const parsed = Papa.parse<Record<string, string>>(csv, { header: true });
 
-    expect(parsed.data[0]["Customer Alias"]).toBe(`'${alias}`);
-  });
+      expect(parsed.data[0]["Customer Alias"]).toBe(`'${alias}`);
+    },
+  );
 });
 
 describe("exportCustomersToCsv", () => {

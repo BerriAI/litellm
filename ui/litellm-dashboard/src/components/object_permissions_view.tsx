@@ -7,6 +7,7 @@ import type { InheritedGrant } from "./permissions/inheritedGrants";
 
 interface ObjectPermissionsViewProps {
   objectPermission?: ObjectPermission | null;
+  entityType?: "key" | "customer";
   inheritedMcpServers?: InheritedGrant[];
   inheritedAgents?: InheritedGrant[];
   variant?: "card" | "inline";
@@ -16,6 +17,7 @@ interface ObjectPermissionsViewProps {
 
 export function ObjectPermissionsView({
   objectPermission,
+  entityType,
   inheritedMcpServers = [],
   inheritedAgents = [],
   variant = "card",
@@ -37,6 +39,7 @@ export function ObjectPermissionsView({
       <VectorStorePermissions vectorStores={vectorStores} accessToken={accessToken} />
       <MCPServerPermissions
         mcpServers={mcpServers}
+        entityType={entityType}
         mcpAccessGroups={mcpAccessGroups}
         mcpToolPermissions={mcpToolPermissions}
         mcpToolsets={mcpToolsets}

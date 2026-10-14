@@ -2,7 +2,7 @@
 
 import type { RowSelectionState } from "@tanstack/react-table";
 import { Ban, Contact, Download, Pencil, Search, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import {
@@ -21,6 +21,7 @@ import { toast } from "@/lib/toast";
 
 import { MAX_BULK_CUSTOMERS } from "./bulkCustomerPayload";
 import { BulkEditCustomersModal } from "./BulkEditCustomersModal";
+import { CustomerBlockConfirmation } from "./CustomerBlockConfirmation";
 import { exportCustomersToCsv } from "./customerCsvExport";
 import {
   CUSTOMER_FILTER_FIELDS,
@@ -37,7 +38,7 @@ const TABLE_STATE_OPTIONS = {
   filterColumns: CUSTOMER_FILTER_FIELDS.map((field) => field.id),
 };
 
-const DEFAULT_COLUMN_VISIBILITY = { mcp_access: false };
+const DEFAULT_COLUMN_VISIBILITY = { mcp_access: false, models: false, max_budget: false };
 const FILTER_LABELS = Object.fromEntries(CUSTOMER_FILTER_FIELDS.map((field) => [field.id, field.label]));
 
 type CustomersTableProps = CustomerTableActions & {
@@ -54,7 +55,7 @@ function EmptyCustomers() {
     <div className="flex flex-col items-center gap-2 py-6">
       <Contact className="size-5 text-muted-foreground" />
       <p className="text-sm font-medium">No customers found</p>
-      <p className="text-sm text-muted-foreground">Create a customer to manage end-user limits and access</p>
+      <p className="text-sm text-muted-foreground">Create a customer to manage customer limits and access</p>
     </div>
   );
 }
@@ -70,20 +71,29 @@ function BulkBlockedStateButton({
   disabled: boolean;
   onClick: () => void;
 }) {
-  const button = (
-    <Button variant="outline" size="sm" disabled={disabled || !premiumUser} onClick={onClick}>
+  const descriptionId = useId();
+  const content = (
+    <>
       {blocked ? <Ban /> : <ShieldCheck />}
       {blocked ? "Block selected" : "Unblock selected"}
-    </Button>
+    </>
   );
-  if (premiumUser) return button;
+  if (premiumUser)
+    return (
+      <Button variant="outline" size="sm" disabled={disabled} onClick={onClick}>
+        {content}
+      </Button>
+    );
   return (
     <TooltipProvider delay={300}>
       <Tooltip>
-        <TooltipTrigger render={<span aria-label={`Bulk ${blocked ? "Block" : "Unblock"} requires Enterprise`} />}>
-          {button}
+        <TooltipTrigger
+          aria-describedby={descriptionId}
+          render={<Button variant="outline" size="sm" aria-disabled="true" className="opacity-50" />}
+        >
+          {content}
         </TooltipTrigger>
-        <TooltipContent role="tooltip">
+        <TooltipContent id={descriptionId} role="tooltip">
           This is a LiteLLM Enterprise feature, and requires a valid key to use.
         </TooltipContent>
       </Tooltip>
@@ -112,6 +122,7 @@ export default function CustomersTable({
     onColumnFiltersChange,
   } = useUrlTableState(TABLE_STATE_OPTIONS);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [blockTarget, setBlockTarget] = useState<{ userIds: string[]; blocked: boolean } | null>(null);
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [bulkEditCustomers, setBulkEditCustomers] = useState<EndUser[] | null>(null);
   const isBusy = isBlocking || bulkEditCustomers !== null;
@@ -144,11 +155,24 @@ export default function CustomersTable({
   const handleBulkSetBlocked = async (userIds: string[], blocked: boolean) => {
     const canSetBlocked = canModify && !isBusy && premiumUser;
     if (!userIds.length || !canSetBlocked) return;
-    if (await onBulkSetBlocked(userIds, blocked)) setRowSelection({});
+    if (await onBulkSetBlocked(userIds, blocked)) {
+      setRowSelection({});
+      setBlockTarget(null);
+    }
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <CustomerBlockConfirmation
+        open={blockTarget !== null}
+        count={blockTarget?.userIds.length ?? 0}
+        blocked={blockTarget?.blocked ?? false}
+        isPending={isBlocking}
+        onCancel={() => setBlockTarget(null)}
+        onConfirm={() => {
+          if (blockTarget) void handleBulkSetBlocked(blockTarget.userIds, blockTarget.blocked);
+        }}
+      />
       <DataTable
         fillHeight
         pageSizeOptions={[25, 50, 100]}
@@ -201,10 +225,10 @@ export default function CustomersTable({
                       premiumUser={premiumUser}
                       disabled={isBusy}
                       onClick={() =>
-                        void handleBulkSetBlocked(
-                          selectedCustomers.map((customer) => customer.user_id),
-                          true,
-                        )
+                        setBlockTarget({
+                          userIds: selectedCustomers.map((customer) => customer.user_id),
+                          blocked: true,
+                        })
                       }
                     />
                     <BulkBlockedStateButton
@@ -212,10 +236,10 @@ export default function CustomersTable({
                       premiumUser={premiumUser}
                       disabled={isBusy}
                       onClick={() =>
-                        void handleBulkSetBlocked(
-                          selectedCustomers.map((customer) => customer.user_id),
-                          false,
-                        )
+                        setBlockTarget({
+                          userIds: selectedCustomers.map((customer) => customer.user_id),
+                          blocked: false,
+                        })
                       }
                     />
                     <Button variant="ghost" size="sm" disabled={isBusy} onClick={() => setRowSelection({})}>
@@ -241,7 +265,7 @@ export default function CustomersTable({
                         const count = exportCustomersToCsv(
                           table.getPrePaginationRowModel().rows.map((row) => row.original),
                         );
-                        toast.success(`Exported ${count} customers`);
+                        toast.success(`Exported ${count} customer${count === 1 ? "" : "s"}`);
                       } catch (error) {
                         toast.fromError(error);
                       }

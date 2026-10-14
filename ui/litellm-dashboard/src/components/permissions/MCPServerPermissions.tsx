@@ -10,6 +10,7 @@ import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
+  entityType?: "key" | "customer";
   mcpAccessGroups?: string[];
   mcpToolPermissions?: Record<string, string[]>;
   mcpToolsets?: string[];
@@ -19,6 +20,7 @@ interface MCPServerPermissionsProps {
 
 export function MCPServerPermissions({
   mcpServers,
+  entityType = "key",
   mcpAccessGroups = [],
   mcpToolPermissions = {},
   mcpToolsets = [],
@@ -54,10 +56,12 @@ export function MCPServerPermissions({
     });
   };
 
-  const directServerIds = mcpServers.filter(
+  const serverIdentifiers =
+    entityType === "customer" ? [...new Set([...mcpServers, ...Object.keys(mcpToolPermissions)])] : mcpServers;
+  const directServerIds = serverIdentifiers.filter(
     (server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL,
   );
-  const inheritedOnlyServers = inheritedMcpServers.filter((grant) => !mcpServers.includes(grant.id));
+  const inheritedOnlyServers = inheritedMcpServers.filter((grant) => !directServerIds.includes(grant.id));
   const serverIdCount = directServerIds.length + inheritedOnlyServers.length;
 
   // Fetch MCP server details when component mounts
@@ -118,7 +122,8 @@ export function MCPServerPermissions({
   };
 
   const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
-  const grantsAllProxyMcpServers = mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
+  const hasAllProxySentinel = serverIdentifiers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
+  const grantsAllProxyMcpServers = entityType === "key" && hasAllProxySentinel;
 
   const mergedItems = [
     ...directServerIds.map((server) => ({ type: "server", value: server, tooltip: `Full ID: ${server}` })),
@@ -144,7 +149,11 @@ export function MCPServerPermissions({
       {blocksAllMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20">
           <ServerIcon className="h-4 w-4 text-destructive" />
-          <p className="text-destructive text-sm">No MCP servers. Access to all MCP servers is blocked</p>
+          <p className="text-destructive text-sm">
+            {entityType === "key"
+              ? "No MCP servers. This key is blocked from all MCP servers, including its team's servers"
+              : "No MCP servers. This customer is blocked from all MCP servers"}
+          </p>
         </div>
       ) : grantsAllProxyMcpServers ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-info/10 border border-info/20">
@@ -283,7 +292,11 @@ export function MCPServerPermissions({
       ) : (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
           <ServerIcon className="h-4 w-4 text-muted-foreground" />
-          <p className="text-muted-foreground text-sm">No MCP servers, access groups, or toolsets configured</p>
+          <p className="text-muted-foreground text-sm">
+            {entityType === "customer" && hasAllProxySentinel
+              ? "No MCP access"
+              : "No MCP servers, access groups, or toolsets configured"}
+          </p>
         </div>
       )}
     </div>

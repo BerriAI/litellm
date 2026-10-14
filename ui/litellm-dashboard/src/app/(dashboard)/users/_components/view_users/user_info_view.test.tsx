@@ -62,6 +62,7 @@ vi.mock("@/components/networking", () => {
     teamMemberAddCall: (...args: any[]) => mockTeamMemberAddCall(...args),
     teamMemberDeleteCall: (...args: any[]) => mockTeamMemberDeleteCall(...args),
     getProxyBaseUrl: () => "https://litellm.test",
+    getUiPageUrl: (url: string) => url,
     fetchMCPServers: (...args: unknown[]) => mockFetchMCPServers(...args),
     fetchMCPToolsets: vi.fn().mockResolvedValue([]),
     listMCPTools: (...args: unknown[]) => mockListMCPTools(...args),
@@ -536,22 +537,30 @@ describe("extractMcpEntitlement", () => {
     expect(result?.mcp_tool_permissions).toEqual({ "srv-deleted": ["read"] });
   });
 
-  it.each([
-    ["selected server first", ["srv-shared-a", "srv-shared-b"]],
-    ["deselected server first", ["srv-shared-b", "srv-shared-a"]],
-  ])("keeps a shared-name allowlist while any server it names is granted (%s)", (_label, order) => {
-    // Names are not unique and the gateway unions a name key into EVERY server answering to it, so
-    // this one entry restricts both. Resolving to the first match would drop it whenever the catalog
-    // happened to return the deselected server first, stripping the restriction from the one still
-    // granted, which is a widening that reproduces on one deployment and not another.
-    const catalog = [
-      { server_id: "srv-shared-a", server_name: "shared", alias: null },
-      { server_id: "srv-shared-b", server_name: "shared", alias: null },
-    ] as any;
-    const ordered = order.map((id) => catalog.find((server: any) => server.server_id === id));
+  it.each([false, true])("limits a shared alias to retained servers regardless of catalog order (%s)", (reverse) => {
+    const catalog: MCPServer[] = [
+      { ...auditFields, server_id: "srv-shared-a", server_name: "kept", alias: "shared" },
+      { ...auditFields, server_id: "srv-shared-b", server_name: "removed", alias: "shared" },
+    ];
+    const ordered = reverse ? catalog.toReversed() : catalog;
+    const permissions = {
+      "srv-shared-a": ["read"],
+      kept: ["write"],
+      shared: ["list"],
+      "srv-shared-b": ["delete"],
+      removed: ["admin"],
+    };
+    const result = extractMcpEntitlement(form({ servers: ["srv-shared-a"] }, permissions), ordered);
+    expect(result?.mcp_tool_permissions).toEqual({ "srv-shared-a": ["read", "write", "list"] });
+  });
 
-    const result = extractMcpEntitlement(form({ servers: ["srv-shared-a"] }, { shared: ["read"] }), ordered as any);
-    expect(result?.mcp_tool_permissions).toEqual({ shared: ["read"] });
+  it("keeps shared-alias restrictions on servers retained through access groups", () => {
+    const catalog: MCPServer[] = [
+      { ...auditFields, server_id: "kept", alias: "shared", mcp_access_groups: ["retained"] },
+      { ...auditFields, server_id: "removed", alias: "shared" },
+    ];
+    const result = extractMcpEntitlement(form({ accessGroups: ["retained"] }, { shared: ["*"] }), catalog);
+    expect(result?.mcp_tool_permissions).toEqual({ kept: ["*"] });
   });
 
   it("drops a shared-name allowlist once no server it names is granted", () => {

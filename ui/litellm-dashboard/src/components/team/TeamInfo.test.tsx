@@ -2025,13 +2025,14 @@ describe("TeamInfoView", () => {
       expect(toast.error).not.toHaveBeenCalled();
     });
 
-    it("prefills the RPM limit and budget a team admin may edit with the team's stored values", async () => {
+    it("prefills the RPM limit and budgets a team admin may edit with the team's stored values", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
           rpm_limit: 50,
           max_budget: 20,
-          caller_edit_access: { kind: "team_admin", editable_fields: ["rpm_limit", "max_budget"] },
+          soft_budget: 15,
+          caller_edit_access: { kind: "team_admin", editable_fields: ["rpm_limit", "max_budget", "soft_budget"] },
         }),
       );
 
@@ -2042,6 +2043,36 @@ describe("TeamInfoView", () => {
 
       expect(await screen.findByLabelText("Requests per minute Limit (RPM)")).toHaveValue(50);
       expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(20);
+      expect(screen.getByLabelText("Soft Budget (USD)")).toHaveValue(15);
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+    });
+
+    it("prefills the member defaults a team admin may edit from the team's member budget", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          team_member_budget_table: { max_budget: 10, budget_duration: "30d", tpm_limit: 100, rpm_limit: 5 },
+          caller_edit_access: {
+            kind: "team_admin",
+            editable_fields: [
+              "team_member_budget",
+              "team_member_budget_duration",
+              "team_member_tpm_limit",
+              "team_member_rpm_limit",
+            ],
+          },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Member Default Budget (USD)")).toHaveValue(10);
+      expect(screen.getByLabelText("Member Default Budget Duration")).toHaveTextContent("monthly");
+      expect(screen.getByLabelText("Member Default TPM Limit")).toHaveValue(100);
+      expect(screen.getByLabelText("Member Default RPM Limit")).toHaveValue(5);
       expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
     });
 

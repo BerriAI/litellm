@@ -1,6 +1,5 @@
 import { Badge } from "@/components/ui/badge";
 import { CircleAlert, CircleCheck, TriangleAlert } from "lucide-react";
-import { issueLabel } from "./lib/issueLabel";
 import { errorCount as countErrors, type PayloadValidation } from "./lib/validatePayload";
 
 export function ValidationStatus({ validation }: { validation: PayloadValidation<unknown> }) {
@@ -44,7 +43,7 @@ export function IssueList({ id, validation }: { id: string; validation: PayloadV
           ) : (
             <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
           )}
-          <span className="shrink-0 font-medium">{issueLabel(issue.path)}</span>
+          <span className="shrink-0 font-medium">{issue.label}</span>
           <span>{issue.message}</span>
         </li>
       ))}
