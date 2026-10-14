@@ -2748,7 +2748,7 @@ async def make_call(
     model: str,
     messages: list,
     logging_obj,
-    timeout: float | httpx.Timeout | None,
+    timeout: float | httpx.Timeout | None = None,
 ):
     if gemini_client is not None:
         client = gemini_client
@@ -2803,7 +2803,7 @@ def make_sync_call(
     model: str,
     messages: list,
     logging_obj,
-    timeout: float | httpx.Timeout | None,
+    timeout: float | httpx.Timeout | None = None,
 ):
     if gemini_client is not None:
         client = gemini_client

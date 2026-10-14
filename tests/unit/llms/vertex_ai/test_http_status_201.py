@@ -54,7 +54,6 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
             model=self.mock_model,
             messages=self.messages,
             logging_obj=self.mock_logging_obj,
-            timeout=None,
         )
 
         # Assert that the post method was called
@@ -86,7 +85,6 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
             model=self.mock_model,
             messages=self.messages,
             logging_obj=self.mock_logging_obj,
-            timeout=None,
         )
 
         # Assert that no error was raised for status code 201
@@ -116,7 +114,6 @@ class TestVertexAIHTTPStatus201(unittest.TestCase):
                 model=self.mock_model,
                 messages=self.messages,
                 logging_obj=self.mock_logging_obj,
-                timeout=None,
             )
 
         # Assert that the error has the correct status code
