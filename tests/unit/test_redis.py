@@ -1368,12 +1368,10 @@ def test_sync_sentinel_uses_sentinel_password_and_master_password(mock_sentinel_
     assert "socket_timeout" not in sentinel_call_kwargs
     assert sentinel_call_kwargs["sentinel_kwargs"] == {
         "password": "sentinel-secret",
-        "username": "redis-user",
         "ssl": True,
         "ssl_cert_reqs": "required",
         "ssl_check_hostname": True,
         "ssl_ca_certs": "/tmp/test-ca.pem",
-        "max_connections": 17,
         "socket_timeout": 5,
     }
     assert "service_name" not in sentinel_call_kwargs["sentinel_kwargs"]
@@ -1447,12 +1445,10 @@ def test_async_sentinel_uses_sentinel_password_and_master_password(
     assert "socket_timeout" not in sentinel_call_kwargs
     assert sentinel_call_kwargs["sentinel_kwargs"] == {
         "password": "sentinel-secret",
-        "username": "redis-user",
         "ssl": True,
         "ssl_cert_reqs": "required",
         "ssl_check_hostname": True,
         "ssl_ca_certs": "/tmp/test-ca.pem",
-        "max_connections": 17,
         "socket_timeout": 5,
     }
     assert "service_name" not in sentinel_call_kwargs["sentinel_kwargs"]
@@ -1469,6 +1465,35 @@ def test_async_sentinel_uses_sentinel_password_and_master_password(
         max_connections=17,
         socket_timeout=5,
     )
+
+
+@pytest.mark.parametrize("build_client", [get_redis_client, get_redis_async_client], ids=["sync", "async"])
+def test_sentinel_keeps_the_data_node_target_db_and_credentials_off_the_monitors(
+    clean_redis_environment, monkeypatch, build_client
+):
+    """The Router only turns Redis on when a host and port are set, so a Sentinel-backed Router always passes
+    them. They, the data db and the data credentials belong on the master connection, never on the Sentinels."""
+    monkeypatch.setenv("REDIS_SENTINEL_NODES", json.dumps([["sentinel-1", 26379], ["sentinel-2", 26380]]))
+    monkeypatch.setenv("REDIS_SERVICE_NAME", "mymaster")
+    monkeypatch.setenv("REDIS_SENTINEL_PASSWORD", "sentinel-secret")
+
+    client = build_client(host="redis-master.internal", port="6379", db=3, username="data-user", password="data-secret")
+
+    pool = client.connection_pool
+    monitors = tuple(monitor.connection_pool.connection_kwargs for monitor in pool.sentinel_manager.sentinels)
+    assert [(monitor["host"], monitor["port"]) for monitor in monitors] == [
+        ("sentinel-1", 26379),
+        ("sentinel-2", 26380),
+    ]
+    assert all(monitor["password"] == "sentinel-secret" for monitor in monitors)
+    assert not any(monitor.get("db") for monitor in monitors)
+    assert not any(monitor.get("username") for monitor in monitors)
+    assert pool.service_name == "mymaster"
+    assert pool.connection_kwargs["db"] == 3
+    assert pool.connection_kwargs["username"] == "data-user"
+    assert pool.connection_kwargs["password"] == "data-secret"
+    assert "host" not in pool.connection_kwargs
+    assert "port" not in pool.connection_kwargs
 
 
 @patch("litellm._redis.init_redis_cluster")
