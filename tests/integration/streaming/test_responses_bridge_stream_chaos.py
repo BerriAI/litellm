@@ -41,7 +41,6 @@ pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _MODEL: Final = "bridged-stream-chaos"
 _MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
-_STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _SENTINEL_PREFIX: Final = "litellm.MidStreamFallbackError: "
 _RATE_LIMIT_PREFIX: Final = "litellm.RateLimitError: "
 _HEADERS: Final[Mapping[str, str]] = MappingProxyType({"anthropic-version": "2023-06-01"})
@@ -305,12 +304,8 @@ def _assert_each_lands_once(served: tuple[_Served, ...]) -> None:
         assert by_call[item.call_id]["status"] == expected, (item.call_id, rows)
 
 
-def _worker_pids(log: Path, count: int) -> tuple[int, ...]:
-    return eventually(
-        lambda: tuple(int(found.group(1)) for found in _STARTED_WORKER.finditer(log.read_text())),
-        lambda pids: len(pids) == count,
-        seconds=30,
-    )
+def _worker_pids(proxy: OwnedProxy, count: int) -> frozenset[int]:
+    return eventually(proxy.worker_pids, lambda pids: len(pids) == count, seconds=30)
 
 
 def _open_upstream_connections(pid: int, upstream: str) -> int:
@@ -362,7 +357,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_the_bridged
     calls: Final = _calls(20, kinds)
     held: Final = _Held(threading.Event(), SimpleQueue())
     with wire_server(held.respond, port=rig.port) as wire:
-        workers: Final = _worker_pids(rig.proxy.log, 2)
+        workers: Final = _worker_pids(rig.proxy, 2)
         burst: Final = await _held_burst(rig.gateway, calls, held)
         held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
         assert sum(held_by.values()) == 20, held_by
