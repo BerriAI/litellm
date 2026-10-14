@@ -999,6 +999,39 @@ def test_bedrock_chat_invoke_preserves_display_when_translating_legacy_thinking(
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
 
 
+BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
+
+
+@pytest.mark.parametrize(
+    "requested_thinking",
+    (
+        {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING},
+        {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING},
+    ),
+    ids=("adaptive", "legacy"),
+)
+def test_bedrock_chat_invoke_keeps_block_binding_with_display_updates(
+    local_model_cost_map, local_beta_headers_config, requested_thinking
+) -> None:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-opus-5"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 512, "thinking": requested_thinking},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}
+
+
 FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
 EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
 

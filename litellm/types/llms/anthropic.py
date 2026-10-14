@@ -732,10 +732,15 @@ ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai
 }
 
 
+class AnthropicThinkingBlockBinding(TypedDict, total=False):
+    prefix_mismatch_behavior: ReadOnly[Literal["error", "drop_block"]]
+
+
 class AnthropicThinkingParam(TypedDict, total=False):
     type: ReadOnly[Literal["enabled", "adaptive", "disabled"]]
     budget_tokens: int
     display: ReadOnly[Literal["summarized", "omitted", "updates"]]
+    block_binding: ReadOnly[AnthropicThinkingBlockBinding]
 
 
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):

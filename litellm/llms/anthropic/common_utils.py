@@ -943,10 +943,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
         existing_output_config: Final = optional_params.get("output_config")
         display: Final = thinking.get("display")
-        if display in ("summarized", "omitted"):
-            optional_params["thinking"] = {"type": "adaptive", "display": display}
-        else:
-            optional_params["thinking"] = {"type": "adaptive"}
+        supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
+        thinking_fields: Final = cast(Mapping[str, object], thinking)  # cast-ok: narrowed by isinstance
+        carried_thinking_keys: Final = {
+            key: value for key, value in thinking_fields.items() if key not in ("type", "budget_tokens", "display")
+        }
+        optional_params["thinking"] = {**carried_thinking_keys, "type": "adaptive", **supported_display}
         optional_params["output_config"] = {
             "effort": effort,
             **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),

@@ -49,7 +49,6 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
-    AnthropicThinkingParam,
 )
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
@@ -349,18 +348,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not isinstance(output_config, dict):
             output_config = {}
         output_config.setdefault("effort", self._effort_from_thinking_budget(budget_tokens))
-        thinking: Final = anthropic_messages_request.get("thinking")
-        display: Final = thinking.get("display") if isinstance(thinking, dict) else None
+        raw: Final = anthropic_messages_request.get("thinking")
+        fields: Final = cast(Mapping[str, object], raw) if isinstance(raw, dict) else {}  # cast-ok: isinstance narrowed
+        carried: Final = {key: value for key, value in fields.items() if key not in ("type", "budget_tokens")}
         anthropic_messages_request["output_config"] = output_config
-        if display is None:
-            adaptive_thinking: Final[AnthropicThinkingParam] = {"type": "adaptive"}
-            anthropic_messages_request["thinking"] = adaptive_thinking
-        else:
-            adaptive_thinking_with_display: Final[AnthropicThinkingParam] = {
-                "type": "adaptive",
-                "display": display,
-            }
-            anthropic_messages_request["thinking"] = adaptive_thinking_with_display
+        anthropic_messages_request["thinking"] = {**carried, "type": "adaptive"}
         verbose_logger.debug(
             "Bedrock clear_thinking_20251015: injected adaptive thinking with effort=%s for model=%s",
             output_config.get("effort"),
@@ -691,8 +683,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             and isinstance(translated_thinking, dict)
             and translated_thinking.get("type") == "adaptive"
         ):
-            thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
-            anthropic_messages_request["thinking"] = thinking_with_display
+            anthropic_messages_request["thinking"] = {**translated_thinking, "display": "updates"}
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
