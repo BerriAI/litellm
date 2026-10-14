@@ -6609,25 +6609,19 @@ async def test_init_sso_settings_in_db_no_settings():
     """
     Test that _init_sso_settings_in_db handles the case when no SSO settings exist in database.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-
-    # Mock prisma client to return None (no SSO settings)
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    environment_before: Final = dict(os.environ)
 
-    # Mock _decrypt_and_set_db_env_variables
-    with patch.object(proxy_config, "decrypt_and_set_db_env_variables") as mock_decrypt_and_set:
-        await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
+    await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
 
-        # Verify find_unique was called
-        mock_prisma_client.db.litellm_ssoconfig.find_unique.assert_awaited_once_with(where={"id": "sso_config"})
-
-        # Verify _decrypt_and_set_db_env_variables was NOT called when no settings exist
-        mock_decrypt_and_set.assert_not_called()
+    mock_prisma_client.db.litellm_ssoconfig.find_unique.assert_awaited_once_with(where={"id": "sso_config"})
+    assert dict(os.environ) == environment_before
 
 
 @pytest.mark.asyncio

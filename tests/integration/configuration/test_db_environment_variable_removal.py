@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import socket
+import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -11,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import anthropic
 import httpx
@@ -20,10 +23,11 @@ import pytest
 import yaml
 from anthropic.types import Message, RawContentBlockDeltaEvent, TextBlock, TextDelta
 from integration._support.anthropic_sse import delta_text, message_json, message_stream, parse_sse, stream_reply
+from integration._support.async_server import LoopbackServer, close_writer
 from integration._support.budget import readiness_seconds
 from integration._support.client import Gateway, eventually, gateway_from_environment, held, string_value
 from integration._support.database import scratch_database, write_rows
-from integration._support.database_relay import database_relay
+from integration._support.database_relay import TriggerScanner, database_relay
 from integration._support.environment_probe import PROBE_HOOK, PROBE_ROUTE
 from integration._support.process import (
     DB_PUSH,
@@ -65,6 +69,27 @@ LONG_VALUE: Final = "v" * 5120
 NULLED_KEY: Final = "LIT9489_NULLED"
 SYNC_MARKER: Final = "LIT9489_SYNC_MARKER"
 CLI_MARKER: Final = "LIT9489_CLI_MARKER"
+VALID_KEY: Final = "LIT9489_VALID"
+EQUALS_KEY: Final = "LIT9489=EQUALS"
+NUL_KEY: Final = "LIT9489_NUL"
+INVALID_KEYS: Final = ("", EQUALS_KEY, NUL_KEY)
+API_VERSION_KEY: Final = "AZURE_API_VERSION"
+CLI_API_VERSION: Final = "2026-10-13-lit9489-cli"
+SSO_ROW_ID: Final = b"sso_config"
+SLOW_SSO_READ_SECONDS: Final = 3.0
+SAMPLERS: Final = 4
+AUTHORIZE_URL: Final = "https://idp.lit9489.example/authorize"
+GENERIC_SSO_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "generic_client_secret": "lit9489-generic-secret",
+        "generic_authorization_endpoint": AUTHORIZE_URL,
+        "generic_token_endpoint": "https://idp.lit9489.example/token",
+        "generic_userinfo_endpoint": "https://idp.lit9489.example/userinfo",
+    }
+)
+CLEARED_SSO_FIELDS: Final[Mapping[str, None]] = MappingProxyType(
+    {"generic_client_id": None, **{field: None for field in GENERIC_SSO_FIELDS}}
+)
 UNTOUCHED: Final[Mapping[str, str | None]] = MappingProxyType(
     {YAML_LITERAL: YAML_LITERAL_VALUE, YAML_REFERENCE: YAML_SOURCE_VALUE, PROCESS_ONLY: PROCESS_ONLY_VALUE}
 )
@@ -105,7 +130,7 @@ def _anthropic_message(request: Request) -> Reply:
     return Reply(body=message_json(message_id, UPSTREAM_MODEL, REPLY_TEXT))
 
 
-def _config(directory: Path, general_settings: Mapping[str, str] = MappingProxyType({})) -> Path:
+def _config(directory: Path, general_settings: Mapping[str, JsonValue] = MappingProxyType({})) -> Path:
     path: Final = directory / f"db_env_removal_{uuid.uuid4().hex}.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -138,6 +163,10 @@ def _process_environment(provider: Wire, database_url: str | None) -> Mapping[st
     )
 
 
+def _without_the_worker_redis(names: tuple[str, ...]) -> tuple[str, ...]:
+    return (*names, *(name for name in os.environ if name.startswith("REDIS_")))
+
+
 def _pod(
     gateway: Gateway,
     directory: Path,
@@ -145,7 +174,7 @@ def _pod(
     database_url: str | None,
     *,
     workers: int = WORKERS,
-    general_settings: Mapping[str, str] = MappingProxyType({}),
+    general_settings: Mapping[str, JsonValue] = MappingProxyType({}),
     remove_environment: tuple[str, ...] = SCRATCH_ONLY,
 ) -> AbstractContextManager[OwnedProxy]:
     directory.mkdir(parents=True, exist_ok=True)
@@ -154,9 +183,10 @@ def _pod(
         directory,
         _process_environment(provider, database_url),
         config=_config(directory, general_settings),
-        remove_environment=remove_environment,
+        remove_environment=_without_the_worker_redis(remove_environment),
         workers=workers,
         database_setup=DB_PUSH,
+        extra_arguments=("--api_version", CLI_API_VERSION),
         healthcheck=WorkerHealthcheck.LENIENT,
     )
 
@@ -172,6 +202,78 @@ def pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pods]:
         _pod(gateway, directory / "reader", provider, database_url) as reader,
     ):
         yield Pods(writer, reader, provider, database_url)
+
+
+class SlowSsoReads:
+    def __init__(self, database_url: str) -> None:
+        parts: Final = urlsplit(database_url)
+        assert parts.hostname is not None and parts.port is not None, "The scratch database URL names no host"
+        self._upstream_host: Final = parts.hostname
+        self._upstream_port: Final = parts.port
+        with socket.socket() as reserve:
+            reserve.bind(("127.0.0.1", 0))
+            self.port: Final[int] = reserve.getsockname()[1]
+        self.url: Final = urlunsplit(parts._replace(netloc=f"{parts.username}:{parts.password}@127.0.0.1:{self.port}"))
+        self._server: Final = LoopbackServer(self.port, self._serve)
+        self.armed: Final = threading.Event()
+        self.slowed: Final = threading.Event()
+
+    async def _forward(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, inspect: bool) -> None:
+        scanner: Final = TriggerScanner(SSO_ROW_ID)
+        try:
+            while chunk := await reader.read(65536):
+                if inspect and scanner.feed(chunk) and self.armed.is_set():
+                    self.slowed.set()
+                    await asyncio.sleep(SLOW_SSO_READ_SECONDS)
+                writer.write(chunk)
+                await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            return
+        finally:
+            await close_writer(writer)
+
+    async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
+        server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
+        await asyncio.gather(
+            self._forward(client_reader, server_writer, True),
+            self._forward(server_reader, client_writer, False),
+        )
+
+    def __enter__(self) -> SlowSsoReads:
+        self._server.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self._server.stop()
+
+
+@dataclass(frozen=True, slots=True)
+class SsoPods:
+    writer: OwnedProxy
+    reader: OwnedProxy
+    excluded: OwnedProxy
+    slow_reads: SlowSsoReads
+
+
+@pytest.fixture(scope="module")
+def sso_pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SsoPods]:
+    directory: Final = tmp_path_factory.mktemp("db-env-removal-sso")
+    with (
+        gateway_from_environment() as gateway,
+        wire_server(_anthropic_message) as provider,
+        scratch_database() as database_url,
+        SlowSsoReads(_plaintext(database_url)) as slow_reads,
+        _pod(gateway, directory / "writer", provider, database_url) as writer,
+        _pod(gateway, directory / "reader", provider, slow_reads.url) as reader,
+        _pod(
+            gateway,
+            directory / "excluded",
+            provider,
+            database_url,
+            general_settings={"supported_db_objects": ["models"]},
+        ) as excluded,
+    ):
+        yield SsoPods(writer, reader, excluded, slow_reads)
 
 
 def _worker_environment(proxy: OwnedProxy, names: tuple[str, ...]) -> WorkerEnvironment:
@@ -217,7 +319,7 @@ def _merge_into_row(database_url: str, values: Mapping[str, JsonValue]) -> None:
 def _remove_from_row(database_url: str, keys: tuple[str, ...]) -> None:
     write_rows(
         'UPDATE "LiteLLM_Config" SET param_value = param_value - %s::text[] WHERE param_name = %s',
-        ("{" + ",".join(keys) + "}", "environment_variables"),
+        ("{" + ",".join(f'"{key}"' for key in keys) + "}", "environment_variables"),
         database_url=database_url,
     )
 
@@ -408,6 +510,42 @@ def _null_in_the_environment_row(pods: Pods) -> str:
     _settled(pods.reader, {NULLED_KEY: "set-before-the-null"})
     _set_through_the_api(pods.writer, {NULLED_KEY: None})
     return NULLED_KEY
+
+
+def _save_sso(proxy: OwnedProxy, fields: Mapping[str, JsonValue]) -> None:
+    response: Final = proxy.gateway.request("PATCH", "/update/sso_settings", dict(fields))
+    assert response.status_code == 200, response.text
+
+
+def _legacy_sso_in_the_environment_row(pods: SsoPods) -> str:
+    _save_sso(pods.writer, CLEARED_SSO_FIELDS)
+    client_id: Final = f"lit9489-legacy-{uuid.uuid4().hex}"
+    _set_through_the_api(
+        pods.writer,
+        {
+            "GENERIC_CLIENT_ID": client_id,
+            **{field.upper(): value for field, value in GENERIC_SSO_FIELDS.items()},
+        },
+    )
+    return client_id
+
+
+def _sso_client_id(proxy: OwnedProxy) -> str | None:
+    response: Final = proxy.gateway.request("GET", "/sso/key/generate", headers=CLOSE)
+    if not response.is_redirect or not (location := response.headers["location"]).startswith(AUTHORIZE_URL):
+        return None
+    return parse_qs(urlsplit(location).query)["client_id"][0]
+
+
+@dataclass(frozen=True, slots=True)
+class LoginSample:
+    sso_client_id: str | None
+    worker: WorkerEnvironment
+
+
+def _login_samples(proxy: OwnedProxy, stop: threading.Event) -> Iterator[LoginSample]:
+    while not stop.is_set():
+        yield LoginSample(_sso_client_id(proxy), _worker_environment(proxy, ("GENERIC_CLIENT_ID",)))
 
 
 NULL_WRITERS: Final[Mapping[str, Callable[[Pods], str]]] = MappingProxyType(
@@ -635,3 +773,79 @@ def test_single_worker_keeps_the_database_url_the_cli_set_from_the_config(tmp_pa
         assert keeps_the_cli_url, "DATABASE_URL no longer holds the value proxy_cli set"
         login: Final = proxy.gateway.request("POST", "/v2/login", {"username": "admin", "password": proxy.gateway.key})
         assert login.status_code == 200, login.text
+
+
+def test_invalid_entries_next_to_valid_ones_keep_the_sync_and_the_other_keys_working(pods: Pods) -> None:
+    database_key: Final = "sk-ant-db-next-to-invalid-entries"
+    _set_through_the_api(pods.writer, {NUL_KEY: "nul\u0000value"})
+    _merge_into_row(
+        pods.database_url,
+        {"": "empty-name", EQUALS_KEY: "equals-in-the-name", "ANTHROPIC_API_KEY": database_key, VALID_KEY: "valid"},
+    )
+
+    _settled_on_both(pods, {"ANTHROPIC_API_KEY": database_key, VALID_KEY: "valid", NUL_KEY: None})
+    assert _key_the_provider_received(pods) == database_key
+
+    _remove_from_row(pods.database_url, ("ANTHROPIC_API_KEY", VALID_KEY))
+
+    _settled_on_both(pods, {"ANTHROPIC_API_KEY": PROCESS_KEY, VALID_KEY: None, NUL_KEY: None})
+    assert _key_the_provider_received(pods) == PROCESS_KEY
+    log: Final = pods.reader.log.read_text(errors="replace")
+    _remove_from_row(pods.database_url, INVALID_KEYS)
+    assert [key for key in INVALID_KEYS if f"Error setting env variable: {key} - " not in log] == []
+
+
+def test_api_version_the_cli_set_comes_back_after_removal(pods: Pods) -> None:
+    _settled_on_both(pods, {API_VERSION_KEY: CLI_API_VERSION})
+
+    _set_through_the_api(pods.writer, {API_VERSION_KEY: "2026-10-13-lit9489-db"})
+    _settled_on_both(pods, {API_VERSION_KEY: "2026-10-13-lit9489-db"})
+
+    _remove_from_row(pods.database_url, (API_VERSION_KEY,))
+
+    _settled_on_both(pods, {API_VERSION_KEY: CLI_API_VERSION})
+
+
+@pytest.mark.timeout(3 * readiness_seconds(WORKERS) + 6 * graceful_stop_seconds() + 6 * CONVERGE_SECONDS)
+def test_sso_save_on_one_pod_keeps_sso_login_on_the_other_pod_without_a_password_page(sso_pods: SsoPods) -> None:
+    legacy_id: Final = _legacy_sso_in_the_environment_row(sso_pods)
+    _settled(sso_pods.reader, {"GENERIC_CLIENT_ID": legacy_id})
+    eventually(lambda: _sso_client_id(sso_pods.reader), lambda client_id: client_id == legacy_id)
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+    stop: Final = threading.Event()
+
+    sso_pods.slow_reads.armed.set()
+    with ThreadPoolExecutor(max_workers=SAMPLERS) as pool:
+        sampling: Final = tuple(
+            pool.submit(lambda: tuple(_login_samples(sso_pods.reader, stop))) for _ in range(SAMPLERS)
+        )
+        try:
+            _save_sso(sso_pods.writer, {"generic_client_id": saved_id, **GENERIC_SSO_FIELDS})
+            _settled(sso_pods.reader, {"GENERIC_CLIENT_ID": saved_id})
+        finally:
+            stop.set()
+            sso_pods.slow_reads.armed.clear()
+        samples: Final = tuple(sample for future in sampling for sample in future.result())
+
+    assert sso_pods.slow_reads.slowed.is_set(), "No SSO settings read went through the slow relay"
+    assert _sso_client_id(sso_pods.reader) == saved_id
+    password_pages: Final = tuple(sample for sample in samples if sample.sso_client_id not in (legacy_id, saved_id))
+    unset: Final = tuple(
+        sample.worker.pid for sample in samples if sample.worker.environment["GENERIC_CLIENT_ID"] is None
+    )
+    assert (len(password_pages), len(unset)) == (0, 0), (len(samples), password_pages[:3], sorted(set(unset)))
+
+
+@pytest.mark.timeout(3 * readiness_seconds(WORKERS) + 6 * graceful_stop_seconds() + 6 * CONVERGE_SECONDS)
+def test_sso_save_reaches_a_pod_that_leaves_sso_settings_out(sso_pods: SsoPods) -> None:
+    legacy_id: Final = _legacy_sso_in_the_environment_row(sso_pods)
+    _settled(sso_pods.excluded, {"GENERIC_CLIENT_ID": legacy_id})
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+
+    _save_sso(sso_pods.writer, {"generic_client_id": saved_id, **GENERIC_SSO_FIELDS})
+
+    _settled(
+        sso_pods.excluded,
+        {"GENERIC_CLIENT_ID": saved_id, **{field.upper(): value for field, value in GENERIC_SSO_FIELDS.items()}},
+    )
+    assert _sso_client_id(sso_pods.excluded) == saved_id

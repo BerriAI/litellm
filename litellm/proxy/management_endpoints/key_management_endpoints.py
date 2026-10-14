@@ -5524,7 +5524,7 @@ async def rotate_master_key(
 
         if environment_variables_dict:
             decrypted_env_vars: Final = proxy_config.decrypt_and_set_db_env_variables(
-                environment_variables=dict[str, str](environment_variables_dict)
+                environment_variables=dict[str, str](environment_variables_dict), return_original_value=True
             )
             encrypted_env_vars: Final = proxy_config.encrypt_env_variables(
                 environment_variables=decrypted_env_vars,

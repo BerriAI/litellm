@@ -2120,6 +2120,10 @@ class _SSOConfigRow(Protocol):
     sso_settings: MutableMapping[str, object]
 
 
+_SSO_SETTINGS_KEPT_OUT_OF_ENVIRONMENT: Final = frozenset({"role_mappings", "team_mappings", "ui_access_mode"})
+_SSO_ENVIRONMENT_VARIABLES: Final = frozenset(SSO_FIELD_ENV_VARS.values())
+
+
 class _InvitationLinkRow(Protocol):
     user_id: str
     expires_at: datetime
@@ -5587,6 +5591,7 @@ class ProxyConfig:
         self._warned_db_mcp_stdio_flag_ignored: bool = False
         self._environment_before_db: Mapping[str, str] = MappingProxyType(dict(os.environ))
         self._db_environment_keys: frozenset[str] = frozenset()
+        self._sso_environment_keys: frozenset[str] = frozenset()
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -7857,7 +7862,7 @@ class ProxyConfig:
             **decrypted,
             **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
         }
-        self._restore_environment_without_db(self._db_environment_keys - applied.keys())
+        self._restore_environment_without_db(self._db_environment_keys - applied.keys() - _SSO_ENVIRONMENT_VARIABLES)
         self._db_environment_keys = frozenset(applied)
         os.environ.update(applied)
         return _as_settings_mapping(applied)
@@ -8303,11 +8308,13 @@ class ProxyConfig:
     async def _reapply_sso_settings_removed_from_db_environment(
         self, prisma_client: PrismaClient, removed_keys: frozenset[str]
     ) -> None:
-        if removed_keys.isdisjoint(SSO_FIELD_ENV_VARS.values()):
+        removed_sso_keys: Final = removed_keys & _SSO_ENVIRONMENT_VARIABLES
+        if not removed_sso_keys:
             return
-        if not self._should_load_db_object(object_type="sso_settings"):
-            return
-        await self._init_sso_settings_in_db(prisma_client=prisma_client)
+        stored_sso_settings: Final = await self._stored_sso_settings(prisma_client)
+        self._restore_environment_without_db(removed_sso_keys)
+        if stored_sso_settings is not None:
+            self._apply_sso_settings(stored_sso_settings)
 
     def _warn_about_shadowed_db_settings(self) -> None:
         shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
@@ -8717,7 +8724,11 @@ class ProxyConfig:
         """
         Initialize SSO settings from database into the router on startup.
         """
+        stored_sso_settings: Final = await self._stored_sso_settings(prisma_client)
+        if stored_sso_settings is not None:
+            self._apply_sso_settings(stored_sso_settings)
 
+    async def _stored_sso_settings(self, prisma_client: PrismaClient) -> Mapping[str, object] | None:
         try:
             sso_settings: Final[_SSOConfigRow | None] = cast(  # cast-ok: prisma Json stub is `str`, runtime is a dict
                 "_SSOConfigRow | None",
@@ -8727,16 +8738,23 @@ class ProxyConfig:
                     reason="init_sso_settings_in_db_lookup_failure",
                 ),
             )
-            if sso_settings is not None:
-                sso_settings.sso_settings.pop("role_mappings", None)
-                sso_settings.sso_settings.pop("team_mappings", None)
-                sso_settings.sso_settings.pop("ui_access_mode", None)
-                uppercase_sso_settings: Final = {key.upper(): value for key, value in sso_settings.sso_settings.items()}
-                self.decrypt_and_set_db_env_variables(environment_variables=uppercase_sso_settings)
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - %s", e
             )
+            return None
+        return {} if sso_settings is None else sso_settings.sso_settings
+
+    def _apply_sso_settings(self, stored_sso_settings: Mapping[str, object]) -> None:
+        sso_environment_variables: Final = {
+            key.upper(): value
+            for key, value in stored_sso_settings.items()
+            if key not in _SSO_SETTINGS_KEPT_OUT_OF_ENVIRONMENT
+        }
+        applied: Final = self.decrypt_and_set_db_env_variables(environment_variables=sso_environment_variables)
+        still_stored: Final = frozenset(key for key, value in sso_environment_variables.items() if value is not None)
+        self._restore_environment_without_db(self._sso_environment_keys - still_stored - self._db_environment_keys)
+        self._sso_environment_keys = frozenset(applied) | (self._sso_environment_keys & still_stored)
 
     async def _init_hashicorp_vault_config_override(self, prisma_client: PrismaClient):
         """

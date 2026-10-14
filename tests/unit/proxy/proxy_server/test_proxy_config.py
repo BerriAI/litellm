@@ -3995,13 +3995,24 @@ def _prisma_with_sso_table(sso_settings: Mapping[str, str | None] | None) -> Mag
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "general_settings",
+    [{}, {"supported_db_objects": ["models"]}],
+    ids=["all-db-objects", "supported-db-objects-without-sso"],
+)
+@pytest.mark.parametrize(
     ("sso_table_client_id", "expected_after_removal"),
     [("sso-table-id", "sso-table-id"), (None, None)],
     ids=["sso-table-sets-it", "no-sso-table-row"],
 )
 async def test_ProxyConfig_sso_key_removed_from_the_env_row_takes_its_sso_table_value(
-    monkeypatch: pytest.MonkeyPatch, sso_table_client_id: str | None, expected_after_removal: str | None
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: Mapping[str, object],
+    sso_table_client_id: str | None,
+    expected_after_removal: str | None,
 ) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", dict(general_settings))
     _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
     prisma_client: Final = _prisma_with_sso_table(
@@ -4017,6 +4028,28 @@ async def test_ProxyConfig_sso_key_removed_from_the_env_row_takes_its_sso_table_
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_sso_key_moved_to_the_sso_table_stays_set_while_the_table_is_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    pc: Final = ProxyConfig()
+
+    async def sso_row_naming_the_client_id_seen_during_the_read(**_: object) -> SimpleNamespace:
+        seen: Final = os.environ.get("GOOGLE_CLIENT_ID")
+        return SimpleNamespace(sso_settings={"google_client_id": encrypt_value_helper(f"table-read-saw-{seen}")})
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=sso_row_naming_the_client_id_seen_during_the_read
+    )
+
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {}, prisma_client)
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "table-read-saw-env-row-id"
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_non_sso_key_removed_from_the_env_row_skips_the_sso_table_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4028,6 +4061,97 @@ async def test_ProxyConfig_non_sso_key_removed_from_the_env_row_skips_the_sso_ta
     await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
 
     prisma_client.db.litellm_ssoconfig.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("startup_client_id", [None, "pod-own-id"], ids=["unset-at-startup", "set-at-startup"])
+@pytest.mark.parametrize(
+    "cleared_sso_table",
+    [{"google_client_id": None}, {}, None],
+    ids=["field-set-to-null", "field-removed", "sso-row-deleted"],
+)
+async def test_ProxyConfig_sso_field_cleared_in_the_sso_table_takes_the_startup_value(
+    monkeypatch: pytest.MonkeyPatch,
+    startup_client_id: str | None,
+    cleared_sso_table: Mapping[str, str | None] | None,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    if startup_client_id is not None:
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", startup_client_id)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    pc: Final = ProxyConfig()
+
+    await pc._init_sso_settings_in_db(_prisma_with_sso_table({"google_client_id": encrypt_value_helper("sso-id")}))
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "sso-id"
+    await pc._init_sso_settings_in_db(_prisma_with_sso_table(cleared_sso_table))
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == startup_client_id
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sso_field_that_stops_decrypting_keeps_its_value_until_cleared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    pc: Final = ProxyConfig()
+    stored_under_old_salt: Final = {"google_client_id": encrypt_value_helper("sso-id")}
+
+    await pc._init_sso_settings_in_db(_prisma_with_sso_table(stored_under_old_salt))
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-rotated-salt")
+    await pc._init_sso_settings_in_db(_prisma_with_sso_table(stored_under_old_salt))
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "sso-id"
+    await pc._init_sso_settings_in_db(_prisma_with_sso_table({"google_client_id": None}))
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") is None
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sso_field_cleared_in_the_sso_table_keeps_the_env_row_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    pc: Final = ProxyConfig()
+
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {})
+    await pc._init_sso_settings_in_db(_prisma_with_sso_table({"google_client_id": encrypt_value_helper("sso-id")}))
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {})
+    await pc._init_sso_settings_in_db(_prisma_with_sso_table({"google_client_id": None}))
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "env-row-id"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sso_table_access_settings_stay_out_of_the_environment(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID", "ROLE_MAPPINGS", "TEAM_MAPPINGS", "UI_ACCESS_MODE")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            sso_settings={
+                "google_client_id": encrypt_value_helper("sso-id"),
+                "role_mappings": {"provider": "google", "group_claim": "groups"},
+                "team_mappings": {"team_ids_jwt_field": "teams"},
+                "ui_access_mode": encrypt_value_helper("admin_only"),
+            }
+        )
+    )
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        await ProxyConfig()._init_sso_settings_in_db(prisma_client)
+
+    assert {
+        key: os.environ.get(key) for key in ("GOOGLE_CLIENT_ID", "ROLE_MAPPINGS", "TEAM_MAPPINGS", "UI_ACCESS_MODE")
+    } == {
+        "GOOGLE_CLIENT_ID": "sso-id",
+        "ROLE_MAPPINGS": None,
+        "TEAM_MAPPINGS": None,
+        "UI_ACCESS_MODE": None,
+    }
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
 
 def test_ProxyConfig_sso_settings_with_unset_fields_apply_without_error_logs(

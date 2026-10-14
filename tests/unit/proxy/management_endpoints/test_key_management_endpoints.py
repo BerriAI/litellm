@@ -9421,6 +9421,54 @@ async def test_key_does_not_override_explicit_budget_duration():
 
 
 @pytest.mark.asyncio
+async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_if_encrypted_with,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        rotate_master_key,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    for key in ("LITELLM_SALT_KEY", "LIT_ROTATE_ENCRYPTED", "LIT_ROTATE_PLAINTEXT"):
+        monkeypatch.setenv(key, "placeholder")
+        monkeypatch.delenv(key)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_config.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                param_name="environment_variables",
+                param_value={
+                    "LIT_ROTATE_ENCRYPTED": encrypt_value_helper("encrypted-value"),
+                    "LIT_ROTATE_PLAINTEXT": "plaintext-value",
+                },
+            )
+        ]
+    )
+    prisma_client.db.litellm_config.update = AsyncMock()
+
+    with patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"):
+        await rotate_master_key(
+            prisma_client=prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+            current_master_key="sk-old-master-key",
+            new_master_key="sk-new-master-key",
+        )
+
+    stored: Final = prisma_client.db.litellm_config.update.await_args.kwargs["data"]["param_value"].data
+    assert {key: decrypt_if_encrypted_with(value, "sk-new-master-key") for key, value in stored.items()} == {
+        "LIT_ROTATE_ENCRYPTED": "encrypted-value",
+        "LIT_ROTATE_PLAINTEXT": "plaintext-value",
+    }
+
+
+@pytest.mark.asyncio
 @patch(
     "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
 )
