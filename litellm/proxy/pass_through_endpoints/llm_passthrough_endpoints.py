@@ -44,7 +44,8 @@ from litellm.constants import (
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
-from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.azure.passthrough.transformation import (
@@ -79,7 +80,11 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy modul
     user_api_key_auth_websocket,
     user_api_key_auth_websocket_for_model,
 )
-from litellm.proxy.common_request_processing import model_deployments_support_stream_options, open_sse_before_first_byte
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    model_deployments_support_stream_options,
+    open_sse_before_first_byte,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -1054,6 +1059,65 @@ def extract_model_from_bedrock_endpoint(endpoint: str) -> str:
 
 
 _extract_model_from_bedrock_endpoint: Final = extract_model_from_bedrock_endpoint
+AWS_ERROR_TYPE_HEADER: Final = "x-amzn-errortype"
+
+
+def _is_guardrail_refusal(error: Exception) -> bool:
+    """A block raised by a guardrail, as opposed to a request check that answers with the same 400, 403 or 422, or a
+    guardrail that could not reach its vendor and failed closed with a 5xx.
+
+    Guardrail hooks stamp ``guardrail_name`` onto the detail of an HTTPException they raise."""
+    match error:
+        case HTTPException(detail=dict() as detail):
+            return is_guardrail_intervention(error) and "guardrail_name" in detail
+        case GuardrailRaisedException() | BlockedPiiEntityError():
+            return error.status_code < 500
+        case _:
+            return False
+
+
+def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:
+    """Bedrock's own error response, when ``handled`` is the unchanged conversion of it by the shared handler."""
+    if not isinstance(error, httpx.HTTPStatusError):
+        return None
+    upstream: Final = error.response
+    if handled.detail != {"error": upstream.content.decode("utf-8")}:
+        return None
+    error_type: Final = upstream.headers.get(AWS_ERROR_TYPE_HEADER)
+    if error_type is None:
+        return None
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers={**(handled.headers or {}), AWS_ERROR_TYPE_HEADER: error_type},
+        media_type=upstream.headers.get("content-type", "application/json"),
+    )
+
+
+async def bedrock_passthrough_error_response(
+    processor: ProxyBaseLLMRequestProcessing,
+    error: Exception,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLoggingType,
+) -> Response:
+    """Run the shared error handling for a Bedrock passthrough request, then answer a guardrail block or an error
+    Bedrock returned the way Bedrock does, so an AWS SDK reads its code and message. Anything else is raised as the
+    shared handler raises it."""
+    try:
+        await processor.handle_llm_api_exception(
+            e=error,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException as handled:
+        response: Final = _bedrock_error_response(error, handled)
+        if response is None:
+            raise
+        return response
+    except ProxyException as handled:
+        if _is_guardrail_refusal(error):
+            raise AwsErrorTypeProxyException(handled, "ValidationException") from handled
+        raise
 
 
 async def handle_bedrock_passthrough_router_model(
@@ -1140,11 +1204,8 @@ async def handle_bedrock_passthrough_router_model(
         )
         return result
     except Exception as e:
-        # Use common exception handling
-        raise await base_llm_response_processor.handle_llm_api_exception(
-            e=e,
-            user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
+        return await bedrock_passthrough_error_response(
+            base_llm_response_processor, e, user_api_key_dict, proxy_logging_obj
         )
 
 
@@ -1343,10 +1404,8 @@ async def bedrock_llm_proxy_route(
 
         return result
     except Exception as e:
-        raise await base_llm_response_processor.handle_llm_api_exception(
-            e=e,
-            user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
+        return await bedrock_passthrough_error_response(
+            base_llm_response_processor, e, user_api_key_dict, proxy_logging_obj
         )
 
 

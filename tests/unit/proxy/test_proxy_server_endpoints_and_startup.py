@@ -33,6 +33,7 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
+    AwsErrorTypeProxyException,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -43,7 +44,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
-from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
+from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._master_key import MASTER_KEY
 
@@ -11958,6 +11959,31 @@ async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(
 
     assert response.status_code == 401
     assert [r for r in caplog.records if r.levelname == "WARNING"] == []
+
+
+
+@pytest.mark.asyncio
+async def test_aws_error_type_exception_handler_adds_the_aws_message_and_header():
+    error = ProxyException(
+        message="synthetic policy says no",
+        type="invalid_request_error",
+        param=None,
+        code=400,
+        headers={"x-litellm-call-id": "call-1"},
+    )
+
+    response = await aws_error_type_exception_handler(
+        _http_request_scope(), AwsErrorTypeProxyException(error, "ValidationException")
+    )
+
+    assert response.status_code == 400
+    assert response.headers["x-amzn-errortype"] == "ValidationException"
+    assert response.headers["x-litellm-call-id"] == "call-1"
+    assert json.loads(response.body) == {
+        "message": "synthetic policy says no",
+        "error": {"message": "synthetic policy says no", "type": "invalid_request_error", "param": None, "code": "400"},
+    }
+    assert app.exception_handlers[AwsErrorTypeProxyException] is aws_error_type_exception_handler
 
 
 @pytest.mark.asyncio
