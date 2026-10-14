@@ -55,6 +55,7 @@ from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
+    LITELLM_CONFIG_CACHE_TTL_SECONDS,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -4503,7 +4504,6 @@ async def _lookup_deprecated_key(
 
 # DualCache for LiteLLM_Config param_name reads.
 # Redis layer is attached in proxy_server._init_cache.
-LITELLM_CONFIG_CACHE_TTL_SECONDS: Final[int] = get_env_int("LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS", 60)
 _CONFIG_CACHE_MISS: Final[str] = "__litellm_config_param_miss__"
 
 litellm_config_cache: Final[DualCache] = DualCache(
