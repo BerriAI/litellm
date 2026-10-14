@@ -492,17 +492,21 @@ def _defer_loading_field(
     drop_params: bool,
 ) -> Mapping[str, bool]:
     defer_loading: Final = _requested_defer_loading(tool, function_tool)
-    if defer_loading is None:
+    if defer_loading is None or (defer_loading is False and not carries_tool_search):
         return {}
-    if drop_params and (not isinstance(defer_loading, bool) or not carries_tool_search):
+    if isinstance(defer_loading, bool) and carries_tool_search:
+        return {"defer_loading": defer_loading}
+    if drop_params:
         verbose_logger.debug("Chat provider: dropping defer_loading=%r under drop_params", defer_loading)
         return {}
-    if not isinstance(defer_loading, bool):
-        raise litellm.UnsupportedParamsError(
-            message=f"defer_loading must be a boolean, got {defer_loading!r}. "
-            "To drop it, set `litellm.drop_params=True` or pass `drop_params=True`."
-        )
-    return {"defer_loading": defer_loading}
+    problem: Final = (
+        'defer_loading needs a {"type": "tool_search"} tool in the same request'
+        if isinstance(defer_loading, bool)
+        else f"defer_loading must be a boolean, got {defer_loading!r}"
+    )
+    raise litellm.UnsupportedParamsError(
+        message=f"{problem}. To drop it, set `litellm.drop_params=True` or pass `drop_params=True`."
+    )
 
 
 def _without_dropped_defer_loading(
