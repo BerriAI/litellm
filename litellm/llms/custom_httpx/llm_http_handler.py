@@ -1005,6 +1005,8 @@ class BaseLLMHTTPHandler:
                 sync_stream=True,
                 json_mode=json_mode,
             )
+            if isinstance(completion_stream, BaseModelResponseIterator):
+                completion_stream.http_response = response
 
         # LOGGING
         logging_obj.post_call(

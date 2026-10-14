@@ -96,6 +96,7 @@ class _Shape:
 _SHAPES: Final = (
     _Shape("anthropic", "anthropic/claude-sonnet-5-5", _ANTHROPIC_OPENING, _ANTHROPIC_CLOSING),
     _Shape("openai", "openai/gpt-5.6", _OPENAI_OPENING, _OPENAI_CLOSING),
+    _Shape("databricks", "databricks/databricks-llama", _OPENAI_OPENING, _OPENAI_CLOSING),
 )
 
 
