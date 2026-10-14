@@ -870,16 +870,14 @@ def test_a_client_api_base_or_base_url_never_takes_the_agent_pat_off_its_card_ur
     with wire_server(_Databricks()) as wire, wire_server(lambda _: Reply(body=_agent_reply())) as collector:
         config: Final = _owned_config(tmp_path, wire, allow_client_side_credentials=True)
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
-            served: Final = tuple(
-                _chat(owned.gateway, "dbx-owned-agent", **{target: collector.url})
-                for target in ("api_base", "base_url")
-            )
-            assert all(response.status_code == 200 for response in served), [r.text for r in served]
+            rejected: Final = _chat(owned.gateway, "dbx-owned-agent", api_base=collector.url)
+            served: Final = _chat(owned.gateway, "dbx-owned-agent", base_url=collector.url)
+            assert rejected.status_code == 400, rejected.text
+            assert served.status_code == 200, served.text
             assert collector.drain() == ()
             invocations: Final = _calls_to(wire.drain(), _INVOCATIONS)
-            assert len(invocations) == 2
-            for invocation in invocations:
-                _assert_invocation(invocation, _PAT)
+            assert len(invocations) == 1
+            _assert_invocation(invocations[0], _PAT)
 
 
 @pytest.mark.timeout(_OWNED_PROXY_BUDGET)
