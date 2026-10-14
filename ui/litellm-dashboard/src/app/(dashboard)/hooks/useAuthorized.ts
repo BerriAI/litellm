@@ -1,6 +1,6 @@
 "use client";
 
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getUiPageUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
 import { buildLoginUrlWithReturn, getLoginUrl, storeReturnUrl } from "@/utils/returnUrlUtils";
@@ -21,7 +21,7 @@ const useAuthorized = () => {
   // Helper function to redirect to login while preserving the current URL
   const redirectToLogin = useCallback(() => {
     storeReturnUrl();
-    const baseLoginUrl = getLoginUrl(getProxyBaseUrl());
+    const baseLoginUrl = getUiPageUrl(getLoginUrl(getProxyBaseUrl()));
     const loginUrlWithReturn = buildLoginUrlWithReturn(baseLoginUrl);
     window.location.replace(loginUrlWithReturn);
   }, []);

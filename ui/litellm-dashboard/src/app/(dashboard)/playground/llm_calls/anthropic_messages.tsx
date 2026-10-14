@@ -4,7 +4,7 @@ import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import { buildMcpToolBlocks } from "@/components/llm_calls/mcp_tool_blocks";
 import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 
@@ -46,7 +46,7 @@ export async function makeAnthropicMessagesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
 
   const headers = buildPlaygroundHeaders(tags, customHeaders);
 

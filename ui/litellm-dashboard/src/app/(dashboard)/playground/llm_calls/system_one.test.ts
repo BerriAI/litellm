@@ -6,6 +6,7 @@ import type { SystemOneRequest, SystemOneResponse } from "../components/systemOn
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://proxy.example.com"),
+  getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
   getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
 }));
 
@@ -84,7 +85,7 @@ describe("makeSystemOneRequest", () => {
   it("uses the proxy base URL when no custom base is provided", async () => {
     await makeSystemOneRequest(payload, "session-key");
 
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://proxy.example.com/v1/systemone");
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://gateway.example.com/v1/systemone");
   });
 
   it("throws the upstream error text for failed requests", async () => {
@@ -169,7 +170,7 @@ describe("/v1/decisions requests", () => {
         headers: expect.objectContaining({ Authorization: "Bearer session-key", "Content-Type": "application/json" }),
       };
       expect(mockFetch).toHaveBeenCalledWith(
-        `${baseUrl?.replace(/\/$/, "") ?? "https://proxy.example.com"}/v1/decisions`,
+        `${baseUrl?.replace(/\/$/, "") ?? "https://gateway.example.com"}/v1/decisions`,
         expect.objectContaining(expectedRequest),
       );
       expect(result.response).toEqual(response);

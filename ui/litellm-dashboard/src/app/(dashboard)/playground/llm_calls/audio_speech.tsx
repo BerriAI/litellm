@@ -1,5 +1,5 @@
 import openai from "openai";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl } from "@/components/networking";
 import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
 import { toast } from "@/lib/toast";
 import type { OpenAIVoice } from "../components/chat_ui/chatConstants";
@@ -22,7 +22,7 @@ export async function makeOpenAIAudioSpeechRequest(
   if (isLocal !== true) {
     console.log = function () {};
   }
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
   const client = new openai.OpenAI({
     apiKey: accessToken,
     baseURL: proxyBaseUrl,

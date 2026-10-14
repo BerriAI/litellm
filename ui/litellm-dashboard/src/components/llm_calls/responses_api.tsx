@@ -1,7 +1,7 @@
 import openai from "openai";
 import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl, getProxyBaseUrl } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import { parseUsageCost } from "./usage_cost";
@@ -102,7 +102,8 @@ export async function makeOpenAIResponsesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
+  const mcpBaseUrl = customBaseUrl || getProxyBaseUrl();
   const headers = buildPlaygroundHeaders(tags, customHeaders);
 
   const client = new openai.OpenAI({
@@ -145,7 +146,7 @@ export async function makeOpenAIResponsesRequest(
         tools.push({
           type: "mcp",
           server_label: "litellm",
-          server_url: `${proxyBaseUrl}/mcp`,
+          server_url: `${mcpBaseUrl}/mcp`,
           require_approval: "never",
         });
       } else {
@@ -159,7 +160,7 @@ export async function makeOpenAIResponsesRequest(
             tools.push({
               type: "mcp",
               server_label: toolsetName,
-              server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(toolsetName)}`,
+              server_url: `${mcpBaseUrl}/mcp/${encodeURIComponent(toolsetName)}`,
               require_approval: "never",
             });
           } else {
@@ -172,7 +173,7 @@ export async function makeOpenAIResponsesRequest(
             tools.push({
               type: "mcp",
               server_label: routeName, // unique per request — collisions cause silent tool-routing failures
-              server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
+              server_url: `${mcpBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
               require_approval: "never",
               ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
             });
