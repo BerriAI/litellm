@@ -1,7 +1,8 @@
-from typing import Final, cast
+from typing import Final, Literal, TypeAlias, cast
 
 import pytest
-from anthropic.types import Message, MessageParam, TextBlock, ToolUnionParam
+from anthropic import Anthropic
+from anthropic.types import Message, MessageParam, TextBlock, TextBlockParam, ToolUnionParam
 from e2e_config import unique_marker
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
@@ -199,6 +200,102 @@ class TestBedrockMessagesPromptCaching:
             f"streaming cache read was not reported: {message.usage!r}"
         )
         assert _message_text(message).strip(), f"streaming response contained no text: {message.content!r}"
+
+
+CLAUDE_HAIKU_ANTHROPIC: Final = "anthropic/claude-haiku-5-5"
+CLAUDE_HAIKU_BEDROCK_INVOKE: Final = "bedrock/invoke/us.anthropic.claude-haiku-5-5"
+CLAUDE_HAIKU_BEDROCK_CONVERSE: Final = "bedrock/converse/us.anthropic.claude-haiku-5-5"
+CLAUDE_HAIKU_BACKENDS: Final = (
+    pytest.param(
+        CLAUDE_HAIKU_ANTHROPIC,
+        id="anthropic",
+        marks=pytest.mark.covers("llm.messages.anthropic.prompt_cache_5m.nonstream.works"),
+    ),
+    pytest.param(
+        CLAUDE_HAIKU_BEDROCK_INVOKE,
+        id="bedrock-invoke",
+        marks=pytest.mark.covers("llm.messages.bedrock_invoke.prompt_cache_5m.nonstream.works"),
+    ),
+    pytest.param(
+        CLAUDE_HAIKU_BEDROCK_CONVERSE,
+        id="bedrock-converse",
+        marks=pytest.mark.covers("llm.messages.bedrock_converse.prompt_cache_5m.nonstream.works"),
+    ),
+)
+LONG_CACHEABLE_DOCUMENT: Final = CACHED_DOCUMENT * 4
+CacheMark: TypeAlias = Literal["cache_control", "prompt_cache_breakpoint"]
+
+
+def _dropping_haiku_deployment(backend: str) -> LiteLLMParamsBody:
+    if backend.startswith("bedrock/"):
+        return LiteLLMParamsBody(model=backend, aws_region_name="us-east-1", drop_params=True)
+    return LiteLLMParamsBody(model=backend, api_key="os.environ/ANTHROPIC_API_KEY", drop_params=True)
+
+
+def _marked_block(text: str, mark: CacheMark) -> dict[str, object]:
+    match mark:
+        case "cache_control":
+            return {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+        case "prompt_cache_breakpoint":
+            return {"type": "text", "text": text, "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+
+def _create_marked(client: Anthropic, model: str, mark: CacheMark) -> Message:
+    marker: Final = unique_marker()
+    return client.messages.create(
+        model=model,
+        max_tokens=32,
+        system=cast(list[TextBlockParam], [_marked_block(f"{marker} {LONG_CACHEABLE_DOCUMENT}", mark)]),
+        messages=[
+            cast(
+                MessageParam,
+                {"role": "user", "content": [_marked_block(f"{marker} What are the payment terms?", mark)]},
+            )
+        ],
+        extra_body=NO_PROXY_CACHE,
+    )
+
+
+@pytest.mark.provider_live
+class TestPromptCacheBreakpointOnMessages:
+    """/v1/messages speaks Anthropic syntax only, so OpenAI's ``prompt_cache_breakpoint`` never becomes a cache mark.
+
+    With drop_params on the key is stripped and the request caches nothing. The drop_params-off half (the provider's
+    400, or litellm's own 400 on Converse) is proven by
+    tests/integration/providers/test_claude_messages_prompt_cache_breakpoint_drop_params_wire.py, because the shared
+    stack sets ``litellm_settings.drop_params: true``, which no deployment can switch back off."""
+
+    @pytest.mark.parametrize("backend", CLAUDE_HAIKU_BACKENDS)
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC, Provider.BEDROCK),
+            models=(CLAUDE_HAIKU_ANTHROPIC, CLAUDE_HAIKU_BEDROCK_INVOKE, CLAUDE_HAIKU_BEDROCK_CONVERSE),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_drop_params_strips_the_breakpoint_so_it_writes_no_cache(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
+    ) -> None:
+        model, key = _register_deployment(
+            proxy, resources, _dropping_haiku_deployment(backend), "e2e-messages-breakpoint-dropped"
+        )
+        client: Final = sdk.anthropic(key)
+
+        native: Final = _create_marked(client, model, "cache_control")
+        dropped: Final = _create_marked(client, model, "prompt_cache_breakpoint")
+
+        assert (native.usage.cache_creation_input_tokens or 0) > 0, (
+            f"the same prefix under cache_control wrote no cache, so this prefix proves nothing: {native.usage!r}"
+        )
+        assert dropped.role == "assistant", f"unexpected role: {dropped.role!r}"
+        assert (dropped.usage.cache_creation_input_tokens or 0) == 0, (
+            f"prompt_cache_breakpoint was translated into a cache write: {dropped.usage!r}"
+        )
+        assert (dropped.usage.cache_read_input_tokens or 0) == 0, (
+            f"prompt_cache_breakpoint was translated into a cache read: {dropped.usage!r}"
+        )
 
 
 class TestAnthropicToolSearch:

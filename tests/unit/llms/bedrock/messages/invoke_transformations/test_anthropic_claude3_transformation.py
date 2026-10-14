@@ -1297,6 +1297,90 @@ def test_bedrock_messages_drop_params_strips_output_config_for_pre_4_5():
     assert "output_config" not in result
 
 
+_PROMPT_CACHE_BREAKPOINT: Final = {"mode": "explicit"}
+_EPHEMERAL: Final = {"type": "ephemeral"}
+
+
+def _breakpoint(marked: bool) -> Mapping[str, object]:
+    return {"prompt_cache_breakpoint": _PROMPT_CACHE_BREAKPOINT} if marked else {}
+
+
+def _breakpoint_system(marked: bool) -> Sequence[Mapping[str, object]]:
+    return [{"type": "text", "text": "system prompt", **_breakpoint(marked)}]
+
+
+def _breakpoint_messages(marked: bool) -> Sequence[Mapping[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "cached prefix", **_breakpoint(marked)},
+                {"type": "text", "text": "native mark", "cache_control": _EPHEMERAL},
+            ],
+        }
+    ]
+
+
+def _breakpoint_tools(marked: bool) -> Sequence[Mapping[str, object]]:
+    return [{"name": "lookup", "input_schema": {"type": "object"}, **_breakpoint(marked)}]
+
+
+def _bedrock_invoke_request_with_breakpoints(drop_params: bool) -> Mapping[str, object]:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return REASONING_BODY_ADAPTER.validate_python(
+        AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+            model="us.anthropic.claude-haiku-5-5",
+            messages=[dict(message) for message in _breakpoint_messages(marked=True)],
+            anthropic_messages_optional_request_params={
+                "max_tokens": 64,
+                "system": _breakpoint_system(marked=True),
+                "tools": _breakpoint_tools(marked=True),
+            },
+            litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+            headers={},
+        )
+    )
+
+
+@pytest.mark.parametrize("drop_params", [False, True], ids=["forwarded_verbatim", "stripped_by_drop_params"])
+def test_bedrock_messages_prompt_cache_breakpoint_follows_drop_params(
+    monkeypatch: pytest.MonkeyPatch, drop_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", None)
+
+    result: Final = _bedrock_invoke_request_with_breakpoints(drop_params=drop_params)
+
+    marked: Final = not drop_params
+    assert result["system"] == _breakpoint_system(marked)
+    assert result["messages"] == _breakpoint_messages(marked)
+    assert result["tools"] == _breakpoint_tools(marked)
+
+
+def _bedrock_invoke_plain_string_request(drop_params: bool) -> str:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return json.dumps(
+        AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+            model="us.anthropic.claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hello there"}],
+            anthropic_messages_optional_request_params={"max_tokens": 64, "system": "be terse"},
+            litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+            headers={},
+        )
+    )
+
+
+def test_bedrock_messages_drop_params_keeps_plain_string_content_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", None)
+
+    assert _bedrock_invoke_plain_string_request(drop_params=True) == _bedrock_invoke_plain_string_request(
+        drop_params=False
+    )
+
+
 def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
     """``drop_params=True`` does not strip on opus-4-7 (supports effort)."""
     from unittest.mock import patch

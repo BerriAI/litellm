@@ -2,9 +2,12 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, ClassVar, Final
 
 import httpx
+from pydantic import TypeAdapter
 
+import litellm
 from litellm._logging import verbose_logger
-from litellm.exceptions import AuthenticationError
+from litellm.exceptions import AuthenticationError, UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -64,6 +67,62 @@ DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
 
 def messages_carry_output_config(messages: Sequence[object]) -> bool:
     return any(isinstance(message, Mapping) and "output_config" in message for message in messages)
+
+
+_NESTED_BLOCK_FIELDS: Final = frozenset({"content", "source"})
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+def _without_prompt_cache_breakpoint(node: object) -> object:
+    """``node`` minus every ``prompt_cache_breakpoint`` on it and on the blocks nested under its
+    ``content`` or ``source`` (a document's ``source.content`` holds blocks too). Tool inputs and
+    schemas are caller data, so they are left alone."""
+    if isinstance(node, list):
+        return [_without_prompt_cache_breakpoint(item) for item in _OBJECT_LIST.validate_python(node)]
+    if not isinstance(node, Mapping):
+        return node
+    fields: Final = _JSON_OBJECT.validate_python(node)
+    return {
+        key: _without_prompt_cache_breakpoint(value) if key in _NESTED_BLOCK_FIELDS else value
+        for key, value in fields.items()
+        if key != "prompt_cache_breakpoint"
+    }
+
+
+_BLOCK_LIST_FIELDS: Final = frozenset({"messages", "system", "tools"})
+
+
+def without_prompt_cache_breakpoints(anthropic_messages_request: Mapping[str, object]) -> Mapping[str, object]:
+    """The request with OpenAI's ``prompt_cache_breakpoint`` stripped from its messages, system and tool blocks.
+
+    /v1/messages speaks Anthropic syntax only, so the OpenAI mark is never translated, only dropped."""
+    return {
+        field: _without_prompt_cache_breakpoint(value) if field in _BLOCK_LIST_FIELDS else value
+        for field, value in anthropic_messages_request.items()
+    }
+
+
+def _deployment_drop_params(litellm_params: GenericLiteLLMParams | Mapping[str, object]) -> object:
+    return litellm_params.get("drop_params") if isinstance(litellm_params, Mapping) else litellm_params.drop_params
+
+
+def messages_request_for_claude(
+    anthropic_messages_request: Mapping[str, object], *, drop_params: bool
+) -> Mapping[str, object] | UnsupportedParamsError:
+    """The /v1/messages request a Claude target may receive: OpenAI's ``prompt_cache_breakpoint`` is
+    stripped under ``drop_params`` and refused otherwise, because a route that rebuilds the request
+    (the chat adapter) would otherwise translate it into a cache mark."""
+    stripped: Final = without_prompt_cache_breakpoints(anthropic_messages_request)
+    if drop_params or stripped == anthropic_messages_request:
+        return stripped
+    return UnsupportedParamsError(
+        message=(
+            "prompt_cache_breakpoint is OpenAI syntax and /v1/messages does not translate it for Claude. "
+            "Use cache_control, or set drop_params=True (proxy: litellm_settings: drop_params: true) to drop it."
+        ),
+        status_code=400,
+    )
 
 
 _messages_carry_output_config = messages_carry_output_config
@@ -660,7 +719,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             **anthropic_messages_optional_request_params,
         )
-        return dict(anthropic_messages_request)
+        drop_params: Final = (
+            normalize_drop_params(litellm.drop_params) is True
+            or normalize_drop_params(_deployment_drop_params(litellm_params)) is True
+        )
+        return dict(
+            without_prompt_cache_breakpoints(anthropic_messages_request) if drop_params else anthropic_messages_request
+        )
 
     def transform_anthropic_messages_response(
         self,
