@@ -1,6 +1,7 @@
 """Stored-config slots: credentials the proxy holds in its env, config or database reach only their owner.
 
-Slots: A1 (virtual key raw value), A2 (master key), B2 (deployment ``api_key`` via ``/model/new``),
+Slots: A1 (virtual key raw value), A2 (master key), B2 (deployment ``api_key`` via ``/model/new``, kept through a
+partial ``POST /model/update`` and rotated through ``PATCH /model/{id}/update``),
 B3 (``/credentials`` entry named by ``litellm_credential_name``), B4 (deployment
 ``aws_secret_access_key``), B4v and B4t (Vertex service-account JSON and the access token minted
 for it), B5 (team ``model_config`` credential override), E1 (guardrail ``api_key`` from config),
@@ -43,6 +44,7 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.sigv4 import encoded_path, signature
 from integration._support.wire import Reply, Request, wire_server
+from pydantic import BaseModel, JsonValue
 from integration.security._canary import MARKER, Canary, canary, find_canary
 from integration.security._sinks import (
     CONFIG_MODEL,
@@ -233,6 +235,27 @@ def _bearer(rig: Rig, marker: Canary, secret: Canary) -> None:
     )
 
 
+def _provider_chat_matches(rig: Rig, marker: Canary, secret: Canary, text: str) -> bool:
+    delivered: Final = rig.provider.carrying(marker.value)
+    actual: Final = tuple(
+        (
+            entry.method,
+            entry.target,
+            entry.headers.get("authorization"),
+            json.loads(entry.body),
+        )
+        for entry in delivered
+    )
+    return actual == (
+        (
+            "POST",
+            "/v1/chat/completions",
+            f"Bearer {secret.value}",
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": text}]},
+        ),
+    )
+
+
 @pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_virtual_key_raw_value_authenticates_and_is_stored_only_as_a_hash(
@@ -335,6 +358,141 @@ def test_model_api_key_added_through_the_api_reaches_only_the_provider(
             detail_routes=(f"/credentials/by_model/{model_id}",),
             reads=_reads(rig.proxy, {"/model/info": {"litellm_model_id": model_id}}),
             context=f"slot B2, {outcome}",
+            since=started,
+        )
+
+
+def _stored_litellm_params(model_id: str) -> dict[str, object]:
+    rows: Final = read_rows('SELECT litellm_params FROM "LiteLLM_ProxyModelTable" WHERE model_id=%s', (model_id,))
+    assert len(rows) == 1, rows
+    return object_value(rows[0]["litellm_params"])
+
+
+class _ServedParams(BaseModel):
+    model_name: str
+    litellm_params: dict[str, JsonValue]
+
+
+def _served_params(gateway: Gateway, model_id: str) -> _ServedParams:
+    response: Final = gateway.request("GET", "/model/info", params={"litellm_model_id": model_id})
+    assert response.status_code == 200, response.text
+    entries: Final = response.json()["data"]
+    assert isinstance(entries, list) and len(entries) == 1, response.text
+    return _ServedParams.model_validate(entries[0])
+
+
+def _served_openai_params(api_base: str, **changed: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "model": "openai/gpt-4o-mini",
+        "api_base": api_base,
+        "allow_client_keepalive_override": False,
+        "merge_reasoning_content_in_choices": False,
+        "use_in_pass_through": False,
+        "use_litellm_proxy": False,
+        "use_xai_oauth": False,
+        **changed,
+    }
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize(
+    ("partial_params", "expected_params"),
+    (
+        pytest.param({"rpm": 10}, {"rpm": 10}, id="rpm"),
+        pytest.param({"timeout": 30}, {"timeout": 30.0}, id="timeout"),
+    ),
+)
+def test_partial_legacy_model_update_keeps_the_stored_api_key_usable(
+    rig: Rig, partial_params: dict[str, JsonValue], expected_params: dict[str, JsonValue]
+) -> None:
+    b2: Final = canary("B2")
+    marker: Final = canary(MARKER)
+    api_base: Final = rig.provider.url + "/v1"
+    with rig.proxy.scenario() as scenario:
+        model, model_id = _model(scenario, {"model": "openai/gpt-4o-mini", "api_base": api_base, "api_key": b2.value})
+        stored_before: Final = _stored_litellm_params(model_id)
+        updated: Final = rig.proxy.request(
+            "POST",
+            "/model/update",
+            {"model_name": model, "model_info": {"id": model_id}, "litellm_params": partial_params},
+        )
+        assert updated.status_code == 200, updated.text
+        assert find_canary(updated.text, (b2,)) == (), f"/model/update echoed the stored key: {updated.text}"
+        stored_after: Final = _stored_litellm_params(model_id)
+        assert stored_after == {**stored_before, **expected_params}, (
+            "A partial update rewrote stored params it was not sent, the api_key ciphertext included"
+        )
+        assert tuple((key, type(stored_after[key]), stored_after[key]) for key in expected_params) == tuple(
+            (key, type(value), value) for key, value in expected_params.items()
+        ), stored_after
+        _assert_stored_without_canary(
+            """SELECT litellm_params->>'api_key' FROM "LiteLLM_ProxyModelTable" WHERE model_id=%s""", (model_id,), b2
+        )
+        served_params: Final = _served_params(rig.proxy, model_id)
+        assert served_params == _ServedParams(
+            model_name=model, litellm_params=_served_openai_params(api_base, **expected_params)
+        )
+        assert tuple(
+            (key, type(served_params.litellm_params[key]), served_params.litellm_params[key])
+            for key in expected_params
+        ) == tuple((key, type(value), value) for key, value in expected_params.items()), served_params
+        caller: Final = _caller(scenario, models=[model])
+        _chat(rig.proxy, caller.key, model, "B2", marker, "success")
+        assert _provider_chat_matches(rig, marker, b2, f"slot B2 {marker.value}"), (
+            "The partial legacy update did not preserve the exact provider request"
+        )
+
+
+@pytest.mark.timeout(240)
+def test_patched_model_api_key_rotates_the_provider_bearer_and_is_never_stored_or_echoed(
+    rig: Rig, request: pytest.FixtureRequest
+) -> None:
+    started: Final = datetime.now(UTC)
+    original: Final = canary("B2")
+    rotated: Final = canary("B2")
+    marker: Final = canary(MARKER)
+    api_base: Final = rig.provider.url + "/v1"
+    with rig.proxy.scenario() as scenario:
+        model, model_id = _model(
+            scenario, {"model": "openai/gpt-4o-mini", "api_base": api_base, "api_key": original.value}
+        )
+        stored_before: Final = _stored_litellm_params(model_id)
+        patched: Final = rig.proxy.request(
+            "PATCH", f"/model/{model_id}/update", {"litellm_params": {"api_key": rotated.value}}
+        )
+        assert patched.status_code == 200, patched.text
+        assert find_canary(patched.text, (original, rotated)) == (), f"PATCH echoed a provider key: {patched.text}"
+        _assert_stored_without_canary(
+            """SELECT litellm_params->>'api_key' FROM "LiteLLM_ProxyModelTable" WHERE model_id=%s""",
+            (model_id,),
+            rotated,
+        )
+        stored_after: Final = _stored_litellm_params(model_id)
+        assert stored_after["api_key"] != stored_before["api_key"], "The rotated key was never written"
+        assert {k: v for k, v in stored_after.items() if k != "api_key"} == {
+            k: v for k, v in stored_before.items() if k != "api_key"
+        }
+        assert _served_params(rig.proxy, model_id) == _ServedParams(
+            model_name=model, litellm_params=_served_openai_params(api_base)
+        )
+        caller: Final = _caller(scenario, models=[model])
+        response, request_id = _chat(rig.proxy, caller.key, model, "B2", marker, "success")
+        assert _provider_chat_matches(rig, marker, rotated, f"slot B2 {marker.value}"), (
+            "The rotated key did not produce the exact provider request"
+        )
+        _finish(
+            rig,
+            rig.proxy,
+            request,
+            secrets=(original, rotated),
+            marker=marker,
+            response=response,
+            request_id=request_id,
+            caller=caller,
+            ids={"model_id": model_id, "model": model},
+            detail_routes=(f"/credentials/by_model/{model_id}",),
+            reads=_reads(rig.proxy, {"/model/info": {"litellm_model_id": model_id}}),
+            context="slot B2 rotated through PATCH",
             since=started,
         )
 
