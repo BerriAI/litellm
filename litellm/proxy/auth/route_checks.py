@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
+    UI_TEAM_ID,
     CommonProxyErrors,
     KeyManagementRoutes,
     LiteLLM_UserTable,
@@ -501,6 +502,13 @@ class RouteChecks:
         Check if route is an info route
         """
         return route in LiteLLMRoutes.info_routes.value
+
+    @staticmethod
+    def is_dashboard_session_info_route(route: str, team_id: str | None) -> bool:
+        """
+        Check if an Admin UI session key is calling an info route the dashboard polls in the background
+        """
+        return team_id == UI_TEAM_ID and RouteChecks.is_info_route(route)
 
     @staticmethod
     def _is_azure_openai_route(route: str) -> bool:

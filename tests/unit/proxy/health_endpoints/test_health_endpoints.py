@@ -5,8 +5,9 @@ import time
 from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from importlib import import_module
 from types import MappingProxyType, SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -22,7 +23,6 @@ from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.router import Router
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     _show_no_redis_warning,
@@ -33,12 +33,14 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     OPENAI_WIF_KWARGS_KEYS,
     WIF_SECRET_BEARING_KEYS,
 )
+from tests._master_key import MASTER_KEY
 
 # Import shared proxy test helpers from conftest
 from tests.unit.proxy.conftest import create_proxy_test_client
@@ -880,7 +882,8 @@ async def test_test_model_connection_request_mode_wins_over_resolved_mode():
 
 
 @pytest.mark.asyncio
-async def test_test_model_connection_evaluation_mode_uses_decisions_handler():
+@pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
+async def test_test_model_connection_decision_modes_are_forwarded(mode: str):
     deployment: Final = MappingProxyType(
         {
             "model_name": "typesafe/jev-latest",
@@ -891,14 +894,14 @@ async def test_test_model_connection_evaluation_mode_uses_decisions_handler():
     with _test_connection_probe(deployment) as ahealth_check:
         result: Final = await health_test_model_connection(
             request=MagicMock(),
-            mode="evaluation",
+            mode=mode,
             litellm_params={"model": "typesafe/jev-latest"},
             model_info={"id": "typesafe-jev-id"},
             user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
         )
 
     assert result["status"] == "success"
-    assert ahealth_check.call_args.kwargs["mode"] == "evaluation"
+    assert ahealth_check.call_args.kwargs["mode"] == mode
 
 
 @pytest.mark.asyncio
@@ -1633,8 +1636,23 @@ def test_health_liveness_endpoint(proxy_client):
     # Verify response is fast (should be < 100ms for a simple endpoint)
     assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
 
-    # Log the duration for visibility (useful for CI/CD monitoring)
-    print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
+
+
+def test_proxy_client_serves_full_proxy_routes_after_gateway_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setattr(app.router, "lifespan_context", app.router.lifespan_context)
+    import_module("gateway.main")
+
+    with create_proxy_test_client(monkeypatch) as client:
+        response: Final = client.post(
+            "/utils/token_counter",
+            headers={"Authorization": f"Bearer {MASTER_KEY}"},
+            json={"model": "gpt-4o", "prompt": "hello"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total_tokens"] > 0
 
 
 def test_health_backlog_includes_admission_control_stats(proxy_client):
@@ -1678,7 +1696,6 @@ def test_health_readiness(proxy_client):
     assert set(response_data.keys()) == {"status", "db"}
     assert response_data["status"] == "healthy"
     assert response_data["db"] in {"connected", "disconnected", "Not connected"}
-    print(f"Response time: {duration_ms:.2f}ms")
 
 
 def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
@@ -2597,7 +2614,6 @@ async def test_health_endpoint_keeps_federation_identity_admin_only():
 def test_no_server_owned_identity_field_reaches_a_non_admin_health_entry(server_owned_field: str):
     """Every server-owned identity field is hidden from non-admin health entries."""
     from litellm.proxy.health_check import clean_endpoint_data
-
     from litellm.proxy.health_endpoints._health_endpoints import (
         _strip_admin_only_fields_from_health_result,
     )
@@ -4825,6 +4841,21 @@ class TestNoRedisWarning:
         prisma.db.query_raw.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("coordination_redis, router_redis", [(MagicMock(), None), (None, MagicMock())])
+    async def test_redis_answers_before_the_env_var_is_looked_up(self, monkeypatch, coordination_redis, router_redis):
+        monkeypatch.setattr(
+            _health_endpoints_module,
+            "get_secret_bool",
+            MagicMock(side_effect=AssertionError("env var looked up although Redis is configured")),
+        )
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(router_redis)),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(5)),
+        ):
+            assert await _show_no_redis_warning() is False
+
+    @pytest.mark.asyncio
     async def test_stays_quiet_when_only_the_router_has_redis(self, monkeypatch):
         """router_settings.redis_host alone backs cooldowns and usage-based routing."""
         monkeypatch.delenv("LITELLM_DISABLE_NO_REDIS_WARNING", raising=False)
@@ -4996,7 +5027,10 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
     assert response.json()["status"] == "success"
 
 
-def test_test_model_connection_accepts_evaluation_mode(monkeypatch):
+@pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
+def test_test_model_connection_accepts_decision_modes(
+    monkeypatch, mode: Literal["evaluation", "decisions"]
+):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -5021,7 +5055,7 @@ def test_test_model_connection_accepts_evaluation_mode(monkeypatch):
         response = client.post(
             "/health/test_connection",
             json={
-                "mode": "evaluation",
+                "mode": mode,
                 "litellm_params": {"model": "typesafe/jev-latest", "api_key": "sk-test"},
             },
         )
