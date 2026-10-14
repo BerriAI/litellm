@@ -83,6 +83,11 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_if_encrypted_with,
+    encrypt_value_helper,
+    get_salt_key,
+)
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
@@ -523,6 +528,21 @@ class _EnvVarsParam(Protocol):
 
 def _env_vars_param_value(param: _EnvVarsParam) -> Mapping[str, str] | None:
     return param.param_value
+
+
+def _environment_variables_reencrypted_for(
+    stored: Mapping[str, object], current_key: str, new_master_key: str
+) -> dict[str, object]:
+    return {
+        key: _environment_value_reencrypted_for(value, current_key, new_master_key) for key, value in stored.items()
+    }
+
+
+def _environment_value_reencrypted_for(value: object, current_key: str, new_master_key: str) -> object:
+    if not isinstance(value, str):
+        return value
+    plaintext: Final = decrypt_if_encrypted_with(value=value, signing_key=current_key)
+    return value if plaintext is None else encrypt_value_helper(value=plaintext, new_encryption_key=new_master_key)
 
 
 async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
@@ -5522,20 +5542,15 @@ async def rotate_master_key(
             if c.param_name == "environment_variables":
                 environment_variables_dict = _env_vars_param_value(c)
 
-        if environment_variables_dict:
-            decrypted_env_vars: Final = proxy_config.decrypt_and_set_db_env_variables(
-                environment_variables=dict[str, str](environment_variables_dict)
+        if environment_variables_dict and (current_key := get_salt_key()) is not None:
+            await _config_table(prisma_client).update(
+                where={"param_name": "environment_variables"},
+                data={
+                    "param_value": prisma.Json(
+                        _environment_variables_reencrypted_for(environment_variables_dict, current_key, new_master_key)
+                    )
+                },
             )
-            encrypted_env_vars: Final = proxy_config.encrypt_env_variables(
-                environment_variables=decrypted_env_vars,
-                new_encryption_key=new_master_key,
-            )
-
-            if encrypted_env_vars:
-                await _config_table(prisma_client).update(
-                    where={"param_name": "environment_variables"},
-                    data={"param_value": prisma.Json({**environment_variables_dict, **encrypted_env_vars})},
-                )
 
     try:
         from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry

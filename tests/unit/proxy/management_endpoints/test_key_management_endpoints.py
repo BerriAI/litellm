@@ -9421,7 +9421,7 @@ async def test_key_does_not_override_explicit_budget_duration():
 
 
 @pytest.mark.asyncio
-async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt_as_stored(monkeypatch):
+async def test_rotate_master_key_reencrypts_every_decryptable_environment_variable_and_keeps_the_rest(monkeypatch):
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.common_utils.encrypt_decrypt_utils import (
         decrypt_if_encrypted_with,
@@ -9442,6 +9442,8 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt_a
             "LIT_ROTATE_ENCRYPTED": encrypt_value_helper("encrypted-value"),
             "LIT_ROTATE_PLAINTEXT": "plaintext-value",
             "LIT_ROTATE_FOREIGN": encrypt_value_helper("foreign-value", new_encryption_key="sk-unrelated-key"),
+            "LITELLM_ENABLE_MCP_STDIO": encrypt_value_helper("true"),
+            "LIT_ROTATE=INVALID_NAME": encrypt_value_helper("invalid-name-value"),
         }
     )
     prisma_client: Final = MagicMock()
@@ -9468,6 +9470,8 @@ async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt_a
     stored: Final = prisma_client.db.litellm_config.update.await_args.kwargs["data"]["param_value"].data
     assert stored.keys() == stored_before.keys()
     assert decrypt_if_encrypted_with(stored["LIT_ROTATE_ENCRYPTED"], "sk-new-master-key") == "encrypted-value"
+    assert decrypt_if_encrypted_with(stored["LITELLM_ENABLE_MCP_STDIO"], "sk-new-master-key") == "true"
+    assert decrypt_if_encrypted_with(stored["LIT_ROTATE=INVALID_NAME"], "sk-new-master-key") == "invalid-name-value"
     assert stored["LIT_ROTATE_PLAINTEXT"] == stored_before["LIT_ROTATE_PLAINTEXT"]
     assert stored["LIT_ROTATE_FOREIGN"] == stored_before["LIT_ROTATE_FOREIGN"]
 

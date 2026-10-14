@@ -46,6 +46,7 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.responses import ResponseTextDeltaEvent
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_ENABLED_ENV_VAR
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value
 
 MODEL: Final = "db-env-removal-claude"
@@ -106,6 +107,7 @@ ROTATED_MASTER_KEY: Final = "sk-lit9489-rotated-master-key"
 PLAINTEXT_KEY: Final = "LIT9489_STORED_IN_PLAINTEXT"
 RETIRED_KEY: Final = "LIT9489_UNDER_A_RETIRED_KEY"
 DECRYPTABLE_KEY: Final = "LIT9489_DECRYPTABLE"
+UNAPPLIED_KEYS: Final = (MCP_STDIO_ENABLED_ENV_VAR, EQUALS_KEY)
 UNTOUCHED: Final[Mapping[str, str | None]] = MappingProxyType(
     {YAML_LITERAL: YAML_LITERAL_VALUE, YAML_REFERENCE: YAML_SOURCE_VALUE, PROCESS_ONLY: PROCESS_ONLY_VALUE}
 )
@@ -1004,11 +1006,14 @@ def test_sso_keys_leaving_the_row_keep_their_values_until_the_sso_table_is_read(
 
 
 @pytest.mark.parametrize("rotation", tuple(ROTATIONS))
-def test_rotation_keeps_environment_values_it_cannot_decrypt_exactly_as_stored(tmp_path: Path, rotation: str) -> None:
+def test_rotation_reencrypts_every_value_it_can_decrypt_and_keeps_the_rest_as_stored(
+    tmp_path: Path, rotation: str
+) -> None:
     plaintext: Final = f"lit9489-plaintext-{uuid.uuid4().hex}"
     retired: Final = _legacy_ciphertext(f"lit9489-retired-{uuid.uuid4().hex}", RETIRED_SALT_KEY)
     decryptable: Final = f"lit9489-decryptable-{uuid.uuid4().hex}"
     encrypted: Final = _legacy_ciphertext(decryptable, SALT_KEY)
+    unapplied: Final = {key: f"lit9489-unapplied-{uuid.uuid4().hex}" for key in UNAPPLIED_KEYS}
     with (
         gateway_from_environment() as gateway,
         wire_server(_anthropic_message) as provider,
@@ -1022,7 +1027,15 @@ def test_rotation_keeps_environment_values_it_cannot_decrypt_exactly_as_stored(t
             environment={"LITELLM_SALT_KEY": SALT_KEY},
         ) as proxy,
     ):
-        _merge_into_row(database_url, {PLAINTEXT_KEY: plaintext, RETIRED_KEY: retired, DECRYPTABLE_KEY: encrypted})
+        _merge_into_row(
+            database_url,
+            {
+                PLAINTEXT_KEY: plaintext,
+                RETIRED_KEY: retired,
+                DECRYPTABLE_KEY: encrypted,
+                **{key: _legacy_ciphertext(value, SALT_KEY) for key, value in unapplied.items()},
+            },
+        )
         _settled(proxy, {PLAINTEXT_KEY: plaintext, RETIRED_KEY: retired, DECRYPTABLE_KEY: decryptable})
 
         signing_key: Final = ROTATIONS[rotation].rotate(proxy)
@@ -1030,6 +1043,7 @@ def test_rotation_keeps_environment_values_it_cannot_decrypt_exactly_as_stored(t
         row: Final = _environment_row(database_url)
         rotated: Final = string_value(row[DECRYPTABLE_KEY])
         assert (rotated != encrypted, decrypt_if_encrypted_with(rotated, signing_key)) == (True, decryptable)
+        assert {key: decrypt_if_encrypted_with(string_value(row[key]), signing_key) for key in unapplied} == unapplied
         assert {key: row.get(key) for key in (PLAINTEXT_KEY, RETIRED_KEY)} == {
             PLAINTEXT_KEY: plaintext,
             RETIRED_KEY: retired,
