@@ -760,9 +760,9 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     assert result["output_config"] == {"effort": "high"}
 
 
-def test_bedrock_chat_invoke_adaptive_thinking_with_tool_based_response_format_avoids_forced_tool_choice(
-    local_model_cost_map,
-):
+def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(local_model_cost_map):
+    """Anthropic accepts a forced tool_choice next to adaptive thinking, and dropping
+    it lets the model answer in prose instead of the requested JSON."""
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -780,8 +780,7 @@ def test_bedrock_chat_invoke_adaptive_thinking_with_tool_based_response_format_a
         drop_params=False,
     )
 
-    assert "tools" in result
-    assert "tool_choice" not in result
+    assert result["tool_choice"] == {"type": "tool", "name": result["tools"][0]["name"]}
     assert result["thinking"] == {"type": "adaptive"}
 
 

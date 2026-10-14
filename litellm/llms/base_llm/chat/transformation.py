@@ -124,11 +124,7 @@ class BaseConfig(ABC):
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
         thinking: Final = non_default_params.get("thinking")
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
-        return (
-            thinking is True
-            or thinking_type in ("enabled", "adaptive")
-            or non_default_params.get("reasoning_effort") is not None
-        )
+        return thinking is True or thinking_type == "enabled" or non_default_params.get("reasoning_effort") is not None
 
     def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
         """
