@@ -28,6 +28,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
+from litellm.responses.litellm_completion_transformation.tool_search import tools_with_anthropic_tool_search_mapped
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
@@ -406,8 +407,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
             else validated_input
         )
+        mapped_tools: Final = (
+            tools_with_anthropic_tool_search_mapped(tools)
+            if self.custom_llm_provider == LlmProviders.OPENAI
+            else tools
+        )
         stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
-            model=model, input=marked_input, tools=tools
+            model=model, input=marked_input, tools=mapped_tools
         )
         object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
         sanitized_tools: Final = self._sanitized_tool_schemas_for_openai(

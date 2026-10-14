@@ -6,6 +6,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import is_anthropic_tool_search_use
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES, AnthropicToolSearchToolRegex
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, OpenAIToolSearchToolParam
 from litellm.types.responses.main import OutputToolSearchCall
 from litellm.types.utils import LlmProviders, Message
 
@@ -26,6 +27,7 @@ __all__ = [
     "is_server_tool_search_tool",
     "provider_builds_anthropic_request",
     "tool_search_call_ids",
+    "tools_with_anthropic_tool_search_mapped",
     "without_tool_search_calls",
     "without_tool_search_uses",
 ]
@@ -60,8 +62,30 @@ def anthropic_tool_search_chat_tool() -> AnthropicToolSearchToolRegex:
     return AnthropicToolSearchToolRegex(type=ANTHROPIC_TOOL_SEARCH_TOOL_TYPE, name=ANTHROPIC_TOOL_SEARCH_TOOL_NAME)
 
 
-def is_anthropic_tool_search_chat_tool(tool: Mapping[str, object]) -> bool:
-    return tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+def is_anthropic_tool_search_chat_tool(tool: object) -> bool:
+    return isinstance(tool, Mapping) and tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+
+
+def _is_openai_tool_search_tool(tool: object) -> bool:
+    return isinstance(tool, Mapping) and tool.get("type") == "tool_search"
+
+
+def tools_with_anthropic_tool_search_mapped(
+    tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
+    if tools is None or not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+        return tools
+    if any(_is_openai_tool_search_tool(tool) for tool in tools):
+        return tuple(tool for tool in tools if not is_anthropic_tool_search_chat_tool(tool))
+    first_search_index: Final = next(
+        index for index, tool in enumerate(tools) if is_anthropic_tool_search_chat_tool(tool)
+    )
+    server_tool_search: Final[OpenAIToolSearchToolParam] = {"type": "tool_search", "execution": "server"}
+    return tuple(
+        server_tool_search if index == first_search_index else tool
+        for index, tool in enumerate(tools)
+        if index == first_search_index or not is_anthropic_tool_search_chat_tool(tool)
+    )
 
 
 def provider_builds_anthropic_request(model: str, custom_llm_provider: str | None) -> bool:

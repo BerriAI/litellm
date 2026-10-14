@@ -9,6 +9,7 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,
@@ -31,6 +32,54 @@ if TYPE_CHECKING:
 
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
+
+
+def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_search() -> None:
+    response_body: Final = {
+        "id": "resp_tool_search_bridge",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_tool_search_bridge",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    tools: Final = [
+        {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+            "defer_loading": True,
+        },
+    ]
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+
+        litellm.completion(
+            model="openai/responses/gpt-5.5",
+            messages=[{"role": "user", "content": "Find a tool"}],
+            tools=tools,
+            api_key="sk-test",
+            cache={"no-cache": True},
+        )
+
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body["tools"][0] == {"type": "tool_search", "execution": "server"}
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
