@@ -39,12 +39,15 @@ class Signer(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class HttpxObjectStore:
-    """Holds the handler, not its client: the shared cache may close and replace the client between batches."""
+    """Holds the handler, not its client: the shared cache may close and replace the client between batches. Never
+    follows a redirect, a sink URL that bounces to plain http would otherwise carry the credential and the records there."""
 
     handler: AsyncHTTPHandler
 
     async def put(self, url: str, content: bytes, headers: Mapping[str, str], timeout: float) -> httpx.Response:
-        return await self.handler.client.put(url, content=content, headers=dict(headers), timeout=timeout)
+        return await self.handler.client.put(
+            url, content=content, headers=dict(headers), timeout=timeout, follow_redirects=False
+        )
 
 
 @dataclass(frozen=True, slots=True)

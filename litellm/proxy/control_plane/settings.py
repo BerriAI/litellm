@@ -13,8 +13,30 @@ from litellm.litellm_core_utils.oauth_token_exchange import TokenExchangeProfile
 from litellm.types.proxy.control_plane.auth import PASSWORD_MAX_LENGTH, USERNAME_MAX_LENGTH
 
 DEFAULT_SESSION_TTL_SECONDS: Final = 12 * 60 * 60
-AuditSinkKind: TypeAlias = Literal["log", "otlp", "s3"]
+AuditSinkKind: TypeAlias = Literal["log", "otlp", "s3", "splunk_hec", "sentinel"]
 ObjectLockMode: TypeAlias = Literal["COMPLIANCE", "GOVERNANCE"]
+_SINK_URL_FIELDS: Final = (
+    ("audit_s3_endpoint_url", "audit_s3_allow_insecure_http"),
+    ("audit_splunk_url", "audit_splunk_allow_insecure_http"),
+    ("audit_sentinel_endpoint", None),
+    ("audit_sentinel_authority_host", None),
+)
+
+
+def _plain_http(url: object) -> bool:
+    return isinstance(url, str) and urlsplit(url).scheme.lower() != "https"
+
+
+_REQUIRED_SINK_FIELDS: Final = (
+    ("s3", "audit_s3_bucket"),
+    ("splunk_hec", "audit_splunk_url"),
+    ("splunk_hec", "audit_splunk_token"),
+    ("sentinel", "audit_sentinel_endpoint"),
+    ("sentinel", "audit_sentinel_dcr_immutable_id"),
+    ("sentinel", "audit_sentinel_tenant_id"),
+    ("sentinel", "audit_sentinel_client_id"),
+    ("sentinel", "audit_sentinel_client_secret"),
+)
 DEFAULT_DATAPLANE_TIMEOUT_SECONDS: Final = 10.0
 
 
@@ -28,6 +50,29 @@ class S3SinkSettings:
     endpoint_url: str | None
     object_lock_mode: ObjectLockMode | None
     retention_days: int
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class SplunkHecSettings:
+    url: str
+    token: SecretStr
+    index: str | None
+    source: str
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class SentinelSettings:
+    """Azure Monitor Logs Ingestion API target plus the Entra app that may write to it."""
+
+    endpoint: str
+    dcr_immutable_id: str
+    stream_name: str
+    tenant_id: str
+    client_id: str
+    client_secret: SecretStr
+    authority_host: str
     timeout_seconds: float
 
 
@@ -140,21 +185,83 @@ class ControlPlaneSettings(BaseSettings):
     audit_s3_object_lock_mode: ObjectLockMode | None = None
     audit_s3_retention_days: int = Field(default=365, ge=1)
     audit_s3_timeout_seconds: float = 30.0
+    audit_splunk_url: str | None = None
+    audit_splunk_allow_insecure_http: bool = False
+    audit_splunk_token: SecretStr | None = None
+    audit_splunk_index: str | None = None
+    audit_splunk_source: str = "litellm-control-plane"
+    audit_splunk_timeout_seconds: float = 30.0
+    audit_sentinel_endpoint: str | None = None
+    audit_sentinel_dcr_immutable_id: str | None = None
+    audit_sentinel_stream_name: str = "Custom-LiteLLMControlPlaneAudit_CL"
+    audit_sentinel_tenant_id: str | None = None
+    audit_sentinel_client_id: str | None = None
+    audit_sentinel_client_secret: SecretStr | None = None
+    audit_sentinel_authority_host: str = "https://login.microsoftonline.com"
+    audit_sentinel_timeout_seconds: float = 30.0
 
     @model_validator(mode="after")
-    def _s3_sink_needs_a_bucket(self) -> "ControlPlaneSettings":
-        if "s3" in self.audit_sinks and self.audit_s3_bucket is None:
-            raise ValueError("CONTROL_PLANE_AUDIT_SINKS names s3 but CONTROL_PLANE_AUDIT_S3_BUCKET is not set.")
+    def _listed_sinks_have_their_settings(self) -> "ControlPlaneSettings":
+        missing: Final = tuple(
+            f"CONTROL_PLANE_{name.upper()}"
+            for kind, name in _REQUIRED_SINK_FIELDS
+            if kind in self.audit_sinks and getattr(self, name) is None
+        )
+        if missing:
+            raise ValueError(
+                f"CONTROL_PLANE_AUDIT_SINKS lists a sink whose settings are not set: {', '.join(missing)}."
+            )
         return self
 
     @model_validator(mode="after")
-    def _s3_endpoint_is_https_unless_opted_out(self) -> "ControlPlaneSettings":
-        endpoint: Final = self.audit_s3_endpoint_url
-        if endpoint is None or self.audit_s3_allow_insecure_http or urlsplit(endpoint).scheme.lower() == "https":
+    def _sink_urls_are_https_unless_opted_out(self) -> "ControlPlaneSettings":
+        """Every sink URL carries a credential (SigV4, HEC token, bearer, client secret), so plain http is refused.
+        Only the stores that can live in-cluster (S3 compatible, Splunk) have an opt-out."""
+        insecure: Final = tuple(
+            (name, flag)
+            for name, flag in _SINK_URL_FIELDS
+            if _plain_http(getattr(self, name)) and not (flag is not None and getattr(self, flag))
+        )
+        if not insecure:
             return self
+        name, flag = insecure[0]
+        remedy: Final = f" or set CONTROL_PLANE_{flag.upper()}=true for an in-cluster endpoint" if flag else ""
         raise ValueError(
-            f"audit s3 endpoint {endpoint!r} is not https, audit records and the SigV4 authorization would travel "
-            "unencrypted. Use https or set CONTROL_PLANE_AUDIT_S3_ALLOW_INSECURE_HTTP=true for an in-cluster store."
+            f"CONTROL_PLANE_{name.upper()} is not https, audit records and the sink credential would travel "
+            f"unencrypted. Use https{remedy}."
+        )
+
+    @property
+    def audit_splunk(self) -> SplunkHecSettings | None:
+        if self.audit_splunk_url is None or self.audit_splunk_token is None:
+            return None
+        return SplunkHecSettings(
+            url=self.audit_splunk_url,
+            token=self.audit_splunk_token,
+            index=self.audit_splunk_index,
+            source=self.audit_splunk_source,
+            timeout_seconds=self.audit_splunk_timeout_seconds,
+        )
+
+    @property
+    def audit_sentinel(self) -> SentinelSettings | None:
+        if (
+            self.audit_sentinel_endpoint is None
+            or self.audit_sentinel_dcr_immutable_id is None
+            or self.audit_sentinel_tenant_id is None
+            or self.audit_sentinel_client_id is None
+            or self.audit_sentinel_client_secret is None
+        ):
+            return None
+        return SentinelSettings(
+            endpoint=self.audit_sentinel_endpoint,
+            dcr_immutable_id=self.audit_sentinel_dcr_immutable_id,
+            stream_name=self.audit_sentinel_stream_name,
+            tenant_id=self.audit_sentinel_tenant_id,
+            client_id=self.audit_sentinel_client_id,
+            client_secret=self.audit_sentinel_client_secret,
+            authority_host=self.audit_sentinel_authority_host.rstrip("/"),
+            timeout_seconds=self.audit_sentinel_timeout_seconds,
         )
 
     @property
