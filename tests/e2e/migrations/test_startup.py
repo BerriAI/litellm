@@ -8,6 +8,7 @@ from .checks import (
     COMPLETE,
     FATAL,
     GATED,
+    GATED_WITH_SHORT_LOCK_TIMEOUT,
     assert_completed,
     assert_completed_after_lock_timeouts,
     start_replicas,
@@ -111,19 +112,17 @@ class TestMigrationStartup:
     )
     def test_lock_timeout_exhaustion_then_restart(self, containers: Containers, database: Database) -> None:
         with database.lock():
-            with containers.start(
-                database, (GATED,), environment={"LITELLM_MIGRATION_DDL_LOCK_TIMEOUT": "2"}
-            ) as replica:
+            with containers.start(database, (GATED_WITH_SHORT_LOCK_TIMEOUT,)) as replica:
                 until("owner blocked in migration SQL", lambda: bool(database.blocked()))
                 failed((replica,), "attempts that made no progress")
             assert not database.exists("migration_effect")
             assert database.query(
                 "SELECT count(*) FROM _prisma_migrations WHERE migration_name = %s AND finished_at IS NOT NULL",
-                (GATED.name,),
+                (GATED_WITH_SHORT_LOCK_TIMEOUT.name,),
             ) == ((0,),)
-        with containers.start(database, (GATED,)) as restarted:
+        with containers.start(database, (GATED_WITH_SHORT_LOCK_TIMEOUT,)) as restarted:
             ready((restarted,), database)
-        assert_completed_after_lock_timeouts(database, GATED)
+        assert_completed_after_lock_timeouts(database, GATED_WITH_SHORT_LOCK_TIMEOUT)
 
     @meta(
         Subject(
