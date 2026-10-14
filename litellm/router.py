@@ -12984,21 +12984,19 @@ class Router:
 
         # Safe to check statically since `rpm` is a direct litellm_params setting, unlike
         # max_input_tokens which get_router_model_info() can also derive from the cost map.
-        _any_deployment_has_rpm = self.routing_strategy != "usage-based-routing-v2" and any(
+        any_deployment_has_rpm: Final = self.routing_strategy != "usage-based-routing-v2" and any(
             isinstance(litellm_params := d.get("litellm_params"), dict) and litellm_params.get("rpm") is not None
             for d in _returned_deployments
         )
 
         ## get model group RPM ##
-        model_group_cache: dict[str, int] | None = None  # mutable-ok: incremented below
-        if _any_deployment_has_rpm:
-            dt = get_utc_datetime()
-            current_minute = dt.strftime("%H-%M")
-            rpm_key = f"{model}:rpm:{current_minute}"
-            cached_model_group: Final = self.cache.get_cache(
-                key=rpm_key, local_only=True, parent_otel_span=parent_otel_span
-            )
-            model_group_cache = cached_model_group or {}  # mutable-ok: updated below
+        rpm_key: Final = f"{model}:rpm:{get_utc_datetime().strftime('%H-%M')}"
+        cached_model_group: Final = (
+            self.cache.get_cache(key=rpm_key, local_only=True, parent_otel_span=parent_otel_span)
+            if any_deployment_has_rpm
+            else None
+        )
+        model_group_cache: Final = cached_model_group if isinstance(cached_model_group, dict) else {}
         for idx, deployment in enumerate(_returned_deployments):
             # Cache nested dict access to avoid repeated temporary dict allocations
             _litellm_params = deployment.get("litellm_params", {})
@@ -13039,7 +13037,7 @@ class Router:
                 verbose_router_logger.exception("An error occurs - %s", e)
 
             ## RPM CHECK ##
-            if _any_deployment_has_rpm and isinstance(model_group_cache, dict):
+            if any_deployment_has_rpm:
                 model_id = _model_info.get("id", "")
                 ### get local router cache ###
                 current_request_cache_local = (

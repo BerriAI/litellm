@@ -22302,6 +22302,158 @@ class TestPreCallChecksOptimization:
         assert deployments[0].get("model_info", {}).get("id") == "small", "First deployment ID changed!"
         assert deployments[1].get("model_info", {}).get("id") == "large", "Second deployment ID changed!"
 
+
+def _rpm_cache_keys_read_by(router: Router, model: str, deployments: list) -> list:
+    get_cache_calls: list = []
+    original_get_cache = router.cache.get_cache
+
+    def _tracking_get_cache(*args, **kwargs):
+        get_cache_calls.append(kwargs.get("key", args[0] if args else None))
+        return original_get_cache(*args, **kwargs)
+
+    router.cache.get_cache = _tracking_get_cache
+    router._pre_call_checks(
+        model=model,
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    return get_cache_calls
+
+
+def test_no_rpm_cache_read_when_no_deployment_has_rpm():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
+                "model_info": {"id": "no-rpm-1"},
+            },
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5.5", "api_key": "sk-test"},
+                "model_info": {"id": "no-rpm-2"},
+            },
+        ],
+        set_verbose=False,
+        enable_pre_call_checks=True,
+    )
+    deployments = router.get_model_list(model_name="test")
+    assert deployments is not None
+
+    get_cache_calls = _rpm_cache_keys_read_by(router, "test", deployments)
+
+    assert get_cache_calls == [], f"Expected zero cache reads, got {get_cache_calls}"
+
+
+def test_rpm_cache_still_read_and_enforced_when_a_deployment_has_rpm():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test", "rpm": 1},
+                "model_info": {"id": "low-rpm"},
+            },
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5.5", "api_key": "sk-test"},
+                "model_info": {"id": "no-rpm"},
+            },
+        ],
+        set_verbose=False,
+        enable_pre_call_checks=True,
+    )
+    deployments = router.get_model_list(model_name="test")
+    assert deployments is not None
+    router.cache.set_cache(key="low-rpm", value=1, local_only=True)
+
+    filtered = router._pre_call_checks(
+        model="test",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["no-rpm"]
+
+
+def test_no_rpm_cache_read_for_usage_based_routing_v2():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test", "rpm": 1},
+                "model_info": {"id": "low-rpm"},
+            },
+        ],
+        set_verbose=False,
+        enable_pre_call_checks=True,
+        routing_strategy="usage-based-routing-v2",
+    )
+    deployments = router.get_model_list(model_name="test")
+    assert deployments is not None
+
+    get_cache_calls = _rpm_cache_keys_read_by(router, "test", deployments)
+
+    assert get_cache_calls == [], f"Expected zero cache reads under usage-based-routing-v2, got {get_cache_calls}"
+
+
+def test_token_counting_failure_returns_original_deployments(monkeypatch):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
+                "model_info": {"id": "dep-1", "max_input_tokens": 100},
+            },
+        ],
+        set_verbose=False,
+        enable_pre_call_checks=True,
+    )
+
+    def _raise_token_counting(*args, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(router, "_count_pre_call_check_tokens", _raise_token_counting)
+    deployments = router.get_model_list(model_name="test")
+    assert deployments is not None
+
+    result = router._pre_call_checks(
+        model="test",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert result == deployments
+
+
+def test_model_info_lookup_failure_is_swallowed(monkeypatch):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test",
+                "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
+                "model_info": {"id": "dep-1"},
+            },
+        ],
+        set_verbose=False,
+        enable_pre_call_checks=True,
+    )
+
+    def _raise_model_info(*args, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(router, "get_router_model_info", _raise_model_info)
+    deployments = router.get_model_list(model_name="test")
+    assert deployments is not None
+
+    result = router._pre_call_checks(
+        model="test",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert [d["model_info"]["id"] for d in result] == ["dep-1"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
