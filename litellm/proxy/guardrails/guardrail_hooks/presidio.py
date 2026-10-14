@@ -177,9 +177,16 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
         yield chunk
 
 
-def _maskable_text_slots(
-    messages: Sequence[object],
-) -> list[tuple[dict, str]]:  # mutable-ok: slots alias message dicts the hooks rewrite in place
+_Slot = tuple[dict[str, object], str]
+
+
+def _as_dicts(items: object) -> list[dict[str, object]]:  # mutable-ok: aliases, not copies
+    if not isinstance(items, list):
+        return []
+    return [cast("dict[str, object]", i) for i in cast("list[object]", items) if isinstance(i, dict)]
+
+
+def _maskable_text_slots(messages: object) -> list[_Slot]:
     """
     ``(container, key)`` pairs whose string value is message text to scan.
 
@@ -188,27 +195,19 @@ def _maskable_text_slots(
     or a list of text blocks). Without them, code-interpreter output such as
     ``pdftotext`` of an attached file reaches the provider unmasked.
     """
-    slots: Final[list[tuple[dict, str]]] = []  # mutable-ok: accumulator handed back to the caller
-    for m in messages:
-        if not isinstance(m, dict):
-            continue
-        content = m.get("content", None)
-        if isinstance(content, str):
+    slots: Final[list[_Slot]] = []  # mutable-ok: accumulator handed back to the caller
+    for m in _as_dicts(messages):
+        if isinstance(m.get("content"), str):
             slots.append((m, "content"))
-        elif isinstance(content, list):
-            for c in content:
-                if not isinstance(c, dict):
-                    continue
-                if isinstance(c.get("text"), str):
-                    slots.append((c, "text"))
-                elif c.get("type") == "tool_result":
-                    inner = c.get("content")
-                    if isinstance(inner, str):
-                        slots.append((c, "content"))
-                    elif isinstance(inner, list):
-                        slots.extend(
-                            (ic, "text") for ic in inner if isinstance(ic, dict) and isinstance(ic.get("text"), str)
-                        )
+            continue
+        for c in _as_dicts(m.get("content")):
+            if isinstance(c.get("text"), str):
+                slots.append((c, "text"))
+            elif c.get("type") == "tool_result":
+                if isinstance(c.get("content"), str):
+                    slots.append((c, "content"))
+                else:
+                    slots.extend((ic, "text") for ic in _as_dicts(c.get("content")) if isinstance(ic.get("text"), str))
     return slots
 
 
@@ -1092,7 +1091,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             responses: Final = await asyncio.gather(
                 *(
                     self.check_pii(
-                        text=container[key],
+                        text=str(container[key]),
                         output_parse_pii=self.output_parse_pii,
                         presidio_config=presidio_config,
                         request_data=data,
@@ -1152,7 +1151,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             responses: Final = await asyncio.gather(
                 *(
                     self.check_pii(
-                        text=container[key],
+                        text=str(container[key]),
                         output_parse_pii=False,
                         presidio_config=presidio_config,
                         request_data=kwargs,
