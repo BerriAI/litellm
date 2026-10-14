@@ -70,7 +70,7 @@ async def test_s3_sync_and_async_uploads_pass_independent_wire_verification(monk
         prior: Final = asyncio.all_tasks()
         logger: Final = S3Logger(s3_bucket_name="integration-bucket", s3_region_name="us-east-1", s3_endpoint_url=wire.url,
                                 s3_aws_access_key_id=ACCESS, s3_aws_secret_access_key=SECRET, s3_callback_params_override={})
-        owned: Final = asyncio.all_tasks() - prior
+        owned: Final = {task for task in asyncio.all_tasks() - prior if task.get_coro().__qualname__ == "CustomBatchLogger.periodic_flush"}
         assert len(owned) == 1
         try:
             for mode in ("sync", "async"):

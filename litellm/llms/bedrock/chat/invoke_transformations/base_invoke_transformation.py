@@ -28,7 +28,7 @@ from litellm.llms.bedrock.request_metadata import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.bedrock import GuardrailConfigBlock
 from litellm.types.llms.openai import AllMessageValues
@@ -49,6 +49,10 @@ _GUARDRAIL_CONFIG_VALIDATOR: Final["TypeAdapter[GuardrailConfigBlock]"] = TypeAd
 
 _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
+)
+
+_INVOKE_PROVIDERS: Final = TypeAdapter(tuple[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]).validate_python(
+    get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL)
 )
 
 
@@ -499,7 +503,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         sync_client: Final = (
-            _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
+            get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
         )
         chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size
         completion_stream, response_headers = make_sync_call(
@@ -568,7 +572,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if provider is not None:
             return provider
 
-        for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+        for provider in _INVOKE_PROVIDERS:
             if provider in model:
                 return provider
         return None

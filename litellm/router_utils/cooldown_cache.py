@@ -84,7 +84,7 @@ class CooldownCache:
 
             # Store the cooldown information for the deployment separately
             cooldown_data: Final = CooldownCacheValue(
-                exception_received=self.exception_masker._mask_value(str(original_exception)),
+                exception_received=self.exception_masker.mask_value(str(original_exception)),
                 status_code=str(exception_status),
                 timestamp=current_time,
                 cooldown_time=cooldown_time,

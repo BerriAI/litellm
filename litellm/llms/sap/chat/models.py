@@ -2,33 +2,45 @@ import warnings
 from enum import Enum
 from typing import Final, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import (
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
-def validate_different_content(v: str | dict | list) -> str:
-    if v in ((), {}, []):
-        return ""
-    elif isinstance(v, dict) and "text" in v:
-        return v["text"]
-    elif isinstance(v, list):
-        new_v: Final = []
-        for item in v:
-            if isinstance(item, dict) and "text" in item:
-                if item["text"]:
-                    new_v.append(item["text"])
-            elif isinstance(item, str):
-                new_v.append(item)
-        return "\n".join(new_v)
-    elif isinstance(v, str):
-        return v
-    raise ValueError("Content must be a string")
+class CacheControl(LiteLLMBaseModel):
+    type: Literal["ephemeral"]
+    ttl: Literal["5m", "1h"] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+        result = handler(self)
+        if result.get("ttl") is None:
+            result.pop("ttl", None)
+        return result
 
 
 class TextContent(LiteLLMBaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
+    cache_control: CacheControl | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+        result = handler(self)
+        if result.get("cache_control") is None:
+            result.pop("cache_control", None)
+        return result
 
 
 class ImageURLContent(LiteLLMBaseModel):
@@ -39,6 +51,16 @@ class ImageURLContent(LiteLLMBaseModel):
 class ImageContent(LiteLLMBaseModel):
     type_: Literal["image_url"] = Field(default="image_url", alias="type")
     image_url: ImageURLContent
+    cache_control: CacheControl | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+        result = handler(self)
+        if result.get("cache_control") is None:
+            result.pop("cache_control", None)
+        return result
 
 
 class FunctionObj(LiteLLMBaseModel):
@@ -52,9 +74,9 @@ class FunctionTool(LiteLLMBaseModel):
     parameters: dict = Field(default={"type": "object", "properties": {}})
     strict: bool = False
 
-    def model_dump(self, **kwargs) -> dict:
+    def model_dump(self, **kwargs: object) -> dict:
         kwargs["exclude_unset"] = False
-        return super().model_dump(**kwargs)
+        return super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
 
     @field_validator("parameters", mode="before")
     @classmethod
@@ -72,10 +94,14 @@ class FunctionTool(LiteLLMBaseModel):
 class ChatCompletionTool(LiteLLMBaseModel):
     type_: Literal["function"] = Field(default="function", alias="type")
     function: FunctionTool
+    cache_control: CacheControl | None = None
 
-    def model_dump(self, **kwargs) -> dict:
+    def model_dump(self, **kwargs: object) -> dict:
         kwargs["exclude_unset"] = False
-        return super().model_dump(**kwargs)
+        result = super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
+        if result.get("cache_control") is None:
+            result.pop("cache_control", None)
+        return result
 
 
 class MessageToolCall(LiteLLMBaseModel):
@@ -90,9 +116,7 @@ class SAPMessage(LiteLLMBaseModel):
     """
 
     role: Literal["system", "developer"] = "system"
-    content: str
-
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    content: str | TextContent | list[TextContent]
 
 
 class SAPUserMessage(LiteLLMBaseModel):
@@ -102,19 +126,15 @@ class SAPUserMessage(LiteLLMBaseModel):
 
 class SAPAssistantMessage(LiteLLMBaseModel):
     role: Literal["assistant"] = "assistant"
-    content: str = ""
+    content: str | TextContent | list[TextContent] = ""
     refusal: str = ""
     tool_calls: list[MessageToolCall] = Field(default=[])
-
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
 class SAPToolChatMessage(LiteLLMBaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
-    content: str
-
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    content: str | TextContent | list[TextContent]
 
 
 ChatMessage = SAPMessage | SAPUserMessage | SAPAssistantMessage | SAPToolChatMessage

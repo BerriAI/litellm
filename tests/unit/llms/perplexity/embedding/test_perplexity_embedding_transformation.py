@@ -3,12 +3,15 @@ Unit tests for Perplexity embedding transformation logic.
 """
 
 import base64
+import datetime
 import struct
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.perplexity.embedding.transformation import (
     PerplexityEmbeddingConfig,
     PerplexityEmbeddingError,
@@ -297,3 +300,100 @@ class TestPerplexityEmbeddingProviderConfig:
         )
         assert config is not None
         assert isinstance(config, PerplexityEmbeddingConfig)
+
+
+FLOAT_ROW = {"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}
+
+
+def _transform(payload: object) -> EmbeddingResponse:
+    logging_obj = Logging(
+        model="perplexity/pplx-embed-v1-0.6b",
+        messages=[],
+        stream=False,
+        call_type="embedding",
+        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="call-id",
+        function_id="function-id",
+    )
+    return PerplexityEmbeddingConfig().transform_embedding_response(
+        model="pplx-embed-v1-0.6b",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=EmbeddingResponse(),
+        logging_obj=logging_obj,
+    )
+
+
+def _token_counts(response: EmbeddingResponse) -> tuple[int, int, int]:
+    assert response.usage is not None
+    return (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens)
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        ({"prompt_tokens": 4, "total_tokens": 6}, (4, 0, 6)),
+        ({"total_tokens": 6}, (6, 0, 6)),
+        ({"prompt_tokens": 0, "total_tokens": 6}, (6, 0, 6)),
+        ({"prompt_tokens": None, "total_tokens": 6}, (6, 0, 6)),
+        ({"prompt_tokens": 4}, (4, 0, 0)),
+        ({}, (0, 0, 0)),
+        ({"prompt_tokens": None, "total_tokens": None}, (0, 0, 0)),
+        ({"prompt_tokens": "", "total_tokens": []}, (0, 0, 0)),
+        ({"prompt_tokens": "12", "total_tokens": 12.0}, (12, 0, 12)),
+    ],
+)
+def test_perplexity_embedding_usage_falls_back_to_total_tokens_and_tolerates_loose_counts(usage, expected):
+    response = _transform({"data": [FLOAT_ROW], "usage": usage})
+
+    assert response.data == [FLOAT_ROW]
+    assert _token_counts(response) == expected
+
+
+def test_perplexity_embedding_response_without_usage_reports_zero_tokens():
+    assert _token_counts(_transform({"data": [FLOAT_ROW]})) == (0, 0, 0)
+
+
+def test_perplexity_embedding_rows_keep_their_fields_in_order_around_the_decoded_vector():
+    encoded = base64.b64encode(struct.pack("3b", 127, 0, -127)).decode()
+
+    response = _transform(
+        {"data": [{"z": 1, "embedding": encoded, "index": 0}, {"index": 1, "embedding": [0.5]}, {"index": 2}]}
+    )
+
+    assert [list(row.items()) for row in response.data] == [
+        [("z", 1), ("embedding", [1.0, 0.0, -1.0]), ("index", 0)],
+        [("index", 1), ("embedding", [0.5])],
+        [("index", 2), ("embedding", None)],
+    ]
+
+
+@pytest.mark.parametrize("payload", [{}, {"data": []}, {"data": ""}, {"data": {}}])
+def test_perplexity_embedding_response_without_rows_has_no_data(payload):
+    assert _transform(payload).data == []
+
+
+@pytest.mark.parametrize("row", [None, 3, "ab", [], [["embedding", [1.0]]]])
+def test_perplexity_embedding_row_that_is_not_an_object_is_rejected(row):
+    with pytest.raises(ValidationError):
+        _transform({"data": [FLOAT_ROW, row]})
+
+
+@pytest.mark.parametrize("usage", [None, [], "tokens", 3])
+def test_perplexity_embedding_usage_that_is_not_an_object_is_rejected(usage):
+    with pytest.raises(ValidationError):
+        _transform({"data": [FLOAT_ROW], "usage": usage})
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": "many"},
+        {"total_tokens": 1.5},
+        {"prompt_tokens": [1]},
+        {"prompt_tokens": 4, "total_tokens": 1.5},
+        {"prompt_tokens": 4, "total_tokens": "many"},
+    ],
+)
+def test_perplexity_embedding_token_count_that_is_not_an_integer_is_rejected(usage):
+    with pytest.raises(ValidationError):
+        _transform({"data": [FLOAT_ROW], "usage": usage})
