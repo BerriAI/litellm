@@ -17,6 +17,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import (
@@ -32,7 +33,16 @@ TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING: Final = "team_admin_editable_team_field
 
 # TODO(LIT-5722): add the remaining team settings one per PR, each with its value-diff tests and dashboard field
 SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset(
-    {"tpm_limit", "rpm_limit", "max_budget", "soft_budget"}
+    {
+        "tpm_limit",
+        "rpm_limit",
+        "max_budget",
+        "soft_budget",
+        "team_member_budget",
+        "team_member_budget_duration",
+        "team_member_tpm_limit",
+        "team_member_rpm_limit",
+    }
 )
 TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION: Final = "raise_max_budget"
 TEAM_ADMIN_PROJECTS_PERMISSION: Final = "projects"
@@ -64,6 +74,19 @@ _METADATA_FOLDED_FIELDS: Final[frozenset[str]] = frozenset(
 _SYSTEM_MANAGED_METADATA_KEYS: Final[frozenset[str]] = frozenset({"team_member_budget_id"})
 _NOT_COLUMNS: Final[frozenset[str]] = frozenset({"team_id", "metadata"})
 _SETTINGS_LOCATION: Final = "Settings > UI > Team admin editable fields"
+
+
+@dataclass(frozen=True, slots=True)
+class TeamMemberDefaults:
+    team_member_budget: float | None = None
+    team_member_budget_duration: str | None = None
+    team_member_tpm_limit: int | None = None
+    team_member_rpm_limit: int | None = None
+
+
+TEAM_MEMBER_DEFAULT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,34 +273,76 @@ def _metadata_changes(
     )
 
 
+def stored_team_member_budget_id(team: LiteLLM_TeamTable) -> str | None:
+    budget_id: Final = _stored_metadata(_JSON_OBJECT.validate_json(team.model_dump_json())).get("team_member_budget_id")
+    return budget_id if isinstance(budget_id, str) else None
+
+
+def team_member_defaults(budget: LiteLLM_BudgetTable | None) -> TeamMemberDefaults | None:
+    if budget is None:
+        return None
+    return TeamMemberDefaults(
+        team_member_budget=budget.max_budget,
+        team_member_budget_duration=budget.budget_duration,
+        team_member_tpm_limit=budget.tpm_limit,
+        team_member_rpm_limit=budget.rpm_limit,
+    )
+
+
 def _stored_model_aliases(existing_row: LiteLLM_TeamTable) -> Mapping[str, object]:
     table: Final = existing_row.litellm_model_table
     return _as_object(_JSON_OBJECT.validate_json(table.model_dump_json()).get("model_aliases")) if table else _EMPTY
 
 
 def _column_changed(
-    field: str, submitted: Mapping[str, object], existing: Mapping[str, object], existing_row: LiteLLM_TeamTable
+    field: str,
+    submitted: Mapping[str, object],
+    existing: Mapping[str, object],
+    existing_row: LiteLLM_TeamTable,
+    member_defaults: Mapping[str, object],
 ) -> bool:
     if field == "model_aliases":
         return _as_object(submitted.get(field)) != _stored_model_aliases(existing_row)
+    if field in member_defaults:
+        return submitted.get(field) != member_defaults[field]
     if field in LiteLLM_TeamTable.model_fields:
         return submitted.get(field) != existing.get(field)
     return True
 
 
-def changed_team_fields(data: UpdateTeamRequest, existing_row: LiteLLM_TeamTable) -> frozenset[str]:
+def _member_defaults_by_field(member_defaults: TeamMemberDefaults | None) -> Mapping[str, object]:
+    stored: Final = member_defaults or TeamMemberDefaults()
+    return MappingProxyType(
+        {
+            "team_member_budget": stored.team_member_budget,
+            "team_member_budget_duration": stored.team_member_budget_duration,
+            "team_member_tpm_limit": stored.team_member_tpm_limit,
+            "team_member_rpm_limit": stored.team_member_rpm_limit,
+        }
+    )
+
+
+def changed_team_fields(
+    data: UpdateTeamRequest,
+    existing_row: LiteLLM_TeamTable,
+    member_defaults: TeamMemberDefaults | None = None,
+) -> frozenset[str]:
     """Logical field names whose stored value the request would change.
 
     Request and stored row are compared as JSON values so both sides share one representation. Fields the
     server folds into metadata are attributed to their own name whether they arrive top-level or inside
-    ``metadata``; anything else in ``metadata`` is attributed to ``metadata``. Fields with no stored
-    counterpart on the team row count as changed whenever they are sent.
+    ``metadata``; anything else in ``metadata`` is attributed to ``metadata``. The ``team_member_*`` defaults
+    compare against the team's member budget row (``None`` when it has none, read as all null). Fields with no
+    stored counterpart count as changed whenever they are sent.
     """
     submitted: Final = _JSON_OBJECT.validate_json(data.model_dump_json(exclude_unset=True))
     existing: Final = _JSON_OBJECT.validate_json(existing_row.model_dump_json())
     column_fields: Final = frozenset(data.model_fields_set) - _NOT_COLUMNS - _METADATA_FOLDED_FIELDS
+    stored_member_defaults: Final = _member_defaults_by_field(member_defaults)
     column_changes: Final = frozenset(
-        field for field in column_fields if _column_changed(field, submitted, existing, existing_row)
+        field
+        for field in column_fields
+        if _column_changed(field, submitted, existing, existing_row, stored_member_defaults)
     )
     return column_changes | _metadata_changes(data, submitted, existing)
 
@@ -295,14 +360,21 @@ def team_admin_edit_verdict(
     data: UpdateTeamRequest,
     existing: LiteLLM_TeamTable,
     permitted: frozenset[str],
+    member_defaults: TeamMemberDefaults | None = None,
 ) -> TeamAdminEditVerdict:
     if not permitted:
         return TeamAdminEditingDisabled()
-    changed: Final = changed_team_fields(data, existing)
+    changed: Final = changed_team_fields(data, existing, member_defaults)
     blocked: Final = sorted(changed - permitted)
     if blocked:
         return TeamAdminFieldNotPermitted(field=blocked[0])
-    return TeamAdminEditAllowed(request=_only_changes(data, changed))
+    creates_member_budget: Final = member_defaults is None and bool(changed & TEAM_MEMBER_DEFAULT_FIELDS)
+    sent_for_new_member_budget: Final = (
+        frozenset(data.model_fields_set) & TEAM_MEMBER_DEFAULT_FIELDS & permitted
+        if creates_member_budget
+        else frozenset[str]()
+    )
+    return TeamAdminEditAllowed(request=_only_changes(data, changed | sent_for_new_member_budget))
 
 
 def team_admin_request_or_raise(verdict: TeamAdminEditVerdict) -> UpdateTeamRequest:

@@ -10,8 +10,10 @@ import { FieldGroup } from "@/components/ui/field";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
+import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import NumericalInput from "../shared/numerical_input";
 import {
+  isTeamAdminDurationSettingsField,
   TEAM_ADMIN_SETTINGS_FIELDS,
   teamAdminFieldLabel,
   teamAdminSettingsChanges,
@@ -27,15 +29,22 @@ const teamAdminSettingsShape = {
   rpm_limit: numericInputSchema,
   max_budget: numericInputSchema,
   soft_budget: numericInputSchema,
+  team_member_budget: numericInputSchema,
+  team_member_budget_duration: z.string().nullish(),
+  team_member_tpm_limit: numericInputSchema,
+  team_member_rpm_limit: numericInputSchema,
 };
 
 const teamAdminSettingsSchema = z.object(teamAdminSettingsShape);
 
-const INPUT_STEP: Readonly<Record<TeamAdminSettingsField, number>> = {
+const INPUT_STEP: Readonly<Record<Exclude<TeamAdminSettingsField, "team_member_budget_duration">, number>> = {
   tpm_limit: 1,
   rpm_limit: 1,
   max_budget: 0.01,
   soft_budget: 0.01,
+  team_member_budget: 0.01,
+  team_member_tpm_limit: 1,
+  team_member_rpm_limit: 1,
 };
 
 const MAX_BUDGET_KEEP_OR_LOWER_HINT = "You can keep or lower this budget. Ask a proxy admin to raise it.";
@@ -45,6 +54,11 @@ const MAX_BUDGET_RAISE_HINT =
 const fieldHint = (name: TeamAdminSettingsField, mayRaiseMaxBudget: boolean): string | undefined => {
   if (name !== "max_budget") return undefined;
   return mayRaiseMaxBudget ? MAX_BUDGET_RAISE_HINT : MAX_BUDGET_KEEP_OR_LOWER_HINT;
+};
+
+const durationSelectValue = (value: string | number | null | undefined): string | undefined => {
+  if (value === null) return NEVER_RESETS_BUDGET_DURATION;
+  return typeof value === "string" ? value : undefined;
 };
 
 interface TeamAdminSettingsFormProps {
@@ -83,9 +97,26 @@ export default function TeamAdminSettingsForm({
             label={teamAdminFieldLabel(name)}
             description={fieldHint(name, mayRaiseMaxBudget)}
           >
-            {({ ref, value, ...field }) => (
-              <NumericalInput {...field} ref={ref} value={value ?? ""} step={INPUT_STEP[name]} />
-            )}
+            {({ ref, id, value, onChange, ...field }) =>
+              isTeamAdminDurationSettingsField(name) ? (
+                <BudgetDurationDropdown
+                  id={id}
+                  showNeverResets
+                  placeholder="Inherit team reset period"
+                  value={durationSelectValue(value)}
+                  onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)}
+                />
+              ) : (
+                <NumericalInput
+                  {...field}
+                  ref={ref}
+                  id={id}
+                  value={value ?? ""}
+                  onChange={onChange}
+                  step={INPUT_STEP[name]}
+                />
+              )
+            }
           </FormField>
         ))}
       </FieldGroup>
