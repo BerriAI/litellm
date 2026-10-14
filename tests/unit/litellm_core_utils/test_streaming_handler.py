@@ -6415,3 +6415,51 @@ def validate_last_format(chunk):
         assert isinstance(
             choice["finish_reason"], str
         ), "'finish_reason' should be a string."
+
+
+class _RecordingProviderStream:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def __iter__(self) -> "_RecordingProviderStream":
+        return self
+
+    def __next__(self) -> object:
+        raise StopIteration
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+def _wrapper_over(stream: _RecordingProviderStream) -> CustomStreamWrapper:
+    return CustomStreamWrapper(
+        completion_stream=stream,
+        model="gpt-5.6",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+
+
+def test_close_releases_the_provider_stream_once_and_ends_iteration():
+    stream: Final = _RecordingProviderStream()
+    wrapper: Final = _wrapper_over(stream)
+    wrapper.close()
+    wrapper.close()
+    assert stream.close_calls == 1
+    with pytest.raises(StopIteration):
+        next(wrapper)
+
+
+def test_leaving_a_with_block_closes_the_provider_stream():
+    stream: Final = _RecordingProviderStream()
+    with _wrapper_over(stream):
+        pass
+    assert stream.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_leaving_an_async_with_block_closes_the_provider_stream():
+    stream: Final = _RecordingProviderStream()
+    async with _wrapper_over(stream):
+        pass
+    assert stream.close_calls == 1

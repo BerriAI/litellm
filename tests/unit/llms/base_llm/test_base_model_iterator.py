@@ -7,6 +7,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Final
 
+import httpx
 import pytest
 from pydantic import BaseModel
 
@@ -305,3 +306,11 @@ async def test_bytes_chunk_with_text_before_data_prefix_is_parsed(sync_mode: boo
     assert chunks[0].id == "chatcmpl-bytes"
     assert chunks[0].choices[0].delta.content == "Hello"
     assert chunks[1]["is_finished"] is True
+
+
+def test_close_releases_the_attached_http_response():
+    response: Final = httpx.Response(200, stream=httpx.ByteStream(b"data: [DONE]\n\n"))
+    iterator: Final = BaseModelResponseIterator(streaming_response=iter(()), sync_stream=True)
+    iterator.http_response = response
+    iterator.close()
+    assert response.is_closed

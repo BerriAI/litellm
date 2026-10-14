@@ -232,6 +232,7 @@ async def make_call(
         speed=speed,
         tool_name_reverse_map=tool_name_reverse_map,
         response_format_schema=response_format_schema,
+        response=response,
     )
 
     # LOGGING
@@ -302,6 +303,7 @@ def make_sync_call(
         speed=speed,
         tool_name_reverse_map=tool_name_reverse_map,
         response_format_schema=response_format_schema,
+        response=response,
     )
 
     # LOGGING
@@ -675,9 +677,12 @@ class ModelResponseIterator:
         speed: str | None = None,
         tool_name_reverse_map: dict[str, str] | None = None,
         response_format_schema: ResponseFormatSchema | None = None,
+        response: httpx.Response | None = None,
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
+        self.sync_stream = sync_stream
+        self._response = response
         self.content_blocks: list[ContentBlockDelta] = []
         self.tool_index = -1
         self.json_mode = json_mode
@@ -1375,6 +1380,22 @@ class ModelResponseIterator:
             return self._handle_accumulated_json_chunk(data_str)
 
     # Sync iterator
+    def close(self) -> None:
+        response: Final = self._response
+        self._response = None
+        if response is not None:
+            response.close()
+
+    async def aclose(self) -> None:
+        response: Final = self._response
+        self._response = None
+        if response is None:
+            return
+        if self.sync_stream:
+            response.close()
+            return
+        await response.aclose()
+
     def __iter__(self):
         return self
 
