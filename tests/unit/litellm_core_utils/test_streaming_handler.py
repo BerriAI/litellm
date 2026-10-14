@@ -1143,6 +1143,50 @@ async def test_async_streaming_read_timeout_triggers_midstream_fallback(
     assert isinstance(excinfo.value.original_exception, Exception)
 
 
+@pytest.mark.asyncio
+async def test_stream_failure_is_logged_against_the_failed_deployment_before_the_router_falls_back(
+    logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class FailureRecorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_deployment_ids: tuple[object, ...] = ()
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            self.failed_deployment_ids = (
+                *self.failed_deployment_ids,
+                kwargs["litellm_params"]["model_info"]["id"],
+            )
+
+    recorder: Final = FailureRecorder()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    logging_obj.model_call_details["litellm_params"] = {"model_info": {"id": "rate-limited-deployment"}}
+
+    async def _raise_rate_limit(**kwargs):
+        raise litellm.RateLimitError(message="Rate limit reached", llm_provider="openai", model="gpt-5.5")
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-5.5",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        make_call=_raise_rate_limit,
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        await response.__anext__()
+    logging_obj.model_call_details["litellm_params"] = {"model_info": {"id": "fallback-deployment"}}
+    for _ in range(50):
+        if recorder.failed_deployment_ids:
+            break
+        await asyncio.sleep(0.01)
+
+    assert recorder.failed_deployment_ids == ("rate-limited-deployment",)
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):
