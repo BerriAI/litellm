@@ -163,6 +163,21 @@ class RecordingPersimmonMaskingGuardrail(PersimmonMaskingGuardrail):
         return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
 
 
+class ArgumentsRedactingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        tool_calls = [
+            {**tool_call, "function": {**tool_call["function"], "arguments": "[REDACTED]"}}
+            for tool_call in inputs.get("tool_calls", [])
+        ]
+        return {**inputs, "tool_calls": tool_calls}
+
+
 class FlatShapeGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
@@ -1110,6 +1125,27 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert search_call.arguments == {"query": "[MASKED]"}
         assert search_call.call_id == "srvtoolu_1"
         assert "name" not in search_call.model_dump()
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_never_returns_original_search_arguments_after_a_non_json_rewrite(self):
+        response = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=[build_tool_search_call("srvtoolu_1", '{"query": "persimmon"}', "completed")],
+        )
+
+        result = await OpenAIResponsesHandler().process_output_response(
+            response, ArgumentsRedactingGuardrail(guardrail_name="redact")
+        )
+
+        search_call = result.output[0]
+        assert isinstance(search_call, OutputToolSearchCall)
+        assert search_call.arguments == {}
+        assert search_call.status == "incomplete"
+        assert "persimmon" not in result.model_dump_json()
 
     @pytest.mark.asyncio
     async def test_process_output_response_with_tool_calls(self):

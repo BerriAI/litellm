@@ -312,23 +312,21 @@ def _scanned_tool_call_item(item: Mapping[str, object]) -> Mapping[str, object]:
     return {**item, "name": _SCANNED_TOOL_SEARCH_NAME, "arguments": json.dumps(item.get("arguments") or {})}
 
 
-def _tool_search_arguments(payload: str | None) -> Mapping[str, object] | None:
-    if payload is None:
-        return None
+def _tool_search_rewrite(payload: str) -> Mapping[str, object]:
     try:
-        return _TOOL_SEARCH_ARGUMENTS_ADAPTER.validate_json(payload)
+        return {"arguments": _TOOL_SEARCH_ARGUMENTS_ADAPTER.validate_json(payload)}
     except ValidationError:
-        return None
+        return {"arguments": {}, "status": "incomplete"}
 
 
 def _rewritten_tool_search_call(item: object, payload: str | None) -> object:
-    arguments: Final = _tool_search_arguments(payload)
-    if arguments is None:
+    if payload is None:
         return item
+    update: Final = _tool_search_rewrite(payload)
     if isinstance(item, BaseModel):
-        return item.model_copy(update={"arguments": arguments})
+        return item.model_copy(update=update)
     if isinstance(item, Mapping):
-        return {**item, "arguments": arguments}
+        return {**item, **update}
     return item
 
 
