@@ -70,25 +70,16 @@ def test_agent_completion_kwargs_drops_model_provider_and_agent_only_keys() -> N
     assert dict(kwargs) == {"api_base": WORKSPACE, "api_key": "pat-1"}
 
 
-def test_agent_completion_kwargs_resolves_os_environ_references(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MY_DBX_PAT", "pat-from-env")
-    monkeypatch.setenv("MY_DBX_HOST", WORKSPACE)
-    monkeypatch.delenv("MY_UNSET_SECRET", raising=False)
+def test_agent_completion_kwargs_never_expands_proxy_env_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROXY_ONLY_SECRET", "proxy-secret-value")
     kwargs = agent_completion_kwargs(
         {
-            "custom_llm_provider": "databricks_agent",
-            "api_base": "os.environ/MY_DBX_HOST",
-            "api_key": "os.environ/MY_DBX_PAT",
-            "extra_headers": {"X-Tenant": "os.environ/MY_DBX_PAT"},
-            "custom_inputs": {"tenant": "os.environ/MY_UNSET_SECRET"},
+            "custom_llm_provider": "langgraph",
+            "api_base": "https://agent.example.com",
+            "api_key": "os.environ/PROXY_ONLY_SECRET",
         }
     )
-    assert dict(kwargs) == {
-        "api_base": WORKSPACE,
-        "api_key": "pat-from-env",
-        "extra_headers": {"X-Tenant": "os.environ/MY_DBX_PAT"},
-        "custom_inputs": {"tenant": "os.environ/MY_UNSET_SECRET"},
-    }
+    assert dict(kwargs) == {"api_base": "https://agent.example.com", "api_key": "os.environ/PROXY_ONLY_SECRET"}
 
 
 @respx.mock

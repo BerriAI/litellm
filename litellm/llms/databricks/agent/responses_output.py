@@ -56,8 +56,12 @@ class _StreamEvent(BaseModel):
     message: object = None
 
 
+_MESSAGE_SEPARATOR: Final = "\n\n"
+
+
 def output_text(items: Sequence[OutputItem] | None) -> str:
-    return "".join(_message_text(item) for item in items or ())
+    texts: Final = (_message_text(item) for item in items or ())
+    return _MESSAGE_SEPARATOR.join(text for text in texts if text)
 
 
 def _message_text(item: OutputItem) -> str:
@@ -72,17 +76,27 @@ def _text_chunk(text: str) -> GenericStreamingChunk:
 
 class DatabricksAgentResponsesIterator(BaseModelResponseIterator):
     _streamed_item_ids: frozenset[str] = frozenset()
+    _emitted_text: bool = False
+    _last_text_item_id: str | None = None
 
     def chunk_parser(self, chunk: Mapping[str, object]) -> GenericStreamingChunk:
         event: Final = _StreamEvent.model_validate(chunk)
         if event.type == "response.output_text.delta":
             if event.item_id is not None:
                 self._streamed_item_ids = self._streamed_item_ids | {event.item_id}
-            return _text_chunk(event.delta or "")
+            return self._item_text_chunk(event.delta or "", event.item_id)
         if event.type == "response.output_item.done":
             if event.item is None or event.item.id in self._streamed_item_ids:
                 return _text_chunk("")
-            return _text_chunk(output_text((event.item,)))
+            return self._item_text_chunk(output_text((event.item,)), event.item.id)
         if event.type == "error":
             raise DatabricksException(status_code=500, message=f"Databricks agent stream error: {event.message}")
         return _text_chunk("")
+
+    def _item_text_chunk(self, text: str, item_id: str | None) -> GenericStreamingChunk:
+        if not text:
+            return _text_chunk("")
+        separator: Final = _MESSAGE_SEPARATOR if self._emitted_text and item_id != self._last_text_item_id else ""
+        self._emitted_text = True
+        self._last_text_item_id = item_id
+        return _text_chunk(f"{separator}{text}")

@@ -19,11 +19,15 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.agent_endpoints.databricks_oauth import resolve_databricks_backend_auth
+from litellm.proxy.agent_endpoints.databricks_oauth import (
+    resolve_databricks_backend_auth,
+    resolve_url_agent_chat_auth,
+)
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.types.agents import AgentResponse
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
+_AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
 
 
 def _agent_extra_headers(agent_kwargs: Mapping[str, object]) -> Mapping[str, str] | None:
@@ -71,14 +75,23 @@ def _with_backend_auth(
     )
 
 
-def _bridge_request_data(data: Mapping[str, object], litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+def _bridge_request_data(
+    data: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    static_headers: Mapping[str, str] | None,
+) -> Mapping[str, object]:
     agent_kwargs: Final = agent_completion_kwargs(litellm_params)
-    extra_headers: Final = merge_agent_headers(
-        dynamic_headers=_client_extra_headers(data, litellm_params),
+    pinned: Final = {key: agent_kwargs[key] for key in _AGENT_PINNED_KWARGS if key in agent_kwargs}
+    agent_headers: Final = merge_agent_headers(
+        dynamic_headers=static_headers,
         static_headers=_agent_extra_headers(agent_kwargs),
     )
+    extra_headers: Final = merge_agent_headers(
+        dynamic_headers=_client_extra_headers(data, litellm_params),
+        static_headers=agent_headers,
+    )
     return _with_headers(
-        {**data, **agent_kwargs, "model": bridge_model_name(litellm_params)},
+        {**agent_kwargs, **data, **pinned, "model": bridge_model_name(litellm_params)},
         extra_headers,
     )
 
@@ -138,10 +151,10 @@ async def route_a2a_agent_request(
             )
 
     litellm_params: Final = agent.litellm_params or {}
-    backend_auth: Final = await resolve_databricks_backend_auth(litellm_params)
 
     if litellm_params.get("custom_llm_provider") in A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS:
-        return _call_route(route_type, _bridge_agent_request(data, agent, backend_auth.litellm_params))
+        bridge_auth: Final = await resolve_databricks_backend_auth(litellm_params)
+        return _call_route(route_type, _bridge_agent_request(data, agent, bridge_auth.litellm_params))
 
     # Get API base URL from agent config
     if not agent.agent_card_params or "url" not in agent.agent_card_params:
@@ -153,7 +166,8 @@ async def route_a2a_agent_request(
     data["api_base"] = agent.agent_card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
 
-    return _call_route(route_type, _with_backend_auth(data, litellm_params, backend_auth.header))
+    url_agent_auth: Final = await resolve_url_agent_chat_auth(litellm_params)
+    return _call_route(route_type, _with_backend_auth(data, litellm_params, url_agent_auth.header))
 
 
 def _bridge_agent_request(
@@ -163,7 +177,7 @@ def _bridge_agent_request(
 ) -> Mapping[str, object]:
     card_url: Final[object] = (agent.agent_card_params or {}).get("url")
     api_base: Final = {"api_base": card_url} if card_url else {}
-    return _bridge_request_data({**data, **api_base}, litellm_params)
+    return _bridge_request_data({**data, **api_base}, litellm_params, agent.static_headers)
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:

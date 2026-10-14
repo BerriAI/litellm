@@ -1,5 +1,6 @@
 import json
 from typing import Final
+from uuid import uuid4
 from unittest.mock import MagicMock
 
 import httpx
@@ -45,7 +46,7 @@ _TOOL_CALL: Final = {
 def env_oauth_m2m(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DATABRICKS_HOST", raising=False)
     monkeypatch.setenv("DATABRICKS_CLIENT_ID", "sp-id")
-    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "sp-secret")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", f"sp-secret-{uuid4().hex}")
 
 
 @pytest.fixture
@@ -347,11 +348,12 @@ def test_output_text_joins_message_items_and_skips_tool_trace_items() -> None:
         {"type": "function_call_output", "call_id": "c1", "output": "secret trace"},
         {
             "type": "message",
-            "content": [{"type": "output_text", "text": "Hello"}, {"type": "refusal", "refusal": "no"}],
+            "content": [{"type": "output_text", "text": "Let me check."}, {"type": "refusal", "refusal": "no"}],
         },
-        {"type": "message", "content": [{"type": "output_text", "text": ", world"}]},
+        {"type": "message", "content": [{"type": "output_text", "text": "It is sunny."}]},
     ]
-    assert output_text(AgentResponse.model_validate({"output": output}).output) == "Hello, world"
+    assert output_text(AgentResponse.model_validate({"output": output}).output) == "Let me check.\n\nIt is sunny."
+    assert output_text(AgentResponse.model_validate({"output": output[:2]}).output) == ""
     assert output_text(None) == ""
 
 
@@ -432,8 +434,32 @@ def test_stream_iterator_emits_deltas_once_and_whole_items_only_when_nothing_str
         iterator.chunk_parser({"type": "response.output_item.done", "item": {**MESSAGE_ITEM, "id": "msg_2"}}),
         iterator.chunk_parser({"type": "response.output_item.done", "item": {"type": "function_call", "id": "fc_1"}}),
     ]
-    assert [chunk["text"] for chunk in chunks] == ["po", "ng", "", "pong", ""]
+    assert [chunk["text"] for chunk in chunks] == ["po", "ng", "", "\n\npong", ""]
     assert all(chunk["is_finished"] is False for chunk in chunks)
+
+
+def test_stream_iterator_separates_consecutive_message_items_like_the_non_streaming_reply() -> None:
+    iterator = DatabricksAgentResponsesIterator(streaming_response=iter(()), sync_stream=True)
+    events: list[dict[str, object]] = [
+        {"type": "response.output_text.delta", "item_id": "msg_1", "delta": ""},
+        {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Let me check."},
+        {"type": "response.output_item.done", "item": {"type": "function_call", "id": "fc_1"}},
+        {"type": "response.output_text.delta", "item_id": "msg_2", "delta": "It is"},
+        {"type": "response.output_text.delta", "item_id": "msg_2", "delta": " sunny."},
+    ]
+    streamed = "".join(iterator.chunk_parser(event)["text"] for event in events)
+    whole = output_text(
+        AgentResponse.model_validate(
+            {
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "Let me check."}]},
+                    {"type": "function_call", "id": "fc_1"},
+                    {"type": "message", "content": [{"type": "output_text", "text": "It is sunny."}]},
+                ]
+            }
+        ).output
+    )
+    assert streamed == whole == "Let me check.\n\nIt is sunny."
 
 
 def test_stream_iterator_surfaces_agent_errors() -> None:
@@ -538,7 +564,11 @@ async def test_unsupported_openai_params_follow_drop_params(httpx_transport: Non
     messages = [{"role": "user", "content": "ping"}]
     with pytest.raises(litellm.UnsupportedParamsError):
         await litellm.acompletion(
-            model="databricks_agent/my-agent", messages=messages, api_base=WORKSPACE, api_key="pat-1", temperature=0.2
+            model="databricks_agent/my-agent",
+            messages=messages,
+            api_base=WORKSPACE,
+            api_key="pat-1",
+            frequency_penalty=0.2,
         )
     with respx.mock:
         route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
@@ -547,7 +577,115 @@ async def test_unsupported_openai_params_follow_drop_params(httpx_transport: Non
             messages=messages,
             api_base=WORKSPACE,
             api_key="pat-1",
-            temperature=0.2,
+            frequency_penalty=0.2,
             drop_params=True,
         )
-    assert "temperature" not in json.loads(route.calls.last.request.content)
+    assert "frequency_penalty" not in json.loads(route.calls.last.request.content)
+
+
+@respx.mock
+@pytest.mark.parametrize("token_limit", [{"max_tokens": 64}, {"max_completion_tokens": 64}])
+async def test_acompletion_sends_sampling_params_in_the_responses_agent_shape(
+    httpx_transport: None, token_limit: dict[str, int]
+) -> None:
+    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    await litellm.acompletion(
+        model="databricks_agent/my-agent",
+        messages=[{"role": "user", "content": "ping"}],
+        api_base=WORKSPACE,
+        api_key="pat-1",
+        temperature=0.2,
+        top_p=0.9,
+        user="user-1",
+        **token_limit,
+    )
+    assert json.loads(route.calls.last.request.content) == {
+        "input": [{"role": "user", "content": "ping"}],
+        "max_output_tokens": 64,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "user": "user-1",
+    }
+
+
+@respx.mock
+async def test_acompletion_sends_string_metadata_and_refuses_other_values_unless_dropped(
+    httpx_transport: None,
+) -> None:
+    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    request: Final = {
+        "model": "databricks_agent/my-agent",
+        "messages": [{"role": "user", "content": "ping"}],
+        "api_base": WORKSPACE,
+        "api_key": "pat-1",
+    }
+    await litellm.acompletion(**request, extra_body={"metadata": {"session": "s-1"}})
+    assert json.loads(route.calls.last.request.content)["metadata"] == {"session": "s-1"}
+
+    with pytest.raises(litellm.BadRequestError, match="string values") as info:
+        await litellm.acompletion(**request, extra_body={"metadata": {"session": "s-1", "turn": 1}})
+    assert info.value.status_code == 400
+    assert route.call_count == 1
+
+    await litellm.acompletion(**request, extra_body={"metadata": {"session": "s-1", "turn": 1}}, drop_params=True)
+    assert json.loads(route.calls.last.request.content)["metadata"] == {"session": "s-1"}
+    await litellm.acompletion(**request, extra_body={"metadata": {"turn": 1}}, drop_params=True)
+    assert "metadata" not in json.loads(route.calls.last.request.content)
+
+
+@responses.activate
+@respx.mock
+async def test_acompletion_reuses_the_env_service_principal_token_until_the_secret_rotates(
+    httpx_transport: None, env_oauth_m2m: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    token = responses.post(TOKEN_URL, json={"access_token": "m2m-token", "expires_in": 3600})
+    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    request: Final = {
+        "model": "databricks_agent/my-agent",
+        "messages": [{"role": "user", "content": "ping"}],
+        "api_base": WORKSPACE,
+    }
+    await litellm.acompletion(**request)
+    await litellm.acompletion(**request)
+    assert token.call_count == 1
+    assert route.call_count == 2
+
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", f"rotated-{uuid4().hex}")
+    await litellm.acompletion(**request)
+    assert token.call_count == 2
+
+
+@responses.activate
+@respx.mock
+async def test_acompletion_mints_a_fresh_env_token_when_it_expires_within_the_refresh_buffer(
+    httpx_transport: None, env_oauth_m2m: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    token = responses.post(TOKEN_URL, json={"access_token": "m2m-token", "expires_in": 30})
+    respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    request: Final = {
+        "model": "databricks_agent/my-agent",
+        "messages": [{"role": "user", "content": "ping"}],
+        "api_base": WORKSPACE,
+    }
+    await litellm.acompletion(**request)
+    await litellm.acompletion(**request)
+    assert token.call_count == 2
+
+
+@respx.mock
+async def test_acompletion_resolves_os_environ_api_base_and_api_key(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_DBX_HOST", WORKSPACE)
+    monkeypatch.setenv("MY_DBX_PAT", "pat-from-env")
+    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    response = await litellm.acompletion(
+        model="databricks_agent/my-agent",
+        messages=[{"role": "user", "content": "ping"}],
+        api_base="os.environ/MY_DBX_HOST",
+        api_key="os.environ/MY_DBX_PAT",
+    )
+    assert route.calls.last.request.headers["Authorization"] == "Bearer pat-from-env"
+    assert response.choices[0].message.content == "pong"

@@ -260,7 +260,42 @@ async def test_route_a2a_bridge_agent_calls_the_endpoint_with_the_agent_params(h
 
 
 @respx.mock
-async def test_route_a2a_bridge_agent_merges_client_and_agent_extra_headers(httpx_transport: None) -> None:
+async def test_route_a2a_bridge_agent_merges_client_static_and_agent_extra_headers(httpx_transport: None) -> None:
+    agent = AgentResponse(
+        agent_id="dbx-agent-id",
+        agent_name="dbx-agent",
+        agent_card_params={"url": WORKSPACE},
+        static_headers={"X-Static": "static", "x-shared": "from-static", "X-Both": "from-static"},
+        litellm_params={
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": WORKSPACE,
+            "api_key": "pat-1",
+            "extra_headers": {"X-Agent": "agent", "x-both": "from-agent"},
+        },
+    )
+    endpoint = respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    data = {
+        "model": "a2a/dbx-agent",
+        "messages": [{"role": "user", "content": "ping"}],
+        "extra_headers": {"X-Trace": "trace-1", "X-Shared": "from-client"},
+    }
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    sent = endpoint.calls.last.request
+    assert sent.headers["X-Trace"] == "trace-1"
+    assert sent.headers["X-Static"] == "static"
+    assert sent.headers["X-Agent"] == "agent"
+    assert sent.headers.get_list("X-Shared") == ["from-static"]
+    assert sent.headers.get_list("X-Both") == ["from-agent"]
+    assert sent.headers["Authorization"] == "Bearer pat-1"
+
+
+async def test_route_a2a_bridge_agent_lets_the_request_win_except_for_the_agent_credentials() -> None:
     agent = AgentResponse(
         agent_id="dbx-agent-id",
         agent_name="dbx-agent",
@@ -270,26 +305,32 @@ async def test_route_a2a_bridge_agent_merges_client_and_agent_extra_headers(http
             "model": "my-agent",
             "api_base": WORKSPACE,
             "api_key": "pat-1",
-            "extra_headers": {"X-Agent": "agent", "X-Shared": "from-agent"},
+            "metadata": {"tags": ["agent-tag"]},
+            "custom_inputs": {"tenant": "t-1"},
+            "timeout": 30,
         },
     )
-    endpoint = respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
-        return_value=httpx.Response(200, json=AGENT_REPLY)
-    )
+    proxy_metadata = {"user_api_key_hash": "key-hash", "user_api_key_team_id": "team-1"}
     data = {
         "model": "a2a/dbx-agent",
         "messages": [{"role": "user", "content": "ping"}],
-        "extra_headers": {"X-Trace": "trace-1", "x-shared": "from-client"},
+        "metadata": proxy_metadata,
+        "api_base": "https://elsewhere.example.com",
+        "api_key": "client-key",
     }
+    completion = Mock(return_value="reply")
 
-    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
-        await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+    with (
+        patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)),
+        patch.object(litellm, "acompletion", completion),
+    ):
+        await route_a2a_agent_request(data=data, route_type="acompletion")
 
-    sent = endpoint.calls.last.request
-    assert sent.headers["X-Trace"] == "trace-1"
-    assert sent.headers["X-Agent"] == "agent"
-    assert sent.headers.get_list("X-Shared") == ["from-agent"]
-    assert sent.headers["Authorization"] == "Bearer pat-1"
+    sent = completion.call_args.kwargs
+    assert sent["metadata"] == proxy_metadata
+    assert (sent["api_base"], sent["api_key"]) == (WORKSPACE, "pat-1")
+    assert (sent["custom_inputs"], sent["timeout"]) == ({"tenant": "t-1"}, 30)
+    assert sent["model"] == "databricks_agent/my-agent"
 
 
 @respx.mock
@@ -368,6 +409,37 @@ async def test_route_a2a_url_agent_with_databricks_oauth_sends_the_minted_token(
     sent = app.calls.last.request
     assert sent.headers["Authorization"] == "Bearer minted-oauth"
     assert json.loads(sent.content)["method"] == "message/send"
+    assert response.choices[0].message.content == "pong"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "oauth_block",
+    [
+        {"client_id": "sp"},
+        "not-a-mapping",
+        {"client_id": "sp", "client_secret": "s", "workspace_url": "https://my-app-1.azure.databricksapps.com"},
+    ],
+)
+async def test_route_a2a_url_agent_with_an_unusable_oauth_block_keeps_calling_its_card_url_on_chat(
+    httpx_transport: None, oauth_block: object
+) -> None:
+    agent_url = "https://my-a2a-app.example.com"
+    agent = AgentResponse(
+        agent_id="a2a-app-id",
+        agent_name="a2a-app",
+        agent_card_params={"url": agent_url},
+        litellm_params={"databricks_oauth": oauth_block},
+    )
+    token = _token_route(WORKSPACE)
+    app = respx.post(agent_url).mock(return_value=httpx.Response(200, json=A2A_REPLY))
+    data = {"model": "a2a/a2a-app", "messages": [{"role": "user", "content": "ping"}]}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        response = await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    assert "Authorization" not in app.calls.last.request.headers
+    assert not token.called
     assert response.choices[0].message.content == "pong"
 
 

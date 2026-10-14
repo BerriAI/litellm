@@ -5,14 +5,16 @@ Model Serving, unified: POST {workspace}/serving-endpoints/responses with the en
 Databricks Apps: POST {app}/responses
 """
 
+import hashlib
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import quote, urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter, ValidationError
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -39,8 +41,34 @@ _ENDPOINT_URL_SUFFIXES: Final = (_INVOCATIONS_SUFFIX, _APP_RESPONSES_SUFFIX)
 _SERVING_ENDPOINTS_SEGMENT: Final = "/serving-endpoints/"
 _UNIFIED_RESPONSES_SUFFIX: Final = "/serving-endpoints/responses"
 _APP_HOST_SUFFIX: Final = ".databricksapps.com"
+_TOKEN_EXPIRY_BUFFER_SECONDS: Final = 60
+
+
+class _TokenCache(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: str, *, ttl: int) -> None: ...
+
+
+def _new_token_cache() -> _TokenCache:
+    return InMemoryCache(max_size_in_memory=64)
+
+
+_ENV_M2M_TOKENS: Final = _new_token_cache()
 _INPUT_ROLES: Final = frozenset({"system", "developer", "user", "assistant"})
-_PASSTHROUGH_PARAMS: Final = ("custom_inputs", "context", "databricks_options")
+_BODY_PARAMS: Final = (
+    "max_output_tokens",
+    "temperature",
+    "top_p",
+    "user",
+    "custom_inputs",
+    "context",
+    "databricks_options",
+)
+_SAMPLING_PARAMS: Final = ("temperature", "top_p", "user")
+_OUTPUT_TOKEN_PARAMS: Final = ("max_completion_tokens", "max_tokens")
+_STRING_METADATA: Final = TypeAdapter(Mapping[str, StrictStr])
+_METADATA: Final = TypeAdapter(Mapping[str, object])
 
 
 def endpoint_name_from_model(model: str) -> str:
@@ -191,19 +219,60 @@ def _env_oauth_m2m_token(api_base: str | None) -> str | None:
                 "set DATABRICKS_HOST to the workspace URL (a Databricks App URL is not a workspace)"
             ),
         )
-    return DatabricksBase().get_oauth_m2m_token(workspace, client_id, client_secret)
+    return _cached_m2m_token(workspace, client_id, client_secret)
+
+
+def _cached_m2m_token(workspace: str, client_id: str, client_secret: str) -> str:
+    secret_digest: Final = hashlib.sha256(client_secret.encode()).hexdigest()[:16]
+    cache_key: Final = f"{workspace}|{client_id}|{secret_digest}"
+    cached: Final[object] = _ENV_M2M_TOKENS.get_cache(cache_key)
+    if isinstance(cached, str):
+        return cached
+    token: Final = DatabricksBase().get_oauth_m2m_token_and_lifetime(workspace, client_id, client_secret)
+    ttl: Final = token.expires_in - _TOKEN_EXPIRY_BUFFER_SECONDS
+    if ttl > 0:
+        _ENV_M2M_TOKENS.set_cache(cache_key, token.access_token, ttl=ttl)
+    return token.access_token
+
+
+def _resolved_env_reference(value: str | None) -> str | None:
+    if value is not None and value.startswith("os.environ/"):
+        return get_secret_str(value)
+    return value
+
+
+def _max_output_tokens(non_default_params: Mapping[str, object]) -> Mapping[str, object]:
+    limits: Final = (non_default_params[key] for key in _OUTPUT_TOKEN_PARAMS if non_default_params.get(key) is not None)
+    limit: Final = next(limits, None)
+    return {} if limit is None else {"max_output_tokens": limit}
+
+
+def _string_metadata_entries(metadata: object) -> Mapping[str, str]:
+    try:
+        entries: Final = _METADATA.validate_python(metadata)
+    except ValidationError:
+        return {}
+    return {key: value for key, value in entries.items() if isinstance(value, str)}
+
+
+def _has_string_values_only(metadata: object) -> bool:
+    try:
+        _STRING_METADATA.validate_python(metadata)
+    except ValidationError:
+        return False
+    return True
 
 
 class DatabricksAgentConfig(BaseConfig):
     @staticmethod
     def resolve_api_base_and_key(api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
         return (
-            api_base or get_secret_str("DATABRICKS_API_BASE"),
-            api_key or get_secret_str("DATABRICKS_API_KEY"),
+            _resolved_env_reference(api_base) or get_secret_str("DATABRICKS_API_BASE"),
+            _resolved_env_reference(api_key) or get_secret_str("DATABRICKS_API_KEY"),
         )
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: mirrors override contract
-        return ["stream"]
+        return ["stream", *_OUTPUT_TOKEN_PARAMS, *_SAMPLING_PARAMS]
 
     def map_openai_params(
         self,
@@ -212,7 +281,8 @@ class DatabricksAgentConfig(BaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        return dict(optional_params)
+        sampling: Final = {key: non_default_params[key] for key in _SAMPLING_PARAMS if key in non_default_params}
+        return {**optional_params, **sampling, **_max_output_tokens(non_default_params)}
 
     def validate_environment(
         self,
@@ -269,14 +339,35 @@ class DatabricksAgentConfig(BaseConfig):
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        passthrough: Final = {key: optional_params[key] for key in _PASSTHROUGH_PARAMS if key in optional_params}
+        body_params: Final = {key: optional_params[key] for key in _BODY_PARAMS if key in optional_params}
         stream: Final = {"stream": True} if optional_params.get("stream") is True else {}
         return {
             **_body_model_field(litellm_params.get("api_base"), model),
             "input": _input_items(messages, _drop_params_enabled(litellm_params)),
             **stream,
-            **passthrough,
+            **body_params,
         }
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        if "metadata" not in extra_body or _has_string_values_only(extra_body["metadata"]):
+            return extra_body
+        if not _drop_params_enabled(litellm_params):
+            raise DatabricksException(
+                status_code=400,
+                message=(
+                    "metadata sent to a Databricks ResponsesAgent must map names to string values; "
+                    "send string values only, or set drop_params: true to drop the others"
+                ),
+            )
+        kept: Final = _string_metadata_entries(extra_body["metadata"])
+        rest: Final = {key: value for key, value in extra_body.items() if key != "metadata"}
+        return {**rest, **({"metadata": kept} if kept else {})}
 
     def transform_response(
         self,

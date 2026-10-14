@@ -85,6 +85,11 @@ def _workspace_origin(url: object) -> str | None:
     return workspace_url_from_api_base(url) if isinstance(url, str) else None
 
 
+@dataclass(frozen=True, slots=True)
+class DatabricksOAuthConfigError:
+    message: str
+
+
 def _config_error(message: str) -> litellm.BadRequestError:
     return litellm.BadRequestError(message=message, model="a2a", llm_provider=DATABRICKS_AGENT_PROVIDER)
 
@@ -141,6 +146,15 @@ def parse_databricks_oauth_config(
     ``litellm.BadRequestError`` when the block is present but incomplete, so misconfiguration
     surfaces loudly instead of silently sending an unauthenticated request.
     """
+    config: Final = databricks_oauth_config(litellm_params)
+    if isinstance(config, DatabricksOAuthConfigError):
+        raise _config_error(config.message)
+    return config
+
+
+def databricks_oauth_config(
+    litellm_params: Mapping[str, object] | None,
+) -> DatabricksAppOAuthConfig | DatabricksOAuthConfigError | None:
     if not litellm_params:
         return None
 
@@ -149,10 +163,10 @@ def parse_databricks_oauth_config(
         return None
     try:
         block: Final = _OAUTH_BLOCK.validate_python(raw)
-    except ValidationError as e:
-        raise _config_error(
+    except ValidationError:
+        return DatabricksOAuthConfigError(
             f"'{DATABRICKS_OAUTH_PARAM}' must be a mapping of OAuth settings, got {type(raw).__name__}"
-        ) from e
+        )
 
     client_id: Final = _resolve_secret(block.get("client_id"))
     client_secret: Final = _resolve_secret(block.get("client_secret"))
@@ -168,9 +182,13 @@ def parse_databricks_oauth_config(
             )
             if not value
         )
-        raise _config_error(f"Databricks App OAuth config is missing required field(s): {', '.join(missing)}")
+        return DatabricksOAuthConfigError(
+            f"Databricks App OAuth config is missing required field(s): {', '.join(missing)}"
+        )
     if is_databricks_app_url(workspace_url):
-        raise _config_error("workspace_url must be the Databricks workspace URL, not a Databricks App URL")
+        return DatabricksOAuthConfigError(
+            "workspace_url must be the Databricks workspace URL, not a Databricks App URL"
+        )
 
     scope: Final = _resolve_secret(block.get("scope")) or _DEFAULT_SCOPE
 
@@ -305,8 +323,24 @@ class AgentBackendAuth:
 async def resolve_databricks_backend_auth(litellm_params: Mapping[str, object]) -> AgentBackendAuth:
     """A ``databricks_agent`` completes with the minted token as its ``api_key``, so the token outranks a personal
     access token and a client ``Authorization`` header; any other agent sends it as the outbound header."""
+    return await _backend_auth(litellm_params, parse_databricks_oauth_config(litellm_params))
+
+
+async def resolve_url_agent_chat_auth(litellm_params: Mapping[str, object]) -> AgentBackendAuth:
+    """Chat to a URL agent sent no OAuth token before ``databricks_oauth`` applied there, so a block that does not
+    parse keeps that call unauthenticated by the proxy instead of failing it."""
+    config: Final = databricks_oauth_config(litellm_params)
+    if isinstance(config, DatabricksOAuthConfigError):
+        verbose_logger.warning("Ignoring the agent's %s on chat: %s", DATABRICKS_OAUTH_PARAM, config.message)
+        return AgentBackendAuth(litellm_params=without_databricks_oauth_params(litellm_params), header=None)
+    return await _backend_auth(litellm_params, config)
+
+
+async def _backend_auth(
+    litellm_params: Mapping[str, object], config: DatabricksAppOAuthConfig | None
+) -> AgentBackendAuth:
     forwarded: Final = without_databricks_oauth_params(litellm_params)
-    token: Final = await _resolve_token(litellm_params)
+    token: Final = None if config is None else await databricks_app_oauth_token_cache.async_get_token(config)
     if token is None:
         return AgentBackendAuth(litellm_params=forwarded, header=None)
     if _is_databricks_agent(litellm_params):
