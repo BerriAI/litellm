@@ -46,11 +46,16 @@ def sha_of(script: str) -> str:
     return hashlib.sha1(script.encode()).hexdigest()  # noqa: S324
 
 
-def _limiter(redis_cache: FakeRedisCache, fail_closed: bool = False) -> PROXY_MaxParallelRequestsHandler_v3:
+def _limiter(
+    redis_cache: FakeRedisCache,
+    fail_closed: bool = False,
+    force_hash_tag_grouping: bool = False,
+) -> PROXY_MaxParallelRequestsHandler_v3:
     dual_cache = DualCache()
     limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(dual_cache=dual_cache),
         fail_closed_resolver=lambda: fail_closed,
+        force_hash_tag_grouping_resolver=lambda: force_hash_tag_grouping,
     )
     dual_cache.attach_redis_cache(redis_cache)  # after init: the fake has no server to register scripts on
     limiter.check_and_increment_by_n_script = AsyncMock(
@@ -72,6 +77,9 @@ def _refunds(limiter: PROXY_MaxParallelRequestsHandler_v3) -> list[tuple[str, fl
 
 def _lua_ok_replies(command: tuple[Any, ...]) -> Any:
     if command[0] == "EVALSHA":
+        if command[1] == sha_of(CHECK_AND_INCREMENT_BY_N_SCRIPT):
+            counter_count: Final = int(command[2]) // 2
+            return [0, *chain.from_iterable((1, 1700000000) for _ in range(counter_count))]
         return [0, 1, 1700000000]  # OK: one counter, new_counter=1, window_start
     if command[0] == "MGET":
         return [None for _ in command[1:]]
@@ -81,7 +89,7 @@ def _lua_ok_replies(command: tuple[Any, ...]) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_descriptor_lua_calls_share_one_pipeline_and_each_keeps_its_result():
+async def test_descriptor_lua_calls_share_one_pipeline_and_keep_counter_results_in_order():
     client = FakeClient(_lua_ok_replies)
     limiter = _limiter(FakeRedisCache(client))
     descriptors = [
@@ -97,19 +105,26 @@ async def test_descriptor_lua_calls_share_one_pipeline_and_each_keeps_its_result
         )
 
     assert response["overall_code"] == "OK"
-    assert [s["descriptor_key"] for s in response["statuses"]] == ["api_key", "model_per_key", "team"]
+    assert [status["descriptor_key"] for status in response["statuses"]] == ["api_key", "model_per_key", "team"]
     assert len(client.pipelines) == 1
-    evalshas = [c for c in client.pipelines[0].commands if c[0] == "EVALSHA"]
-    assert len(evalshas) == 3
-    assert {c[1] for c in evalshas} == {sha_of(CHECK_AND_INCREMENT_BY_N_SCRIPT)}
-    assert [c[3] for c in evalshas] == ["{api_key:k1}:window", "{model_per_key:k1:gpt}:window", "{team:t1}:window"]
+    evalshas: Final = tuple(command for command in client.pipelines[0].commands if command[0] == "EVALSHA")
+    assert len(evalshas) == 1
+    assert evalshas[0][1:3] == (sha_of(CHECK_AND_INCREMENT_BY_N_SCRIPT), 6)
+    assert evalshas[0][3:9] == (
+        "{api_key:k1}:window",
+        "{api_key:k1}:requests",
+        "{model_per_key:k1:gpt}:window",
+        "{model_per_key:k1:gpt}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+    )
 
 
 @pytest.mark.asyncio
-async def test_an_over_limit_descriptor_in_the_pipeline_refunds_the_groups_that_were_applied():
+async def test_an_over_limit_descriptor_in_the_merged_lua_call_does_not_refund_other_descriptors():
     def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "EVALSHA" and command[3] == "{team:t1}:window":
-            return [1, 1, 21, 20]  # OVER_LIMIT on its first counter
+        if command[0] == "EVALSHA":
+            return [1, 2, 21, 20]
         return _lua_ok_replies(command)
 
     client = FakeClient(replies)
@@ -124,15 +139,16 @@ async def test_an_over_limit_descriptor_in_the_pipeline_refunds_the_groups_that_
 
     assert response["overall_code"] == "OVER_LIMIT"
     assert response["statuses"][0]["descriptor_key"] == "team"
-    assert _refunds(limiter) == [("{api_key:k1}:requests", -1.0)]
+    assert _refunds(limiter) == []
     assert len(client.pipelines) == 1
+    assert len([command for command in client.pipelines[0].commands if command[0] == "EVALSHA"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_an_over_limit_descriptor_also_refunds_the_groups_the_pipeline_incremented_after_it():
+async def test_an_over_limit_first_descriptor_in_the_merged_lua_call_does_not_refund():
     def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "EVALSHA" and command[3] == "{api_key:k1}:window":
-            return [1, 1, 11, 10]  # OVER_LIMIT on the first group; the later groups already incremented
+        if command[0] == "EVALSHA":
+            return [1, 1, 11, 10]
         return _lua_ok_replies(command)
 
     client = FakeClient(replies)
@@ -151,17 +167,16 @@ async def test_an_over_limit_descriptor_also_refunds_the_groups_the_pipeline_inc
 
     assert response["overall_code"] == "OVER_LIMIT"
     assert response["statuses"][0]["descriptor_key"] == "api_key"
-    assert _refunds(limiter) == [("{team:t1}:requests", -1.0), ("{model_per_key:k1:gpt}:requests", -1.0)]
+    assert _refunds(limiter) == []
     assert len(client.pipelines) == 1
+    assert len([command for command in client.pipelines[0].commands if command[0] == "EVALSHA"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_a_redis_denial_stands_when_another_pipelined_group_fails():
+async def test_a_merged_redis_denial_stands_without_falling_back_or_refunding():
     def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "EVALSHA" and command[3] == "{api_key:k1}:window":
-            return [1, 1, 11, 10]  # OVER_LIMIT
-        if command[0] == "EVALSHA" and command[3] == "{team:t1}:window":
-            return ValueError("script blew up")
+        if command[0] == "EVALSHA":
+            return [1, 2, 21, 20]
         return _lua_ok_replies(command)
 
     client = FakeClient(replies)
@@ -178,16 +193,17 @@ async def test_a_redis_denial_stands_when_another_pipelined_group_fails():
             increments=[{"requests": 1}, {"requests": 1}, {"requests": 1}],
         )
 
-    assert response["overall_code"] == "OVER_LIMIT"  # not the in-memory fallback's verdict
-    assert response["statuses"][0]["descriptor_key"] == "api_key"
-    assert _refunds(limiter) == [("{model_per_key:k1:gpt}:requests", -1.0)]
+    assert response["overall_code"] == "OVER_LIMIT"
+    assert response["statuses"][0]["descriptor_key"] == "team"
+    assert _refunds(limiter) == []
     assert len(client.pipelines) == 1
+    assert len([command for command in client.pipelines[0].commands if command[0] == "EVALSHA"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_one_failed_lua_group_refunds_the_other_pipelined_groups_and_falls_back_to_in_memory():
+async def test_a_failed_merged_lua_call_falls_back_to_in_memory_without_refunds():
     def replies(command: tuple[Any, ...]) -> Any:
-        if command[0] == "EVALSHA" and command[3] == "{api_key:k1}:window":
+        if command[0] == "EVALSHA":
             return ValueError("script blew up")
         return _lua_ok_replies(command)
 
@@ -202,32 +218,26 @@ async def test_one_failed_lua_group_refunds_the_other_pipelined_groups_and_falls
         )
 
     assert response["overall_code"] == "OK"
-    assert len(response["statuses"]) == 2  # in-memory enforcement covered both descriptors
-    assert _refunds(limiter) == [("{team:t1}:requests", -1.0)]
+    assert len(response["statuses"]) == 2
+    assert _refunds(limiter) == []
     assert len(client.pipelines) == 1
+    assert len([command for command in client.pipelines[0].commands if command[0] == "EVALSHA"]) == 1
 
 
 @pytest.mark.parametrize(
-    "client, refunded",
+    "client",
     [
-        (
-            FakeClient(
-                lambda command: (
-                    ValueError("script blew up")
-                    if command[0] == "EVALSHA" and command[3] == "{api_key:k1}:window"
-                    else _lua_ok_replies(command)
-                )
-            ),
-            [("{team:t1}:requests", -1.0)],
+        FakeClient(
+            lambda command: ValueError("script blew up")
+            if command[0] == "EVALSHA"
+            else _lua_ok_replies(command)
         ),
-        (FakeClient(_lua_ok_replies, fail=ConnectionError("redis down")), []),
+        FakeClient(_lua_ok_replies, fail=ConnectionError("redis down")),
     ],
-    ids=["one_group_failed", "pipeline_failed"],
+    ids=["script_failed", "pipeline_failed"],
 )
 @pytest.mark.asyncio
-async def test_fail_closed_rejects_when_a_pipelined_lua_group_cannot_be_verified(
-    client: FakeClient, refunded: list[tuple[str, float]]
-):
+async def test_fail_closed_rejects_when_the_merged_lua_call_cannot_be_verified(client: FakeClient):
     limiter = _limiter(FakeRedisCache(client), fail_closed=True)
 
     with request_redis_batch_scope(), pytest.raises(RateLimitUnverifiableError) as exc:
@@ -237,12 +247,13 @@ async def test_fail_closed_rejects_when_a_pipelined_lua_group_cannot_be_verified
         )
 
     assert exc.value.status_code == 503
-    assert _refunds(limiter) == refunded
+    assert _refunds(limiter) == []
     assert len(client.pipelines) == 1
+    assert len([command for command in client.pipelines[0].commands if command[0] == "EVALSHA"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_a_pipeline_failure_refunds_nothing_and_falls_back_to_in_memory_enforcement():
+async def test_a_pipeline_failure_falls_back_to_in_memory_enforcement_without_refunds():
     client = FakeClient(_lua_ok_replies, fail=ConnectionError("redis down"))
     limiter = _limiter(FakeRedisCache(client))
 
@@ -254,14 +265,17 @@ async def test_a_pipeline_failure_refunds_nothing_and_falls_back_to_in_memory_en
 
     assert response["overall_code"] == "OK"
     assert len(response["statuses"]) == 2
+    assert _refunds(limiter) == []
     assert len(client.pipelines) == 1
+    assert len([command for command in client.pipelines[0].commands if command[0] == "EVALSHA"]) == 1
 
 
 @pytest.mark.asyncio
-async def test_without_a_request_scope_descriptor_groups_run_the_script_directly_as_before():
+async def test_standalone_descriptor_groups_run_as_one_direct_script_without_request_scope():
     client = FakeClient(_lua_ok_replies)
     limiter = _limiter(FakeRedisCache(client))
-    limiter.check_and_increment_by_n_script = AsyncMock(return_value=[0, 1, 1700000000])
+    script: Final = AsyncMock(return_value=[0, 1, 1700000000, 1, 1700000000])
+    limiter.check_and_increment_by_n_script = script
 
     response = await limiter.atomic_check_and_increment_by_n(
         descriptors=[_descriptor("api_key", "k1", 10), _descriptor("team", "t1", 20)],
@@ -269,7 +283,34 @@ async def test_without_a_request_scope_descriptor_groups_run_the_script_directly
     )
 
     assert response["overall_code"] == "OK"
-    assert limiter.check_and_increment_by_n_script.await_count == 2
+    assert script.await_count == 1
+    assert script.await_args.kwargs["keys"] == [
+        "{api_key:k1}:window",
+        "{api_key:k1}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+    ]
+    assert client.pipelines == []
+
+
+@pytest.mark.asyncio
+async def test_forced_hash_tag_grouping_stops_on_first_over_limit_descriptor():
+    client: Final = FakeClient(_lua_ok_replies)
+    redis_cache: Final = FakeRedisCache(client)
+    limiter: Final = _limiter(redis_cache, force_hash_tag_grouping=True)
+    script: Final = AsyncMock(return_value=[1, 1, 11, 10])
+    limiter.check_and_increment_by_n_script = script
+
+    with request_redis_batch_scope():
+        response: Final = await limiter.atomic_check_and_increment_by_n(
+            descriptors=[_descriptor("api_key", "k1", 10), _descriptor("team", "t1", 20)],
+            increments=[{"requests": 1}, {"requests": 1}],
+        )
+
+    assert response["overall_code"] == "OVER_LIMIT"
+    assert response["statuses"][0]["descriptor_key"] == "api_key"
+    assert script.await_count == 1
+    assert script.await_args.kwargs["keys"] == ["{api_key:k1}:window", "{api_key:k1}:requests"]
     assert client.pipelines == []
 
 
@@ -307,7 +348,7 @@ async def test_armed_routing_read_rides_the_admission_pipeline_and_routing_issue
     assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
     assert len(client.pipelines) == 1
     commands = client.pipelines[0].commands
-    assert [c[0] for c in commands] == ["MGET", "EVALSHA", "EVALSHA"]
+    assert [c[0] for c in commands] == ["MGET", "EVALSHA"]
     mget_keys = set(commands[0][1:])
     assert {CooldownCache.get_cooldown_cache_key("dep-a"), CooldownCache.get_cooldown_cache_key("dep-b")} <= mget_keys
     assert any(":tpm:" in key for key in mget_keys) and any(":rpm:" in key for key in mget_keys)

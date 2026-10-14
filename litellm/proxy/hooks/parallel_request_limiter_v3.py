@@ -2181,32 +2181,44 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptor_groups: list[DescriptorAtomicGroup],
         parent_otel_span: Span | None = None,
     ) -> RateLimitResponse:
-        """
-        Run Lua check-and-increment one descriptor at a time so each call's
-        keys co-locate on a single Redis Cluster slot. On OVER_LIMIT for
-        descriptor i, refund descriptors 0..i-1's increments. On Lua failure
-        mid-loop, refund applied increments and fall back to in-memory.
-        """
+        """Reserve standalone counters atomically while preserving grouped hash-tagged calls."""
         if not descriptor_groups:
             return RateLimitResponse(
                 overall_code="OK",
                 statuses=[],
             )
+        merge_standalone_groups: Final = (
+            len(descriptor_groups) > 1 and not self._is_redis_cluster() and not self._force_hash_tag_grouping_resolver()
+        )
+        descriptor_groups_for_execution: Final = (
+            [
+                (
+                    list(itertools.chain.from_iterable(group[0] for group in descriptor_groups)),
+                    list(itertools.chain.from_iterable(group[1] for group in descriptor_groups)),
+                    list(itertools.chain.from_iterable(group[2] for group in descriptor_groups)),
+                )
+            ]
+            if merge_standalone_groups
+            else descriptor_groups
+        )
         applied: Final[list[tuple[CounterRefund, ...]]] = []
         statuses: Final[list[RateLimitStatus]] = []
         reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
         raw: list[CacheCounterValue]
 
-        pipelined: Final = self._pipeline_scripts(
-            CHECK_AND_INCREMENT_BY_N_SCRIPT,
-            self.check_and_increment_by_n_script,  # pyright: ignore[reportArgumentType]  # sole caller guards it is not None
-            tuple((keys, args) for keys, args, _meta in descriptor_groups),
-        )
-        batched: Final = tuple(result for result in pipelined if result is not None)
-        if len(batched) == len(descriptor_groups):
-            return await self._settle_pipelined_descriptor_groups(descriptor_groups, batched, parent_otel_span)
+        if len(descriptor_groups_for_execution) == 1:
+            pipelined: Final = self._pipeline_scripts(
+                CHECK_AND_INCREMENT_BY_N_SCRIPT,
+                self.check_and_increment_by_n_script,  # pyright: ignore[reportArgumentType]  # guarded by the caller
+                tuple((keys, args) for keys, args, _meta in descriptor_groups_for_execution),
+            )
+            batched: Final = tuple(result for result in pipelined if result is not None)
+            if len(batched) == 1:
+                return await self._settle_pipelined_descriptor_groups(
+                    descriptor_groups_for_execution, batched, parent_otel_span
+                )
 
-        for keys, args, meta in descriptor_groups:
+        for keys, args, meta in descriptor_groups_for_execution:
             try:
                 raw = await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
                     keys=keys,
@@ -2227,7 +2239,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"diverge from Redis until window expires (window_size={self.window_size}s)",
                     e,
                 )
-                flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
+                flat_meta: list[AtomicCounterMeta] = [
+                    m for _k, _a, group_meta in descriptor_groups_for_execution for m in group_meta
+                ]
                 async with self._check_and_increment_lock:
                     return await self._atomic_check_and_increment_in_memory(
                         per_counter_meta=flat_meta,
@@ -2238,7 +2252,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if response["overall_code"] == "OVER_LIMIT":
                 await self._refund_applied_descriptor_groups(applied)
                 return response
-            if len(descriptor_groups) == 1:
+            if len(descriptor_groups_for_execution) == 1:
                 return response
             applied.append(self._counter_refunds_from_atomic_response(raw, meta))
             statuses.extend(response["statuses"])
