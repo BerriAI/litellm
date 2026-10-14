@@ -331,6 +331,61 @@ def test_chunk_parser_function_call_added_produces_tool_use():
     assert choice.finish_reason is None
 
 
+def test_chunk_parser_function_call_added_with_output_item_arguments_does_not_duplicate_arguments():
+    """Verify that when an output_item carries arguments, the opening chunk initializes arguments to ''
+    so delta events do not produce duplicate arguments downstream."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+    from litellm.types.utils import ModelResponseStream
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        "item": {
+            "type": "function_call",
+            "name": "get_weather",
+            "call_id": "call-123",
+            "arguments": '{"city":"Berlin"}',
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert isinstance(result, ModelResponseStream)
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.delta.tool_calls is not None
+    assert len(choice.delta.tool_calls) == 1
+    tool_call = choice.delta.tool_calls[0]
+    assert tool_call.id == "call-123"
+    assert tool_call.type == "function"
+    assert tool_call.function.name == "get_weather"
+    assert tool_call.function.arguments == ""
+    assert choice.finish_reason is None
+
+    # Simulate subsequent argument delta streaming
+    chunk_delta = {
+        "type": "response.function_call_arguments.delta",
+        "delta": '{"city":"Berlin"}',
+        "item_id": "call-123",
+        "output_index": 0,
+    }
+    result_delta = iterator.chunk_parser(chunk_delta)
+    assert isinstance(result_delta, ModelResponseStream)
+    assert len(result_delta.choices) == 1
+    tool_call_delta = result_delta.choices[0].delta.tool_calls[0]
+    assert tool_call_delta.function.arguments == '{"city":"Berlin"}'
+
+    # Combined arguments across the stream must yield exactly 1 copy of {"city":"Berlin"}
+    accumulated_args = (tool_call.function.arguments or "") + (tool_call_delta.function.arguments or "")
+    assert accumulated_args == '{"city":"Berlin"}'
+
+
 def test_transform_response_with_reasoning_and_output():
     """Test transform_response handles ResponsesAPIResponse with reasoning items and output messages."""
     from unittest.mock import Mock
