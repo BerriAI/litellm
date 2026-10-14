@@ -169,6 +169,20 @@ class TestWithoutInjectedUsageFrames:
         assert "usage" not in relayed.decode()
 
     @pytest.mark.asyncio
+    async def test_a_choice_that_finishes_while_another_still_streams_keeps_its_place(self):
+        last_token_finish = _frame(
+            _chunk("chatcmpl-1", choices=[{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}])
+        )
+        upstream = [_content(0), _content(1), last_token_finish, _content(1), _content(1), _finish(1), USAGE, DONE]
+
+        relayed = await _relayed(upstream)
+
+        assert [payload["choices"] for payload in _payloads(relayed)] == [
+            payload["choices"] for payload in _payloads(b"".join(upstream[:-2]))
+        ]
+        assert _payloads(relayed)[-1]["system_fingerprint"] == FINGERPRINT
+
+    @pytest.mark.asyncio
     async def test_a_server_that_forces_usage_onto_every_chunk_is_relayed_untouched(self):
         forced = [
             _content(0, usage=USAGE_COUNTS),

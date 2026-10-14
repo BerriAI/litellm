@@ -122,26 +122,34 @@ def _with_fingerprint(frame: bytes, fingerprint: str | None) -> bytes:
     return _SSE_DATA_FIELD + b" " + restamped.encode() + terminator
 
 
-def _awaits_fingerprint(chunk: _RelayedChunk) -> bool:
-    return chunk.system_fingerprint is None and any(choice.finish_reason is not None for choice in chunk.choices)
+def _awaits_fingerprint(chunk: _RelayedChunk | None) -> bool:
+    return (
+        chunk is not None
+        and chunk.usage is None
+        and chunk.system_fingerprint is None
+        and any(choice.finish_reason is not None for choice in chunk.choices)
+    )
+
+
+def _is_usage_only(chunk: _RelayedChunk) -> bool:
+    return chunk.usage is not None and not chunk.choices
 
 
 def _relayed_frame(frame: bytes, state: _RelayState) -> tuple[bytes, _RelayState]:
     if state.passes_usage_through:
         return frame, state
     chunk: Final = _relayed_chunk(frame)
-    if chunk is None:
-        return b"".join((*_held_frames(state), frame)), _RelayState()
-    if chunk.usage is not None and chunk.choices:
-        return b"".join((*_held_frames(state), frame)), _RelayState(passes_usage_through=True)
-    if chunk.usage is not None:
+    if chunk is not None and _is_usage_only(chunk):
         return (
             b"".join(_with_fingerprint(held, chunk.system_fingerprint) for held in _held_frames(state)),
             _RelayState(),
         )
     if _awaits_fingerprint(chunk):
         return b"", replace(state, newest_held=_HeldFrame(frame, state.newest_held))
-    return frame, state
+    return (
+        b"".join((*_held_frames(state), frame)),
+        _RelayState(passes_usage_through=chunk is not None and chunk.usage is not None),
+    )
 
 
 def _sse_frames(complete: bytes) -> tuple[bytes, ...]:
