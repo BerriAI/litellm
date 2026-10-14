@@ -84,6 +84,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     LegacyEncryptionUnavailableError,
+    encrypt_value_helper,
     legacy_encryption_available,
 )
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
@@ -5345,13 +5346,39 @@ async def rotate_master_key(
                 environment_variables_dict = _env_vars_param_value(c)
 
         if environment_variables_dict:
+            # Side effect preserved: decrypted values are loaded into os.environ
+            # (read compat), exactly as before. Keys that do NOT decrypt
+            # (wrong-key ciphertext, corrupt blobs, stored plaintext) are absent
+            # from the decrypted dict — they must be written back byte-identical,
+            # never silently dropped from the stored row.
             decrypted_env_vars: Final = proxy_config.decrypt_and_set_db_env_variables(
                 environment_variables=dict[str, str](environment_variables_dict)
             )
-            encrypted_env_vars: Final = proxy_config.encrypt_env_variables(
-                environment_variables=decrypted_env_vars,
-                new_encryption_key=new_master_key,
-            )
+            encrypted_env_vars: dict[str, str] = {}
+            preserved_env_var_keys: list[str] = []
+            for env_key, stored_value in environment_variables_dict.items():
+                decrypted_value = decrypted_env_vars.get(env_key)
+                if decrypted_value is None:
+                    # Undecryptable or plaintext: preserve the stored bytes as-is
+                    # so the entry stays readable via read-compat or a manual
+                    # rotation by the admin. Never delete.
+                    encrypted_env_vars[env_key] = stored_value
+                    preserved_env_var_keys.append(env_key)
+                else:
+                    # The empty string decrypts to itself (it round-trips), so it
+                    # lands here too and is re-encrypted like any other value.
+                    encrypted_env_vars[env_key] = encrypt_value_helper(
+                        value=decrypted_value,
+                        new_encryption_key=new_master_key,
+                    )
+            if preserved_env_var_keys:
+                verbose_proxy_logger.warning(
+                    "Master-key rotation preserved %d environment_variables entries "
+                    "byte-identical because they do not decrypt under the current key "
+                    "(they need manual rotation by an admin): %s",
+                    len(preserved_env_var_keys),
+                    sorted(preserved_env_var_keys),
+                )
 
             if encrypted_env_vars:
                 await _config_table(prisma_client).update(
@@ -5495,7 +5522,16 @@ async def migrate_encryption_endpoint(
         user_api_key_dict=user_api_key_dict,
         dry_run=dry_run,
     )
-    return {"status": "success", "dry_run": dry_run, "report": report.as_dict()}
+    return {
+        "status": "success",
+        "dry_run": dry_run,
+        # Loud by design: entries left byte-identical because they do not decrypt
+        # under the current key (wrong-key ciphertext / plaintext). Each needs
+        # manual rotation by an admin — the run must never read as
+        # success-with-nothing-to-do while entries were preserved.
+        "preserved_needing_manual_rotation": report.total_preserved,
+        "report": report.as_dict(),
+    }
 
 
 @router.get(

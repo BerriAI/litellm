@@ -7,7 +7,10 @@ proof-of-fix (real proxy + DB) is performed separately on the repro server.
 """
 
 import asyncio
+import base64
+import hashlib
 import json
+import os
 import sys
 from types import SimpleNamespace
 from typing import Final
@@ -18,7 +21,9 @@ import pytest
 from litellm._service_logger import ServiceTypes
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    _V2_GCM_PREFIX,
     _V3_GCM_PREFIX,
+    decrypt_if_encrypted_with,
     encrypt_secret_map,
     encrypt_value_helper,
 )
@@ -41,6 +46,16 @@ def _legacy_ct(value: str, monkeypatch) -> str:
 
 def _enable_aes(monkeypatch):
     monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "aes-256-gcm"})
+
+
+def _v2_ct(value: str, signing_key: str) -> str:
+    """Hand-mint a ``v2:gcm:`` value the way the previous release wrote it: AES-256-GCM under raw SHA-256."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    nonce: Final = os.urandom(12)
+    key: Final = hashlib.sha256(signing_key.encode()).digest()
+    sealed: Final = nonce + AESGCM(key).encrypt(nonce, value.encode(), None)
+    return _V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode()
 
 
 def _empty_covered_tables(client):
@@ -67,6 +82,19 @@ def test_classify_value(salt_key, monkeypatch):
     assert cm.classify_value("") == "plaintext"
     assert cm.classify_value(123) == "not-a-string"
     assert cm.classify_value(None) == "not-a-string"
+
+
+def test_classify_value_wrong_key_versioned_is_undecryptable_not_migrated(salt_key, monkeypatch):
+    """A ``v3:gcm:`` / ``v2:gcm:`` value sealed under a different key must NOT pass
+    the prefix fast-path as ``migrated`` — the scan attempts a real decryption so
+    it lands in ``undecryptable`` and the dry-run cannot self-report zero."""
+    _enable_aes(monkeypatch)
+
+    assert cm.classify_value(encrypt_value_helper("secret", new_encryption_key="sk-another-salt")) == "undecryptable"
+    assert cm.classify_value(_v2_ct("secret", "sk-another-salt")) == "undecryptable"
+    # Values that DO decrypt under the current key keep the fast-path result.
+    assert cm.classify_value(encrypt_value_helper("secret")) == "migrated"
+    assert cm.classify_value(_v2_ct("secret", salt_key)) == "migrated"
 
 
 def test_is_migrated(salt_key, monkeypatch):
@@ -188,13 +216,14 @@ async def test_check_and_rotation_preflight_pass_without_pynacl_when_only_comple
 
     report: Final = await cm.check_encryption(prisma_client=client)
 
-    assert report.residual_legacy == 0, report.to_dict()
+    assert report.residual_legacy == 0, report.as_dict()
     assert report.as_dict()["locations"]["model_table"] == {
         "scanned": 1,
         "migrated": 0,
         "already_v2": 1,
         "plaintext": 0,
         "undecryptable": 0,
+        "preserved": 0,
         "legacy": 0,
     }
 
@@ -654,6 +683,7 @@ async def test_check_classifies_mcp_secret_maps(
         "already_v2": expected_v2,
         "plaintext": 0,
         "undecryptable": expected_invalid,
+        "preserved": 0,
         "legacy": expected_legacy,
     }
     assert report.residual_legacy == expected_legacy
@@ -717,6 +747,127 @@ async def test_migrate_covered_tables_reports_real_counts(salt_key, monkeypatch)
     assert by_loc["model_table"].migrated == 1  # was legacy pre, v2 post
     assert by_loc["model_table"].legacy == 0  # residual zero after rotation
     assert by_loc["model_table"].already_v2 == 1
+
+
+# --------------------------- config environment_variables rewrite (gauntlet rig) ---------------------------
+
+
+def _gauntlet_env_var_rig(salt: str, monkeypatch) -> dict[str, str]:
+    """The stored config ``environment_variables`` row from the deep-gauntlet repro:
+    good v3 / v2 / nacl values, one plaintext value, one wrong-key v3 value and an
+    empty string. The old rewrite silently deleted PLAINTEXT and WRONG_KEY_V3."""
+    good_nacl: Final = _legacy_ct("good-nacl-secret", monkeypatch)
+    # The nacl mint leaves the legacy opt-in set; mint the AES values after
+    # restoring the gate so WRONG_KEY_V3 is a versioned value under a wrong key.
+    _enable_aes(monkeypatch)
+    return {
+        "GOOD_V3": encrypt_value_helper("good-v3-secret"),
+        "GOOD_V2": _v2_ct("good-v2-secret", salt),
+        "GOOD_NACL": good_nacl,
+        "PLAINTEXT": "plain-env-value",
+        "WRONG_KEY_V3": encrypt_value_helper("wrong-key-secret", new_encryption_key="sk-a-different-salt"),
+        "EMPTY": "",
+    }
+
+
+def _env_vars_prisma(stored: dict[str, str]):
+    """A prisma mock whose ``litellm_config`` holds the env-vars row in ``stored``.
+
+    ``update`` writes through to ``stored`` so the post-run scan observes the row
+    the rewrite actually persisted.
+    """
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_many = AsyncMock(
+        return_value=[SimpleNamespace(param_name="environment_variables", param_value=stored)]
+    )
+
+    async def _find_unique(where):
+        if where.get("param_name") == "environment_variables":
+            return SimpleNamespace(param_name="environment_variables", param_value=dict(stored))
+        return None
+
+    client.db.litellm_config.find_unique = AsyncMock(side_effect=_find_unique)
+
+    async def _update(where, data):
+        assert where == {"param_name": "environment_variables"}
+        payload = data["param_value"]
+        new_values = payload.data if hasattr(payload, "data") else payload
+        stored.clear()
+        stored.update(new_values)
+
+    client.db.litellm_config.update = AsyncMock(side_effect=_update)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_migrate_preserves_undecryptable_and_plaintext_env_vars(salt_key, monkeypatch):
+    """The migration rewrite never deletes env-var entries that do not decrypt:
+    PLAINTEXT and WRONG_KEY_V3 survive byte-identical, the good values re-encrypt
+    to v3:gcm:, and the report counts the preserved entries (skip-and-warn)."""
+    _enable_aes(monkeypatch)
+    monkeypatch.setattr(os, "environ", dict(os.environ))  # sandbox: the rewrite loads decrypted values into os.environ
+    stored = _gauntlet_env_var_rig(salt_key, monkeypatch)
+    original = dict(stored)
+    client = _env_vars_prisma(stored)
+
+    report = await cm.migrate_encryption(prisma_client=client, user_api_key_dict=MagicMock(), dry_run=False)
+
+    # Nothing deleted: every seeded entry survives the rewrite.
+    assert set(stored) == set(original)
+    # Undecryptable and plaintext entries are preserved byte-identical.
+    assert stored["PLAINTEXT"] == original["PLAINTEXT"]
+    assert stored["WRONG_KEY_V3"] == original["WRONG_KEY_V3"]
+    # Good entries re-encrypt to v3:gcm: and decrypt back to their originals.
+    for entry, secret in (
+        ("GOOD_V3", "good-v3-secret"),
+        ("GOOD_V2", "good-v2-secret"),
+        ("GOOD_NACL", "good-nacl-secret"),
+    ):
+        assert stored[entry].startswith(_V3_GCM_PREFIX)
+        assert stored[entry] != original[entry]
+        assert decrypt_if_encrypted_with(stored[entry], salt_key) == secret
+    # The empty string round-trips (decrypts to ""), so it re-encrypts like any value.
+    assert stored["EMPTY"].startswith(_V3_GCM_PREFIX)
+    assert decrypt_if_encrypted_with(stored["EMPTY"], salt_key) == ""
+
+    location: Final = report.as_dict()["locations"]["config_environment_variables"]
+    assert location["scanned"] == 6
+    assert location["migrated"] == 1  # the nacl value
+    assert location["already_v2"] == 4  # GOOD_V3, GOOD_V2, EMPTY and the migrated nacl value
+    assert location["undecryptable"] == 1  # honest scan: WRONG_KEY_V3 is not already_v2
+    assert location["plaintext"] == 1
+    assert location["preserved"] == 2  # PLAINTEXT + WRONG_KEY_V3 left byte-identical
+    assert location["legacy"] == 0
+    assert report.total_preserved == 2
+    assert report.total_undecryptable >= 1
+
+
+@pytest.mark.asyncio
+async def test_migrate_dry_run_writes_nothing_and_reports_the_same_preserved_counts(salt_key, monkeypatch):
+    _enable_aes(monkeypatch)
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    stored = _gauntlet_env_var_rig(salt_key, monkeypatch)
+    original = dict(stored)
+    client = _env_vars_prisma(stored)
+    client.db.litellm_config.update = AsyncMock()  # any write must fail this test
+
+    report = await cm.migrate_encryption(prisma_client=client, user_api_key_dict=MagicMock(), dry_run=True)
+
+    assert stored == original  # nothing written; the row is byte-identical
+    client.db.litellm_config.update.assert_not_awaited()
+    location: Final = report.as_dict()["locations"]["config_environment_variables"]
+    assert location["scanned"] == 6
+    assert location["migrated"] == 0
+    assert location["legacy"] == 1  # the nacl value still awaiting migration
+    assert location["already_v2"] == 2  # GOOD_V3 and GOOD_V2 only — the wrong-key value is not
+    assert location["undecryptable"] == 1
+    assert location["plaintext"] == 2  # stored plaintext + empty string
+    assert location["preserved"] == 2  # same preserved counts as the real run
+    assert report.total_preserved == 2
 
 
 def _db_service_hooks() -> tuple[AsyncMock, MagicMock]:

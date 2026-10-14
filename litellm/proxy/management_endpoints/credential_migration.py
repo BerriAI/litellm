@@ -17,7 +17,8 @@ Design properties (see case 2026-06-24 fix plan):
 * **Resumable.** Walkers commit per row (or per small table), so an interrupted
   run leaves a clean mixed state that a re-run completes.
 * **Skip-on-undecryptable.** A value that cannot be decrypted is never
-  overwritten — corrupt rows are preserved and reported, never destroyed.
+  overwritten — corrupt rows are preserved and reported (the ``preserved`` /
+  ``undecryptable`` counters flag them for manual rotation), never destroyed.
 * **Attestable.** :func:`check_encryption` is a read-only scan that classifies
   every value as ``migrated`` / ``legacy`` / ``plaintext`` / ``undecryptable``.
   A residual ``legacy == 0`` is the compliance attestation.
@@ -72,6 +73,7 @@ class LocationReport:
     already_v2: int = 0  # values already migrated (skipped)
     plaintext: int = 0  # legacy-plaintext values (no ciphertext to migrate)
     undecryptable: int = 0  # could not decrypt — preserved, not overwritten
+    preserved: int = 0  # left byte-identical by the rewrite (undecryptable / plaintext) — needs manual rotation
 
     # Used by --check (read-only classification):
     legacy: int = 0  # nacl ciphertext still awaiting migration
@@ -97,6 +99,7 @@ class LocationReport:
             "already_v2": self.already_v2,
             "plaintext": self.plaintext,
             "undecryptable": self.undecryptable,
+            "preserved": self.preserved,
             "legacy": self.legacy,
         }
 
@@ -119,10 +122,21 @@ class MigrationReport:
     def total_undecryptable(self) -> int:
         return sum(loc.undecryptable for loc in self.locations)
 
+    @property
+    def total_preserved(self) -> int:
+        """Entries left byte-identical by the run because they cannot be re-encrypted.
+
+        Surfaced at the top level of the report / endpoint response so a run that
+        preserved values never reads as a silent success-with-nothing-to-do: each
+        of these needs manual rotation by an admin.
+        """
+        return sum(loc.preserved for loc in self.locations)
+
     def as_dict(self) -> dict[str, object]:
         return {
             "residual_legacy": self.residual_legacy,
             "total_undecryptable": self.total_undecryptable,
+            "total_preserved": self.total_preserved,
             "locations": {loc.location: loc.as_dict() for loc in self.locations},
         }
 
@@ -141,26 +155,44 @@ def classify_value(value: object, key: str = "scan") -> ValueClass:
     """Classify a stored value for the residual scanner.
 
     * ``not-a-string`` — not a string (numbers/bools/None left as-is on disk).
-    * ``migrated`` — carries a versioned ``gcm`` prefix.
+    * ``migrated`` — carries a versioned ``gcm`` prefix **and** decrypts under
+      the current key (a prefix alone proves nothing about the key).
     * ``legacy`` — decrypts under the legacy nacl reader (still needs migrating).
-    * ``plaintext`` — a non-empty string that does not decrypt and is not v2;
-      treated as legacy plaintext (nothing to migrate).
-    * ``undecryptable`` — reserved for callers that already know a value is
-      ciphertext but cannot decrypt it; ``classify_value`` itself cannot tell a
-      corrupt ciphertext from plaintext, so it returns ``plaintext`` for both.
+    * ``plaintext`` — a non-empty string that does not decrypt and is not
+      versioned; treated as legacy plaintext (nothing to migrate).
+    * ``undecryptable`` — a versioned ``gcm`` value that does not decrypt under
+      the current key (wrong key / corrupt); preserved, never deleted. For
+      unversioned values ``classify_value`` cannot tell a corrupt nacl blob
+      from plaintext, so it returns ``plaintext`` for both.
     """
     if not isinstance(value, str):
         return "not-a-string"
     if value == "":
         return "plaintext"
-    if is_versioned_gcm(value):
-        return "migrated"
-    require_legacy_reader_for((value,), "scan stored encryption")
+    versioned: Final = is_versioned_gcm(value)
+    if not versioned:
+        require_legacy_reader_for((value,), "scan stored encryption")
     decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
+    if versioned:
+        # The versioned prefix proves the writer intended ciphertext, so a value
+        # that does not decrypt under the current key is undecryptable — the
+        # prefix alone must never pass a wrong-key value off as already migrated.
+        return "migrated" if decrypted is not None else "undecryptable"
     if decrypted is None:
-        # Did not decrypt under nacl and has no v2 marker: legacy plaintext.
+        # Did not decrypt under nacl and has no versioned marker: legacy plaintext.
         return "plaintext"
     return "legacy"
+
+
+def needs_manual_rotation(classification: ValueClass, value: object) -> bool:
+    """True for a stored value a rewrite leaves byte-identical because it cannot be re-encrypted.
+
+    Undecryptable ciphertext and non-empty plaintext are preserved as-is by the
+    rewrite doorways (the migration never deletes them) and stay readable only
+    via manual rotation by an admin. The empty string decrypts to itself (it
+    round-trips), so a rewrite re-encrypts it — it is not preserved.
+    """
+    return classification == "undecryptable" or (classification == "plaintext" and value != "")
 
 
 def reencrypt_value(value: object, key: str = "migrate") -> object:
@@ -251,6 +283,11 @@ async def _migrate_config_settings_row(
         if cls == "migrated":
             report.already_v2 += 1
             continue
+        if cls == "undecryptable":
+            # Wrong-key / corrupt ciphertext: preserved byte-identical, never deleted.
+            report.undecryptable += 1
+            report.preserved += 1
+            continue
         if cls == "legacy":
             if dry_run:
                 # Residual: would migrate, but a dry run writes nothing, so it
@@ -266,8 +303,10 @@ async def _migrate_config_settings_row(
                 # Defensive: a legacy value that did not re-encrypt is still
                 # residual, not migrated.
                 report.legacy += 1
-        else:  # plaintext / not-a-string — nothing to migrate
+        else:  # plaintext / not-a-string — nothing to migrate, stored value preserved as-is
             report.plaintext += 1
+            if needs_manual_rotation(cls, v):
+                report.preserved += 1
 
     if changed and not dry_run:
         async with db_span("migrate_config_credentials", "LiteLLM_Config"):
@@ -304,6 +343,11 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
         if cls == "migrated":
             report.already_v2 += 1
             continue
+        if cls == "undecryptable":
+            # Wrong-key / corrupt ciphertext: preserved byte-identical, never deleted.
+            report.undecryptable += 1
+            report.preserved += 1
+            continue
         if cls == "legacy":
             if dry_run:
                 # Residual: would migrate, but a dry run writes nothing, so it
@@ -321,6 +365,7 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
                 report.legacy += 1
         else:
             report.plaintext += 1
+            report.preserved += 1
 
     if changed and not dry_run:
         async with db_span("migrate_sso_credentials", "LiteLLM_SSOConfig"):
@@ -379,6 +424,11 @@ async def _migrate_callback_vars_table(
                     report.already_v2 += 1
                 elif cls == "legacy":
                     row_legacy += 1
+                elif cls == "undecryptable":
+                    # Wrong-key versioned ciphertext: the selective transforms
+                    # pass it through, preserving it byte-identical.
+                    report.undecryptable += 1
+                    report.preserved += 1
                 else:  # plaintext / not-a-string
                     report.plaintext += 1
 
@@ -597,7 +647,13 @@ async def _scan_one_table(
 
 
 async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
-    """Scan the ``environment_variables`` config row (``param_value`` dict)."""
+    """Scan the ``environment_variables`` config row (``param_value`` dict).
+
+    Values that do not decrypt under the current key (wrong-key versioned
+    ciphertext, corrupt blobs, stored plaintext) are preserved byte-identical by
+    the rotation rewrite — they are counted as ``preserved`` so the report makes
+    clear they were left untouched and need manual rotation.
+    """
     report: Final = LocationReport(location="config_environment_variables")
     try:
         record: Final = await prisma_client.db.litellm_config.find_unique(where={"param_name": "environment_variables"})
@@ -613,7 +669,10 @@ async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
         except (ValueError, TypeError):
             value = {}
     for s in _iter_encrypted_strings(value):
-        _classify_into_report(report, s)
+        cls = classify_value(s, key="scan")
+        report.count(cls)
+        if needs_manual_rotation(cls, s):
+            report.preserved += 1
     return report
 
 

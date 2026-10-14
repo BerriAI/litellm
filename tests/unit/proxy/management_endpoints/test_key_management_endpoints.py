@@ -9430,6 +9430,109 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
     ), "api_key must be stored re-encrypted under the new master key, not in plaintext"
 
 
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
+)
+async def test_rotate_master_key_preserves_undecryptable_and_plaintext_env_vars(
+    mock_rotate_mcp,
+    monkeypatch,
+):
+    """Gauntlet rig for the master-key rotation doorway (POST /key/regenerate with
+    ``new_master_key``): env-var entries that do not decrypt under the current key
+    (stored plaintext, wrong-key v3) must survive the rotation byte-identical
+    instead of being silently deleted from the stored ``environment_variables``
+    row, and the re-encryptable entries must land under the new master key.
+    """
+    import os
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        _V2_GCM_PREFIX,
+        _V3_GCM_PREFIX,
+        decrypt_if_encrypted_with,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        rotate_master_key,
+    )
+
+    salt = "sk-rotate-salt-1234"
+    new_master = "sk-rotated-new-master"
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    # Sandbox os.environ: the rotation loads decrypted values into it.
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    def _legacy_ct(value: str) -> str:
+        monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+        out = encrypt_value_helper(value)
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        return out
+
+    def _v2_ct(value: str) -> str:
+        import base64
+        import hashlib
+
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        nonce = os.urandom(12)
+        key = hashlib.sha256(salt.encode()).digest()
+        sealed = nonce + AESGCM(key).encrypt(nonce, value.encode(), None)
+        return _V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode()
+
+    original = {
+        "GOOD_V3": encrypt_value_helper("good-v3-secret"),
+        "GOOD_V2": _v2_ct("good-v2-secret"),
+        "GOOD_NACL": _legacy_ct("good-nacl-secret"),
+        "PLAINTEXT": "plain-env-value",
+        "WRONG_KEY_V3": encrypt_value_helper("wrong-key-secret", new_encryption_key="sk-a-different-salt"),
+        "EMPTY": "",
+    }
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(
+        return_value=[SimpleNamespace(param_name="environment_variables", param_value=original)]
+    )
+    mock_prisma_client.db.litellm_config.update = AsyncMock()
+    mock_rotate_mcp.return_value = None
+
+    await rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="test-user",
+        ),
+        current_master_key=salt,
+        new_master_key=new_master,
+    )
+
+    mock_prisma_client.db.litellm_config.update.assert_awaited_once()
+    written = mock_prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
+
+    # Nothing deleted: every seeded entry survives the rotation.
+    assert set(written) == set(original)
+    # Undecryptable and plaintext entries are preserved byte-identical, never dropped.
+    assert written["PLAINTEXT"] == original["PLAINTEXT"]
+    assert written["WRONG_KEY_V3"] == original["WRONG_KEY_V3"]
+    # Good entries re-encrypt under the new master key and decrypt back to their originals.
+    for entry, secret in (
+        ("GOOD_V3", "good-v3-secret"),
+        ("GOOD_V2", "good-v2-secret"),
+        ("GOOD_NACL", "good-nacl-secret"),
+    ):
+        assert written[entry].startswith(_V3_GCM_PREFIX)
+        assert decrypt_if_encrypted_with(written[entry], new_master) == secret
+    # The empty string round-trips (decrypts to ""), so it re-encrypts under the new key.
+    assert written["EMPTY"].startswith(_V3_GCM_PREFIX)
+    assert decrypt_if_encrypted_with(written["EMPTY"], new_master) == ""
+
+
 @pytest.mark.parametrize(
     "legacy_table, build_row",
     [
