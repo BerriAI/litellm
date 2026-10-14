@@ -304,28 +304,42 @@ def test_client_cache_control_on_a_screenshot_inside_a_tool_result_reaches_gpt_5
 RAW_BREAKPOINT: Final = {"mode": "explicit"}
 
 
+RAW_LOG_OUTPUT: Final = [{"type": "input_text", "text": "build ok", "prompt_cache_breakpoint": RAW_BREAKPOINT}]
+RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoint": RAW_BREAKPOINT}
+
+
 @pytest.mark.parametrize(
-    ("extra_kwargs", "log_output", "question"),
+    ("model", "extra_kwargs", "log_output", "question"),
     [
+        pytest.param("openai/gpt-5.5", OPENAI_API, RAW_LOG_OUTPUT, RAW_QUESTION, id="sent-as-is"),
         pytest.param(
-            OPENAI_API,
-            [{"type": "input_text", "text": "build ok", "prompt_cache_breakpoint": RAW_BREAKPOINT}],
-            {"type": "input_text", "text": "q", "prompt_cache_breakpoint": RAW_BREAKPOINT},
-            id="sent-as-is",
-        ),
-        pytest.param(
+            "openai/gpt-5.5",
             {**OPENAI_API, "drop_params": True},
             "build ok",
             {"type": "input_text", "text": "q"},
             id="dropped-under-drop-params",
         ),
+        pytest.param(
+            "openai/gpt-5.6",
+            {**OTHER_HOST, "drop_params": True},
+            RAW_LOG_OUTPUT,
+            RAW_QUESTION,
+            id="kept-under-drop-params-for-a-model-that-takes-them",
+        ),
+        pytest.param(
+            "openai/screenshots-prod",
+            {**OTHER_HOST, "drop_params": True, "base_model": "gpt-5.6"},
+            RAW_LOG_OUTPUT,
+            RAW_QUESTION,
+            id="kept-under-drop-params-for-a-base-model-that-takes-them",
+        ),
     ],
 )
-def test_raw_prompt_cache_breakpoints_reach_a_deployment_that_reads_none_unless_drop_params_drops_them(
-    extra_kwargs: dict[str, object], log_output: object, question: dict[str, object]
+def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drops_them_for_a_model_that_takes_none(
+    model: str, extra_kwargs: dict[str, object], log_output: object, question: dict[str, object]
 ) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
-        model="openai/gpt-5.5",
+        model=model,
         extra_kwargs=extra_kwargs,
         max_tokens=1024,
         messages=[

@@ -10,7 +10,10 @@ from typing import Final, TypeAlias
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    supports_openai_prompt_cache_breakpoint,
+)
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
@@ -62,15 +65,28 @@ def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, ob
     )
 
 
+def _model_takes_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    provider_name: Final = provider if isinstance(provider, str) else None
+    base_model: Final = forwarded_kwargs.get("base_model")
+    return supports_openai_prompt_cache_breakpoint(model, provider_name) or (
+        isinstance(base_model, str)
+        and bool(base_model)
+        and supports_openai_prompt_cache_breakpoint(base_model, provider_name)
+    )
+
+
 def _without_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
 
 
 def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, object]) -> BlockRewrite | None:
-    """Client cache marks become breakpoints for a deployment that reads them, and a deployment that reads none drops
-    raw breakpoints under drop_params."""
+    """Client cache marks become breakpoints for a deployment that reads them, and a model that takes no breakpoints
+    drops raw ones under drop_params."""
     if _reads_prompt_cache_breakpoint(model, forwarded_kwargs):
         return cache_control_as_prompt_cache_breakpoint
+    if _model_takes_prompt_cache_breakpoint(model, forwarded_kwargs):
+        return None
     if normalize_drop_params(forwarded_kwargs.get("drop_params")) is True or litellm.drop_params is True:
         return _without_prompt_cache_breakpoint
     return None
