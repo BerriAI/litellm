@@ -741,6 +741,8 @@ class TestMCPServerManager:
                 "client_id": "gateway-client",
                 "client_secret": "SECRET-CLIENT-SECRET",
                 "client_private_key": "-----BEGIN PRIVATE KEY-----SECRET-PEM-----END PRIVATE KEY-----",
+                "id_jag_resource_client_id": "resource-client-id",
+                "id_jag_resource_client_secret": "SECRET-RESOURCE-CLIENT-SECRET",
                 "token_exchange_endpoint": "https://org-idp.example/oauth2/token",
                 "id_jag_resource_token_endpoint": "https://resource-as.example/oauth2/token",
                 "authentication_token": "SECRET-STATIC-TOKEN",
@@ -750,11 +752,16 @@ class TestMCPServerManager:
         with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
             await manager.load_servers_from_config(config)
 
+        server: Final = next(iter(manager.config_mcp_servers.values()))
+        assert server.id_jag_resource_client_id == "resource-client-id"
+        assert server.id_jag_resource_client_secret == "SECRET-RESOURCE-CLIENT-SECRET"
         dump = next(m for m in caplog.messages if "Loaded MCP Servers" in m)
         assert "SECRET-PEM" not in dump
         assert "SECRET-CLIENT-SECRET" not in dump
+        assert "SECRET-RESOURCE-CLIENT-SECRET" not in dump
         assert "SECRET-STATIC-TOKEN" not in dump
         assert "gateway-client" in dump
+        assert "resource-client-id" in dump
         assert "https://org-idp.example/oauth2/token" in dump
 
     async def test_load_servers_from_config_warns_on_invalid_alias(self, config_only_mcp_manager_factory, caplog):
@@ -9797,6 +9804,30 @@ class TestMCPServerTokenExchangeColumns:
         mcp_server = await manager.build_mcp_server_from_table(table_record)
 
         assert mcp_server.subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_reads_id_jag_resource_client_credentials(self):
+        resource_secret: Final = "resource-secret"
+        manager: Final = MCPServerManager()
+        table_record: Final = LiteLLM_MCPServerTable(
+            server_id="id-jag-resource-client",
+            server_name="id_jag_resource_client",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_id_jag,
+            credentials={
+                "id_jag_resource_client_id": "resource-client",
+                "id_jag_resource_client_secret": resource_secret,
+            },
+        )
+
+        mcp_server: Final = await manager.build_mcp_server_from_table(
+            table_record,
+            credentials_are_encrypted=False,
+        )
+
+        assert mcp_server.id_jag_resource_client_id == "resource-client"
+        assert mcp_server.id_jag_resource_client_secret == resource_secret
 
     @pytest.mark.asyncio
     async def test_round_trip_token_exchange_columns_preserved(self):
