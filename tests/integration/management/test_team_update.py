@@ -243,6 +243,43 @@ async def test_team_update_team_admin_cannot_change_member_defaults_of_another_t
     assert team is not None and "team_member_budget_id" not in (team.metadata or {}), "denied but team mutated"
 
 
+async def test_team_update_team_admin_soft_budget_follows_the_proxy_admin_grant(gateway_client, db, resources, actors):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "alpha", resources.prefix)
+    headers = {"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"}
+    body = {"team_id": resources.prefix, "soft_budget": 7.5}
+
+    with team_admin_permissions(gateway_client.gateway, ["max_budget"]):
+        denied = await gateway_client.post("/team/update", headers=headers, json=body)
+    assert denied.status_code == 403, denied.text
+    assert "'soft_budget'" in denied.text and "Team admin editable fields" in denied.text, denied.text
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert row is not None and row.soft_budget != 7.5, "denied but team mutated"
+
+    with team_admin_permissions(gateway_client.gateway, ["soft_budget"]):
+        allowed = await gateway_client.post("/team/update", headers=headers, json=body)
+    assert allowed.status_code == 200, allowed.text
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert row is not None and row.soft_budget == 7.5
+
+
+async def test_team_update_team_admin_cannot_set_soft_budget_on_a_team_they_do_not_administer(
+    gateway_client, db, resources, actors
+):
+    callers = await _callers(db, actors, resources.prefix)
+    await _seed_target(db, actors, callers, "beta", resources.prefix)
+
+    with team_admin_permissions(gateway_client.gateway, ["soft_budget"]):
+        resp = await gateway_client.post(
+            "/team/update",
+            headers={"Authorization": f"Bearer {callers[Actor.TEAM_ADMIN].cleartext}"},
+            json={"team_id": resources.prefix, "soft_budget": 7.5},
+        )
+    assert resp.status_code == 403, resp.text
+    row = await db.db.litellm_teamtable.find_unique(where={"team_id": resources.prefix})
+    assert row is not None and row.soft_budget != 7.5, "denied but team mutated"
+
+
 # Relocation gate — moving a team to a different org. The resources team starts
 # in actors.org_a_id; each scenario relocates it to actors.org_b_id. PROXY_ADMIN bypasses;
 # ORG_B_ADMIN reaches the handler but holds no role on the source team (403);
