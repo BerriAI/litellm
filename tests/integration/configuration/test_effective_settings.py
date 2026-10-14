@@ -27,11 +27,12 @@ def test_model_block_changes_actual_route_and_leaves_other_route_working(gateway
         gateway.chat(model)
         gateway.chat(other)
         gateway.post("/model/block", {"model_id": identity})
-        assert read_rows(
-            'SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)
-        ) == [{"blocked": True}]
+        assert read_rows('SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == [
+            {"blocked": True}
+        ]
         response: Final = gateway.request(
-            "POST", "/v1/chat/completions",
+            "POST",
+            "/v1/chat/completions",
             {"model": model, "messages": [{"role": "user", "content": "blocked deployment"}]},
         )
         assert response.status_code == 403, response.text
@@ -39,15 +40,18 @@ def test_model_block_changes_actual_route_and_leaves_other_route_working(gateway
         assert response.json()["error"]["message"] == "litellm.PermissionDeniedError: Model is blocked"
         assert object_value(gateway.chat(other)["usage"])["total_tokens"] == 40
         gateway.post("/model/unblock", {"model_id": identity})
-        assert read_rows(
-            'SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)
-        ) == [{"blocked": False}]
+        assert read_rows('SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == [
+            {"blocked": False}
+        ]
         assert object_value(gateway.chat(model)["usage"])["total_tokens"] == 40
 
 
 @pytest.mark.covers("mgmt.router_settings.update.changes_observed_attempt_count")
 def test_saved_retry_setting_controls_real_attempts_and_restores(gateway: Gateway) -> None:
-    with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream, gateway.scenario() as scenario:
+    with (
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+        gateway.scenario() as scenario,
+    ):
         original: Final = object_value(gateway.get("/router/settings")["current_values"])["num_retries"]
         provider_model: Final = f"retry-{uuid.uuid4().hex}"
         model: Final = scenario.model(model=f"openai/{provider_model}", input_cost_per_token=0, output_cost_per_token=0)
@@ -66,8 +70,12 @@ def test_saved_retry_setting_controls_real_attempts_and_restores(gateway: Gatewa
                 assert configured.status_code == 200, configured.text
                 upstream.get("/__observations").raise_for_status()
                 response: Final = gateway.request(
-                    "POST", "/v1/chat/completions",
-                    {"model": model, "messages": [{"role": "user", "content": f"{provider_model} attempt {generation}"}]},
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model,
+                        "messages": [{"role": "user", "content": f"{provider_model} attempt {generation}"}],
+                    },
                 )
                 observed: Final = upstream.get("/__observations")
                 observed.raise_for_status()
@@ -153,15 +161,20 @@ def test_partial_credential_patch_merges_values_and_deletes_only_the_named_field
         gateway.scenario() as scenario,
     ):
         name: Final = (
-            f"team-{uuid.uuid4().hex}/cred-{uuid.uuid4().hex}"
-            if contains_slash
-            else f"credential-{uuid.uuid4().hex}"
+            f"team-{uuid.uuid4().hex}/cred-{uuid.uuid4().hex}" if contains_slash else f"credential-{uuid.uuid4().hex}"
         )
-        gateway.post("/credentials", {
-            "credential_name": name,
-            "credential_values": {"api_key": api_key, "api_base": f"{original.url}/v1", "organization": "org-merge"},
-            "credential_info": {},
-        })
+        gateway.post(
+            "/credentials",
+            {
+                "credential_name": name,
+                "credential_values": {
+                    "api_key": api_key,
+                    "api_base": f"{original.url}/v1",
+                    "organization": "org-merge",
+                },
+                "credential_info": {},
+            },
+        )
         scenario.cleanups.callback(gateway.request, "DELETE", f"/credentials/{name}")
         model: Final = scenario.model(api_key=None, api_base=None, litellm_credential_name=name)
         first, untouched = _provider_call(gateway, model, "before patch", original, moved)
@@ -178,7 +191,11 @@ def test_partial_credential_patch_merges_values_and_deletes_only_the_named_field
         assert _masked_credential(gateway, name) == _MaskedCredential(
             credential_name=name,
             credential_info={},
-            credential_values={"api_key": "sy****" + api_key[-2:], "api_base": f"{moved.url}/v1", "organization": "org-merge"},
+            credential_values={
+                "api_key": "sy****" + api_key[-2:],
+                "api_base": f"{moved.url}/v1",
+                "organization": "org-merge",
+            },
         )
         old_base, new_base = _provider_call(gateway, model, "after api_base patch", original, moved)
         assert old_base == ()
@@ -198,28 +215,88 @@ def test_partial_credential_patch_merges_values_and_deletes_only_the_named_field
         assert [_sent_headers(request) for request in after_delete] == [(f"Bearer {api_key}", None)]
 
 
+def test_dashboard_credential_edit_keeps_the_stripped_secret_and_round_trips_credential_info(gateway: Gateway) -> None:
+    api_key: Final = f"synthetic-dashboard-{uuid.uuid4().hex}"
+    info: Final[dict[str, JsonValue]] = {"custom_llm_provider": "openai"}
+    with (
+        wire_server(_openai_reply) as original,
+        wire_server(_openai_reply) as moved,
+        gateway.scenario() as scenario,
+    ):
+        name: Final = f"credential-{uuid.uuid4().hex}"
+        gateway.post(
+            "/credentials",
+            {
+                "credential_name": name,
+                "credential_values": {"api_key": api_key, "api_base": f"{original.url}/v1", "organization": "org-dash"},
+                "credential_info": info,
+            },
+        )
+        scenario.cleanups.callback(gateway.request, "DELETE", f"/credentials/{name}")
+        model: Final = scenario.model(api_key=None, api_base=None, litellm_credential_name=name)
+        stored: Final = _stored_credential_values(name)
+
+        _patch_credential(
+            gateway,
+            name,
+            {
+                "credential_values": {"api_base": f"{moved.url}/v1", "organization": "org-dash"},
+                "credential_info": info,
+            },
+        )
+        edited: Final = _stored_credential_values(name)
+        assert sorted(edited) == ["api_base", "api_key", "organization"], edited
+        assert edited["api_key"] == stored["api_key"], edited
+        assert read_rows(
+            'SELECT credential_info FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,)
+        ) == [{"credential_info": info}]
+        assert _masked_credential(gateway, name) == _MaskedCredential(
+            credential_name=name,
+            credential_info=info,
+            credential_values={
+                "api_key": "sy****" + api_key[-2:],
+                "api_base": f"{moved.url}/v1",
+                "organization": "org-dash",
+            },
+        )
+        old_base, new_base = _provider_call(gateway, model, "after dashboard edit", original, moved)
+        assert old_base == ()
+        assert [_sent_headers(request) for request in new_base] == [(f"Bearer {api_key}", "org-dash")]
+
+
 @pytest.mark.covers("mgmt.credential.update.saved_value_reaches_wire")
 def test_credential_value_update_and_model_reload_reach_provider(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
         name: Final = f"credential-{uuid.uuid4().hex}"
-        gateway.post("/credentials", {
-            "credential_name": name, "credential_values": {"api_key": "synthetic-credential-first"}, "credential_info": {}
-        })
+        gateway.post(
+            "/credentials",
+            {
+                "credential_name": name,
+                "credential_values": {"api_key": "synthetic-credential-first"},
+                "credential_info": {},
+            },
+        )
 
         def remove_credential() -> None:
             response: Final = gateway.request("DELETE", f"/credentials/{name}")
             assert response.status_code == 200, response.text
-            assert read_rows(
-                'SELECT credential_name FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,)
-            ) == []
+            assert (
+                read_rows('SELECT credential_name FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,))
+                == []
+            )
 
         scenario.cleanups.callback(remove_credential)
         model: Final = scenario.model(api_key=None, litellm_credential_name=name)
         identity: Final = model_identity(gateway, model)
         for value in ("synthetic-credential-first", "synthetic-credential-second"):
-            patched: Final = gateway.request("PATCH", f"/credentials/{name}", {
-                "credential_name": name, "credential_values": {"api_key": value}, "credential_info": {}
-            })
+            patched: Final = gateway.request(
+                "PATCH",
+                f"/credentials/{name}",
+                {"credential_name": name, "credential_values": {"api_key": value}, "credential_info": {}},
+            )
             assert patched.status_code == 200, patched.text
             rows: Final = read_rows(
                 'SELECT credential_values FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,)
@@ -229,10 +306,15 @@ def test_credential_value_update_and_model_reload_reach_provider(gateway: Gatewa
             assert isinstance(stored["api_key"], str) and stored["api_key"] != value
             for reload in (False, True):
                 if reload:
-                    response: Final = gateway.request("PATCH", f"/model/{identity}/update", {"model_info": {"description": value}})
+                    response: Final = gateway.request(
+                        "PATCH", f"/model/{identity}/update", {"model_info": {"description": value}}
+                    )
                     assert response.status_code == 200, response.text
                 upstream.get("/__observations").raise_for_status()
-                assert object_value(gateway.chat(model, text=f"{name} {value} reload={reload}")["usage"])["total_tokens"] == 40
+                assert (
+                    object_value(gateway.chat(model, text=f"{name} {value} reload={reload}")["usage"])["total_tokens"]
+                    == 40
+                )
                 observed: Final = upstream.get("/__observations")
                 observed.raise_for_status()
                 assert len(observed.json()["requests"]) == 1, (value, reload, observed.text)
