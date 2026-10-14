@@ -1424,7 +1424,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
         else:
             kwargs["default_on"] = False
 
-        super().__init__(**kwargs)
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType]  # pydantic validates each field's type at runtime
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
