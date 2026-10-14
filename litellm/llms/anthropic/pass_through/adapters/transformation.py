@@ -133,7 +133,6 @@ from litellm.llms.anthropic.common_utils import (
     eager_input_streaming_flag,
     format_anthropic_tool_use_id_with_signature,
     is_empty_unsigned_thinking_block,
-    normalize_anthropic_tool_use_id,
     split_anthropic_tool_use_id_signature,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
