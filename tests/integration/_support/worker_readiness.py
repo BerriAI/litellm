@@ -22,15 +22,13 @@ def wait_for_worker_readiness(
     def readbacks() -> Iterator[bool]:
         while time.monotonic() < deadline:
             timeout: Final = deadline - time.monotonic()
-            if timeout <= 0:
-                return
             with httpx.Client(
                 base_url=str(gateway.client.base_url),
                 timeout=timeout,
                 trust_env=False,
                 verify=False,
             ) as client:
-                response = client.get(
+                response: Final = client.get(
                     "/model/info",
                     headers={"Authorization": f"Bearer {gateway.key}"},
                 )

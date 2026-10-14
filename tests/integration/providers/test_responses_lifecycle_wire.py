@@ -8,11 +8,11 @@ from urllib.parse import parse_qsl, urlsplit
 
 import openai
 import pytest
-from integration._support.client import Gateway, Scenario, object_value, string_value
+from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.worker_readiness import wait_for_worker_readiness
-from openai.types.responses import ResponseStreamEvent
+from openai.types.responses import Response, ResponseStreamEvent
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _MODEL: Final = "gpt-5"
@@ -53,6 +53,15 @@ def drain_contract_requests(wire: Wire) -> tuple[Request, ...]:
     discovery: Final = tuple(request for request in requests if request.target == "/v1/models")
     assert all(request.method == "GET" and request.body == b"" for request in discovery), requests
     return tuple(request for request in requests if request.target != "/v1/models")
+
+
+def _retrieve_or_missing_deployment(client: openai.OpenAI, response_id: str) -> Response | openai.BadRequestError:
+    try:
+        return client.responses.retrieve(response_id)
+    except openai.BadRequestError as refusal:
+        if "no healthy deployments" not in str(refusal).lower():
+            raise
+        return refusal
 
 
 def _response(identity: str, status: str = "completed") -> bytes:
@@ -226,7 +235,7 @@ def test_retrieve_returns_the_id_the_client_holds(gateway: Gateway, prefix: str)
 
 
 @pytest.mark.parametrize("prefix", _ALIASES)
-def test_streamed_response_ids_are_stable_on_each_alias(
+def test_streamed_response_ids_are_stable_and_retrievable_on_each_alias(
     gateway: Gateway,
     prefix: str,
 ) -> None:
@@ -258,9 +267,25 @@ def test_streamed_response_ids_are_stable_on_each_alias(
         assert response_ids and all(response_id == response_ids[0] for response_id in response_ids), events
         streamed_id: Final = response_ids[0]
         assert streamed_id.startswith("resp_") and streamed_id != raw_id, events
+        retrieved: Final = eventually(
+            lambda: _retrieve_or_missing_deployment(client, streamed_id),
+            lambda outcome: not isinstance(outcome, openai.BadRequestError),
+            seconds=60,
+        )
+        assert isinstance(retrieved, Response), retrieved
+        assert same_response(retrieved.id, streamed_id), retrieved.model_dump_json()
+        assert retrieved.model_dump(mode="json", exclude_none=True) == {
+            "id": retrieved.id,
+            "object": "response",
+            "created_at": 1.0,
+            "status": "completed",
+            "model": _MODEL,
+            "output": [],
+        }, retrieved.model_dump_json()
         requests: Final = drain_contract_requests(wire)
         assert [(request.method, urlsplit(request.target).path, request.body) for request in requests] == [
             ("POST", "/v1/responses", requests[0].body),
+            ("GET", f"/v1/responses/{raw_id}", b""),
         ], requests
         assert _JSON_OBJECT.validate_json(requests[0].body) == {
             "model": _MODEL,
