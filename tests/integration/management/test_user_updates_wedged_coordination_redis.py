@@ -468,7 +468,7 @@ def test_user_budget_update_propagates_to_gateway_and_peer(gateway: Gateway, pee
             eventually(
                 lambda: _user_chat(peer, model, key, f"denied {uuid.uuid4().hex}"),
                 lambda response: response.status_code == 422,
-                seconds=75,
+                seconds=10,
             ),
             user_id,
         )
