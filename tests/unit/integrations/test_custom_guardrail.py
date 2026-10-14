@@ -2812,22 +2812,24 @@ class TestLoggingOnlyApplyGuardrail:
         assert kwargs["standard_logging_object"] == {"guardrail_information": None}
 
     @pytest.mark.parametrize(
-        "scope,expected_calls",
+        "scope,continue_on_input_failure,expected_calls",
         (
-            (None, [("request", ["hello there"]), ("response", ["general kenobi"])]),
-            ("both", [("request", ["hello there"]), ("response", ["general kenobi"])]),
-            ("input", [("request", ["hello there"])]),
-            ("output", [("response", ["general kenobi"])]),
+            (None, False, [("request", ["hello there"]), ("response", ["general kenobi"])]),
+            (None, True, [("request", ["hello there"]), ("response", ["general kenobi"])]),
+            ("input", False, [("request", ["hello there"])]),
+            ("output", False, [("response", ["general kenobi"])]),
         ),
     )
     @pytest.mark.asyncio
     async def test_logging_only_scope_scans_configured_directions(
         self,
         scope: LoggingOnlyScope | None,
+        continue_on_input_failure: bool,
         expected_calls: list[tuple[str, list[str]]],
     ) -> None:
         guardrail: Final = _ApplyOnlyObserver()
         guardrail.logging_only_scope = scope
+        guardrail.logging_only_continue_on_input_failure = continue_on_input_failure
         kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
 
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
@@ -2881,21 +2883,37 @@ class TestLoggingOnlyApplyGuardrail:
         assert [entry["guardrail_name"] for entry in entries] == ["apply-only-observer"]
         assert [entry["guardrail_status"] for entry in entries] == ["success"]
 
+    @pytest.mark.parametrize(
+        "scope,continue_on_input_failure,expected_calls,expected_statuses",
+        (
+            (None, True, [("response", ["general kenobi"])], ["success"]),
+            ("input", True, [], []),
+            ("output", True, [("response", ["general kenobi"])], ["success"]),
+            (None, False, [], []),
+        ),
+    )
     @pytest.mark.asyncio
-    async def test_request_copy_failure_does_not_drop_the_response_scan_for_explicit_both_scope(self):
+    async def test_request_copy_failure_drops_the_response_scan_only_without_continue(
+        self,
+        scope: LoggingOnlyScope | None,
+        continue_on_input_failure: bool,
+        expected_calls: list[tuple[str, list[str]]],
+        expected_statuses: list[str],
+    ):
         import threading
 
         guardrail: Final = _ApplyOnlyObserver()
-        guardrail.logging_only_scope = "both"
+        guardrail.logging_only_scope = scope
+        guardrail.logging_only_continue_on_input_failure = continue_on_input_failure
         call: Final = _logged_call([{"role": "user", "content": "hello there", "lock": threading.Lock()}])
         kwargs: Final = call[0]
         response: Final = call[1]
 
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
-        assert guardrail.calls == [("response", ["general kenobi"])]
-        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
-        assert [entry["guardrail_status"] for entry in entries] == ["success"]
+        assert guardrail.calls == expected_calls
+        entries: Final = out_kwargs["standard_logging_object"].get("guardrail_information") or []
+        assert [entry["guardrail_status"] for entry in entries] == expected_statuses
 
     @pytest.mark.asyncio
     async def test_block_verdict_is_recorded_without_raising(self):
@@ -2927,8 +2945,23 @@ class TestLoggingOnlyApplyGuardrail:
         entries = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert [e["guardrail_status"] for e in entries] == ["guardrail_failed_to_respond"]
 
+    @pytest.mark.parametrize(
+        "scope,continue_on_input_failure,expected_calls,expected_statuses",
+        (
+            (None, True, [("request", ["hello there"]), ("response", ["general kenobi"])], ["guardrail_failed_to_respond", "success"]),
+            ("output", True, [("response", ["general kenobi"])], ["success"]),
+            ("input", True, [("request", ["hello there"])], ["guardrail_failed_to_respond"]),
+            (None, False, [("request", ["hello there"])], ["guardrail_failed_to_respond"]),
+        ),
+    )
     @pytest.mark.asyncio
-    async def test_input_scan_error_does_not_drop_the_response_scan_for_explicit_both_scope(self):
+    async def test_input_scan_error_drops_the_response_scan_only_without_continue(
+        self,
+        scope: LoggingOnlyScope | None,
+        continue_on_input_failure: bool,
+        expected_calls: list[tuple[str, list[str]]],
+        expected_statuses: list[str],
+    ):
         class _FailingBothObserver(_ApplyOnlyObserver):
             @log_guardrail_information
             async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
@@ -2938,14 +2971,15 @@ class TestLoggingOnlyApplyGuardrail:
                 return GenericGuardrailAPIInputs(texts=[])
 
         guardrail = _FailingBothObserver()
-        guardrail.logging_only_scope = "both"
+        guardrail.logging_only_scope = scope
+        guardrail.logging_only_continue_on_input_failure = continue_on_input_failure
         kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
 
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
-        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        assert guardrail.calls == expected_calls
         entries = out_kwargs["standard_logging_object"]["guardrail_information"]
-        assert [e["guardrail_status"] for e in entries] == ["guardrail_failed_to_respond", "success"]
+        assert [e["guardrail_status"] for e in entries] == expected_statuses
 
     @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
@@ -3651,3 +3685,104 @@ def test_subclass_that_skips_super_init_still_runs_with_default_scope():
             self.default_on = True
 
     assert NoSuperInit().should_run_guardrail({"stream": True}, GuardrailEventHooks.pre_call) is True
+
+
+def test_get_guardrail_from_metadata() -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
+
+    assert guardrail.get_guardrail_from_metadata({}) == []
+    assert guardrail.get_guardrail_from_metadata(
+        {"metadata": {"guardrails": ["guardrail1", "guardrail2"]}}
+    ) == ["guardrail1", "guardrail2"]
+    assert guardrail.get_guardrail_from_metadata(
+        {"metadata": {"guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]}}
+    ) == [{"test-guardrail": {"extra_body": {"key": "value"}}}]
+
+
+def test_guardrail_is_in_requested_guardrails() -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
+
+    assert guardrail._guardrail_is_in_requested_guardrails(["test-guardrail", "other"]) is True
+    assert guardrail._guardrail_is_in_requested_guardrails(["other"]) is False
+    assert guardrail._guardrail_is_in_requested_guardrails(
+        [{"test-guardrail": {"extra_body": {"extra_key": "extra_value"}}}]
+    ) is True
+    assert guardrail._guardrail_is_in_requested_guardrails(
+        [
+            {
+                "other-guardrail": {"extra_body": {"extra_key": "extra_value"}},
+                "test-guardrail": {"extra_body": {"extra_key": "extra_value"}},
+            }
+        ]
+    ) is True
+    assert guardrail._guardrail_is_in_requested_guardrails(
+        [{"other-guardrail": {"extra_body": {"extra_key": "extra_value"}}}]
+    ) is False
+
+
+def test_should_run_guardrail() -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="test-guardrail", event_hook=GuardrailEventHooks.pre_call
+    )
+
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": ["test-guardrail"]}},
+            GuardrailEventHooks.pre_call,
+        )
+        is True
+    )
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": ["test-guardrail"]}},
+            GuardrailEventHooks.during_call,
+        )
+        is False
+    )
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": ["other-guardrail"]}},
+            GuardrailEventHooks.pre_call,
+        )
+        is False
+    )
+
+
+def test_get_guardrail_dynamic_request_body_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
+
+    assert guardrail.get_guardrail_dynamic_request_body_params(
+        {"metadata": {"guardrails": [{"test-guardrail": {}}]}}
+    ) == {}
+    assert guardrail.get_guardrail_dynamic_request_body_params(
+        {"metadata": {"guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]}}
+    ) == {"key": "value"}
+    assert guardrail.get_guardrail_dynamic_request_body_params(
+        {"metadata": {"guardrails": [{"other-guardrail": {"extra_body": {"key": "value"}}}]}}
+    ) == {}
+
+
+def test_default_on_guardrail() -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="test-guardrail",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+
+    assert guardrail.should_run_guardrail({"metadata": {}}, GuardrailEventHooks.pre_call) is True
+    assert guardrail.should_run_guardrail({"metadata": {}}, GuardrailEventHooks.post_call) is False
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": ["test-guardrail-5"]}},
+            GuardrailEventHooks.pre_call,
+        )
+        is True
+    )
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": []}},
+            GuardrailEventHooks.pre_call,
+        )
+        is True
+    )

@@ -1,8 +1,6 @@
 import asyncio
 import json
-import os
 import re
-import signal
 import socket
 import threading
 import uuid
@@ -17,13 +15,12 @@ from typing import Final
 
 import anthropic
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
-from integration._support.process import OwnedProxy, group_members, owned_proxy, owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
 from pydantic import JsonValue
@@ -1772,27 +1769,9 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
         candidate: Final = owned.gateway
         with candidate.scenario() as scenario:
             model: Final = scenario.model(api_base=_dead_api_base())
-            members: Final = tuple(
-                member for member in group_members(owned.process.pid) if member.pid != owned.process.pid
-            )
-            children: Final = tuple(member.pid for member in members)
-            workers: Final = tuple(
-                member.pid for member in members if any("spawn_main" in part for part in member.cmdline())
-            )
+            workers: Final = owned.worker_pids()
             assert len(workers) >= 2, workers
-            os.kill(workers[0], signal.SIGKILL)
-            expected: Final = len(children)
-            eventually(
-                lambda: tuple(
-                    member.pid
-                    for member in group_members(owned.process.pid)
-                    if member.pid != owned.process.pid
-                    and member.is_running()
-                    and member.status() != psutil.STATUS_ZOMBIE
-                ),
-                lambda pids: len(pids) >= expected and any(pid not in children for pid in pids),
-                seconds=30,
-            )
+            owned.kill_worker(min(workers))
 
             def burst(index: int) -> httpx.Response:
                 return candidate.request(
@@ -1807,11 +1786,16 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
                 assert response.status_code == 200, response.text
                 assert response.headers["content-type"].startswith("text/event-stream"), response.text
 @pytest.mark.parametrize(
-    ("logging_only_scope", "scanned_directions"),
-    (("input", ("request",)), ("output", ("response",)), ("both", ("request", "response"))),
+    ("logging_only_settings", "scanned_directions"),
+    (
+        ({"logging_only_scope": "input"}, ("request",)),
+        ({"logging_only_scope": "output"}, ("response",)),
+        ({"logging_only_continue_on_input_failure": True}, ("request", "response")),
+    ),
+    ids=("input", "output", "continue_on_input_failure"),
 )
 def test_logging_only_scope_observes_only_the_configured_direction_without_blocking(
-    gateway: Gateway, tmp_path: Path, logging_only_scope: str, scanned_directions: tuple[str, ...]
+    gateway: Gateway, tmp_path: Path, logging_only_settings: dict[str, object], scanned_directions: tuple[str, ...]
 ) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
     prompt: Final = "synthetic observed prompt " + identity
@@ -1848,7 +1832,7 @@ def test_logging_only_scope_observes_only_the_configured_direction_without_block
                 "litellm_params": {
                     "guardrail": "generic_guardrail_api",
                     "mode": "logging_only",
-                    "logging_only_scope": logging_only_scope,
+                    **logging_only_settings,
                     "default_on": True,
                     "api_base": policy.url,
                     "api_key": "synthetic-guardrail-key",
@@ -2732,14 +2716,10 @@ def test_concurrent_disconnects_during_a_guardrail_outage_each_record_exactly_on
 
 def test_disconnect_scans_keep_recording_after_a_worker_is_killed(gateway: Gateway, tmp_path: Path) -> None:
     with _disconnect_rig(gateway, tmp_path, gated=False, pause=3, workers=2) as rig:
-        members: Final = tuple(
-            member for member in group_members(rig.owned.process.pid) if member.pid != rig.owned.process.pid
-        )
-        workers: Final = tuple(member for member in members if any("spawn_main" in part for part in member.cmdline()))
-        assert len(workers) >= 2, members
-        workers[0].send_signal(signal.SIGKILL)
-        psutil.wait_procs((workers[0],), timeout=10)
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        workers: Final = rig.owned.worker_pids()
+        assert len(workers) >= 2, workers
+        with rig.owned.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=8) as pool:
+            kill()
             received: Final = tuple(pool.map(lambda index: _chat_httpx(rig, index), range(8)))
         assert all(rig.secret(index) in line for index, line in enumerate(received)), received
         assert _post_call_statuses(rig, rig.model, rows=8) == (("success",),) * 8

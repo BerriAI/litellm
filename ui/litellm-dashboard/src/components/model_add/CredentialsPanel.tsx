@@ -12,6 +12,7 @@ import {
   credentialUpdateCall,
 } from "@/components/networking";
 import { Button } from "@/components/ui/button";
+import { extractProxyErrorMessage } from "@/lib/http/client";
 import { stripMaskedSecrets } from "@/utils/maskedSecretUtils";
 import { isProxyAdminRole } from "@/utils/roles";
 
@@ -19,7 +20,7 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
 import CredentialModal from "./CredentialModal";
 import CredentialsTable from "./CredentialsTable";
-import { buildCredential, withoutRestrictedFields } from "./credential_form_helpers";
+import { buildCredential, type CredentialSubmission } from "./credential_form_helpers";
 
 export default function CredentialsPanel() {
   const { accessToken, userRole } = useAuthorized();
@@ -35,13 +36,13 @@ export default function CredentialsPanel() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
 
-  const handleUpdateCredential = async (values: Record<string, unknown>, valuesToDelete: readonly string[] = []) => {
+  const handleUpdateCredential = async (submission: CredentialSubmission, valuesToDelete: readonly string[] = []) => {
     if (!accessToken) {
       return;
     }
     try {
-      const newCredential = buildCredential(values, stripMaskedSecrets(withoutRestrictedFields(values)));
-      await credentialUpdateCall(accessToken, values.credential_name as string, {
+      const newCredential = buildCredential(submission, stripMaskedSecrets(submission.credential_values));
+      await credentialUpdateCall(accessToken, submission.credential_name, {
         ...newCredential,
         ...(valuesToDelete.length > 0 ? { credential_values_to_delete: valuesToDelete } : {}),
       });
@@ -49,22 +50,22 @@ export default function CredentialsPanel() {
       setIsUpdateModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      toast.error("Failed to update credential");
+      toast.error(extractProxyErrorMessage(error));
     }
   };
 
-  const handleAddCredential = async (values: Record<string, unknown>) => {
+  const handleAddCredential = async (submission: CredentialSubmission) => {
     if (!accessToken) {
       return;
     }
     try {
-      const newCredential = buildCredential(values, withoutRestrictedFields(values));
+      const newCredential = buildCredential(submission, submission.credential_values);
       await credentialCreateCall(accessToken, newCredential);
       toast.success("Credential added successfully");
       setIsAddModalOpen(false);
       await refetchCredentials();
     } catch (error) {
-      toast.error("Failed to add credential");
+      toast.error(extractProxyErrorMessage(error));
     }
   };
 
