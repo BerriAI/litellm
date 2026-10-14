@@ -77,13 +77,27 @@ def _router(wire: Wire, **settings: object) -> Router:
     )
 
 
+_MESSAGES: Final = [{"role": "user", "content": _PROMPT}]
+
+
+def _content(response: litellm.ModelResponse) -> str:
+    choice: Final = response.choices[0]
+    assert isinstance(choice, litellm.Choices), choice
+    return str(choice.message.content)
+
+
+async def _acomplete(router: Router, **request: object) -> str:
+    response: Final = await router.acompletion(model="primary", messages=_MESSAGES, **request)
+    assert isinstance(response, litellm.ModelResponse), response
+    return _content(response)
+
+
 def _complete(client: str, router: Router, **request: object) -> str:
-    messages: Final = [{"role": "user", "content": _PROMPT}]
     if client == "async":
-        response: Final = asyncio.run(router.acompletion(model="primary", messages=messages, **request))
-    else:
-        response = router.completion(model="primary", messages=messages, **request)
-    return str(response.choices[0].message.content)
+        return asyncio.run(_acomplete(router, **request))
+    response: Final = router.completion(model="primary", messages=_MESSAGES, **request)
+    assert isinstance(response, litellm.ModelResponse), response
+    return _content(response)
 
 
 @pytest.mark.parametrize("client", _CLIENTS)
