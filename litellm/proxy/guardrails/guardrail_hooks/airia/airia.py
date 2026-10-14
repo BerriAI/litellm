@@ -53,8 +53,8 @@ def _stream_cannot_carry_a_rewrite(request_data: Mapping[str, object] | None) ->
     if not call_types:
         return True
     # Deferred like the resolver's own import: the handler package imports the proxy.
-    from litellm.llms import load_guardrail_translation_mappings  # noqa: PLC0415
-    from litellm.llms.openai.chat.guardrail_translation.handler import (  # noqa: PLC0415
+    from litellm.llms import load_guardrail_translation_mappings  # noqa: PLC0415  # circular import
+    from litellm.llms.openai.chat.guardrail_translation.handler import (  # noqa: PLC0415  # circular import
         OpenAIChatCompletionsHandler,
     )
 
@@ -81,7 +81,7 @@ def _request_route(request_data: Mapping[str, object]) -> str | None:
     return None
 
 
-def _as_object(value: object) -> dict[str, object] | None:
+def _as_object(value: object) -> Mapping[str, object] | None:
     """`value` as a JSON object, or None. States the key type once so the checker does not see
     `dict[Unknown, Unknown]` at every read."""
     return value if isinstance(value, dict) else None  # pyright: ignore[reportUnknownVariableType]  # isinstance narrows to dict[Unknown, Unknown]; JSON keys are str
@@ -103,7 +103,7 @@ class AiriaGuardrail(CustomGuardrail):
 
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
-            params={"timeout": httpx.Timeout(timeout=resolved_timeout, connect=5.0)},  # mutable-ok: one-shot params
+            params={"timeout": httpx.Timeout(timeout=resolved_timeout, connect=5.0)},
         )
 
         self.api_base = (api_base or os.getenv("AIRIA_GATEWAY_URL", "")).rstrip("/")
@@ -123,7 +123,7 @@ class AiriaGuardrail(CustomGuardrail):
 
         self.optional_params = kwargs
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # parent takes untyped **kwargs
-            supported_event_hooks=supported_event_hooks or [*SUPPORTED_EVENT_HOOKS],  # mutable-ok: base needs a list
+            supported_event_hooks=supported_event_hooks or [*SUPPORTED_EVENT_HOOKS],
             **kwargs,
         )
         verbose_proxy_logger.info("AiriaGuardrail initialized with gateway: %s", self.api_base)
@@ -145,7 +145,7 @@ class AiriaGuardrail(CustomGuardrail):
         try:
             response: Final = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # the handler's `data` param is an untyped dict upstream
                 f"{self.api_base}{GUARDRAIL_PATH}",
-                json={  # mutable-ok: httpx needs a plain dict; built once and sent
+                json={
                     "input_type": input_type,
                     "texts": inputs.get("texts") or (),
                     "images": inputs.get("images") or (),
@@ -155,7 +155,7 @@ class AiriaGuardrail(CustomGuardrail):
                     "model": inputs.get("model"),
                     "litellm_call_id": call_id,
                 },
-                headers={"Authorization": f"Bearer {self.api_key}"},  # mutable-ok: one-shot HTTP headers
+                headers={"Authorization": f"Bearer {self.api_key}"},
             )
             response.raise_for_status()
             raw_body: Final[object] = response.json()
@@ -197,7 +197,7 @@ class AiriaGuardrail(CustomGuardrail):
 
     def _rewritten(
         self,
-        body: dict[str, object],  # mutable-ok: response.json() returns a plain dict
+        body: Mapping[str, object],
         inputs: GenericGuardrailAPIInputs,
     ) -> GenericGuardrailAPIInputs:
         texts: Final = body.get("texts")
@@ -211,7 +211,7 @@ class AiriaGuardrail(CustomGuardrail):
         if texts is None and structured_messages is None:
             raise self._blocked()
 
-        rewritten: Final[GenericGuardrailAPIInputs] = {**inputs}  # mutable-ok: fresh copy; caller's object untouched
+        rewritten: Final[GenericGuardrailAPIInputs] = {**inputs}
         if isinstance(texts, list):
             rewritten["texts"] = texts
         if isinstance(structured_messages, list):

@@ -23,10 +23,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _airia_callback
 
 
-guardrail_initializer_registry: Final = {  # mutable-ok: module-level registry, built once and never mutated
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.AIRIA.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {  # mutable-ok: module-level registry, built once and never mutated
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.AIRIA.value: AiriaGuardrail,
 }
