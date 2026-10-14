@@ -64,7 +64,7 @@ blockquote p { margin: 7px 0 10px; font-size: 13px; line-height: 1.65; white-spa
 .request-details h4 { font-size: 11px; margin-bottom: 7px; }
 .related { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
 .related button { text-align: left; padding: 0; }
-.chart-tooltip { position: fixed; z-index: 5; background: var(--popover); color: var(--popover-foreground); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 20px #00000010; padding: 10px 12px; font-size: 11px; white-space: pre-line; pointer-events: none; max-width: 270px; }
+.chart-tooltip { position: fixed; z-index: 5; width: 310px; max-width: calc(100vw - 16px); pointer-events: none; font-size: 12px; line-height: 1.4; }
 [hidden] { display: none !important; }
 .filterbar { margin-top: 18px; }
 .filterbar label { font-size: 12px; }
@@ -91,3 +91,15 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 @media(max-width:1100px) { .charts { grid-template-columns: 1fr; } }
 @media(max-width:600px) { .filterbar { gap: 8px; } .filterbar input { width: 170px; } .table-footer, footer { flex-direction: column; } .synthetic-label { margin-left: 0; } }
 @media(prefers-reduced-motion:reduce) { html { scroll-behavior: auto; } }
+
+.tooltip-date { width: fit-content; border-radius: 5px; background: var(--foreground); color: var(--background); padding: 4px 7px; margin-bottom: 8px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.tooltip-panel { padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); color: var(--popover-foreground); box-shadow: 0 4px 12px #00000020; }
+.tooltip-row { display: grid; grid-template-columns: 4px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 5px; border-radius: 4px; }
+.tooltip-marker { width: 4px; height: 20px; border-radius: 2px; }
+.tooltip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tooltip-panel strong { font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
+.tooltip-total, .tooltip-meta { display: flex; justify-content: space-between; gap: 12px; padding: 7px 5px; }
+.tooltip-total { margin-top: 4px; border-top: 1px solid var(--border); }
+.tooltip-meta { color: var(--muted-foreground); padding-top: 0; font-size: 11px; }
+.bucket-hit.active { fill: var(--foreground); fill-opacity: .07; stroke: var(--muted-foreground); stroke-opacity: .3; stroke-dasharray: 3 3; }
+#session-legend .highlighted { font-weight: 700; color: var(--foreground); }

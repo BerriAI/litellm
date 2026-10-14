@@ -24,6 +24,35 @@ def main() -> None:
         assert page.locator("#ranking-body tr[data-entity]").count() == 3
         total = sum(float(r["spend_usd"]) for r in DATA["requests"])
         assert abs(float(page.locator("#total-spend").get_attribute("data-value")) - total) < 1e-12
+        bucket = page.locator("[data-bucket-spend]").nth(3)
+        bucket.hover()
+        tooltip = page.locator("#chart-tooltip")
+        assert tooltip.is_visible()
+        expected_bucket = float(bucket.get_attribute("data-bucket-spend"))
+        shown_total = float(tooltip.locator(".tooltip-total strong").inner_text().lstrip("$"))
+        assert abs(shown_total - expected_bucket) < 0.000001
+        assert int(tooltip.locator(".tooltip-meta strong").inner_text()) == int(
+            bucket.get_attribute("data-bucket-count")
+        )
+        series_values = [float(value.lstrip("$")) for value in tooltip.locator(".tooltip-row strong").all_inner_texts()]
+        assert series_values == sorted(series_values, reverse=True)
+        assert abs(sum(series_values) - expected_bucket) < 0.000003
+        assert tooltip.locator(".tooltip-marker").count() == len(DATA["manifest"]["sessions"])
+        assert tooltip.locator("strong").first.evaluate("e => Number(getComputedStyle(e).fontWeight)") >= 600
+        assert "active" in bucket.get_attribute("class")
+        page.screenshot(path=str(ARTIFACTS / "rankings-hover.png"))
+        page.locator("h1").hover()
+        assert not tooltip.is_visible()
+        bucket.focus()
+        assert tooltip.is_visible()
+        page.keyboard.press("Escape")
+        assert not tooltip.is_visible()
+        legend = page.locator("#session-legend button").first
+        legend.hover()
+        assert page.locator("[data-series]").first.evaluate("e => e.style.opacity") == "1"
+        assert page.locator("[data-series]").nth(1).evaluate("e => e.style.opacity") == "0.18"
+        page.locator("h1").hover()
+        assert page.locator("[data-series]").nth(1).evaluate("e => e.style.opacity") == ""
         amounts = page.locator("#ranking-body tr[data-entity]").evaluate_all(
             "rows => rows.map(r => Number(r.dataset.spend))"
         )
@@ -108,6 +137,10 @@ def main() -> None:
                     "page_errors": errors,
                     "checks": [
                         "initial totals",
+                        "tooltip totals and sorted series",
+                        "tooltip typography and markers",
+                        "hover and keyboard tooltip dismissal",
+                        "legend emphasis and reset",
                         "plotted bucket totals",
                         "keyboard quote navigation",
                         "descending spend ranking",

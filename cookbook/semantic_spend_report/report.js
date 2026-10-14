@@ -44,6 +44,7 @@
   }
 
   function renderTimeline(list) {
+    clearChartHover();
     const duration = Math.max(1, state.end - state.start);
     const bucketMs = duration <= 60000 ? 5000 : duration <= 3600000 ? 60000 : 3600000;
     const bucketStart = Math.floor(state.start / bucketMs) * bucketMs;
@@ -72,13 +73,15 @@
       const lower = buckets.map(b => b.values.slice(0, index).reduce((a, v) => a + v, 0));
       const upper = buckets.map((b, i) => lower[i] + b.values[index]);
       const points = [...upper.map((v, i) => `${x(i)},${y(v)}`), ...lower.map((v, i) => `${x(i)},${y(v)}`).reverse()].join(" ");
-      return `<polygon points="${points}" fill="${sessionColors.get(session.session_id)}" fill-opacity="0.56" stroke="${sessionColors.get(session.session_id)}" stroke-width="1.5"><title>${esc(session.name)} · ${money(spend(list.filter(r => r.session_id === session.session_id)))}</title></polygon>`;
+      return `<polygon data-series="${esc(session.session_id)}" points="${points}" fill="${sessionColors.get(session.session_id)}" fill-opacity="0.56" stroke="${sessionColors.get(session.session_id)}" stroke-width="1.5"><title>${esc(session.name)} · ${money(spend(list.filter(r => r.session_id === session.session_id)))}</title></polygon>`;
     }).join("");
     const axis = buckets.map((b, i) => i % Math.max(1, Math.ceil(count / 5)) === 0 || i === count - 1
       ? `<text x="${x(i)}" y="${height - 9}" text-anchor="middle" fill="var(--muted-foreground)" font-size="10">${time(b.start)}</text>` : "").join("");
     const hits = buckets.map((b, i) => {
       const tooltip = `${time(b.start)}–${time(b.start + bucketMs)} UTC\n${money(spend(b.requests))} · ${b.requests.length} requests\n` + sessions.map((s, n) => `${s.name}: ${money(b.values[n])}`).join("\n");
-      return `<rect x="${left + i * chartWidth / count}" y="${top}" width="${chartWidth / count}" height="${chartHeight}" fill="transparent" tabindex="0" data-bucket-spend="${spend(b.requests)}" data-bucket-count="${b.requests.length}" data-tooltip="${esc(tooltip)}" aria-label="${esc(tooltip)}"><title>${esc(tooltip)}</title></rect>`;
+      const detail = { heading: `${time(b.start)}–${time(b.start + bucketMs)} UTC`, total: spend(b.requests), count: b.requests.length,
+        series: sessions.map((session, n) => ({ name: session.name, value: b.values[n], color: sessionColors.get(session.session_id) })).sort((a, z) => z.value - a.value) };
+      return `<rect class="bucket-hit" data-tooltip-detail="${esc(JSON.stringify(detail))}" x="${left + i * chartWidth / count}" y="${top}" width="${chartWidth / count}" height="${chartHeight}" fill="transparent" tabindex="0" data-bucket-spend="${spend(b.requests)}" data-bucket-count="${b.requests.length}" data-tooltip="${esc(tooltip)}" aria-label="${esc(tooltip)}"></rect>`;
     }).join("");
     el("timeline").innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Stacked session spend in time buckets" data-spend="${spend(list)}" data-request-count="${list.length}">${grid}${areas}${axis}${hits}</svg>`;
     el("session-legend").innerHTML = sessions.map(s => `<button data-open-session="${esc(s.session_id)}"><span class="dot" style="background:${sessionColors.get(s.session_id)}"></span>${esc(s.name)}</button>`).join("");
@@ -224,17 +227,49 @@
     el("filter-error").hidden = true;
     syncDates(); render();
   });
-  document.addEventListener("pointermove", event => {
-    const target = event.target.closest("[data-tooltip]");
+  function clearChartHover() {
+    el("chart-tooltip").hidden = true;
+    document.querySelectorAll(".bucket-hit.active").forEach(node => node.classList.remove("active"));
+    document.querySelectorAll("[data-series]").forEach(node => node.style.opacity = "");
+    document.querySelectorAll("#session-legend button").forEach(node => node.classList.remove("highlighted"));
+  }
+
+  function showChartTooltip(target, clientX, clientY) {
+    clearChartHover();
+    const detail = JSON.parse(target.dataset.tooltipDetail);
     const tooltip = el("chart-tooltip");
-    tooltip.hidden = !target;
+    const total = detail.total;
+    tooltip.innerHTML = `<div class="tooltip-date">${esc(detail.heading)}</div><div class="tooltip-panel">${detail.series.map(series => `<div class="tooltip-row"><span class="tooltip-marker" style="background:${series.color}"></span><span class="tooltip-name">${esc(series.name)}</span><strong>${money(series.value)}</strong></div>`).join("")}<div class="tooltip-total"><span>Total spend</span><strong>${money(total)}</strong></div><div class="tooltip-meta"><span>Model requests</span><strong>${detail.count}</strong></div></div>`;
+    tooltip.hidden = false;
+    target.classList.add("active");
+    const bounds = tooltip.getBoundingClientRect();
+    tooltip.style.left = Math.max(8, Math.min(clientX + 16, window.innerWidth - bounds.width - 8)) + "px";
+    tooltip.style.top = Math.max(8, Math.min(clientY + 16, window.innerHeight - bounds.height - 8)) + "px";
+  }
+
+  document.addEventListener("pointermove", event => {
+    const target = event.target.closest("[data-tooltip-detail]");
     if (target) {
-      tooltip.textContent = target.dataset.tooltip;
-      tooltip.style.left = Math.min(event.clientX + 14, window.innerWidth - 285) + "px";
-      tooltip.style.top = Math.min(event.clientY + 14, window.innerHeight - 155) + "px";
+      showChartTooltip(target, event.clientX, event.clientY);
+      return;
+    }
+    clearChartHover();
+    const legend = event.target.closest("#session-legend [data-open-session]");
+    if (legend) {
+      legend.classList.add("highlighted");
+      document.querySelectorAll("[data-series]").forEach(node => node.style.opacity = node.dataset.series === legend.dataset.openSession ? "1" : "0.18");
     }
   });
-  document.addEventListener("scroll", () => { el("chart-tooltip").hidden = true; }, true);
+  document.addEventListener("focusin", event => {
+    const target = event.target.closest("[data-tooltip-detail]");
+    if (!target) return;
+    const bounds = target.getBoundingClientRect();
+    showChartTooltip(target, bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  });
+  document.addEventListener("focusout", clearChartHover);
+  document.addEventListener("keydown", event => { if (event.key === "Escape") clearChartHover(); });
+  document.addEventListener("scroll", clearChartHover, true);
+  document.documentElement.addEventListener("pointerleave", clearChartHover);
   el("user-filter").innerHTML = '<option value="all">All selected users</option>' + [...new Set(rows.map(r => r.user_id))].map(user => `<option value="${esc(user)}">${esc(user)}</option>`).join("");
   window.addEventListener("resize", () => renderTimeline(selectedRows()));
   syncDates();
