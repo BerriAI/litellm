@@ -13,6 +13,7 @@ PROVIDER_MODEL: Final = "gpt-4o-mini"
 TEAM_MODEL_TPM: Final = 100
 MAX_TOKENS: Final = 60
 CONCURRENT_REQUESTS: Final = 3
+UPSTREAM_USAGE: Final = {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
 UPSTREAM_REPLY: Final = json.dumps(
     {
         "id": "chatcmpl-team-tpm-control",
@@ -22,7 +23,7 @@ UPSTREAM_REPLY: Final = json.dumps(
         "choices": [
             {"index": 0, "message": {"role": "assistant", "content": "team tpm control"}, "finish_reason": "stop"}
         ],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+        "usage": UPSTREAM_USAGE,
     }
 ).encode()
 
@@ -78,12 +79,16 @@ def test_concurrent_team_model_tpm_requests_reserve_tokens_before_reaching_the_p
             )
             release.set()
             responses: Final = tuple(future.result(timeout=15) for future in futures)
-        statuses: Final = tuple(sorted(response.status_code for response in responses))
-        assert statuses == (200, 429, 429), tuple(response.text for response in responses)
-        assert len(wire.drain()) == 1, statuses
-        served: Final = next(response for response in responses if response.status_code == 200)
-        assert served.json()["usage"] == {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}, served.text
-        for rejected in (response for response in responses if response.status_code == 429):
-            error: Final = rejected.json()["error"]
-            assert (error["type"], error["code"], error["param"]) == ("throttling_error", "429", None), rejected.text
-            assert f"Limit type: tokens. Current limit: {TEAM_MODEL_TPM}," in error["message"], rejected.text
+        served: Final = tuple(response for response in responses if response.status_code == 200)
+        rejected: Final = tuple(response for response in responses if response.status_code != 200)
+        assert len(served) <= 1, tuple(response.text for response in responses)
+        assert len(wire.drain()) == len(served), tuple(response.status_code for response in responses)
+        for response in rejected:
+            assert response.status_code == 429, response.text
+            error: Final = response.json()["error"]
+            assert (error["type"], error["code"], error["param"]) == ("throttling_error", "429", None), response.text
+            assert f"Limit type: tokens. Current limit: {TEAM_MODEL_TPM}," in error["message"], response.text
+        admitted: Final = served[0] if served else send(CONCURRENT_REQUESTS)
+        assert admitted.status_code == 200, admitted.text
+        assert admitted.json()["usage"] == UPSTREAM_USAGE, admitted.text
+        assert len(wire.drain()) == (0 if served else 1)

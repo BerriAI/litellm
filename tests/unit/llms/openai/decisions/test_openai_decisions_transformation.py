@@ -181,6 +181,32 @@ def test_systemone_questions_without_instructions_become_valid_openai_questions(
     assert all(question.instructions for question in _OPENAI_BODY.validate_python(body).questions)
 
 
+def test_systemone_images_reach_openai_as_input_images_ahead_of_the_state() -> None:
+    request: Final = _SYSTEMONE_BODY.validate_python(
+        {
+            "state": {"ticket": 1234},
+            "questions": {"damaged": {"type": "noul", "instructions": "Is the item damaged?"}},
+            "images": ["data:image/png;base64,AA==", {"content_type": "image/webp", "base64": "BB=="}],
+        }
+    )
+
+    assert ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request)) == {
+        "model": "gpt-6-luna",
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+                    {"type": "input_image", "image_url": "data:image/webp;base64,BB=="},
+                    {"type": "input_text", "text": '{"ticket": 1234}'},
+                ],
+            }
+        ],
+        "questions": [{"type": "predicate", "name": "damaged", "instructions": "Is the item damaged?"}],
+    }
+
+
 @pytest.mark.parametrize(
     "question",
     ({"type": "choice", "criteria": {"refund": None}}, {"type": "score", "criteria": ["minor"]}),

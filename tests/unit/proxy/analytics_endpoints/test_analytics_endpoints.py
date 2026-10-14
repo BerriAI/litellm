@@ -7,12 +7,13 @@ totals for the stat cards, and the filter options for the UI dropdowns.
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import LiteLLMRoutes
+from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.analytics_endpoints.analytics_endpoints import get_global_activity
 from litellm.proxy.analytics_endpoints.cache_activity import (
     ERROR_BREAKDOWN_SQL,
@@ -22,6 +23,23 @@ from litellm.proxy.analytics_endpoints.cache_activity import (
     CacheActivityGroup,
     compute_totals,
 )
+
+ADMIN: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+INTERNAL_USER: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1")
+
+
+async def _no_teams(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+    return ()
+
+
+async def _team_nine(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+    return ("team-9",)
+
+
+async def _activity(auth: UserAPIKeyAuth, team_lookup=_no_teams, **overrides):
+    params = {"start_date": "2026-07-01", "end_date": "2026-07-27", "key_aliases": [], "models": [], **overrides}
+    return await get_global_activity(log_team_lookup=team_lookup, user_api_key_dict=auth, **params)
+
 
 GROUP_ROWS = [
     {
@@ -78,7 +96,7 @@ def mock_prisma(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_returns_groups_totals_and_filter_options(mock_prisma: MagicMock):
-    response = await get_global_activity(start_date="2026-07-01", end_date="2026-07-27", key_aliases=[], models=[])
+    response = await _activity(ADMIN)
 
     assert [group.call_type for group in response.groups] == ["acompletion", "Unknown"]
     assert response.groups[0].api_requests == 1000
@@ -99,12 +117,7 @@ async def test_returns_groups_totals_and_filter_options(mock_prisma: MagicMock):
 
 @pytest.mark.asyncio
 async def test_filters_are_passed_to_sql_as_json_arrays(mock_prisma: MagicMock):
-    await get_global_activity(
-        start_date="2026-07-01",
-        end_date="2026-07-27",
-        key_aliases=["my-key"],
-        models=["gpt-5.1", "claude-opus-4-8"],
-    )
+    await _activity(ADMIN, key_aliases=["my-key"], models=["gpt-5.1", "claude-opus-4-8"])
 
     filtered_calls = [
         call for call in mock_prisma.db.query_raw.call_args_list if call.args[0] in (GROUPS_SQL, ERROR_BREAKDOWN_SQL)
@@ -120,9 +133,9 @@ async def test_every_query_excludes_the_same_info_routes(mock_prisma: MagicMock)
     """Regression for LIT-5884: failed info-route calls are spend-logged but are not inference traffic, so
     the groups, error breakdown and both filter-option queries all receive the same exclusion list. What
     the SQL does with it is covered against Postgres in tests/integration/spend/test_cache_activity.py."""
-    await get_global_activity(start_date="2026-07-01", end_date="2026-07-27", key_aliases=[], models=[])
+    await _activity(ADMIN)
 
-    exclusions_by_query = {call.args[0]: json.loads(call.args[-1]) for call in mock_prisma.db.query_raw.call_args_list}
+    exclusions_by_query = {call.args[0]: json.loads(call.args[-4]) for call in mock_prisma.db.query_raw.call_args_list}
     assert set(exclusions_by_query) == {GROUPS_SQL, ERROR_BREAKDOWN_SQL, KEY_ALIAS_OPTIONS_SQL, MODEL_OPTIONS_SQL}
     for excluded_call_types in exclusions_by_query.values():
         assert excluded_call_types == LiteLLMRoutes.info_routes.value
@@ -131,9 +144,38 @@ async def test_every_query_excludes_the_same_info_routes(mock_prisma: MagicMock)
 
 
 @pytest.mark.asyncio
+async def test_admin_queries_grant_all_rows(mock_prisma: MagicMock):
+    await _activity(ADMIN)
+
+    scope_by_query = {call.args[0]: call.args[-3:] for call in mock_prisma.db.query_raw.call_args_list}
+    assert set(scope_by_query) == {GROUPS_SQL, ERROR_BREAKDOWN_SQL, KEY_ALIAS_OPTIONS_SQL, MODEL_OPTIONS_SQL}
+    for scope_args in scope_by_query.values():
+        assert scope_args == (True, None, "[]")
+
+
+@pytest.mark.asyncio
+async def test_internal_user_queries_are_scoped_to_own_and_team_rows(mock_prisma: MagicMock):
+    await _activity(INTERNAL_USER, team_lookup=_team_nine)
+
+    scope_by_query = {call.args[0]: call.args[-3:] for call in mock_prisma.db.query_raw.call_args_list}
+    assert set(scope_by_query) == {GROUPS_SQL, ERROR_BREAKDOWN_SQL, KEY_ALIAS_OPTIONS_SQL, MODEL_OPTIONS_SQL}
+    for scope_args in scope_by_query.values():
+        assert scope_args == (False, "user-1", json.dumps(["team-9"]))
+
+
+@pytest.mark.asyncio
+async def test_key_without_user_id_grants_no_rows(mock_prisma: MagicMock):
+    no_user = UserAPIKeyAuth(user_role=LitellmUserRoles.TEAM, user_id=None)
+    await _activity(no_user)
+
+    for call in mock_prisma.db.query_raw.call_args_list:
+        assert call.args[-3:] == (False, None, "[]")
+
+
+@pytest.mark.asyncio
 async def test_rejects_malformed_dates_with_400(mock_prisma: MagicMock):
     with pytest.raises(HTTPException) as exc_info:
-        await get_global_activity(start_date="07/01/2026", end_date="2026-07-27", key_aliases=[], models=[])
+        await _activity(ADMIN, start_date="07/01/2026")
 
     assert exc_info.value.status_code == 400
     mock_prisma.db.query_raw.assert_not_called()

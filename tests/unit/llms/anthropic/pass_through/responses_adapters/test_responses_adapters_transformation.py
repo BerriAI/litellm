@@ -5,7 +5,7 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock
 
 import pytest
@@ -623,9 +623,7 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result == [
-            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Private reasoning."}]}
-        ]
+        assert result == [{"type": "reasoning", "summary": [{"type": "summary_text", "text": "Private reasoning."}]}]
 
     def test_consecutive_thinking_blocks_become_one_reasoning_item(self):
         """Summary parts of one upstream reasoning item are regrouped into that item."""
@@ -2156,7 +2154,7 @@ class TestPromptCacheBreakpointToResponses:
             }
         ]
 
-    def test_assistant_and_tool_result_blocks_drop_breakpoint(self):
+    def test_assistant_blocks_drop_breakpoint_and_a_tool_result_keeps_it_on_its_last_output_part(self):
         items = _ADAPTER.translate_messages_to_responses_input(
             [
                 {"role": "user", "content": [{"type": "text", "text": "q"}]},
@@ -2180,8 +2178,192 @@ class TestPromptCacheBreakpointToResponses:
                 },
             ]
         )
-        assert len(items) == 4
-        assert not _contains_key(items, "prompt_cache_breakpoint")
+        *earlier_items, tool_output = items
+        assert len(earlier_items) == 3
+        assert not _contains_key(earlier_items, "prompt_cache_breakpoint")
+        assert tool_output == {
+            "type": "function_call_output",
+            "call_id": "toolu_01",
+            "output": [{"type": "input_text", "text": "r", "prompt_cache_breakpoint": self.EXPLICIT}],
+        }
+
+    def test_a_marked_tool_result_with_screenshots_moves_its_breakpoint_to_the_last_screenshot(self):
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "t", "input": {}}]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_01",
+                            "content": [
+                                {"type": "text", "text": "r"},
+                                {
+                                    "type": "image",
+                                    "source": {"type": "base64", "media_type": "image/png", "data": "Zmlyc3Q="},
+                                },
+                                {
+                                    "type": "image",
+                                    "source": {"type": "base64", "media_type": "image/png", "data": "bGFzdA=="},
+                                },
+                            ],
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        }
+                    ],
+                },
+            ]
+        )
+        *_, tool_output, screenshots = items
+        assert tool_output == {
+            "type": "function_call_output",
+            "call_id": "toolu_01",
+            "output": f"r\n{TOOL_RESULT_IMAGE_PLACEHOLDER}",
+        }
+        *_, first_screenshot, last_screenshot = screenshots["content"]
+        assert first_screenshot == {"type": "input_image", "image_url": "data:image/png;base64,Zmlyc3Q="}
+        assert last_screenshot == {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,bGFzdA==",
+            "prompt_cache_breakpoint": self.EXPLICIT,
+        }
+
+    SCREENSHOT: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "c2hvdA=="}}
+    MARKED_SCREENSHOT_PART: Final = {
+        "type": "input_image",
+        "image_url": "data:image/png;base64,c2hvdA==",
+        "prompt_cache_breakpoint": EXPLICIT,
+    }
+    LOG_OUTPUT: Final = {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok"}
+
+    def test_an_unmarked_screenshot_before_a_marked_tool_result_lands_inside_that_breakpoint(self):
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_shot", "content": [self.SCREENSHOT]},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_log",
+                            "content": "build ok",
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                        },
+                    ],
+                }
+            ]
+        )
+        _, log_output, screenshots = items
+        assert log_output == self.LOG_OUTPUT
+        assert screenshots["content"][-1] == self.MARKED_SCREENSHOT_PART
+
+    @pytest.mark.parametrize("mark_on_the_screenshot", [False, True], ids=["mark-on-tool-result", "mark-on-screenshot"])
+    def test_a_tool_result_after_a_marked_screenshot_stays_after_its_breakpoint(self, mark_on_the_screenshot: bool):
+        mark: Final = {"prompt_cache_breakpoint": self.EXPLICIT}
+        marked_result: Final = (
+            {"type": "tool_result", "tool_use_id": "toolu_shot", "content": [{**self.SCREENSHOT, **mark}]}
+            if mark_on_the_screenshot
+            else {"type": "tool_result", "tool_use_id": "toolu_shot", "content": [self.SCREENSHOT], **mark}
+        )
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        marked_result,
+                        {"type": "tool_result", "tool_use_id": "toolu_log", "content": "build ok"},
+                    ],
+                }
+            ]
+        )
+        _, screenshots, log_output = items
+        assert screenshots["content"][-1] == self.MARKED_SCREENSHOT_PART
+        assert log_output == self.LOG_OUTPUT
+
+    def test_a_breakpoint_on_text_inside_a_tool_result_marks_its_output(self):
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_log",
+                            "content": [{"type": "text", "text": "build ok", "prompt_cache_breakpoint": self.EXPLICIT}],
+                        }
+                    ],
+                }
+            ]
+        )
+        assert items == [
+            {
+                "type": "function_call_output",
+                "call_id": "toolu_log",
+                "output": [{"type": "input_text", "text": "build ok", "prompt_cache_breakpoint": self.EXPLICIT}],
+            }
+        ]
+
+    SCREENSHOT_PART: Final = {"type": "input_image", "image_url": "data:image/png;base64,c2hvdA=="}
+    MARKED_LOG_TEXT: Final = {"type": "text", "text": "build ok", "prompt_cache_breakpoint": EXPLICIT}
+    LOG_TEXT_WITH_SCREENSHOT: Final = f"build ok\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
+
+    @pytest.mark.parametrize(
+        ("content", "output", "screenshot"),
+        [
+            pytest.param(
+                [MARKED_LOG_TEXT, SCREENSHOT],
+                [{"type": "input_text", "text": LOG_TEXT_WITH_SCREENSHOT, "prompt_cache_breakpoint": EXPLICIT}],
+                SCREENSHOT_PART,
+                id="screenshot-after-the-marked-text",
+            ),
+            pytest.param(
+                [SCREENSHOT, MARKED_LOG_TEXT],
+                LOG_TEXT_WITH_SCREENSHOT,
+                MARKED_SCREENSHOT_PART,
+                id="screenshot-before-the-marked-text",
+            ),
+        ],
+    )
+    def test_a_breakpoint_on_text_inside_a_tool_result_covers_only_the_screenshots_before_that_text(
+        self, content: list[dict[str, object]], output: object, screenshot: dict[str, object]
+    ):
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_shot", "content": content}]}]
+        )
+        assert items == [
+            {"type": "function_call_output", "call_id": "toolu_shot", "output": output},
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY}, screenshot],
+            },
+        ]
+
+    def test_a_later_tool_output_stays_after_the_last_marked_screenshot_of_an_earlier_result(self):
+        marked_screenshot: Final = {**self.SCREENSHOT, "prompt_cache_breakpoint": self.EXPLICIT}
+        items: Final = _ADAPTER.translate_messages_to_responses_input(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_shot",
+                            "content": [marked_screenshot, marked_screenshot],
+                        },
+                        {"type": "tool_result", "tool_use_id": "toolu_log", "content": "build ok"},
+                    ],
+                }
+            ]
+        )
+        _, screenshots, log_output = items
+        assert screenshots["content"] == [
+            {"type": "input_text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+            self.MARKED_SCREENSHOT_PART,
+            self.MARKED_SCREENSHOT_PART,
+        ]
+        assert log_output == self.LOG_OUTPUT
 
     def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
         from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
