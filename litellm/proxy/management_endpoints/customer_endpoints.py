@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_BudgetTable as PrismaBudgetRow
     from prisma.models import LiteLLM_EndUserTable as PrismaEndUserRow
 
+    from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
     from litellm.proxy.utils import PrismaClient
 
 import litellm
@@ -45,7 +46,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -156,6 +157,29 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
     return CustomerResponse.model_validate(record.model_dump())
 
 
+def _configured_blocked_user_hook() -> "ENTERPRISE_BlockedUserList":
+    try:
+        from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
+    except ImportError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Blocked user check was never set. This call has no effect."
+                + CommonProxyErrors.missing_enterprise_package_docker.value
+            },
+        )
+    configured_hook: Final = next(
+        (callback for callback in litellm.callbacks if isinstance(callback, ENTERPRISE_BlockedUserList)), None
+    )
+    if configured_hook is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Blocked user check was never set. This call has no effect."},
+        )
+
+    return configured_hook
+
+
 @router.post(
     "/end_user/block",
     tags=["Customer Management"],
@@ -187,6 +211,7 @@ async def block_user(data: BlockUsers) -> BlockUsersResponse:
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    _configured_blocked_user_hook()
     try:
         if prisma_client is None:
             raise HTTPException(
@@ -240,43 +265,33 @@ async def unblock_user(data: BlockUsers) -> UnblockUsersResponse:
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    try:
-        from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
-    except ImportError:
+    configured_hook: Final = _configured_blocked_user_hook()
+
+    requested_ids: Final = frozenset(data.user_ids)
+    file_ids: Final = (
+        _STRING_IDS.validate_python(configured_hook.blocked_user_list or ())
+        if isinstance(litellm.blocked_user_list, str)
+        else ()
+    )
+    if requested_ids.intersection(file_ids):
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "Blocked user check was never set. This call has no effect."
-                + CommonProxyErrors.missing_enterprise_package_docker.value
+                "error": "These customers are blocked by a file. Update the file and restart the proxy to unblock them."
             },
         )
-    configured_hook: Final = next(
-        (callback for callback in litellm.callbacks if isinstance(callback, ENTERPRISE_BlockedUserList)), None
-    )
-    if configured_hook is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Blocked user check was never set. This call has no effect."},
-        )
-
-    requested_ids: Final = frozenset(data.user_ids)
-    configured_ids: Final = _STRING_IDS.validate_python(
-        configured_hook.blocked_user_list
-        if isinstance(litellm.blocked_user_list, str)
-        else litellm.blocked_user_list or ()
-    )
-    remaining_legacy_ids: Final = tuple(user_id for user_id in configured_ids if user_id not in requested_ids)
     table: Final = _typed_table(EndUserRepository(prisma_client)) if prisma_client is not None else None
     if table is not None:
-        await table.update_many(where={"user_id": {"in": data.user_ids}}, data={"blocked": False})
+        await update_many_in(table, "user_id", data.user_ids, data={"blocked": False}, atomicity="per_chunk_ok")
+    configured_ids: Final = (
+        file_ids
+        if isinstance(litellm.blocked_user_list, str)
+        else _STRING_IDS.validate_python(litellm.blocked_user_list or ())
+    )
+    remaining_legacy_ids: Final = tuple(user_id for user_id in configured_ids if user_id not in requested_ids)
     if isinstance(litellm.blocked_user_list, list):
         litellm.blocked_user_list[:] = remaining_legacy_ids
     await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
-    if isinstance(litellm.blocked_user_list, str) and requested_ids.intersection(configured_ids):
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "`blocked_user_list` must be set as a list. Filepaths can't be updated."},
-        )
     return UnblockUsersResponse(blocked_users=list(remaining_legacy_ids))
 
 

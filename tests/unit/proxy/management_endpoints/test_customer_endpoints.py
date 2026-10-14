@@ -1,3 +1,5 @@
+import asyncio
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +13,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from prisma.models import LiteLLM_EndUserTable as PrismaEndUserRow
 
+import litellm
 from litellm.proxy._types import (
     BlockUsers,
     LiteLLM_EndUserTable,
@@ -99,6 +102,16 @@ def test_should_update_field(
 def mock_prisma_client():
     with patch("litellm.proxy.proxy_server.prisma_client") as mock:
         yield mock
+
+
+@pytest.fixture
+def configured_block_hook(mock_prisma_client: MagicMock) -> Iterator[None]:
+    from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
+
+    with patch("litellm.blocked_user_list", []):
+        hook: Final = ENTERPRISE_BlockedUserList(prisma_client=mock_prisma_client)
+        with patch("litellm.callbacks", [hook]):
+            yield
 
 
 @pytest.fixture
@@ -558,7 +571,7 @@ def test_update_customer_response_keeps_nested_budget_server_fields(mock_prisma_
 
 
 def test_block_customer_success_serializes_through_response_model(
-    mock_prisma_client: MagicMock, mock_user_api_key_auth: object
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: object, configured_block_hook: None
 ) -> None:
     """
     /customer/block returns {"blocked_users": [<end user rows>]}. With
@@ -1107,7 +1120,9 @@ def test_customer_update_invalidates_end_user_and_registry_caches(mock_prisma_cl
     assert _published_keys(mock_publish) == ["end_user_id:c1", "end_user_restricted_registry", "litellm:end_user_id:c1"]
 
 
-def test_customer_block_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
+def test_customer_block_invalidates_end_user_and_registry_caches(
+    mock_prisma_client, mock_user_api_key_auth, configured_block_hook: None
+):
     """Blocking is the one mutation that must take effect instantly; a stale registry keeps serving it."""
     mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
         return_value=LiteLLM_EndUserTable(user_id="c1", blocked=True)
@@ -1138,7 +1153,7 @@ def test_customer_block_invalidates_end_user_and_registry_caches(mock_prisma_cli
 
 
 def test_customer_block_legacy_route_matches_canonical_response(
-    mock_prisma_client: MagicMock, mock_user_api_key_auth: object
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: object, configured_block_hook: None
 ) -> None:
     blocked_row: Final = PrismaEndUserRow(
         user_id="legacy-customer", blocked=True, alias="Legacy customer", spend=0, models=[]
@@ -1265,7 +1280,8 @@ async def test_customer_block_unblock_refreshes_enterprise_hook_cache(mock_prism
         cached_row: Final = cache.get_cache(end_user_block_cache_key(active_row.user_id), model_type=PrismaEndUserRow)
         assert cached_row is not None and cached_row.blocked is False
 
-        await block_user(customer_ids)
+        with patch("litellm.callbacks", [hook]):
+            await block_user(customer_ids)
         with pytest.raises(HTTPException, match="User blocked from making LLM API Calls"):
             await hook.async_pre_call_hook(auth, cache, {"user": active_row.user_id}, "completion")
 
@@ -1434,7 +1450,7 @@ async def test_customer_unblock_database_only_hook_refreshes_cached_block(mock_p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("in_file", (False, True))
-async def test_customer_unblock_file_list_clears_database_and_keeps_file(
+async def test_customer_unblock_file_list_validates_before_database_write(
     mock_prisma_client: MagicMock, tmp_path: Path, in_file: bool
 ) -> None:
     from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
@@ -1460,22 +1476,91 @@ async def test_customer_unblock_file_list_clears_database_and_keeps_file(
         hook: Final = ENTERPRISE_BlockedUserList(prisma_client=mock_prisma_client)
         with patch("litellm.callbacks", [hook]):
             if in_file:
-                with pytest.raises(HTTPException, match="Filepaths can't be updated") as error:
+                with pytest.raises(HTTPException, match="Update the file and restart the proxy") as error:
                     await unblock_user(BlockUsers(user_ids=[user_id]))
-                assert error.value.status_code == 500
+                assert error.value.status_code == 400
             else:
                 response: Final = await unblock_user(BlockUsers(user_ids=[user_id]))
                 assert response.blocked_users == ["legacy-only"]
 
-        assert cache.get_cache(end_user_block_cache_key(user_id), model_type=PrismaEndUserRow) is None
+        cached_row: Final = cache.get_cache(end_user_block_cache_key(user_id), model_type=PrismaEndUserRow)
         if in_file:
+            assert cached_row is not None and cached_row.blocked is True
             with pytest.raises(HTTPException, match="User blocked from making LLM API Calls"):
                 await hook.async_pre_call_hook(auth, cache, {"user": user_id}, "completion")
         else:
+            assert cached_row is None
             await hook.async_pre_call_hook(auth, cache, {"user": user_id}, "completion")
 
-    update_many.assert_awaited_once_with(where={"user_id": {"in": [user_id]}}, data={"blocked": False})
+    if in_file:
+        update_many.assert_not_awaited()
+    else:
+        update_many.assert_awaited_once_with(where={"user_id": {"in": [user_id]}}, data={"blocked": False})
     assert block_file.read_text() == file_contents
+
+
+@pytest.mark.parametrize("route", ("/customer/block", "/end_user/block"))
+def test_customer_block_requires_loaded_hook_before_writing(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: object, route: str
+) -> None:
+    upsert: Final = AsyncMock()
+    mock_prisma_client.db = SimpleNamespace(litellm_endusertable=SimpleNamespace(upsert=upsert))
+    with patch("litellm.callbacks", []), _end_user_cache_doubles() as (cache, publish):
+        response: Final = client.post(route, json={"user_ids": ["c1"]}, headers={"Authorization": "Bearer k"})
+    assert response.status_code == 400
+    assert response.json() == {"detail": {"error": "Blocked user check was never set. This call has no effect."}}
+    upsert.assert_not_awaited()
+    assert cache.deleted == []
+    publish.assert_not_awaited()
+
+
+@pytest.mark.parametrize("route", ("/customer/block", "/end_user/block", "/customer/unblock", "/end_user/unblock"))
+@pytest.mark.parametrize("size", (0, 1001))
+def test_customer_block_requests_reject_empty_or_oversized_batches(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: object, route: str, size: int
+) -> None:
+    upsert: Final = AsyncMock()
+    update_many: Final = AsyncMock()
+    mock_prisma_client.db = SimpleNamespace(
+        litellm_endusertable=SimpleNamespace(upsert=upsert, update_many=update_many)
+    )
+    response: Final = client.post(
+        route, json={"user_ids": [f"c{index}" for index in range(size)]}, headers={"Authorization": "Bearer k"}
+    )
+    assert response.status_code == 422
+    upsert.assert_not_awaited()
+    update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_customer_unblocks_keep_both_ids_unblocked(mock_prisma_client: MagicMock) -> None:
+    from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
+
+    first_write_started: Final = asyncio.Event()
+    release_first_write: Final = asyncio.Event()
+
+    async def write_block_state(where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        assert data == {"blocked": False}
+        if where == {"user_id": {"in": ["c1"]}}:
+            first_write_started.set()
+            await release_first_write.wait()
+        return 1
+
+    mock_prisma_client.db = SimpleNamespace(
+        litellm_endusertable=SimpleNamespace(update_many=AsyncMock(side_effect=write_block_state))
+    )
+    with patch("litellm.blocked_user_list", ["c1", "c2", "still-blocked"]), _end_user_cache_doubles():
+        hook: Final = ENTERPRISE_BlockedUserList(prisma_client=mock_prisma_client)
+        with patch("litellm.callbacks", [hook]):
+            first_request: Final = asyncio.create_task(unblock_user(BlockUsers(user_ids=["c1"])))
+            await first_write_started.wait()
+            second_response: Final = await unblock_user(BlockUsers(user_ids=["c2"]))
+            assert second_response.blocked_users == ["c1", "still-blocked"]
+            release_first_write.set()
+            first_response: Final = await first_request
+        assert first_response.blocked_users == ["still-blocked"]
+        assert hook.blocked_user_list == ["still-blocked"]
+        assert litellm.blocked_user_list == ["still-blocked"]
 
 
 def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
