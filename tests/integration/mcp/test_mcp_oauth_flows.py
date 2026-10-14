@@ -28,10 +28,13 @@ from integration._support.mcp import (
     McpCaller,
     McpPeer,
     Outcome,
+    ScriptedTool,
     _outcome_from_rpc,
     call_tool,
     mcp_peer,
     register_mcp,
+    scripted_peer,
+    text_result,
     tool_calls,
 )
 from integration._support.mcp_grants import create_toolset
@@ -274,7 +277,8 @@ class _Pkce:
 
 
 def _authorize_through_gateway(
-    gateway: Gateway, auth: AuthorizationServer, alias: str, key: str, client_id: str, pkce: _Pkce
+    gateway: Gateway, auth: AuthorizationServer, alias: str, key: str, client_id: str, pkce: _Pkce,
+    scope: str = "tools.call",
 ) -> str:
     started: Final = gateway.client.get(
         f"/{alias}/authorize",
@@ -285,7 +289,7 @@ def _authorize_through_gateway(
             "state": "client-state",
             "code_challenge": pkce.challenge,
             "code_challenge_method": "S256",
-            "scope": "tools.call",
+            "scope": scope,
         },
         headers={"x-litellm-api-key": key},
     )
@@ -1673,3 +1677,140 @@ def test_standard_pattern_discovery_ignores_forwarded_headers_from_an_untrusted_
             "scopes_supported": ["tools.call"],
         }, protected.text
         assert "evil.example" not in protected.text, protected.text
+
+
+@contextmanager
+def _scope_enforcing_peer(auth: AuthorizationServer) -> Iterator[tuple[McpPeer, Wire]]:
+    with scripted_peer(
+        ScriptedTool("read_op", lambda _: text_result("read completed")),
+        ScriptedTool("write_op", lambda _: text_result("write completed")),
+        ScriptedTool("forbid_op", lambda _: text_result("must not execute")),
+    ) as inner:
+        def enforce(request: Request) -> Reply:
+            body: Final = json.loads(request.body) if request.body else {}
+            if body.get("method") == "tools/call":
+                name: Final = body["params"]["name"]
+                if name == "forbid_op":
+                    return Reply(status=403, body=b"denied")
+                required: Final = "tools.write" if name == "write_op" else "tools.read"
+                token: Final = request.headers.get("authorization", "").removeprefix("Bearer ")
+                with auth.lock:
+                    granted: Final = auth.access_tokens.get(token, {}).get("scope", "")
+                if required not in granted.split():
+                    return Reply(status=403, headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", scope="{required}"'})
+            forwarded: Final = httpx.request(request.method, inner.url, content=request.body, headers=dict(request.headers))
+            return Reply(status=forwarded.status_code, body=forwarded.content, content_type=forwarded.headers.get("content-type", "application/json"))
+
+        with wire_server(enforce) as wire:
+            yield McpPeer(wire.url + "/mcp", inner.calls), wire
+
+
+@pytest.mark.parametrize("entry", ["rest", "server_mcp"])
+def test_managed_scope_step_up_preserves_read_and_write_without_retry(gateway: Gateway, entry: EntryPoint) -> None:
+    with oauth_server(scopes=("tools.read", "tools.write")) as auth, _scope_enforcing_peer(auth) as (peer, wire), gateway.scenario() as scenario:
+        alias: Final = "scope" + uuid.uuid4().hex[:8]
+        identity: Final = _register_oauth(
+            scenario, peer, auth, alias, auth_type="oauth2", oauth2_flow="authorization_code",
+            credentials={"client_id": "scope-client", "client_secret": "scope-secret", "scopes": ["tools.read"]},
+        )
+        owner: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
+        stranger: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        code: Final = _authorize_through_gateway(gateway, auth, alias, owner, "scope-client", pkce, "tools.read")
+        first: Final = _redeem(gateway, alias, owner, "scope-client", code, pkce)
+        assert first.status_code == 200, first.text
+        caller: Final = McpCaller(gateway, owner, entry, alias)
+        read: Final = caller.call(f"{alias}-read_op", {}, identity)
+        assert read.ok and read.text == "read completed", read.raw
+        peer.drain()
+        wire.drain()
+        denied: Final = (
+            call_tool(gateway, owner, identity, f"{alias}-write_op", {}) if entry == "rest"
+            else caller.rpc("tools/call", {"name": f"{alias}-write_op", "arguments": {}})
+        )
+        assert denied.status_code == 403, denied.text
+        challenge: Final = denied.headers["www-authenticate"]
+        assert 'error="insufficient_scope"' in challenge and 'scope="tools.write"' in challenge
+        assert f'resource_metadata="{_base(gateway)}/.well-known/oauth-protected-resource/' in challenge
+        attempts: Final = tuple(request for request in wire.drain() if request.body and json.loads(request.body).get("method") == "tools/call")
+        assert len(attempts) == 1 and tool_calls(peer.drain()) == (), "denied operation was retried or executed"
+        second_code: Final = _authorize_through_gateway(gateway, auth, alias, owner, "scope-client", pkce, "tools.write")
+        second: Final = _redeem(gateway, alias, owner, "scope-client", second_code, pkce)
+        assert second.status_code == 200, second.text
+        with auth.lock:
+            granted: Final = auth.access_tokens[_issued_token(second.json())]["scope"]
+        assert granted.split() == ["tools.read", "tools.write"]
+        for operation in ("read", "write"):
+            result: Final = caller.call(f"{alias}-{operation}_op", {}, identity)
+            assert result.ok and result.text == f"{operation} completed", result.raw
+        forbidden: Final = caller.call(f"{alias}-forbid_op", {}, identity)
+        assert forbidden.status == 200 and not forbidden.ok, forbidden.raw
+        unauthorized: Final = McpCaller(gateway, stranger, entry, alias).call(f"{alias}-read_op", {}, identity)
+        assert unauthorized.status == 401, unauthorized.raw
+
+
+@pytest.mark.parametrize("route", ["/mcp", "/toolset/{toolset}/mcp"])
+def test_managed_step_up_advertises_sdk_compatible_metadata_and_bound_permissions(gateway: Gateway, route: str) -> None:
+    from mcp.shared.auth_utils import check_resource_allowed
+
+    with (
+        oauth_server(scopes=("tools.read", "tools.write")) as auth,
+        _scope_enforcing_peer(auth) as (peer, wire),
+        gateway.scenario() as scenario,
+    ):
+        alias: Final = "scope" + uuid.uuid4().hex[:8]
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "scope-client", "client_secret": "scope-secret", "scopes": ["tools.read"]},
+        )
+        toolset_name: Final = "scope" + uuid.uuid4().hex[:8]
+        toolset_id: Final = create_toolset(
+            scenario, ((identity, "read_op"), (identity, "write_op")), toolset_name=toolset_name
+        )
+        owner: Final = scenario.key(
+            user_id=scenario.user(), object_permission={"mcp_servers": [identity], "mcp_toolsets": [toolset_id]}
+        )
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        code: Final = _authorize_through_gateway(gateway, auth, alias, owner, "scope-client", pkce, "tools.read")
+        first: Final = _redeem(gateway, alias, owner, "scope-client", code, pkce)
+        assert first.status_code == 200, first.text
+        path: Final = route.format(toolset=toolset_name)
+        headers: Final = {**ACCEPT, "Authorization": f"Bearer {owner}"}
+        initialized: Final = gateway.client.post(
+            path, headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": dict(INITIALIZE)}
+        )
+        assert initialized.status_code == 200, initialized.text
+        peer.drain()
+        wire.drain()
+        response: Final = gateway.client.post(
+            path,
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": f"{alias}-write_op", "arguments": {}},
+            },
+        )
+        assert response.status_code == 403, response.text
+        challenge: Final = response.headers["www-authenticate"]
+        metadata_url: Final = challenge.split('resource_metadata="', 1)[1].split('"', 1)[0]
+        metadata: Final = gateway.client.get(metadata_url)
+        assert metadata.status_code == 200, metadata.text
+        assert check_resource_allowed(
+            requested_resource=_base(gateway) + path, configured_resource=metadata.json()["resource"]
+        )
+        encoded_scope: Final = challenge.split('scope="', 1)[1].split('"', 1)[0]
+        assert encoded_scope == f"litellm:mcp_scope:{identity.encode().hex()}:{b'tools.write'.hex()}"
+        assert tool_calls(peer.drain()) == (), "denied operation executed upstream"
+        attempts: Final = tuple(
+            request
+            for request in wire.drain()
+            if request.body and json.loads(request.body).get("method") == "tools/call"
+        )
+        assert len(attempts) == 1, "denied operation was retried"

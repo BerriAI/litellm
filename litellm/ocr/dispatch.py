@@ -1,4 +1,5 @@
 from collections.abc import Coroutine, Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -6,8 +7,9 @@ import httpx
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
-from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, LiteLLMOcrRequest
+from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
+from litellm.rust_bridge.public_call import NativeCall, native_call, native_call_hook, optional_str, signature
 
 __all__ = ("aocr", "ocr")
 
@@ -21,30 +23,36 @@ def _bind_request(
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
     **kwargs: object,  # kwargs-ok: public OCR accepts provider-specific options
-) -> LiteLLMOcrRequest:
-    return LiteLLMOcrRequest(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "model": model,
+            "document": document,
+            "api_key": api_key,
+            "api_base": api_base,
+            "timeout": timeout,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+            "kwargs": kwargs,
+        }
     )
 
 
-def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> LiteLLMOcrRequest:
+_OCR: Final = signature(_bind_request)
+
+
+def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
     try:
-        return _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds the public arguments before native validation
+        _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds the public arguments before native validation
     except TypeError as error:
         raise TypeError(str(error).replace("_bind_request()", f"{name}()")) from None
+    return native_call(_OCR, args, kwargs)
 
 
-def _context(request: LiteLLMOcrRequest) -> RouteContext:
-    prefix, separator, _ = request.model.partition("/")
-    provider: Final = request.custom_llm_provider or (prefix if separator else None)
-    return RouteContext(Route.OCR, provider=provider, model=request.model)
+def _context(request: NativeCall) -> RouteContext:
+    prefix, separator, _ = str(request.resolved["model"]).partition("/")
+    provider: Final = optional_str(request.resolved.get("custom_llm_provider")) or (prefix if separator else None)
+    return RouteContext(Route.OCR, provider=provider, model=str(request.resolved["model"]))
 
 
 _DISPATCH: Final = PublicDispatch(
@@ -70,7 +78,7 @@ def ocr(
         kwargs,
         python=runtime.NO_PYTHON,
         binding=NATIVE_OCR,
-        native=call_hook,
+        native=native_call_hook,
     )
 
 
@@ -80,5 +88,5 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
         kwargs,
         python=runtime.NO_PYTHON,
         binding=NATIVE_AOCR,
-        native=call_hook,
+        native=native_call_hook,
     )
