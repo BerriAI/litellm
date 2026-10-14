@@ -1260,7 +1260,8 @@ class ModelResponseIterator:
         if streamed is None or fields is None or not streamed.isdisjoint(fields):
             return None
         self._streamed_answer_keys = streamed | frozenset(fields)
-        return f", {json.dumps(fields)[1:-1]}" if fields else ""
+        separator: Final = ", " if streamed else ""
+        return f"{separator}{json.dumps(fields)[1:-1]}" if fields else ""
 
     def _flush_response_format_buffer(self) -> str:
         schema: Final = self.response_format_schema

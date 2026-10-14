@@ -3118,6 +3118,14 @@ def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arriv
     assert contents[3] == blocks[0][:-1]
 
 
+def test_streamed_json_mode_empty_object_then_field_blocks_arrives_as_one_object():
+    blocks = ("{}", *(json.dumps({name: value}) for name, value in _STREAMED_RISK_OBJECT.items()))
+
+    contents = _streamed_json_tool_blocks(blocks)
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+
+
 def test_streamed_json_mode_partial_objects_that_repeat_a_field_keep_the_order_the_model_sent():
     blocks = (json.dumps({"tier": 3}), json.dumps({"tier": 4}))
 
