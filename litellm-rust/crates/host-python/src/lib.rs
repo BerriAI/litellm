@@ -5,6 +5,7 @@
 
 mod argument;
 mod binding;
+mod caller;
 mod conversion_cache;
 mod driver;
 mod error;
@@ -18,7 +19,6 @@ mod native;
 mod owned;
 mod runtime;
 mod services;
-mod task;
 
 pub use argument::{effective_py_args, lookup, present};
 pub use binding::PythonBinding;
