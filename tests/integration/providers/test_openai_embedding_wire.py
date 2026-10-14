@@ -143,3 +143,33 @@ def test_openai_embedding_forwards_omitted_or_float_encoding_format(
         ], response.text
         assert (payload.usage.prompt_tokens, payload.usage.total_tokens) == (4, 4), response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/embeddings")]
+
+
+def test_openai_embedding_relays_requested_base64_string_unchanged(gateway: Gateway) -> None:
+    encoded: Final = _encoded(_VECTORS[0])
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/embeddings"
+        assert request.headers["authorization"] == f"Bearer {_SDK_KEY}"
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert body == {"model": "text-embedding-3-small", "input": _RAW_INPUT, "encoding_format": "base64"}, body
+        return _embedding_reply([encoded])
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=_MODEL,
+            api_base=f"{wire.url}/v1",
+            api_key=_SDK_KEY,
+        )
+        virtual_key: Final = scenario.key()
+        response: Final = gateway.request(
+            "POST",
+            "/v1/embeddings",
+            {"model": model, "input": _RAW_INPUT, "encoding_format": "base64"},
+            key=virtual_key,
+        )
+        assert response.status_code == 200, response.text
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        assert payload["data"] == [{"object": "embedding", "index": 0, "embedding": encoded}], response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/embeddings")]

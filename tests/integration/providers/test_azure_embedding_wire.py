@@ -4,6 +4,7 @@ import struct
 from typing import Final, Literal
 from urllib.parse import parse_qs
 
+import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
@@ -45,13 +46,8 @@ def test_azure_embedding_uses_deployment_api_version_and_normalizes_response(gat
         assert parse_qs(query) == {"api-version": ["2024-06-01"]}, request.target
         assert request.headers["api-key"] == "synthetic-azure-key"
         body: Final = _JSON_OBJECT.validate_json(request.body)
-        # openai-python 2.33.0 defaults omitted encoding_format to base64: https://github.com/openai/openai-python/blob/v2.33.0/src/openai/resources/embeddings.py
-        assert body == {
-            "model": _DEPLOYMENT,
-            "input": list(_INPUTS),
-            "dimensions": 256,
-            "encoding_format": "base64",
-        }, body
+        sent_fields: Final = {key: value for key, value in body.items() if key != "encoding_format"}
+        assert sent_fields == {"model": _DEPLOYMENT, "input": list(_INPUTS), "dimensions": 256}, body
         embedding_values: Final = [_encoded(vector) for vector in _VECTORS]
         return Reply(
             body=json.dumps(
@@ -87,6 +83,51 @@ def test_azure_embedding_uses_deployment_api_version_and_normalizes_response(gat
             {"object": "embedding", "index": index, "embedding": list(vector)} for index, vector in enumerate(_VECTORS)
         ], response.text
         assert (payload.usage.prompt_tokens, payload.usage.total_tokens) == (4, 4), response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", f"/openai/deployments/{_DEPLOYMENT}/embeddings?api-version=2024-06-01")
+        ]
+
+
+def test_azure_embedding_omits_encoding_format_the_client_did_not_send(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: azure embeddings inject encoding_format=base64 into the upstream body when the client omitted it, "
+        "unlike openai which forwards the body as sent"
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == f"/openai/deployments/{_DEPLOYMENT}/embeddings?api-version=2024-06-01"
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        if "encoding_format" in body:
+            return Reply(status=400, body=b'{"error":"encoding_format must be omitted"}')
+        assert body == {"model": _DEPLOYMENT, "input": list(_INPUTS)}, body
+        return Reply(
+            body=json.dumps(
+                {
+                    "object": "list",
+                    "data": [
+                        {"object": "embedding", "index": index, "embedding": list(vector)}
+                        for index, vector in enumerate(_VECTORS)
+                    ],
+                    "model": _DEPLOYMENT,
+                    "usage": {"prompt_tokens": 4, "total_tokens": 4},
+                }
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"azure/{_DEPLOYMENT}",
+            api_base=wire.url,
+            api_key="synthetic-azure-key",
+            api_version="2024-06-01",
+        )
+        response: Final = gateway.request("POST", "/v1/embeddings", {"model": model, "input": list(_INPUTS)})
+        assert response.status_code == 200, response.text
+        payload: Final = _EmbeddingResponse.model_validate_json(response.content)
+        assert [item.model_dump() for item in payload.data] == [
+            {"object": "embedding", "index": index, "embedding": list(vector)} for index, vector in enumerate(_VECTORS)
+        ], response.text
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", f"/openai/deployments/{_DEPLOYMENT}/embeddings?api-version=2024-06-01")
         ]

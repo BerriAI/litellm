@@ -65,6 +65,11 @@ _AZURE_SDK_BODY: Final = {
 }
 
 
+def _drop_bearer_auth(request: httpx.Request) -> None:
+    request.headers.pop("authorization", None)
+    assert "api-key" in request.headers, dict(request.headers)
+
+
 def _azure_sdk_embedding(
     gateway: Gateway,
     deployment: str | None,
@@ -72,7 +77,7 @@ def _azure_sdk_embedding(
     model: str,
 ) -> openai.types.CreateEmbeddingResponse:
     with (
-        httpx.Client(trust_env=False) as http_client,
+        httpx.Client(trust_env=False, event_hooks={"request": [_drop_bearer_auth]}) as http_client,
         openai.AzureOpenAI(
             azure_endpoint=str(gateway.client.base_url).rstrip("/"),
             azure_deployment=deployment,

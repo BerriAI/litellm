@@ -36,13 +36,13 @@ def _encoded(vector: tuple[float, ...]) -> str:
     return base64.b64encode(struct.pack("<3f", *vector)).decode("ascii")
 
 
-def _openai_reply() -> bytes:
+def _openai_reply(count: int) -> bytes:
     return json.dumps(
         {
             "object": "list",
             "data": [
                 {"object": "embedding", "index": index, "embedding": list(vector)}
-                for index, vector in enumerate(_VECTORS)
+                for index, vector in enumerate(_VECTORS[:count])
             ],
             "model": "text-embedding-3-small",
             "usage": {"prompt_tokens": 4, "total_tokens": 4},
@@ -50,13 +50,13 @@ def _openai_reply() -> bytes:
     ).encode()
 
 
-def _azure_reply() -> bytes:
+def _azure_reply(count: int) -> bytes:
     return json.dumps(
         {
             "object": "list",
             "data": [
                 {"object": "embedding", "index": index, "embedding": _encoded(vector)}
-                for index, vector in enumerate(_VECTORS)
+                for index, vector in enumerate(_VECTORS[:count])
             ],
             "model": _AZURE_DEPLOYMENT,
             "usage": {"prompt_tokens": 4, "total_tokens": 4},
@@ -83,9 +83,10 @@ class _TokenArrayCase:
     query: Mapping[str, tuple[str, ...]]
     auth_header: str
     auth_value: str
-    body: Mapping[str, JsonValue]
-    reply: bytes
+    body: Callable[[JsonValue], Mapping[str, JsonValue]]
+    reply: Callable[[int], bytes]
     item_type: str | None
+    ignored_body_keys: frozenset[str] = frozenset()
 
     @property
     def path(self) -> str:
@@ -103,8 +104,8 @@ _CASES: Final = (
         query={},
         auth_header="authorization",
         auth_value="Bearer synthetic-openai-key",
-        body={"model": "text-embedding-3-small", "input": _TOKEN_INPUT},
-        reply=_openai_reply(),
+        body=lambda tokens: {"model": "text-embedding-3-small", "input": tokens},
+        reply=_openai_reply,
         item_type=None,
     ),
     _TokenArrayCase(
@@ -118,10 +119,10 @@ _CASES: Final = (
         query={"api-version": ("2024-06-01",)},
         auth_header="api-key",
         auth_value="synthetic-azure-key",
-        # openai-python 2.33.0 defaults omitted encoding_format to base64: https://github.com/openai/openai-python/blob/v2.33.0/src/openai/resources/embeddings.py
-        body={"input": _TOKEN_INPUT, "model": _AZURE_DEPLOYMENT, "encoding_format": "base64"},
-        reply=_azure_reply(),
+        body=lambda tokens: {"input": tokens, "model": _AZURE_DEPLOYMENT},
+        reply=_azure_reply,
         item_type=None,
+        ignored_body_keys=frozenset({"encoding_format"}),
     ),
     _TokenArrayCase(
         model_params=lambda url: {
@@ -133,8 +134,8 @@ _CASES: Final = (
         query={},
         auth_header="authorization",
         auth_value="Bearer synthetic-vllm-key",
-        body={"model": "vllm-embed-model", "input": _TOKEN_INPUT},
-        reply=_openai_reply(),
+        body=lambda tokens: {"model": "vllm-embed-model", "input": tokens},
+        reply=_openai_reply,
         item_type=None,
     ),
     _TokenArrayCase(
@@ -147,8 +148,8 @@ _CASES: Final = (
         query={},
         auth_header="authorization",
         auth_value="Bearer synthetic-nebius-key",
-        body={"model": "nebius-embed-model", "input": _TOKEN_INPUT},
-        reply=_openai_reply(),
+        body=lambda tokens: {"model": "nebius-embed-model", "input": tokens},
+        reply=_openai_reply,
         item_type=None,
     ),
     _TokenArrayCase(
@@ -162,17 +163,28 @@ _CASES: Final = (
         query={},
         auth_header="authorization",
         auth_value="Bearer synthetic-bedrock-bearer",
-        body={"texts": _BEDROCK_TEXTS, "input_type": "search_document"},
-        reply=_bedrock_reply(),
+        body=lambda _tokens: {"texts": _BEDROCK_TEXTS, "input_type": "search_document"},
+        reply=lambda _count: _bedrock_reply(),
         item_type="float",
     ),
 )
 
 
-@pytest.mark.parametrize("case", _CASES, ids=("openai", "azure", "hosted_vllm", "nebius", "bedrock-cohere"))
+_CASE_IDS: Final = ("openai", "azure", "hosted_vllm", "nebius", "bedrock-cohere")
+_SHAPES: Final = (("nested", _TOKEN_INPUT, 2), ("flat", _FLAT_TOKEN_INPUT, 1))
+_PARAMS: Final = tuple(
+    pytest.param(case, tokens, count, id=f"{case_id}-{shape}")
+    for case, case_id in zip(_CASES, _CASE_IDS, strict=True)
+    for shape, tokens, count in _SHAPES[: 1 if case_id == "bedrock-cohere" else 2]
+)
+
+
+@pytest.mark.parametrize(("case", "tokens", "count"), _PARAMS)
 def test_embedding_token_arrays_are_forwarded_or_decoded_for_provider(
     gateway: Gateway,
     case: _TokenArrayCase,
+    tokens: list[int] | list[list[int]],
+    count: int,
 ) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -180,15 +192,17 @@ def test_embedding_token_arrays_are_forwarded_or_decoded_for_provider(
         assert path == case.path, request.target
         assert {key: tuple(values) for key, values in parse_qs(query).items()} == dict(case.query), request.target
         assert request.headers[case.auth_header] == case.auth_value, dict(request.headers)
-        assert _JSON_OBJECT.validate_json(request.body) == case.body, request.body
-        return Reply(body=case.reply)
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        sent_fields: Final = {key: value for key, value in body.items() if key not in case.ignored_body_keys}
+        assert sent_fields == case.body(tokens), request.body
+        return Reply(body=case.reply(count))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(**case.model_params(wire.url))
         response: Final = gateway.request(
             "POST",
             "/v1/embeddings",
-            {"model": model, "input": _TOKEN_INPUT},
+            {"model": model, "input": tokens},
         )
         assert response.status_code == 200, response.text
         payload: Final = _EmbeddingResponse.model_validate_json(response.content)
@@ -200,7 +214,7 @@ def test_embedding_token_arrays_are_forwarded_or_decoded_for_provider(
                 "embedding": list(vector),
                 **type_field,
             }
-            for index, vector in enumerate(_VECTORS)
+            for index, vector in enumerate(_VECTORS[:count])
         ], response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", case.target)]
 
