@@ -1792,7 +1792,7 @@ def encode_thought_signature_for_anthropic_tool_id(signature: str) -> str:
 
 def decode_thought_signature_from_anthropic_tool_id(encoded: str) -> str:
     """Inverse of ``encode_thought_signature_for_anthropic_tool_id``."""
-    pad = (-len(encoded)) % 4
+    pad: Final = (-len(encoded)) % 4
     return base64.urlsafe_b64decode(encoded + ("=" * pad)).decode("utf-8")
 
 
@@ -1806,7 +1806,7 @@ def format_anthropic_tool_use_id_with_signature(raw_id: str, thought_signature: 
     signature after ``__thought__`` lets those clients round-trip the real
     signature the same way OpenAI-compatible clients do via ``tool_calls[].id``.
     """
-    base_id = normalize_anthropic_tool_use_id(raw_id)
+    base_id: Final = normalize_anthropic_tool_use_id(raw_id)
     if not thought_signature:
         return base_id
     return f"{base_id}{THOUGHT_SIGNATURE_SEPARATOR}{encode_thought_signature_for_anthropic_tool_id(thought_signature)}"

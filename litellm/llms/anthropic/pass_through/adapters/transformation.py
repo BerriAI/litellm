@@ -367,19 +367,19 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         fields: Final = _optional_attr(tool_call, "provider_specific_fields")
         if fields:
-            signature = _thought_signature(fields)
+            signature: Final = _thought_signature(fields)
             if signature:
                 return signature
 
         function_fields: Final = _optional_attr(_optional_attr(tool_call, "function"), "provider_specific_fields")
         if function_fields:
-            signature = _thought_signature(function_fields)
-            if signature:
-                return signature
+            function_signature: Final = _thought_signature(function_fields)
+            if function_signature:
+                return function_signature
 
         raw_id: Final = _optional_attr(tool_call, "id")
         if isinstance(raw_id, str) and THOUGHT_SIGNATURE_SEPARATOR in raw_id:
-            parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+            parts: Final = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
             if len(parts) == 2 and parts[1]:
                 return parts[1]
 
