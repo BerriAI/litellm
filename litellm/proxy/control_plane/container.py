@@ -1,8 +1,9 @@
 """Long-lived objects built once per process and handed to the app. Tests build their own."""
 
+import os
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from importlib.metadata import PackageNotFoundError, version
 from types import MappingProxyType
@@ -10,7 +11,9 @@ from typing import Final
 
 import httpx
 from opentelemetry.sdk.trace import TracerProvider
+from pydantic import TypeAdapter
 
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # params is an untyped dict upstream
@@ -18,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.control_plane.audit.log import AuditLog, build_audit_log
 from litellm.proxy.control_plane.audit.ocsf import Product
 from litellm.proxy.control_plane.audit.pipeline import AuditPipeline, AuditSink, build_pipeline
+from litellm.proxy.control_plane.audit.s3 import HttpxObjectStore, S3ObjectLockSink, SigV4Signer
 from litellm.proxy.control_plane.audit.sinks import LogSink, OtlpLogSink
 from litellm.proxy.control_plane.auth.jwt import JwksKeyLookup, SessionTokenCodec, TokenVerifier, build_token_verifier
 from litellm.proxy.control_plane.auth.login import LoginService, LoginThrottle
@@ -112,10 +116,37 @@ def _shared_http_client(settings: ControlPlaneSettings) -> HttpTransport:
     return HandlerTransport(_shared_http_handler(settings))
 
 
+_REGION: Final = TypeAdapter(str)
+_OPTIONAL_REGION: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+
+
+def _s3_sink(settings: ControlPlaneSettings) -> AuditSink:
+    s3: Final = settings.audit_s3
+    if s3 is None:
+        raise ValueError("CONTROL_PLANE_AUDIT_SINKS names s3 but CONTROL_PLANE_AUDIT_S3_BUCKET is not set.")
+    aws: Final = BaseAWSLLM()
+    region: Final = s3.region or _environment_region(aws)
+    return S3ObjectLockSink(
+        replace(s3, region=region), HttpxObjectStore(_shared_http_handler(settings)), SigV4Signer(region, aws)
+    )
+
+
+def _environment_region(aws: BaseAWSLLM) -> str:
+    """The AWS SDK order: ``AWS_REGION``, then botocore's chain (``AWS_DEFAULT_REGION``, profile, config), then
+    litellm's resolver (``AWS_REGION_NAME`` and its default)."""
+    from botocore.session import Session
+
+    explicit: Final = os.environ.get("AWS_REGION")
+    configured: Final = explicit or _OPTIONAL_REGION.validate_python(Session().get_config_variable("region"))
+    return configured or _REGION.validate_python(aws.get_aws_region_name_for_non_llm_api_calls())
+
+
 def _sink(kind: str, settings: ControlPlaneSettings) -> AuditSink:
     match kind:
         case "otlp":
             return OtlpLogSink(build_log_exporter(settings), build_resource(settings))
+        case "s3":
+            return _s3_sink(settings)
         case _:
             return LogSink()
 

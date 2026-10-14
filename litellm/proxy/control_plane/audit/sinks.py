@@ -28,7 +28,7 @@ AUDIT_LOGGER: Final = verbose_proxy_logger.getChild(LOG_PREFIX)
 AUDIT_LOGGER.setLevel(logging.INFO)
 
 
-def _line(record: AuditRecord) -> str:
+def ocsf_line(record: AuditRecord) -> str:
     return json.dumps(record.body, default=str, separators=(",", ":"))
 
 
@@ -38,7 +38,7 @@ class LogSink:
 
     async def deliver(self, batch: Batch) -> DeliveryResult:
         for record in batch:
-            AUDIT_LOGGER.info("%s %s", LOG_PREFIX, _line(record))
+            AUDIT_LOGGER.info("%s %s", LOG_PREFIX, ocsf_line(record))
         return Delivered(len(batch))
 
     async def close(self) -> None:
@@ -81,7 +81,7 @@ def _log_data(record: AuditRecord, resource: Resource) -> LogData:
             trace_flags=TraceFlags(TraceFlags.SAMPLED if trace_id else TraceFlags.DEFAULT),
             severity_text=severity_text,
             severity_number=severity_number,
-            body=_line(record),
+            body=ocsf_line(record),
             attributes=dict(_attributes(record)),
         ),
         SCOPE,
