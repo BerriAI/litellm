@@ -419,6 +419,69 @@ def test_a_malformed_input_image_is_refused_unless_the_deployment_drops_params(
         assert _upstream_body(request) == _expected_upstream_body("clef", _state(marker), [_PNG_DATA_URL]), label
 
 
+_GIF_BASE64: Final = "R0lGODlhAQABAAAAACw="
+_PNG_DATA_URL_WITH_NAME: Final = f"data:IMAGE/PNG;name=screen.png;base64,{_PNG_BASE64}"
+_WEBP_DATA_URL: Final = "data:image/webp;base64,UklGRhoAAABXRUJQ"
+
+
+@pytest.mark.parametrize("route", ("/v1/systemone", "/v1/decisions"))
+def test_clef_gets_png_jpeg_and_webp_images_without_media_type_parameters(gateway: Gateway, route: Route) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_clef_reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY)
+        images: Final = [_PNG_DATA_URL_WITH_NAME, _JPEG_DATA_URL, _WEBP_DATA_URL]
+        response: Final = _decide(gateway, route, model, marker, images)
+        assert response.status_code == 200, response.text
+        assert response.json() == _expected_response(route, "clef", marker)
+        (request,) = wire.drain()
+        assert _upstream_body(request) == _expected_upstream_body(
+            "clef", _state(marker), [_PNG_DATA_URL, _JPEG_DATA_URL, _WEBP_DATA_URL]
+        )
+
+
+def test_an_openai_decision_model_gets_a_data_url_with_media_type_parameters_unchanged(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_luna_reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model="openai/gpt-6-luna", api_base=wire.url, api_key=_API_KEY)
+        response: Final = _decide(gateway, "/v1/decisions", model, marker, [_PNG_DATA_URL_WITH_NAME])
+        assert response.status_code == 200, response.text
+        (request,) = wire.drain()
+        sent: Final = list_value(
+            object_value(list_value(_JSON_OBJECT.validate_json(request.body)["input"])[0])["content"]
+        )
+        assert sent == [
+            {"type": "input_text", "text": _state(marker)},
+            {"type": "input_image", "image_url": _PNG_DATA_URL_WITH_NAME},
+        ]
+
+
+_REFUSED_TYPES: Final[tuple[tuple[str, Route, JsonValue], ...]] = (
+    ("gif_data_url", "/v1/decisions", f"data:image/gif;base64,{_GIF_BASE64}"),
+    ("gif_object", "/v1/systemone", {"content_type": "image/gif", "base64": _GIF_BASE64}),
+)
+
+
+@pytest.mark.parametrize(("label", "route", "image"), _REFUSED_TYPES, ids=[label for label, _, _ in _REFUSED_TYPES])
+def test_an_image_type_clef_refuses_is_refused_unless_the_deployment_drops_params(
+    gateway: Gateway, label: str, route: Route, image: JsonValue
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_clef_reply) as wire, gateway.scenario() as scenario:
+        strict: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY)
+        dropping: Final = scenario.model(model=_CLEF, api_base=wire.url, api_key=_API_KEY, drop_params=True)
+        refused: Final = _decide(gateway, route, strict, marker, [image, _PNG_DATA_URL])
+        assert refused.status_code == 400, (label, refused.text)
+        assert (
+            "cloudflare takes only image/jpeg, image/jpg, image/png, image/webp images, got image/gif" in refused.text
+        ), (label, refused.text)
+        assert wire.drain() == (), label
+        dropped: Final = _decide(gateway, route, dropping, marker, [image, _PNG_DATA_URL])
+        assert dropped.status_code == 200, (label, dropped.text)
+        assert dropped.json() == _expected_response(route, "clef", marker), label
+        (request,) = wire.drain()
+        assert _upstream_body(request) == _expected_upstream_body("clef", _state(marker), [_PNG_DATA_URL]), label
+
+
 _MIB: Final = 1024 * 1024
 
 
@@ -593,6 +656,7 @@ def _timed_liveliness(gateway: Gateway) -> tuple[int, float]:
 _WORST_CASE_IMAGES: Final = (
     ("unterminated_data_url", "DATA:IMAGE/" + "x" * 2_000_000),
     ("url_with_trailing_space", "HTTPS://" + "x" * 2_000_000 + " "),
+    ("parameters_without_base64", "DATA:IMAGE/PNG" + ";x" * 1_000_000),
 )
 
 
@@ -650,6 +714,8 @@ def _image_host_and_clef(request: Request) -> Reply:
     path: Final = urlsplit(request.target).path
     if request.method == "GET" and path == "/image.png":
         return Reply(body=PNG_1X1, content_type="image/png")
+    if request.method == "GET" and path == "/page.html":
+        return Reply(body=b"<html></html>", content_type="text/html; charset=utf-8")
     if request.method == "GET" and path == "/slow.png":
         _SLOW_IMAGE_RELEASE.wait(timeout=30)
         return Reply(body=PNG_1X1, content_type="image/png")
@@ -764,6 +830,17 @@ def test_a_missing_remote_image_is_refused_without_a_call_to_clef(allowlisted: G
     assert response.status_code == 400, response.text
     assert "Unable to fetch image from URL. Status code: 404" in response.text, response.text
     assert _routes(wire.drain()) == [("GET", "/missing.png")]
+
+
+@pytest.mark.timeout(_OWNED_TIMEOUT)
+def test_a_remote_page_that_is_not_an_image_is_refused_without_a_call_to_clef(allowlisted: Gateway, wire: Wire) -> None:
+    marker: Final = uuid.uuid4().hex
+    response: Final = _decide(
+        allowlisted, "/v1/decisions", _ALLOWLISTED_MODEL, marker, [f"{wire.url}/page.html?id=marker-{marker}"]
+    )
+    assert response.status_code == 400, response.text
+    assert "images, got text/html" in response.text, response.text
+    assert _routes(wire.drain()) == [("GET", "/page.html")]
 
 
 @pytest.mark.timeout(_OWNED_TIMEOUT)

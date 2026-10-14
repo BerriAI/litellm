@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from functools import partial
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -17,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
+    image_media_type,
     image_param,
     input_images,
     ir_to_systemone_response,
@@ -462,6 +464,34 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
     return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
 
 
+def _has_media_type_in(media_types: frozenset[str], image: DecisionsImage) -> bool:
+    media_type: Final = image_media_type(image)
+    return media_type is None or media_type in media_types
+
+
+def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
+    media_types: Final = call.provider_config.image_media_types
+    if media_types is None:
+        return call
+    found: Final = (image_media_type(image) for image in input_images(call.ir_request.input))
+    unsupported: Final = tuple(
+        dict.fromkeys(type_ for type_ in found if type_ is not None and type_ not in media_types)
+    )
+    if not unsupported:
+        return call
+    supported: Final = with_images_where(call.ir_request.input, partial(_has_media_type_in, media_types))
+    if _drops_params(call.litellm_params) and not _leaves_no_input(supported):
+        return replace(call, ir_request=replace(call.ir_request, input=supported))
+    raise litellm.BadRequestError(
+        message=(
+            f"{call.custom_llm_provider} takes only {', '.join(sorted(media_types))} images, "
+            f"got {', '.join(unsupported)}"
+        ),
+        model=call.requested_model,
+        llm_provider=call.custom_llm_provider,
+    )
+
+
 def _decoded_image_bytes(image: DecisionsImage) -> int:
     if isinstance(image, DecisionsBase64Image):
         return len(image.base64.rstrip("=")) * 3 // 4
@@ -551,7 +581,8 @@ def _map_upstream_exception(error: Exception, call: DecisionsCall) -> Exception:
 
 
 async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    inlined: Final = _checked_image_sizes(await _async_with_remote_images_inlined(call))
+    supported: Final = _checked_image_types(call)
+    inlined: Final = _checked_image_sizes(_checked_image_types(await _async_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
     try:
         response: Final = await _HANDLER.adecisions(
@@ -561,7 +592,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is call else _request_body(call),
+            logged_body=body if inlined is supported else _request_body(supported),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
@@ -574,7 +605,8 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
 
 
 def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
-    inlined: Final = _checked_image_sizes(_with_remote_images_inlined(call))
+    supported: Final = _checked_image_types(call)
+    inlined: Final = _checked_image_sizes(_checked_image_types(_with_remote_images_inlined(supported)))
     body: Final = _request_body(inlined)
     try:
         response: Final = _HANDLER.decisions(
@@ -584,7 +616,7 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is call else _request_body(call),
+            logged_body=body if inlined is supported else _request_body(supported),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,

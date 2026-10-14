@@ -10539,7 +10539,7 @@
                           "items": {
                             "anyOf": [
                               {
-                                "pattern": "^(?i:data:image/[^;,\\s]+;base64,.+|https?://\\S+)$",
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
                                 "type": "string"
                               },
                               {
@@ -11430,7 +11430,7 @@
                           "items": {
                             "anyOf": [
                               {
-                                "pattern": "^(?i:data:image/[^;,\\s]+;base64,.+|https?://\\S+)$",
+                                "pattern": "^(?i:data:image/[^;,\\s]+(?:;[^;,\\s]+)*;base64,.+|https?://\\S+)$",
                                 "type": "string"
                               },
                               {

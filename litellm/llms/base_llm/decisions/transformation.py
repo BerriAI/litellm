@@ -18,6 +18,7 @@ from litellm.types.decisions import (
     ChoiceQuestion,
     DecisionAnswer,
     DecisionQuestion,
+    DecisionsBase64Image,
     DecisionsImage,
     DecisionsIRAnswer,
     DecisionsIRChoiceAnswer,
@@ -57,6 +58,7 @@ _PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
 _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
 _REMOTE_URL_PREFIXES: Final = ("http://", "https://")
+_DATA_URL_PREFIX: Final = "data:"
 
 
 def decisions_text(value: DecisionsJSON) -> str:
@@ -228,8 +230,25 @@ def _systemone_state(decision_input: DecisionsIRState | DecisionsIRMessages) -> 
             assert_never(decision_input)
 
 
+def _media_type(content_type: str) -> str:
+    return content_type.split(";", 1)[0].strip().lower()
+
+
+def image_media_type(image: DecisionsImage) -> str | None:
+    if isinstance(image, DecisionsBase64Image):
+        return _media_type(image.content_type)
+    if not image.lower().startswith(_DATA_URL_PREFIX):
+        return None
+    return _media_type(image[len(_DATA_URL_PREFIX) :])
+
+
 def _systemone_image(image: DecisionsImage) -> str | Mapping[str, object]:
-    return image if isinstance(image, str) else image.model_dump()
+    if isinstance(image, DecisionsBase64Image):
+        return {"content_type": image_media_type(image), "base64": image.base64}
+    media_type: Final = image_media_type(image)
+    if media_type is None:
+        return image
+    return f"{_DATA_URL_PREFIX}{media_type};base64,{image.partition(',')[2]}"
 
 
 def _optional(key: str, value: object) -> Mapping[str, object]:
@@ -430,6 +449,7 @@ class BaseDecisionsConfig(ABC):
     max_images: int | None = None
     max_image_bytes: int | None = None
     max_total_image_bytes: int | None = None
+    image_media_types: frozenset[str] | None = None
     inlines_remote_images: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}

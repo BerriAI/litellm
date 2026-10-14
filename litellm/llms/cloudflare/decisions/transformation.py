@@ -19,6 +19,7 @@ class CloudflareDecisionsConfig(BaseDecisionsConfig):
     max_images = 4
     max_image_bytes = 4 * 1024 * 1024
     max_total_image_bytes = 8 * 1024 * 1024
+    image_media_types = frozenset({"image/png", "image/jpeg", "image/jpg", "image/webp"})
     inlines_remote_images = True
 
     def get_default_api_base(self) -> str | None:

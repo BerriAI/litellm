@@ -65,9 +65,9 @@ async def asystemone(
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
     safety_identifier: str | None = None,
-    images: DecisionsImages | None = None,
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
+    images: DecisionsImages | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
     call: Final = _prepare_systemone_call(
@@ -99,9 +99,9 @@ def systemone(
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
     safety_identifier: str | None = None,
-    images: DecisionsImages | None = None,
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
+    images: DecisionsImages | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
     call: Final = _prepare_systemone_call(
