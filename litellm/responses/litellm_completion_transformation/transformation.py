@@ -607,7 +607,7 @@ class LiteLLMCompletionResponsesConfig:
             "max_tokens": responses_api_request.get("max_output_tokens"),
             "stream": stream,
             "metadata": kwargs.get("metadata"),
-            "service_tier": kwargs.get("service_tier"),
+            "service_tier": responses_api_request.get("service_tier"),
             "safety_identifier": responses_api_request.get("safety_identifier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
@@ -2530,7 +2530,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "function": function_dict,
             "type": "function",
-            "index": 0,
+            "index": index,
         }
 
         if provider_specific_fields:

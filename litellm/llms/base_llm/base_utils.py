@@ -3,13 +3,15 @@ Utility functions for base LLM classes.
 """
 
 import copy
+import itertools
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any, Final, cast  # noqa: TID251  # a developer message is rebuilt as a typed system message
 
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage, ChatCompletionToolCallChunk
@@ -155,6 +157,136 @@ def convert_tool_response_to_message(
 
 
 _convert_tool_response_to_message = convert_tool_response_to_message
+
+
+@dataclass(frozen=True, slots=True)
+class ResponseFormatSchema:
+    property_names: frozenset[str]
+    required_names: frozenset[str] = frozenset()
+    allows_undeclared_keys: bool = False
+
+    @property
+    def accepts_a_lone_undeclared_key(self) -> bool:
+        return self.allows_undeclared_keys and not self.required_names
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
+_NAMES: Final = TypeAdapter(frozenset[str])
+
+
+def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
+    try:
+        return _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _names(value: object) -> frozenset[str]:
+    try:
+        return _NAMES.validate_python(value)
+    except ValidationError:
+        return frozenset()
+
+
+def _allows_undeclared_keys(document: Mapping[str, JsonValue]) -> bool:
+    additional_properties: Final = document.get("additionalProperties")
+    return (
+        additional_properties is True
+        or as_json_object(additional_properties) is not None
+        or bool(as_json_object(document.get("patternProperties")))
+    )
+
+
+def response_format_schema(value: object) -> ResponseFormatSchema | None:
+    document: Final = as_json_object(value)
+    if document is None:
+        return None
+    properties: Final = as_json_object(document.get("properties", {}))
+    if properties is None:
+        return None
+    return ResponseFormatSchema(
+        property_names=frozenset(properties),
+        required_names=_names(document.get("required", ())),
+        allows_undeclared_keys=_allows_undeclared_keys(document),
+    )
+
+
+RESPONSE_FORMAT_ENVELOPE_NAME_KEYS: Final = frozenset({"name", "tool_name"})
+
+
+@dataclass(frozen=True, slots=True)
+class _EnvelopeLayer:
+    inner: Mapping[str, JsonValue]
+    names_the_tool: bool
+
+
+def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] | None:
+    if not isinstance(value, str):
+        return as_json_object(value)
+    try:
+        return as_json_object(json.loads(value))
+    except (json.JSONDecodeError, RecursionError):
+        return None
+
+
+def _label_keys(payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema) -> frozenset[str]:
+    if not schema.required_names:
+        return frozenset()
+    declared: Final = schema.property_names | schema.required_names
+    return frozenset(key for key, value in payload_object.items() if isinstance(value, str) and key not in declared)
+
+
+def _envelope_layer(
+    payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
+) -> _EnvelopeLayer | None:
+    name_keys: Final = frozenset(
+        key for key in RESPONSE_FORMAT_ENVELOPE_NAME_KEYS if payload_object.get(key) == tool_name
+    )
+    label_keys: Final = name_keys or _label_keys(payload_object, schema)
+    wrapper_keys: Final = tuple(key for key in payload_object if key not in label_keys)
+    if len(wrapper_keys) != 1 or wrapper_keys[0] in schema.property_names:
+        return None
+    wrapped: Final = payload_object[wrapper_keys[0]]
+    inner: Final = _json_object_or_encoded_object(wrapped) if name_keys else as_json_object(wrapped)
+    return None if inner is None else _EnvelopeLayer(inner=inner, names_the_tool=bool(name_keys))
+
+
+def _envelope_layers(
+    payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
+) -> Iterator[_EnvelopeLayer]:
+    layer = _envelope_layer(payload_object, schema, tool_name)  # rebind-ok: the recursion gate needs a loop
+    while layer is not None:
+        yield layer
+        layer = _envelope_layer(layer.inner, schema, tool_name)
+
+
+def _schema_object_inside_envelope(
+    payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
+) -> Mapping[str, JsonValue] | None:
+    layers: Final = _envelope_layers(payload_object, schema, tool_name)
+    candidates: Final = layers if schema.property_names else itertools.islice(layers, 1)
+    return next((layer.inner for layer in candidates if _holds_the_schema_object(layer, schema)), None)
+
+
+def _holds_the_schema_object(layer: _EnvelopeLayer, schema: ResponseFormatSchema) -> bool:
+    if layer.names_the_tool:
+        return True
+    return not schema.accepts_a_lone_undeclared_key and not schema.property_names.isdisjoint(layer.inner)
+
+
+def response_format_envelope_contents(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object | None:
+    payload_object: Final = as_json_object(payload)
+    if payload_object is None:
+        return None
+    schema_object: Final = _schema_object_inside_envelope(payload_object, schema, tool_name)
+    if schema_object is not None:
+        return schema_object
+    return None if "values" in schema.property_names else payload_object.get("values")
+
+
+def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
+    contents: Final = response_format_envelope_contents(payload, schema, tool_name)
+    return payload if contents is None else contents
 
 
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:

@@ -23,6 +23,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    cache_control_as_prompt_cache_breakpoint,
     with_prompt_cache_breakpoint,
 )
 from litellm.llms.anthropic.common_utils import (
@@ -72,6 +73,7 @@ OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_CONTENT_PART_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 AllToolParamValues = ChatCompletionToolParam | AllAnthropicToolsValues
 
@@ -88,6 +90,12 @@ def _validated_object_list(value: object) -> list[object] | None:
         return _OBJECT_LIST_ADAPTER.validate_python(value)
     except ValidationError:
         return None
+
+
+def _part_with_cache_control_renamed(part: object) -> object:
+    if not _accepts_prompt_cache_breakpoint(part):
+        return part
+    return cache_control_as_prompt_cache_breakpoint(_CONTENT_PART_ADAPTER.validate_python(part))
 
 
 def configured_injection_points(value: object) -> Sequence[CacheControlInjectionPoint]:
@@ -242,6 +250,10 @@ def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
 
 
+def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
+    return message.get("role") != "assistant"
+
+
 # Set by a caller whose message list is not the one that goes upstream -- today the
 # Responses API layer, whose `instructions` only becomes a system message further down.
 # Tells this hook to hand role-targeted points to the pass holding the final messages
@@ -326,7 +338,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         openai_dialect: Final = (
             stamped_dialect
             if isinstance(stamped_dialect, bool)
-            else AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+            else AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 model,
                 non_default_params.get("custom_llm_provider"),
                 non_default_params.get("api_base") or non_default_params.get("base_url"),
@@ -384,7 +396,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return model, processed_messages, non_default_params
 
     @staticmethod
-    def _targets_openai_prompt_cache_breakpoint(
+    def targets_openai_prompt_cache_breakpoint(
         model: str | None,
         custom_llm_provider: str | None,
         api_base: object = None,
@@ -621,8 +633,31 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return message
 
     @staticmethod
+    def cache_control_as_prompt_cache_breakpoints(message: AllMessageValues) -> AllMessageValues:
+        """Every Anthropic ``cache_control`` on the message or its parts moved to OpenAI's ``prompt_cache_breakpoint``,
+        placed where the injection hook would put one. Marks with no OpenAI slot are left for the caller to strip."""
+        fields: Final[Mapping[str, object]] = dict(message)
+        if not _may_carry_prompt_cache_breakpoint(fields):
+            return message
+        parts: Final = _validated_object_list(fields.get("content"))
+        renamed: Final = (
+            message
+            if parts is None
+            else cast(  # cast-ok: the same message with its part marks renamed
+                AllMessageValues,
+                {
+                    **fields,
+                    "content": [_part_with_cache_control_renamed(part) for part in parts],
+                },
+            )
+        )
+        if fields.get("cache_control") is None:
+            return renamed
+        return AnthropicCacheControlHook._insert_prompt_cache_breakpoint_in_message(renamed)
+
+    @staticmethod
     def _insert_prompt_cache_breakpoint_in_message(message: AllMessageValues) -> AllMessageValues:
-        if message.get("role") == "assistant":
+        if not _may_carry_prompt_cache_breakpoint(message):
             return message
         message_content: Final = message.get("content", None)
         if isinstance(message_content, str):
@@ -790,7 +825,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return AnthropicCacheControlHook._stamped(
             points,
             "_litellm_openai_dialect",
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 model, custom_llm_provider, api_base, prompt_cache_options
             ),
         )
@@ -1107,7 +1142,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return messages, system
 
-        openai_dialect: Final = AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+        openai_dialect: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
             model, custom_llm_provider, api_base, kwargs.get("prompt_cache_options")
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)

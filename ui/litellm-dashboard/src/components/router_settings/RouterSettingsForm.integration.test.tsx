@@ -88,6 +88,38 @@ describe("RouterSettingsForm", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ enableTagFiltering: true }));
   });
 
+  it("disables every control whose key config.yaml owns and leaves the rest editable", () => {
+    const props = {
+      ...baseProps,
+      value: {
+        ...defaultValue,
+        selectedStrategy: "latency-based-routing",
+        routerSettings: {
+          routing_strategy: "latency-based-routing",
+          routing_strategy_args: { ttl: 3600 },
+          num_retries: 3,
+          timeout: 60,
+        },
+      },
+      availableRoutingStrategies: ["simple-shuffle", "latency-based-routing"],
+      routerSettingsSource: {
+        routing_strategy: "config" as const,
+        routing_strategy_args: "config" as const,
+        enable_tag_filtering: "config" as const,
+        num_retries: "config" as const,
+        timeout: "db" as const,
+      },
+    };
+    render(<RouterSettingsForm {...props} />);
+
+    expect(screen.getByRole("combobox")).toBeDisabled();
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-disabled", "true");
+    expect(document.querySelector('input[name="ttl"]')).toBeDisabled();
+    expect(document.querySelector('input[name="num_retries"]')).toBeDisabled();
+    expect(document.querySelector('input[name="timeout"]')).toBeEnabled();
+    expect(screen.getAllByTestId("config-owned-badge")).toHaveLength(4);
+  });
+
   it("should show the Reliability & Retries section", () => {
     render(<RouterSettingsForm {...baseProps} />);
     expect(screen.getByText("Reliability & Retries")).toBeInTheDocument();

@@ -3072,7 +3072,7 @@ class TestOpenAIPromptCacheBreakpoint:
         ],
     )
     def test_dialect_resolution(self, model, provider, expected):
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(model, provider) is expected
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(model, provider) is expected
 
     def test_count_covers_both_marker_kinds(self):
         message = {
@@ -3478,8 +3478,8 @@ class TestChatPathProviderStamp:
         from unittest.mock import patch
 
         with patch.object(AnthropicCacheControlHook, "_resolve_provider") as resolve:
-            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-4.1", None) is False
-            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("my-custom-model", None) is False
+            assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("gpt-4.1", None) is False
+            assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("my-custom-model", None) is False
         resolve.assert_not_called()
 
     def test_litellm_proxy_target_keeps_anthropic_style_markers(self):
@@ -3815,7 +3815,7 @@ class TestHostedOpenAIDialectFlag:
     def test_flagged_non_openai_deployment_is_eligible(self, monkeypatch):
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
             is True
         )
 
@@ -3823,7 +3823,7 @@ class TestHostedOpenAIDialectFlag:
         """The api_base check exists to sniff for api.openai.com, which a Bedrock host never is."""
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 self.MANTLE_MODEL,
                 "bedrock_mantle",
                 api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -3834,7 +3834,7 @@ class TestHostedOpenAIDialectFlag:
     def test_flag_set_false_keeps_the_deployment_ineligible(self, monkeypatch):
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=False)
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
             is False
         )
 
@@ -3842,14 +3842,14 @@ class TestHostedOpenAIDialectFlag:
     def test_an_odd_typed_flag_keeps_the_deployment_ineligible(self, monkeypatch, flag):
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=flag)
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
             is False
         )
 
     def test_unflagged_non_openai_deployment_stays_ineligible(self, monkeypatch):
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=None)
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
             is False
         )
 
@@ -3857,7 +3857,7 @@ class TestHostedOpenAIDialectFlag:
         """A flagged entry does not license a different provider serving the same model string."""
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "azure") is False
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "azure") is False
         )
 
     def test_openai_entries_still_go_through_the_api_base_check(self, monkeypatch):
@@ -3865,7 +3865,7 @@ class TestHostedOpenAIDialectFlag:
         assert litellm.model_cost["gpt-5.6"]["supports_prompt_cache_breakpoint"] is True
         assert litellm.model_cost["gpt-5.6"]["litellm_provider"] == "openai"
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 "gpt-5.6", "openai", api_base="https://some-compatible-host.example.com"
             )
             is False
@@ -3873,8 +3873,8 @@ class TestHostedOpenAIDialectFlag:
 
     def test_azure_hosted_gpt_5_6_remains_ineligible(self):
         """Regression guard: the openai entry's flag must not leak to another provider."""
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-5.6", "azure") is False
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/gpt-5.6", None) is False
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("gpt-5.6", "azure") is False
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("azure/gpt-5.6", None) is False
 
     REGIONAL_MODEL = "bedrock_mantle/us-east-1/openai.gpt-5.6-sol"
 
@@ -3882,15 +3882,15 @@ class TestHostedOpenAIDialectFlag:
         """``bedrock_mantle/<region>/<model>`` is a documented routing form the map keys without the region."""
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
             is True
         )
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, None) is True
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, None) is True
 
     def test_region_prefixed_deployment_honors_a_flag_set_false(self, monkeypatch):
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=False)
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
             is False
         )
 
@@ -3899,31 +3899,31 @@ class TestHostedOpenAIDialectFlag:
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
         gov_model = "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-sol"
         self._register(monkeypatch, gov_model, "bedrock_mantle", flag=None)
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(gov_model, "bedrock_mantle") is False
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(gov_model, "bedrock_mantle") is False
 
     def test_region_free_entry_does_not_license_another_provider(self, monkeypatch):
         """The candidate keys are built for the request's provider, so a flagged Mantle row stays Mantle's."""
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("us-east-1/openai.gpt-5.6-sol", "azure")
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("us-east-1/openai.gpt-5.6-sol", "azure")
             is False
         )
 
     def test_unmapped_deployment_name_stays_ineligible(self):
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/my-deployment", None) is False
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("my-deployment", "azure") is False
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("azure/my-deployment", None) is False
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("my-deployment", "azure") is False
 
     def test_bare_name_colliding_with_an_openai_row_reads_its_own_provider_entry(self, monkeypatch):
         """The Responses layer hands the hook a bare deployment name plus its provider. The openai row keyed by
         that bare name neither answers for the deployment nor stops the lookup of the provider's own entry."""
         self._register(monkeypatch, "gpt-collide", "openai")
         self._register(monkeypatch, "azure_ai/gpt-collide", "azure_ai")
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is True
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is True
 
     def test_bare_name_colliding_with_an_openai_row_stays_ineligible_without_its_own_flag(self, monkeypatch):
         self._register(monkeypatch, "gpt-collide", "openai")
         self._register(monkeypatch, "azure_ai/gpt-collide", "azure_ai", flag=None)
-        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is False
+        assert AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is False
 
     def test_the_support_check_reads_the_served_providers_row_for_a_provider_stripped_name(self, monkeypatch):
         """The chat-to-Responses bridge holds the provider-stripped deployment name and the provider that
@@ -3964,7 +3964,7 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
     def test_shipped_entry_makes_the_deployment_eligible(self):
         assert supports_openai_prompt_cache_breakpoint(self.MANTLE_MODEL) is True
         assert (
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
             is True
         )
 
