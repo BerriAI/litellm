@@ -305,6 +305,7 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
 
 
 _TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})
+_TOOL_SEARCH_REPLAY_ITEM_TYPES: Final = frozenset({"reasoning", *_TOOL_SEARCH_ITEM_TYPES})
 _TOOL_SEARCH_ITEMS_KEY: Final = "tool_search_items"
 
 
@@ -312,12 +313,12 @@ def _json_field(value: object, key: str) -> object:
     return cast(Mapping[str, object], value).get(key) if isinstance(value, dict) else None  # cast-ok: untyped JSON
 
 
-def _tool_search_item(item: object) -> Mapping[str, object] | None:
+def _tool_search_replay_item(item: object) -> Mapping[str, object] | None:
     raw: Final[object] = item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
     if not isinstance(raw, dict):
         return None
     fields: Final = cast(dict[str, object], raw)  # cast-ok: provider JSON item, keys forwarded verbatim
-    if fields.get("type") not in _TOOL_SEARCH_ITEM_TYPES:
+    if fields.get("type") not in _TOOL_SEARCH_REPLAY_ITEM_TYPES:
         return None
     return {key: value for key, value in fields.items() if value is not None}
 
@@ -326,7 +327,11 @@ def _tool_search_items_from_output_items(output_items: object) -> tuple[Mapping[
     if not isinstance(output_items, list):
         return ()
     entries: Final = cast(Sequence[object], output_items)  # cast-ok: each entry is re-validated
-    return tuple(item for item in (_tool_search_item(entry) for entry in entries) if item is not None)
+    items: Final = tuple(item for item in (_tool_search_replay_item(entry) for entry in entries) if item is not None)
+    last_search: Final = max(
+        (index for index, item in enumerate(items) if item.get("type") in _TOOL_SEARCH_ITEM_TYPES), default=-1
+    )
+    return items[: last_search + 1]
 
 
 def _tool_search_provider_fields(
@@ -341,14 +346,16 @@ def _tool_search_input_items(msg: object) -> tuple[Mapping[str, object], ...]:
     )
 
 
-def _tool_definition_names(tool: object) -> tuple[str, ...]:
-    tool_type: Final = _json_field(tool, "type")
-    members: Final = _json_field(tool, "tools")
-    if tool_type == "namespace" and isinstance(members, list):
-        member_tools: Final = cast(Sequence[object], members)  # cast-ok: untyped JSON, each member re-checked
-        return tuple(chain.from_iterable(_tool_definition_names(member) for member in member_tools))
-    name: Final = _json_field(tool, "server_label" if tool_type == "mcp" else "name")
+def _tool_definition_name(tool: object) -> tuple[str, ...]:
+    name: Final = _json_field(tool, "server_label" if _json_field(tool, "type") == "mcp" else "name")
     return (name,) if isinstance(name, str) else ()
+
+
+def _namespace_members(tool: object) -> Sequence[object]:
+    members: Final = _json_field(tool, "tools")
+    if _json_field(tool, "type") != "namespace" or not isinstance(members, list):
+        return (tool,)
+    return cast(Sequence[object], members)  # cast-ok: untyped JSON, each member re-checked
 
 
 def _loaded_tools(item: Mapping[str, object]) -> Sequence[object]:
@@ -359,11 +366,14 @@ def _loaded_tools(item: Mapping[str, object]) -> Sequence[object]:
 
 
 def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
+    if not _requests_tool_search(request):
+        return ()
     messages: Final = _json_field(request, "messages")
     entries: Final = cast(Sequence[object], messages) if isinstance(messages, list) else ()  # cast-ok: untyped JSON
     items: Final = chain.from_iterable(_tool_search_input_items(message) for message in entries)
     loaded: Final = chain.from_iterable(_loaded_tools(item) for item in items)
-    return tuple(chain.from_iterable(_tool_definition_names(tool) for tool in loaded))
+    definitions: Final = chain.from_iterable(_namespace_members(tool) for tool in loaded)
+    return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in definitions))
 
 
 def _requests_tool_search(request: object) -> bool:
@@ -372,12 +382,16 @@ def _requests_tool_search(request: object) -> bool:
     return any(_json_field(tool, "type") == "tool_search" for tool in entries)
 
 
-def _without_tool_search_items(input_items: Sequence[object]) -> tuple[object, ...]:
-    return tuple(item for item in input_items if _json_field(item, "type") not in _TOOL_SEARCH_ITEM_TYPES)
+def _reasoning_ids(items: Sequence[Mapping[str, object]]) -> frozenset[str]:
+    ids: Final = (item.get("id") for item in items if item.get("type") == "reasoning")
+    return frozenset(item_id for item_id in ids if isinstance(item_id, str))
 
 
-def _assistant_replay_items(msg: "AllMessageValues") -> tuple[Mapping[str, object], ...]:
-    return (*_reasoning_input_items(msg), *_tool_search_input_items(msg))
+def _assistant_replay_items(msg: "AllMessageValues", replay_tool_search: bool) -> tuple[Mapping[str, object], ...]:
+    searched: Final = _tool_search_input_items(msg) if replay_tool_search else ()
+    searched_reasoning_ids: Final = _reasoning_ids(searched)
+    reasoning: Final = (item for item in _reasoning_input_items(msg) if item.get("id") not in searched_reasoning_ids)
+    return (*searched, *reasoning)
 
 
 def _as_chat_reasoning_items(
@@ -656,9 +670,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         *,
         drop_params: bool = False,
         keep_prompt_cache_breakpoints: bool = False,
+        replay_tool_search: bool = False,
+        include_namespace: bool = False,
     ) -> tuple[list[object], str | None]:
         converted_input_items, instructions = self._convert_chat_completion_messages_to_responses_input(
-            messages, drop_params=drop_params
+            messages,
+            drop_params=drop_params,
+            replay_tool_search=replay_tool_search,
+            include_namespace=include_namespace,
         )
         return (
             converted_input_items
@@ -668,7 +687,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
     def _convert_chat_completion_messages_to_responses_input(
-        self, messages: list["AllMessageValues"], *, drop_params: bool = False
+        self,
+        messages: list["AllMessageValues"],
+        *,
+        drop_params: bool = False,
+        replay_tool_search: bool = False,
+        include_namespace: bool = False,
     ) -> tuple[list[object], str | None]:
         input_items: Final[list[object]] = []
         instructions: str | None = None
@@ -750,7 +774,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         )
                     )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
-                input_items.extend(_assistant_replay_items(msg))
+                input_items.extend(_assistant_replay_items(msg, replay_tool_search))
                 if content:
                     input_items.append(
                         {
@@ -773,7 +797,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             input_tool_call["name"] = function["name"]
                         if "arguments" in function:
                             input_tool_call["arguments"] = function["arguments"]
-                        if (namespace := _tool_call_namespace(cast(object, tool_call))) is not None:  # cast-ok: untyped
+                        if include_namespace and (
+                            namespace := _tool_call_namespace(cast(object, tool_call))  # cast-ok: untyped
+                        ):
                             input_tool_call["namespace"] = namespace
                         input_items.append(input_tool_call)
                     elif isinstance(custom, dict):
@@ -789,7 +815,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
                 if role == "assistant":
-                    input_items.extend(_assistant_replay_items(msg))
+                    input_items.extend(_assistant_replay_items(msg, replay_tool_search))
                 input_items.append(
                     {
                         "type": "message",
@@ -800,7 +826,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 )
             elif role == "assistant":
-                input_items.extend(_assistant_replay_items(msg))
+                input_items.extend(_assistant_replay_items(msg, replay_tool_search))
 
         return input_items, instructions
 
@@ -906,6 +932,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
+        optional_params = self._extract_extra_body_params(optional_params)
         provider: Final = _served_provider(litellm_params)
         base_model: Final = litellm_params.get("base_model")
         supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model, provider) or (
@@ -917,6 +944,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
+            replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
+            include_namespace=True,
         )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
@@ -940,8 +969,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else target_input_items
         )
         instructions: Final = None if is_system_only_request else converted_instructions
-
-        optional_params = self._extract_extra_body_params(optional_params)
 
         # Build responses API request using the reverse transformation logic
         responses_api_request: Final = ResponsesAPIOptionalRequestParams()
@@ -977,9 +1004,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         request_data: Final = {
             "model": api_model,
-            "input": input_items
-            if _requests_tool_search(responses_api_request)
-            else list(_without_tool_search_items(input_items)),
+            "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **sanitized_litellm_params,
             "client": client,

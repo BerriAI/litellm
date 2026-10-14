@@ -274,6 +274,33 @@ class TestCheckToolsAllowlist:
         assert "get_weather" not in str(exc_info.value.message)
 
     @pytest.mark.asyncio
+    async def test_replayed_tool_search_is_not_counted_when_the_request_cannot_send_it(self):
+        token = _token(metadata={"allowed_tools": ["get_weather"]})
+        body = {
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+            "messages": [
+                {"role": "user", "content": "clean up the disk"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "provider_specific_fields": {
+                        "tool_search_items": [
+                            {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                            {"type": "tool_search_output", "call_id": "ts_1", "tools": [{"name": "run_shell"}]},
+                        ]
+                    },
+                },
+            ],
+        }
+        allowed = await check_tools_allowlist(
+            request_body=body,
+            valid_token=token,
+            team_object=None,
+            route="/v1/chat/completions",
+        )
+        assert allowed is None
+
+    @pytest.mark.asyncio
     async def test_team_allowlist_used_when_key_empty(self):
         token = _token(
             metadata={},
