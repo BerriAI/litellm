@@ -18,7 +18,6 @@ from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.migration_lock import held_migration_lock
 from litellm_proxy_extras.prisma_toolchain import (
-    MIGRATION_DDL_LOCK_TIMEOUT_ENV_VAR,
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
     ensure_prisma_toolchain,
@@ -1165,10 +1164,9 @@ class ProxyExtrasDBManager:
             raise RuntimeError(
                 f"Database migration failed after {MAX_MIGRATE_DEPLOY_ATTEMPTS} "
                 "attempts that made no progress (timeouts, lock timeouts or deadlock retries). "
-                "Check database connectivity, load, long-running transactions on the migrated tables, "
-                "and _prisma_migrations ledger state. Raise "
-                f"{PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR} if the attempts timed out, or "
-                f"{MIGRATION_DDL_LOCK_TIMEOUT_ENV_VAR} if they timed out waiting for a table lock."
+                "Check database connectivity, load and _prisma_migrations ledger state. "
+                "If a migration hit SET LOCAL lock_timeout, check for long-running transactions on the migrated tables. "
+                f"Raise {PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR} if the attempts timed out."
             )
         finally:
             os.chdir(original_dir)
@@ -1284,8 +1282,8 @@ class ProxyExtrasDBManager:
             if migration_name and _MIGRATION_LOCK_TIMEOUT_MARKER in stderr:
                 ProxyExtrasDBManager._log_migration_lock_holders(migration_name)
                 logger.warning(
-                    "Migration %s timed out waiting for a table lock, rolling its ledger row back and retrying. "
-                    f"Raise {MIGRATION_DDL_LOCK_TIMEOUT_ENV_VAR} if the database needs longer.",
+                    "Migration %s timed out waiting for a table lock after hitting SET LOCAL lock_timeout, rolling "
+                    "its ledger row back and retrying. Check for long-running transactions on the migrated tables.",
                     migration_name,
                 )
                 ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
