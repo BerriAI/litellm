@@ -287,6 +287,36 @@ async def test_get_daily_activity_order_has_id_tiebreaker():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page, page_size", [(0, 10), (-1, 10), (1, 0), (1, -5)])
+async def test_get_daily_activity_rejects_non_positive_pagination_with_400(page, page_size):
+    from fastapi import HTTPException
+
+    mock_prisma = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=0)
+    mock_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_dailyteamspend = mock_table
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_daily_activity(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            entity_metadata_field=None,
+            start_date="2026-09-18",
+            end_date="2026-09-25",
+            model=None,
+            api_key=None,
+            page=page,
+            page_size=page_size,
+        )
+
+    assert exc_info.value.status_code == 400, exc_info.value.detail
+    mock_table.find_many.assert_not_called()
+
+
 def test_is_user_agent_tag():
     """Test _is_user_agent_tag function."""
     # Test None and empty string
@@ -2480,6 +2510,15 @@ def test_parse_canonical_date_range_reports_missing_then_malformed_dates() -> No
     )
     assert parse_canonical_date_range("2026-09-24", "2026-09-26") == CanonicalDateRange(
         start=date(2026, 9, 24), end=date(2026, 9, 26)
+    )
+
+
+def test_parse_canonical_date_range_rejects_end_before_start() -> None:
+    assert parse_canonical_date_range("2026-09-26", "2026-09-24") == InvalidDateRange(
+        reason="end_date must be on or after start_date"
+    )
+    assert parse_canonical_date_range("2026-09-24", "2026-09-24") == CanonicalDateRange(
+        start=date(2026, 9, 24), end=date(2026, 9, 24)
     )
 
 

@@ -41,6 +41,7 @@ class Resolved:
 
 
 _UI_SETTINGS_FIELDS: Final[tuple[str, ...]] = (
+    "disable_model_add_for_internal_users",
     "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",

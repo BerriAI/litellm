@@ -34,7 +34,7 @@ class FileContentStreamingResponse:
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj = logging_obj
         self.standard_logging_object: StandardLoggingPayload | None = None
-        self._hidden_params: dict[str, Any] = {}
+        self._hidden_params: dict[str, object] = {}
         self._logging_completed = False
         self._close_completed = False
         self._start_time = (
@@ -121,7 +121,7 @@ class FileContentStreamingResponse:
         return response
 
     def _sync_hidden_params(self) -> None:
-        litellm_params: dict[str, Any] = {}
+        litellm_params: dict[str, object] = {}
         if self.logging_obj is not None:
             litellm_params = self.logging_obj.model_call_details.get("litellm_params", {}) or {}
 

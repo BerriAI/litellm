@@ -1,4 +1,8 @@
+from unittest.mock import Mock
+
 import httpx
+import pytest
+from pydantic import ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
@@ -419,3 +423,163 @@ def test_gemini_image_generation_response_without_grounding_has_no_web_search_re
     )
 
     assert getattr(result.usage, "web_search_requests", None) is None
+
+
+def _transform_response(model: str, payload: object) -> ImageResponse:
+    return GoogleImageGenConfig().transform_image_generation_response(
+        model=model,
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(data=[]),
+        logging_obj=Mock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize("predictions", [[], "", {}])
+def test_imagen_generation_response_with_empty_predictions_has_no_images(predictions: object):
+    assert _transform_response("gemini/imagen-4.0-generate-001", {"predictions": predictions}).data == []
+
+
+def test_imagen_generation_response_keeps_predictions_without_image_bytes():
+    result = _transform_response(
+        "gemini/imagen-4.0-generate-001",
+        {"predictions": [{"bytesBase64Encoded": "first-image"}, {"mimeType": "image/png"}]},
+    )
+
+    assert [image.b64_json for image in result.data or []] == ["first-image", None]
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        ("gemini/imagen-4.0-generate-001", {"predictions": None}),
+        ("gemini/imagen-4.0-generate-001", {"predictions": "not a list"}),
+        ("gemini/imagen-4.0-generate-001", {"predictions": [{"bytesBase64Encoded": "a"}, "not an object"]}),
+        ("gemini-3.1-flash-image-preview", {"usageMetadata": "not an object"}),
+        ("gemini-3.1-flash-image-preview", {"usageMetadata": ["not an object"]}),
+        ("gemini/imagen-4.0-generate-001", ["not an object"]),
+        ("gemini/imagen-4.0-generate-001", "not an object"),
+    ],
+)
+def test_image_generation_response_rejects_malformed_payloads_without_echoing_them(model: str, payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_response(model, payload)
+
+    assert "input_value" not in str(exc_info.value)
+
+
+_GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image-preview"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"candidates": []},
+        {"candidates": ""},
+        {"candidates": {}},
+        {"candidates": [{}]},
+        {"candidates": [{"finishReason": "SAFETY"}]},
+        {"candidates": [{"content": {}}]},
+        {"candidates": [{"content": {"parts": ""}}]},
+        {"candidates": [{"content": {"parts": "plain text"}}]},
+        {"candidates": [{"content": {"parts": {"text": "only text"}}}]},
+        {"candidates": [{"content": {"parts": [{"text": "only text"}, "plain text", ["text"], [], ""]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png"}}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": "no image"}, {"inlineData": ["mimeType"]}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": ""}, {"inlineData": []}, {"inlineData": {}}]}}]},
+        {"candidates": [{"content": {"parts": [{"inline_data": {"data": "snake-case-is-not-read"}}]}}]},
+    ],
+)
+def test_gemini_image_generation_response_without_inline_image_data_has_no_images(payload: object):
+    assert _transform_response(_GEMINI_IMAGE_MODEL, payload).data == []
+
+
+def test_gemini_image_generation_response_keeps_image_order_and_thought_signatures():
+    result = _transform_response(
+        _GEMINI_IMAGE_MODEL,
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": "caption"},
+                            {"inlineData": {"mimeType": "image/png", "data": "first"}, "thoughtSignature": "sig-1"},
+                            "plain text",
+                        ]
+                    }
+                },
+                {
+                    "content": {
+                        "parts": [
+                            {"inlineData": {"data": "second"}},
+                            {"inlineData": {"data": None}, "thoughtSignature": ""},
+                            {"inlineData": {"data": "fourth"}, "thoughtSignature": {"nested": ["sig"]}},
+                        ]
+                    }
+                },
+            ]
+        },
+    )
+
+    assert [(image.b64_json, image.provider_specific_fields) for image in result.data or []] == [
+        ("first", {"thought_signature": "sig-1"}),
+        ("second", None),
+        (None, None),
+        ("fourth", {"thought_signature": {"nested": ["sig"]}}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["gemini-secret"],
+        "gemini-secret",
+        {"candidates": None},
+        {"candidates": 7},
+        {"candidates": "gemini-secret"},
+        {"candidates": ["gemini-secret"]},
+        {"candidates": [{"content": None}]},
+        {"candidates": [{"content": "gemini-secret"}]},
+        {"candidates": [{"content": ["gemini-secret"]}]},
+        {"candidates": [{"content": {"parts": None}}]},
+        {"candidates": [{"content": {"parts": [None]}}]},
+        {"candidates": [{"content": {"parts": [7]}}]},
+        {"candidates": [{"content": {"parts": ["inlineData gemini-secret"]}}]},
+        {"candidates": [{"content": {"parts": [["inlineData", "gemini-secret"]]}}]},
+        {"candidates": [{"content": {"parts": {"inlineData": "gemini-secret"}}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": None}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": 7}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": "data gemini-secret"}]}}]},
+        {"candidates": [{"content": {"parts": [{"inlineData": ["data", "gemini-secret"]}]}}]},
+    ],
+)
+def test_gemini_image_generation_response_rejects_malformed_candidates_without_echoing_them(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_response(_GEMINI_IMAGE_MODEL, payload)
+
+    assert "gemini-secret" not in str(exc_info.value)
+
+
+def _rejection_text(payload: object) -> str:
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_response(_GEMINI_IMAGE_MODEL, payload)
+
+    return str(exc_info.value)
+
+
+@pytest.mark.parametrize("position", [403, 429])
+@pytest.mark.parametrize("malformed_entry", [None, 7, "inlineData"])
+def test_gemini_image_generation_response_rejection_text_is_the_same_wherever_the_malformed_entry_sits(
+    position: int, malformed_entry: object
+):
+    late_parts = [*[{"text": "caption"}] * position, malformed_entry]
+    late_candidates = [*[{"finishReason": "STOP"}] * position, malformed_entry]
+
+    assert _rejection_text({"candidates": [{"content": {"parts": late_parts}}]}) == _rejection_text(
+        {"candidates": [{"content": {"parts": [malformed_entry]}}]}
+    )
+    assert _rejection_text({"candidates": late_candidates}) == _rejection_text({"candidates": [malformed_entry]})
