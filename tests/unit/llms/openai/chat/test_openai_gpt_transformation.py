@@ -1768,7 +1768,7 @@ _NO_NONE_ENTRY: Final = {
 
 
 def test_reasoning_effort_none_raises_when_the_model_map_disables_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(litellm.model_cost, _NO_NONE_MODEL, _NO_NONE_ENTRY)
+    monkeypatch.setattr(litellm, "model_cost", {_NO_NONE_MODEL: _NO_NONE_ENTRY})
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="reasoning_effort=none"):
         OpenAIGPT5Config().map_openai_params(
             non_default_params={"reasoning_effort": "none"},
@@ -1781,7 +1781,7 @@ def test_reasoning_effort_none_raises_when_the_model_map_disables_it(monkeypatch
 def test_reasoning_effort_none_is_dropped_when_the_model_map_disables_it_and_drop_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(litellm.model_cost, _NO_NONE_MODEL, _NO_NONE_ENTRY)
+    monkeypatch.setattr(litellm, "model_cost", {_NO_NONE_MODEL: _NO_NONE_ENTRY})
     mapped: Final = OpenAIGPT5Config().map_openai_params(
         non_default_params={"reasoning_effort": "none"},
         optional_params={},
