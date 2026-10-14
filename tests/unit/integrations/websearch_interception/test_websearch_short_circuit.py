@@ -5,6 +5,7 @@ Tests the short-circuit path that detects web-search-only /v1/messages requests
 and executes the search directly without routing through the backend LLM.
 """
 
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -392,3 +393,56 @@ class TestShortCircuitEntryPoint:
         assert result is not None
         text_block = next(b for b in result["content"] if b["type"] == "text")
         assert text_block["text"] == "results"
+
+
+class TestShortCircuitSafeguardResults:
+    """A short-circuited reply never reaches the backend, so the proxy answers Claude Code's safeguards itself."""
+
+    SAFEGUARDS = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    NO_TOOL_USES_AVAILABLE = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
+
+    async def _short_circuit(self, *, stream: bool, kwargs: dict | None):
+        from litellm.llms.anthropic.pass_through.messages.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = ("results", None)
+            with (
+                patch("litellm.callbacks", [logger]),
+                patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}),
+            ):
+                return await _try_websearch_short_circuit(
+                    model="github_copilot/gpt-5.4",
+                    messages=[{"role": "user", "content": "search query"}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    custom_llm_provider="github_copilot",
+                    stream=stream,
+                    kwargs=kwargs,
+                )
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_reply_answers_safeguards_with_no_tool_uses(self):
+        result = await self._short_circuit(stream=False, kwargs={"safeguards": self.SAFEGUARDS})
+
+        assert list(result["safeguard_results"]) == self.NO_TOOL_USES_AVAILABLE
+        assert "tool_use" not in [block["type"] for block in result["content"]]
+
+    @pytest.mark.asyncio
+    async def test_streaming_reply_carries_safeguard_results_in_the_final_message_delta(self):
+        result = await self._short_circuit(stream=True, kwargs={"safeguards": self.SAFEGUARDS})
+
+        raw = b"".join([chunk async for chunk in result]).decode()
+        events = [json.loads(line[len("data: ") :]) for line in raw.splitlines() if line.startswith("data: ")]
+        message_delta = next(event for event in events if event["type"] == "message_delta")
+        assert message_delta["delta"]["safeguard_results"] == self.NO_TOOL_USES_AVAILABLE
+        assert message_delta["delta"]["stop_reason"] == "end_turn"
+        assert [event["type"] for event in events][-2:] == ["message_delta", "message_stop"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kwargs", [None, {"metadata": {"user_id": "u1"}}])
+    async def test_request_without_safeguards_gets_no_results(self, kwargs):
+        result = await self._short_circuit(stream=False, kwargs=kwargs)
+
+        assert "safeguard_results" not in result

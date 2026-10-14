@@ -9,6 +9,7 @@ from litellm.types.llms.anthropic import (
     AnthropicStopDetails,
     CompactionBlock,
     ContextManagementResponse,
+    SafeguardResult,
     ServerToolUsage,
     UsageIteration,
 )
@@ -104,4 +105,4 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     type: Literal["message"] | None
     usage: AnthropicUsage | None
     context_management: NotRequired[ContextManagementResponse]
-    safeguard_results: NotRequired[ReadOnly[list[dict[str, object]]]]
+    safeguard_results: NotRequired[ReadOnly[Sequence[SafeguardResult]]]

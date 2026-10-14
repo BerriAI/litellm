@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, TypeAlias
 
@@ -546,10 +546,38 @@ class AnthropicStopDetails(TypedDict, total=False):
     explanation: ReadOnly[str | None]
 
 
+class SafeguardToolUseEvaluated(TypedDict):
+    type: ReadOnly[Literal["evaluated"]]
+    outcome: ReadOnly[Literal["flagged", "not_flagged"]]
+    explanation: NotRequired[ReadOnly[str]]
+
+
+class SafeguardToolUseUnavailable(TypedDict):
+    type: ReadOnly[Literal["unavailable"]]
+    reason: ReadOnly[Literal["timeout", "error", "refused", "input_too_long", "truncated"]]
+
+
+SafeguardToolUseVerdict: TypeAlias = SafeguardToolUseEvaluated | SafeguardToolUseUnavailable
+
+
+class SafeguardStatusAvailable(TypedDict):
+    type: ReadOnly[Literal["available"]]
+    tool_uses: ReadOnly[Mapping[str, SafeguardToolUseVerdict]]
+
+
+class SafeguardStatusUnsupported(TypedDict):
+    type: ReadOnly[Literal["unsupported"]]
+
+
+class SafeguardResult(TypedDict):
+    type: ReadOnly[Literal["dangerous_tool_use"]]
+    status: ReadOnly[SafeguardStatusAvailable | SafeguardStatusUnsupported]
+
+
 class MessageDelta(TypedDict, total=False):
     stop_reason: str | None
     stop_details: ReadOnly[AnthropicStopDetails]
-    safeguard_results: ReadOnly[list[dict[str, object]]]
+    safeguard_results: ReadOnly[Sequence[SafeguardResult]]
 
 
 class ServerToolUsage(TypedDict, total=False):
@@ -613,7 +641,7 @@ class MessageChunk(TypedDict, total=False):
     stop_reason: str | None
     stop_sequence: str | None
     usage: UsageDelta
-    safeguard_results: ReadOnly[list[dict[str, object]]]
+    safeguard_results: ReadOnly[Sequence[SafeguardResult]]
 
 
 class MessageStartBlock(TypedDict):

@@ -79,6 +79,9 @@ async def anthropic_messages_with_mcp(
     from litellm.experimental_mcp_client.tools import (
         transform_mcp_tool_to_anthropic_tool,
     )
+    from litellm.llms.anthropic.pass_through.adapters.handler import request_safeguards_evaluator
+    from litellm.llms.anthropic.pass_through.messages.handler import proxy_classifies_tool_uses
+    from litellm.llms.anthropic.pass_through.safeguards import with_safeguard_results
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
@@ -132,9 +135,18 @@ async def anthropic_messages_with_mcp(
             messages=list(messages), stream=stream, **base_call_args
         )
 
+    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+    classified_here: Final = proxy_classifies_tool_uses(
+        model, custom_llm_provider if isinstance(custom_llm_provider, str) else None, kwargs
+    )
+    loop_call_args: Final[Mapping[str, object]] = (
+        {key: value for key, value in base_call_args.items() if key != "safeguards"}
+        if classified_here
+        else base_call_args
+    )
     working_messages: Sequence[Mapping[str, object]] = tuple(messages)
     response: AnthropicMessagesResponse = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
-        messages=list(working_messages), stream=False, **base_call_args
+        messages=list(working_messages), stream=False, **loop_call_args
     )
 
     for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
@@ -171,7 +183,7 @@ async def anthropic_messages_with_mcp(
             _build_tool_result_message(tool_results),
         )
         response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
-            messages=list(working_messages), stream=False, **base_call_args
+            messages=list(working_messages), stream=False, **loop_call_args
         )
     else:
         verbose_logger.warning(
@@ -180,10 +192,15 @@ async def anthropic_messages_with_mcp(
             model,
         )
 
+    client_response: Final = (
+        await with_safeguard_results(response, request_safeguards_evaluator(kwargs, working_messages))
+        if classified_here
+        else response
+    )
     if stream:
         from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
 
-        return FakeAnthropicMessagesStreamIterator(response)
-    return response
+        return FakeAnthropicMessagesStreamIterator(client_response)
+    return client_response

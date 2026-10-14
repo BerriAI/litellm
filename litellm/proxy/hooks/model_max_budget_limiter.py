@@ -14,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -545,7 +546,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         _litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
-        _metadata: Final[dict] = _litellm_params.get("metadata", {}) or {}
+        _metadata: Final[dict] = StandardLoggingPayloadSetup.merge_litellm_metadata(
+            _litellm_params  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+        )
         payload_metadata: Final = standard_logging_payload.get("metadata") or {}
 
         # Use model_group (the user-facing model alias, e.g. "gpt-4o") when
