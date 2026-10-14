@@ -5,6 +5,10 @@ Anthropic, Vertex, Azure AI and Bedrock Invoke transformation tests; these pin
 the pure placement rules on the OpenAI-format message list.
 """
 
+import time
+from itertools import chain
+from typing import Final
+
 import pytest
 
 import litellm
@@ -302,6 +306,36 @@ EMPTY_ASSISTANT = pytest.mark.parametrize(
         "unanswered-tool-search-use",
     ],
 )
+
+
+def test_flagged_placement_handles_a_long_run_of_unanswered_tool_search_uses_in_linear_time():
+    search_uses: Final = tuple(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{**_TOOL_SEARCH_USE, "id": f"srvtoolu_{index:06d}"}],
+        }
+        for index in range(3000)
+    )
+    reminders: Final = tuple(
+        chain.from_iterable(
+            ({"role": "system", "content": f"reminder {index}"}, {"role": "user", "content": f"q{index}"})
+            for index in range(10)
+        )
+    )
+    messages: Final = [
+        {"role": "user", "content": "start"},
+        *reminders,
+        *search_uses,
+        {"role": "user", "content": "end"},
+    ]
+
+    started: Final = time.perf_counter()
+    placed: Final = place_mid_conversation_system(messages, supports_mid_conversation_system=True)
+    elapsed: Final = time.perf_counter() - started
+
+    assert set(_roles(placed)[:21]) == {"user"}
+    assert elapsed < 1.0
 
 
 def test_flagged_placement_keeps_a_system_before_a_tool_search_use_the_caller_answered():

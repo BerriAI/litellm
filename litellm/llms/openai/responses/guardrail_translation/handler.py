@@ -29,9 +29,10 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 """
 
 import copy
+import json
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, repeat
 from types import MappingProxyType
@@ -230,6 +231,10 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 
 
 _TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+_TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
+_OUTPUT_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {_TOOL_SEARCH_CALL_TYPE}
+_SCANNED_TOOL_SEARCH_NAME: Final = "tool_search"
+_TOOL_SEARCH_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call": "arguments", "custom_tool_call": "input"}
 )
@@ -285,7 +290,7 @@ def _is_tool_call_item(item: object) -> bool:
 
 
 def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
-    if stream_item_field(item, "type") not in _TOOL_CALL_ITEM_TYPES:
+    if stream_item_field(item, "type") not in _OUTPUT_TOOL_CALL_ITEM_TYPES:
         return None
     if isinstance(item, Mapping):
         return cast("Mapping[str, object]", item)  # cast-ok: output items are str-keyed JSON objects
@@ -294,6 +299,42 @@ def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
 
 def _is_tool_call_output_item(item: object) -> bool:
     return _tool_call_output_item_mapping(item) is not None
+
+
+def _indexed_tool_call_output_items(outputs: Sequence[object]) -> tuple[tuple[int, object], ...]:
+    return tuple((index, item) for index, item in enumerate(outputs) if _is_tool_call_output_item(item))
+
+
+def _scanned_tool_call_item(item: Mapping[str, object]) -> Mapping[str, object]:
+    """A ``tool_search_call`` reaches guardrails as a ``tool_search`` call whose arguments are JSON text."""
+    if item.get("type") != _TOOL_SEARCH_CALL_TYPE:
+        return item
+    return {**item, "name": _SCANNED_TOOL_SEARCH_NAME, "arguments": json.dumps(item.get("arguments") or {})}
+
+
+def _tool_search_arguments(payload: str | None) -> Mapping[str, object] | None:
+    if payload is None:
+        return None
+    try:
+        return _TOOL_SEARCH_ARGUMENTS_ADAPTER.validate_json(payload)
+    except ValidationError:
+        return None
+
+
+def _rewritten_tool_search_call(item: object, payload: str | None) -> object:
+    arguments: Final = _tool_search_arguments(payload)
+    if arguments is None:
+        return item
+    if isinstance(item, BaseModel):
+        return item.model_copy(update={"arguments": arguments})
+    if isinstance(item, Mapping):
+        return {**item, "arguments": arguments}
+    return item
+
+
+def _deliver_into_output(outputs: Sequence[object], index: int, item: object, delivered: object) -> None:
+    if delivered is not item and isinstance(outputs, MutableSequence):
+        outputs[index] = delivered  # rebind-ok: a frozen output item takes a rewrite by being swapped in the list
 
 
 def _released_tool_call_payload(responses_so_far: Sequence[object], item_id: object) -> str | None:
@@ -317,7 +358,9 @@ def _released_tool_call_payload(responses_so_far: Sequence[object], item_id: obj
 
 
 def _with_released_payload(item: Mapping[str, object], responses_so_far: Sequence[object]) -> Mapping[str, object]:
-    field: Final = _TOOL_CALL_PAYLOAD_FIELDS[str(item.get("type"))]
+    field: Final = _TOOL_CALL_PAYLOAD_FIELDS.get(str(item.get("type")))
+    if field is None:
+        return item
     payload: Final = _released_tool_call_payload(responses_so_far, item.get("id"))
     return item if payload is None else {**item, field: payload}
 
@@ -921,7 +964,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 task_mappings=task_mappings,
             )
             self._write_tool_call_rewrites_to_output(
-                tool_call_items=tuple(item for item in response_output if _is_tool_call_output_item(item)),
+                outputs=response_output,
                 pre_guardrail_tool_calls=pre_guardrail_tool_calls,
                 post_guardrail_tool_calls=post_guardrail_tool_calls,
             )
@@ -1156,7 +1199,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
 
     @staticmethod
-    def _write_event_field(event: object, field: str, value: str) -> None:
+    def _write_event_field(event: object, field: str, value: object) -> None:
         if isinstance(event, dict):
             event[field] = value  # rebind-ok: delivering the rewrite means editing the buffered event in place
         else:
@@ -1234,7 +1277,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         pipeline executor discards it and releases the original events."""
         if post_guardrail_tool_calls == pre_guardrail_tool_calls:
             return
-        tool_call_items: Final = tuple(output_item for output_item in outputs if _is_tool_call_output_item(output_item))
+        indexed_tool_call_items: Final = _indexed_tool_call_output_items(outputs)
+        tool_call_items: Final = tuple(output_item for _, output_item in indexed_tool_call_items)
         call_ids: Final = tuple(
             call_id
             for output_item in tool_call_items
@@ -1268,12 +1312,14 @@ class OpenAIResponsesHandler(BaseTranslation):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
             raise UndeliverableStreamRewrite(guardrail_name, undeliverable_reason)
-        for output_item, rewrite in (
-            (output_item, rewrites_by_call_id[call_id])
-            for output_item, call_id in zip(tool_call_items, call_ids)
+        for (index, output_item), rewrite in (
+            (indexed_item, rewrites_by_call_id[call_id])
+            for indexed_item, call_id in zip(indexed_tool_call_items, call_ids)
             if call_id in rewrites_by_call_id
         ):
-            self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
+            _deliver_into_output(
+                outputs, index, output_item, self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
+            )
         delta_replacements: Final = MappingProxyType(
             {call_id: chain((rewrite.arguments,), repeat("")) for call_id, rewrite in rewrites_by_call_id.items()}
         )
@@ -1292,28 +1338,34 @@ class OpenAIResponsesHandler(BaseTranslation):
                         stream_item_field(event, "item"), rewrites_by_call_id[call_id].name, None
                     )
                 case "response.output_item.done":
-                    self._write_tool_call_item(
-                        stream_item_field(event, "item"),
-                        rewrites_by_call_id[call_id].name,
-                        rewrites_by_call_id[call_id].arguments,
+                    done_item = stream_item_field(event, "item")
+                    delivered_item = self._write_tool_call_item(
+                        done_item, rewrites_by_call_id[call_id].name, rewrites_by_call_id[call_id].arguments
                     )
+                    if delivered_item is not done_item:
+                        self._write_event_field(event, "item", delivered_item)
                 case _:
                     pass
 
     def _write_tool_call_rewrites_to_output(
         self,
-        tool_call_items: Sequence[object],
+        outputs: Sequence[object],
         pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
         post_guardrail_tool_calls: tuple[_ToolCallShape, ...],
     ) -> None:
-        if len(tool_call_items) != len(post_guardrail_tool_calls):
+        indexed_tool_call_items: Final = _indexed_tool_call_output_items(outputs)
+        if len(indexed_tool_call_items) != len(post_guardrail_tool_calls):
             return
-        for output_item, rewrite in (
-            (output_item, _tool_call_rewrite(before, after))
-            for output_item, before, after in zip(tool_call_items, pre_guardrail_tool_calls, post_guardrail_tool_calls)
+        for (index, output_item), rewrite in (
+            (indexed_item, _tool_call_rewrite(before, after))
+            for indexed_item, before, after in zip(
+                indexed_tool_call_items, pre_guardrail_tool_calls, post_guardrail_tool_calls
+            )
             if after != before
         ):
-            self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
+            _deliver_into_output(
+                outputs, index, output_item, self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
+            )
 
     @staticmethod
     def _tool_call_ids_by_item_id(stream_events: Sequence[object]) -> Mapping[str, str]:
@@ -1343,18 +1395,28 @@ class OpenAIResponsesHandler(BaseTranslation):
         item: Final = stream_item_field(event, "item")
         call_id: Final = stream_item_field(item, "call_id")
         return (
-            call_id if stream_item_field(item, "type") in _TOOL_CALL_ITEM_TYPES and isinstance(call_id, str) else None
+            call_id
+            if stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES and isinstance(call_id, str)
+            else None
         )
 
     @staticmethod
-    def _write_tool_call_item(item: object, name: str | None, payload: str | None) -> None:
+    def _write_tool_call_item(item: object, name: str | None, payload: str | None) -> object:
+        """Apply a rewrite and return the item that carries it.
+
+        A ``tool_search_call`` keeps its name and takes the rewritten arguments as a JSON
+        object on a copy, since its item may be frozen. Other tool calls are edited in place.
+        """
+        item_type: Final = stream_item_field(item, "type")
         if item is None:
-            return
+            return item
+        if item_type == _TOOL_SEARCH_CALL_TYPE:
+            return _rewritten_tool_search_call(item, payload)
         if name is not None:
             OpenAIResponsesHandler._write_event_field(item, "name", name)
-        item_type: Final = stream_item_field(item, "type")
         if payload is not None and isinstance(item_type, str) and item_type in _TOOL_CALL_PAYLOAD_FIELDS:
             OpenAIResponsesHandler._write_event_field(item, _TOOL_CALL_PAYLOAD_FIELDS[item_type], payload)
+        return item
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """
@@ -1405,7 +1467,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             stream_item_field(event, "type") in _TOOL_CALL_PAYLOAD_EVENT_TYPES
             or (
                 stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
-                and stream_item_field(stream_item_field(event, "item"), "type") in _TOOL_CALL_ITEM_TYPES
+                and stream_item_field(stream_item_field(event, "item"), "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES
             )
             for event in responses_so_far
         )
@@ -1414,7 +1476,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     def _completed_response_scan_key(response: object) -> StreamingScanKey:
         output_items: Final = stream_item_items(response, "output")
         message_items: Final = tuple(
-            item for item in output_items if stream_item_field(item, "type") not in _TOOL_CALL_ITEM_TYPES
+            item for item in output_items if stream_item_field(item, "type") not in _OUTPUT_TOOL_CALL_ITEM_TYPES
         )
         return StreamingScanKey(
             texts=tuple(
@@ -1426,7 +1488,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             tool_calls=tuple(
                 stream_item_fingerprint(item)
                 for item in output_items
-                if stream_item_field(item, "type") in _TOOL_CALL_ITEM_TYPES
+                if stream_item_field(item, "type") in _OUTPUT_TOOL_CALL_ITEM_TYPES
             ),
             stream_ended=True,
         )
@@ -1540,7 +1602,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         tool_call_item: Final = _tool_call_output_item_mapping(output_item)
         if tool_call_item is not None:
             if tool_calls_to_check is not None:
-                tool_calls_to_check.append(tool_call_dict_from_output_item(tool_call_item, output_idx))
+                tool_calls_to_check.append(
+                    tool_call_dict_from_output_item(_scanned_tool_call_item(tool_call_item), output_idx)
+                )
             return
 
         # Handle both GenericResponseOutputItem and dict
