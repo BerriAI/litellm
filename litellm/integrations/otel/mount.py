@@ -20,20 +20,6 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-
-def is_trace_response_propagator_enabled() -> bool:
-    if not is_otel_v2_enabled():
-        return False
-    try:
-        from opentelemetry.instrumentation.propagators import (
-            TraceResponsePropagator,
-            get_global_response_propagator,
-        )
-    except ImportError:
-        return False
-    return isinstance(get_global_response_propagator(), TraceResponsePropagator)
-
-
 # Routes excluded from server-span tracing by default: high-frequency pollers and
 # static UI/docs assets, none of which are LLM traffic. Entries are substring-matched
 # against the request path (unanchored, so they survive a ``server_root_path`` prefix
@@ -127,8 +113,10 @@ def instrument_fastapi_app(app: "FastAPI") -> None:
     That way server spans and gen-ai spans share one provider and the same trace.
 
     Once instrumented, every traced response carries the W3C ``traceresponse``
-    header naming its server span, unless another response propagator is already
-    registered.
+    header naming its server span, unless the response already relays an upstream's
+    ``traceresponse`` or another response propagator is already registered. The
+    server span also gets ``litellm.call_id`` from the response's
+    ``x-litellm-call-id`` header.
     """
     try:
         if not is_otel_v2_enabled():
@@ -141,10 +129,11 @@ def instrument_fastapi_app(app: "FastAPI") -> None:
         # package is absent, even with the gate off.
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.propagators import (
-            TraceResponsePropagator,
             get_global_response_propagator,
             set_global_response_propagator,  # pyright: ignore[reportUnknownVariableType]  # upstream leaves its parameter unannotated
         )
+
+        from litellm.integrations.otel.trace_response import UpstreamFirstTraceResponsePropagator
 
         excluded_urls: Final = (
             os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
@@ -161,6 +150,6 @@ def instrument_fastapi_app(app: "FastAPI") -> None:
             exclude_spans=["receive", "send"],
         )
         if get_global_response_propagator() is None:
-            set_global_response_propagator(TraceResponsePropagator())
+            set_global_response_propagator(UpstreamFirstTraceResponsePropagator())
     except Exception as e:
         verbose_logger.debug("Skipping OTel V2 FastAPI instrumentation: %s", e)

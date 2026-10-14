@@ -6,7 +6,6 @@ surface and the server-span + shared-provider behavior it produces.
 
 
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 import pytest
 
@@ -22,7 +21,6 @@ import httpx  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from opentelemetry.instrumentation.propagators import (  # noqa: E402
     ResponsePropagator,
-    TraceResponsePropagator,
     get_global_response_propagator,
     set_global_response_propagator,
 )
@@ -46,7 +44,6 @@ from litellm.integrations.otel.mount import (  # noqa: E402
     PASSTHROUGH_PREFIXES,
     _passthrough_span_name_hook,
     instrument_fastapi_app,
-    is_trace_response_propagator_enabled,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: E402
     HttpPassThroughEndpointHelpers,
@@ -279,20 +276,6 @@ def test_instrument_fastapi_app_noop_when_gate_off(monkeypatch):
     assert getattr(app, "_is_instrumented_by_opentelemetry", False) is False
 
 
-def test_trace_response_propagator_is_disabled_when_gate_is_off(monkeypatch):
-    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
-    set_global_response_propagator(TraceResponsePropagator())
-
-    assert is_trace_response_propagator_enabled() is False
-
-
-def test_trace_response_propagator_is_disabled_when_optional_dependency_is_missing(monkeypatch):
-    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
-
-    with patch.dict("sys.modules", {"opentelemetry.instrumentation.propagators": None}):
-        assert is_trace_response_propagator_enabled() is False
-
-
 def test_instrument_fastapi_app_attaches_when_gate_on(monkeypatch):
     """With the gate on the FastAPI app is instrumented for server spans."""
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
@@ -307,6 +290,9 @@ def test_instrument_fastapi_app_attaches_when_gate_on(monkeypatch):
         assert getattr(app, "_is_instrumented_by_opentelemetry", False) is True
     finally:
         FastAPIInstrumentor.uninstrument_app(app)
+
+
+_UPSTREAM_TRACERESPONSE = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 
 
 def _traced_app(monkeypatch, tracer_provider):
@@ -331,10 +317,12 @@ def _traced_app(monkeypatch, tracer_provider):
     async def stream():
         return StreamingResponse(chunks(), headers={"x-litellm-call-id": "call-stream"})
 
-    @app.get("/relayed")
-    async def relayed():
-        upstream = httpx.Headers({"traceresponse": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"})
-        return fastapi.Response(headers=HttpPassThroughEndpointHelpers.get_response_headers(upstream))
+    async def relay_upstream():
+        upstream = httpx.Headers({"traceresponse": _UPSTREAM_TRACERESPONSE})
+        return fastapi.Response(headers=HttpPassThroughEndpointHelpers.get_response_headers(upstream, "call-relayed"))
+
+    app.add_api_route("/relayed", relay_upstream)
+    app.add_api_route("/relayed/health", relay_upstream)
 
     instrument_fastapi_app(app)
     return app
@@ -347,20 +335,42 @@ def _exporting_provider():
     return logger._tracer_provider, exporter
 
 
+def _server_spans_by_route(exporter):
+    return {(s.attributes or {})["http.route"]: s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER}
+
+
 def test_every_traced_response_names_its_own_server_span(monkeypatch):
     provider, exporter = _exporting_provider()
     client = TestClient(_traced_app(monkeypatch, provider))
 
-    responses = {path: client.get(path) for path in ("/success", "/failure", "/stream", "/relayed")}
+    responses = {path: client.get(path) for path in ("/success", "/failure", "/stream")}
 
-    server_spans = {
-        (s.attributes or {})["http.route"]: s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
-    }
+    server_spans = _server_spans_by_route(exporter)
     assert responses["/failure"].status_code == 400
     assert responses["/stream"].text == "data: first\n\ndata: [DONE]\n\n"
     for path, response in responses.items():
         context = server_spans[path].context
         assert response.headers.get_list("traceresponse") == [f"00-{context.trace_id:032x}-{context.span_id:016x}-01"]
+
+
+@pytest.mark.parametrize("path", ["/relayed", "/relayed/health"])
+def test_a_relayed_upstream_traceresponse_is_returned_once_and_unchanged(monkeypatch, path):
+    provider, _ = _exporting_provider()
+
+    response = TestClient(_traced_app(monkeypatch, provider)).get(path)
+
+    assert response.headers.get_list("traceresponse") == [_UPSTREAM_TRACERESPONSE]
+
+
+def test_server_span_carries_the_call_id_its_response_returns(monkeypatch):
+    provider, exporter = _exporting_provider()
+    client = TestClient(_traced_app(monkeypatch, provider))
+
+    responses = {path: client.get(path) for path in ("/success", "/failure", "/stream", "/relayed")}
+
+    server_spans = _server_spans_by_route(exporter)
+    for path, response in responses.items():
+        assert (server_spans[path].attributes or {})["litellm.call_id"] == response.headers["x-litellm-call-id"]
 
 
 def test_traceresponse_keeps_the_caller_trace(monkeypatch):
@@ -416,7 +426,7 @@ def test_an_operator_response_propagator_is_kept(monkeypatch):
     response = TestClient(_traced_app(monkeypatch, provider)).get("/relayed")
 
     assert response.headers["x-operator-trace"] == "kept"
-    assert response.headers["traceresponse"] == "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    assert response.headers["traceresponse"] == _UPSTREAM_TRACERESPONSE
 
 
 def test_browsers_can_read_traceresponse_through_cors(monkeypatch):
