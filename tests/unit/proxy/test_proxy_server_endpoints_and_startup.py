@@ -1173,14 +1173,17 @@ async def test_add_deployment_hydrates_non_llm_objects_when_model_reconcile_fail
     from litellm.proxy.utils import ProxyLogging
 
     class FailingReconcileProxyConfig(ProxyConfig):
-        """Reconcile raises inside the shared try, before the hydration; hydration records itself."""
+        """The router update raises inside the shared try, before the hydration; hydration records itself."""
 
         def __init__(self):
             super().__init__()
             self.non_llm_hydrations = 0
 
         async def get_models_from_db(self, prisma_client):
-            raise RuntimeError("db unavailable")
+            return []
+
+        async def _update_llm_router(self, new_models, proxy_logging_obj):
+            raise RuntimeError("router update failed")
 
         async def _init_non_llm_objects_in_db(self, prisma_client):
             self.non_llm_hydrations += 1
