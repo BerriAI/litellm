@@ -1,4 +1,3 @@
-use std::ops::ControlFlow;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -19,10 +18,10 @@ use litellm_host::{
 };
 
 use crate::PythonHostCalls;
+use crate::caller::{Answer, PythonCaller, Yielded};
 use crate::handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle, Suspension};
 use crate::hooks::{HookStep, PythonCallEvent, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
-use crate::task::{Answer, PythonTask, Yielded};
 use crate::{Error, InvokeError, PythonBinding};
 
 type ProtocolOf<H> = <H as PythonBinding>::Protocol;
@@ -124,19 +123,19 @@ fn classified<H: PythonBinding>(py: Python<'_>, binding: &H, error: ErrorOf<H>) 
 
 /// The call as one async body. Every hook step and host call is awaited in place on the
 /// caller's task; the parts lock is never held across an await.
-struct Running<H, M, L>
+struct CallBody<H, M, L>
 where
     H: PythonBinding,
     M: Machine,
 {
-    task: PythonTask,
+    caller: PythonCaller,
     parts: SharedParts<H, L>,
     native: NativeMachine<M>,
     start: Option<StartMachine<ProtocolOf<H>, M>>,
     streaming: bool,
 }
 
-impl<H, M, L> Running<H, M, L>
+impl<H, M, L> CallBody<H, M, L>
 where
     L: PythonCallHooks + 'static,
     H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
@@ -223,7 +222,7 @@ where
                 HookStep::Ready(value) => return Ok(value),
                 HookStep::Await(awaitable, resume) => (awaitable, resume),
             };
-            let answer = self.task.suspend(Suspension::Await(awaitable)).await;
+            let answer = self.caller.await_python(awaitable).await;
             step = {
                 let mut parts = self.parts();
                 Python::attach(|py| resume(&mut parts.hooks, py, answer))?
@@ -237,16 +236,14 @@ where
             let poll = Python::attach(|py| self.native.resume(py, interruption.take()))?;
             let result = match poll {
                 NativePoll::Ready(result) => result,
-                NativePoll::Suspend(awaitable) => {
-                    match self.task.suspend(Suspension::Await(awaitable)).await {
-                        Ok(_) => self.native.take_result()?,
-                        Err(error) if self.parts().interrupted.is_none() => {
-                            interruption = Some(self.interrupt(error));
-                            continue;
-                        }
-                        Err(error) => return Err(error),
+                NativePoll::Suspend(awaitable) => match self.caller.await_python(awaitable).await {
+                    Ok(_) => self.native.take_result()?,
+                    Err(error) if self.parts().interrupted.is_none() => {
+                        interruption = Some(self.interrupt(error));
+                        continue;
                     }
-                }
+                    Err(error) => return Err(error),
+                },
             };
             let op = match result {
                 Ok(MachineStep::Suspended(op)) => op,
@@ -324,7 +321,7 @@ where
                         Ok::<_, PyErr>(head)
                     })?
                 };
-                self.consumed(Suspension::Open(head), reply).await;
+                reply.send(self.caller.open_stream(head).await);
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
@@ -337,7 +334,7 @@ where
                         Ok::<_, PyErr>(chunk)
                     })?
                 };
-                self.consumed(Suspension::Yield(chunk), reply).await;
+                reply.send(self.caller.yield_chunk(chunk).await);
                 Ok(())
             }
         }
@@ -352,7 +349,7 @@ where
             Python::attach(|py| parts.binding.begin_host_call(py, call))?
         };
         while let Some(awaitable) = pending {
-            let result = self.task.suspend(Suspension::Await(awaitable)).await;
+            let result = self.caller.await_python(awaitable).await;
             pending = {
                 let mut parts = self.parts();
                 Python::attach(|py| parts.binding.resume_host_call(py, result))?
@@ -368,17 +365,6 @@ where
             Python::attach(|py| parts.hooks.on_event(py, event))?
         };
         self.settle(step).await
-    }
-
-    /// Hands a stream boundary to the consumer. Reading on is demand for the next chunk;
-    /// anything else, closing the stream included, detaches the call from it.
-    async fn consumed(&self, suspension: Suspension, reply: Reply<ControlFlow<()>>) {
-        let read = self.task.suspend(suspension).await;
-        reply.send(if read.is_ok() {
-            ControlFlow::Continue(())
-        } else {
-            ControlFlow::Break(())
-        });
     }
 
     async fn completed(
@@ -487,7 +473,7 @@ where
     }
 }
 
-struct Driver<H, L>
+struct CallDriver<H, L>
 where
     H: PythonBinding,
     L: PythonCallHooks,
@@ -497,7 +483,7 @@ where
     parts: SharedParts<H, L>,
 }
 
-impl<H, L> Driver<H, L>
+impl<H, L> CallDriver<H, L>
 where
     H: PythonBinding + 'static,
     L: PythonCallHooks + 'static,
@@ -527,7 +513,7 @@ where
     }
 }
 
-impl<H, L> ExecutionBody for Driver<H, L>
+impl<H, L> ExecutionBody for CallDriver<H, L>
 where
     H: PythonBinding + 'static,
     L: PythonCallHooks + 'static,
@@ -575,7 +561,7 @@ where
     }
 }
 
-impl<H, L> Drop for Driver<H, L>
+impl<H, L> Drop for CallDriver<H, L>
 where
     H: PythonBinding,
     L: PythonCallHooks,
@@ -637,8 +623,8 @@ where
         let parts = Arc::clone(&parts);
         let asynchronous = options.asynchronous;
         move |co| {
-            Running {
-                task: PythonTask::new(co),
+            CallBody {
+                caller: PythonCaller::new(co),
                 parts,
                 native: NativeMachine::new(asynchronous),
                 start: Some(Box::new(start)),
@@ -647,7 +633,7 @@ where
             .run()
         }
     });
-    let mut driver = Driver {
+    let mut driver = CallDriver {
         body: Mutex::new(body),
         reply: None,
         parts,
