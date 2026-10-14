@@ -435,6 +435,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
     legacy_unreadable,
+    needs_legacy_reader,
+    require_legacy_reader_for,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.fips import (
@@ -5952,7 +5954,11 @@ class ProxyConfig:
         existing: Final[dict] = dict(row.param_value) if row is not None and row.param_value is not None else {}
 
         to_set: Final = {k: v for k, v in updates.items() if v is not None}
-        encrypted: Final = self.encrypt_env_variables_for_db(environment_variables=to_set) if to_set else {}
+        encrypted: Final = (
+            self.encrypt_env_variables_for_db(environment_variables=to_set, stored_environment_variables=existing)
+            if to_set
+            else {}
+        )
         deleted_keys: Final = {k for k, v in updates.items() if v is None}
         merged: Final = {**{k: v for k, v in existing.items() if k not in deleted_keys}, **encrypted}
 
@@ -7881,7 +7887,12 @@ class ProxyConfig:
 
     _decrypt_db_variables = decrypt_db_variables
 
-    def encrypt_env_variables_for_db(self, environment_variables: dict, new_encryption_key: str | None = None) -> dict:
+    def encrypt_env_variables_for_db(
+        self,
+        environment_variables: dict,
+        new_encryption_key: str | None = None,
+        stored_environment_variables: Mapping[str, object] | None = None,
+    ) -> dict:
         """
         Idempotently encrypt environment variables for a DB write.
 
@@ -7895,7 +7906,24 @@ class ProxyConfig:
         Decryption here deliberately uses _decrypt_db_variables (not
         _decrypt_and_set_db_env_variables): this is a write path, and
         loading values into os.environ is the read path's responsibility.
+
+        ``stored_environment_variables`` is the stored row the save merges
+        into (already loaded by the caller). The legacy-reader guard below
+        only fires for incoming keys whose stored counterpart is unprefixed:
+        such a value may be a round-trip echo of legacy ciphertext, which
+        without PyNaCl cannot be decrypted before the rewrite and must be
+        refused instead of v3-wrapped. Keys with no stored counterpart are
+        new plaintext by construction and never need PyNaCl.
         """
+        require_legacy_reader_for(
+            (
+                value
+                for key, value in environment_variables.items()
+                if stored_environment_variables is not None
+                and needs_legacy_reader(stored_environment_variables.get(key))
+            ),
+            "re-encrypt environment variables for the config save",
+        )
         decrypted_env_vars: Final = {
             k: v if legacy_unreadable(v) else decrypt_value_helper(value=v, key=k, return_original_value=True)
             for k, v in environment_variables.items()
@@ -18513,7 +18541,9 @@ async def update_config(
             existing = await _read_section("environment_variables")
             before_environment_variables: Final = copy.deepcopy(existing)
             existing.update(
-                proxy_config.encrypt_env_variables_for_db(environment_variables=config_info.environment_variables)
+                proxy_config.encrypt_env_variables_for_db(
+                    environment_variables=config_info.environment_variables, stored_environment_variables=existing
+                )
             )
             await _upsert_section("environment_variables", existing)
             asyncio.create_task(
