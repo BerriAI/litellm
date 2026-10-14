@@ -293,7 +293,11 @@ class ResponsesSessionHandler:
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
         decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
-        response_id: Final = decoded_response_id.get("response_id", previous_response_id)
+        decoded_id: Final = decoded_response_id.get("response_id", previous_response_id)
+        # Bridged deployments (`use_chat_completions_api: true`) store the encoded `resp_...`
+        # id in SpendLogs.request_id while the lookup decodes to the chat completion id, so
+        # the session query has to match either stored form.
+        candidate_request_ids: Final = list(dict.fromkeys((previous_response_id, decoded_id)))
         if prisma_client is None:
             return []
 
@@ -301,7 +305,7 @@ class ResponsesSessionHandler:
             WITH matching_session AS (
                 SELECT session_id
                 FROM "LiteLLM_SpendLogs"
-                WHERE request_id = $1
+                WHERE request_id = ANY($1::text[])
             )
             SELECT *
             FROM "LiteLLM_SpendLogs"
@@ -313,13 +317,13 @@ class ResponsesSessionHandler:
         for attempt in range(max_attempts):
             if attempt:
                 await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
-            if spend_logs := await prisma_client.db.query_raw(query, response_id):
+            if spend_logs := await prisma_client.db.query_raw(query, candidate_request_ids):
                 verbose_proxy_logger.debug(
                     "Found the following spend logs for previous response id %s: %s",
-                    response_id,
+                    candidate_request_ids,
                     json.dumps(spend_logs, indent=4, default=str),
                 )
                 return spend_logs
 
-        verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
+        verbose_proxy_logger.debug("Found no spend logs for previous response id %s", candidate_request_ids)
         return []
