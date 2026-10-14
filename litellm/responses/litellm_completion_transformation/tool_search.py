@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
-from typing import Final, Literal, TypeAlias, cast
+from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
@@ -37,6 +37,7 @@ ANTHROPIC_TOOL_SEARCH_TOOL_NAME: Final = "tool_search_tool_regex"
 ToolSearchCallStatus: TypeAlias = Literal["in_progress", "completed", "incomplete"]
 
 _ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_TOOL_MAPPING_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class _ToolSearchFields(LiteLLMBaseModel):
@@ -62,14 +63,22 @@ def anthropic_tool_search_chat_tool() -> AnthropicToolSearchToolRegex:
     return AnthropicToolSearchToolRegex(type=ANTHROPIC_TOOL_SEARCH_TOOL_TYPE, name=ANTHROPIC_TOOL_SEARCH_TOOL_NAME)
 
 
+def _tool_type(tool: object) -> str | None:
+    try:
+        tool_mapping: Final = _TOOL_MAPPING_ADAPTER.validate_python(tool)
+    except ValidationError:
+        return None
+    tool_type: Final = tool_mapping.get("type")
+    return tool_type if isinstance(tool_type, str) else None
+
+
 def is_anthropic_tool_search_chat_tool(tool: object) -> bool:
-    return (
-        isinstance(tool, Mapping) and cast(Mapping[str, object], tool).get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
-    )
+    tool_type: Final = _tool_type(tool)
+    return tool_type in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
 def _is_openai_tool_search_tool(tool: object) -> bool:
-    return isinstance(tool, Mapping) and cast(Mapping[str, object], tool).get("type") == "tool_search"
+    return _tool_type(tool) == "tool_search"
 
 
 def tools_with_anthropic_tool_search_mapped(
