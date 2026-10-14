@@ -1,13 +1,20 @@
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_http::request::string_headers as shared_string_headers;
 pub(super) use litellm_http::request::truncate_error_body;
+use litellm_llms::tencent::messages::transformation::TENCENT_MESSAGES_CONFIG;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+    edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
+    minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
+};
+use litellm_llms::{
+    bedrock::claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
+    bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
 
@@ -34,14 +41,25 @@ impl MessagesProvider {
 /// Python's `get_provider_anthropic_messages_config`: Vertex AI serves only its Claude
 /// partner models on this route.
 pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<MessagesProvider> {
+    use litellm_llms::openrouter::messages::transformation::OPENROUTER_MESSAGES_CONFIG;
+
     let config: &'static dyn BaseMessagesConfig = match provider {
+        LlmProviders::Tencent => &TENCENT_MESSAGES_CONFIG,
         LlmProviders::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::Bedrock if model.starts_with("claude_platform/") => {
+            &BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+        }
+        LlmProviders::Bedrock if model.starts_with("mantle/") => &BEDROCK_MANTLE_MESSAGES_CONFIG,
         LlmProviders::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::BedrockMantle => &BEDROCK_MANTLE_MESSAGES_CONFIG,
         LlmProviders::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::Edenai => &EDENAI_MESSAGES_CONFIG,
+        LlmProviders::Minimax => &MINIMAX_MESSAGES_CONFIG,
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             &VERTEX_ANTHROPIC_MESSAGES_CONFIG
         }
+        LlmProviders::Openrouter => &OPENROUTER_MESSAGES_CONFIG,
         _ => return None,
     };
     Some(MessagesProvider { provider, config })
@@ -64,10 +82,13 @@ mod tests {
     use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 
     #[rstest]
+    #[case::tencent("tencent")]
     #[case::anthropic("anthropic")]
     #[case::azure_ai("azure_ai")]
     #[case::bedrock("bedrock")]
     #[case::deepseek("deepseek")]
+    #[case::edenai("edenai")]
+    #[case::minimax("minimax")]
     #[case::vertex_ai("vertex_ai")]
     fn provider_keeps_its_python_name(#[case] name: &str) {
         let provider =

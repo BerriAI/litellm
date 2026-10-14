@@ -884,19 +884,18 @@ class _FakeLedger:
         (
             "postgresql://pool/db?pgbouncer=true",
             "postgresql://writer/db",
-            "postgresql://writer/db?schema=public&options=-c+lock_timeout%3D10000",
+            "postgresql://writer/db?schema=public",
         ),
         (
             "postgresql://pool/db?schema=tenant%20one&pgbouncer=true",
             "postgresql://writer/db?sslmode=require&schema=wrong",
-            "postgresql://writer/db?sslmode=require&schema=tenant+one&options=-c+lock_timeout%3D10000",
+            "postgresql://writer/db?sslmode=require&schema=tenant+one",
         ),
     ),
 )
-def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(monkeypatch, pooled, direct, expected):
+def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(pooled, direct, expected):
     from litellm_proxy_extras.migration_lock import migration_environment
 
-    monkeypatch.delenv("LITELLM_MIGRATION_DDL_LOCK_TIMEOUT", raising=False)
     environment = {"DATABASE_URL": pooled, "PRISMA_OFFLINE_MODE": "true"}
     configured = {**environment, **({"DIRECT_URL": direct} if direct else {})}
     migrated = migration_environment(configured)
@@ -904,106 +903,6 @@ def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(monkeyp
     assert migrated["DATABASE_URL"] == expected
     assert migrated["PRISMA_OFFLINE_MODE"] == "true"
     assert configured["DATABASE_URL"] == pooled
-
-
-@pytest.mark.parametrize(
-    "database_url,direct_url,ddl_timeout,expected_pairs",
-    (
-        (
-            "postgresql://writer/db",
-            None,
-            None,
-            [("options", "-c lock_timeout=10000")],
-        ),
-        (
-            "postgresql://pool/db?schema=tenant&pgbouncer=true",
-            "postgresql://writer/db?options=-c%20statement_timeout%3D0&schema=wrong",
-            None,
-            [("schema", "tenant"), ("options", "-c statement_timeout=0 -c lock_timeout=10000")],
-        ),
-        (
-            "postgresql://pool/db",
-            "postgresql://writer/db?options=-c%20lock_timeout%3D2500",
-            None,
-            [("options", "-c lock_timeout=2500"), ("schema", "public")],
-        ),
-        (
-            "postgresql://pool/db",
-            "postgresql://writer/db?options=-clock_timeout%3D2500",
-            None,
-            [("options", "-clock_timeout=2500"), ("schema", "public")],
-        ),
-        (
-            "postgresql://pool/db",
-            "postgresql://writer/db?options=--lock_timeout%3D0",
-            None,
-            [("options", "--lock_timeout=0"), ("schema", "public")],
-        ),
-        (
-            "postgresql://pool/db",
-            "postgresql://writer/db?options=-c%20deadlock_timeout%3D1000",
-            None,
-            [("schema", "public"), ("options", "-c deadlock_timeout=1000 -c lock_timeout=10000")],
-        ),
-        (
-            "postgresql://pool/db",
-            "postgresql://writer/db?pgbouncer=true",
-            None,
-            [("pgbouncer", "true"), ("schema", "public")],
-        ),
-        (
-            "postgresql://writer/db",
-            None,
-            "2.5",
-            [("options", "-c lock_timeout=2500")],
-        ),
-        (
-            "postgresql://writer/db",
-            None,
-            "abc",
-            [("options", "-c lock_timeout=10000")],
-        ),
-    ),
-    ids=(
-        "plain-database-url",
-        "direct-url-with-an-existing-options-value",
-        "pinned-dash-c-lock-timeout",
-        "pinned-dash-clock-timeout",
-        "pinned-double-dash-lock-timeout-zero-disables",
-        "unrelated-deadlock-timeout-is-not-a-pin",
-        "pooled-direct-url",
-        "timeout-override",
-        "invalid-override-falls-back",
-    ),
-)
-def test_migration_environment_pins_a_ddl_lock_timeout(
-    monkeypatch, database_url, direct_url, ddl_timeout, expected_pairs
-):
-    from urllib.parse import parse_qsl, urlsplit
-
-    from litellm_proxy_extras.migration_lock import migration_environment
-
-    if ddl_timeout is None:
-        monkeypatch.delenv("LITELLM_MIGRATION_DDL_LOCK_TIMEOUT", raising=False)
-    else:
-        monkeypatch.setenv("LITELLM_MIGRATION_DDL_LOCK_TIMEOUT", ddl_timeout)
-    environment = {"DATABASE_URL": database_url, **({"DIRECT_URL": direct_url} if direct_url else {})}
-    snapshot = dict(environment)
-
-    migrated = migration_environment(environment)
-
-    assert parse_qsl(urlsplit(migrated["DATABASE_URL"]).query) == expected_pairs
-    assert environment == snapshot
-
-
-def test_migration_environment_lock_timeout_encodes_the_options_value(monkeypatch):
-    from litellm_proxy_extras.migration_lock import migration_environment
-
-    monkeypatch.delenv("LITELLM_MIGRATION_DDL_LOCK_TIMEOUT", raising=False)
-
-    migrated = migration_environment({"DATABASE_URL": "postgresql://writer/db"})
-
-    assert migrated["DATABASE_URL"] == "postgresql://writer/db?options=-c+lock_timeout%3D10000"
 
 
 class _MigrateDeployHarness:
@@ -1019,12 +918,15 @@ class _MigrateDeployHarness:
         repeat_last=False,
         confirmed_migrations=(),
         ledger: "_FakeLedger | None" = None,
+        database_url: str = "postgresql://u:p@localhost:9/x",
+        prisma_env: dict[str, str] | None = None,
     ):
         import subprocess as subprocess_module
 
         import litellm_proxy_extras.utils as utils_module
 
         self.deploy_calls = []
+        self.deploy_environments = []
         self.resolved = []
         self.rolled_back = []
         self.sleeps = []
@@ -1036,12 +938,14 @@ class _MigrateDeployHarness:
 
         if ledger is None:
             monkeypatch.delenv("DATABASE_URL", raising=False)
+            monkeypatch.delenv("DIRECT_URL", raising=False)
         else:
-            monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+            monkeypatch.setenv("DATABASE_URL", database_url)
+            monkeypatch.delenv("DIRECT_URL", raising=False)
             monkeypatch.setattr("psycopg.connect", ledger.connect)
         monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
-        monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: {})
+        monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: prisma_env or {})
         monkeypatch.setattr(utils_module.time, "sleep", self.sleeps.append)
 
         self.baseline_succeeds = True
@@ -1061,6 +965,7 @@ class _MigrateDeployHarness:
     def _fake_run(self, cmd, **kwargs):
         if cmd[1:] == ["migrate", "deploy"]:
             self.deploy_calls.append(cmd)
+            self.deploy_environments.append(kwargs["env"].get("DATABASE_URL", ""))
             outcome = self._next_outcome()
             if outcome == "ok":
                 return _FakeCompleted()
@@ -1168,6 +1073,26 @@ class TestConcurrentP3009Recovery:
 
 
 class TestMigrateDeployAttemptAccounting:
+    def test_migrate_deploy_does_not_add_startup_options_to_a_pooled_url(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from urllib.parse import parse_qsl, urlsplit
+
+        pooled_url: Final = "postgresql://pool/db?schema=tenant&connection_limit=5"
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            ["ok"],
+            ledger=_FakeLedger(at_error=(), after_peer=()),
+            database_url=pooled_url,
+            prisma_env={"DATABASE_URL": pooled_url},
+        )
+
+        assert harness.run() is True
+        received_url: Final = harness.deploy_environments[0]
+        assert received_url == pooled_url
+        assert all(key != "options" for key, _ in parse_qsl(urlsplit(received_url).query))
+
     def test_a_push_created_database_finishes_bootstrapping(self, monkeypatch, tmp_path):
         harness = _MigrateDeployHarness(
             monkeypatch,
@@ -1282,7 +1207,7 @@ class TestMigrateDeployAttemptAccounting:
 
 class TestMigrationLockTimeoutRecovery:
     """A migration whose DDL wait Postgres cancelled (55P03, from the lock_timeout the
-    migration URL now pins) is retryable: the half-written ledger row is rolled back and
+    migration SQL sets locally) is retryable: the half-written ledger row is rolled back and
     the next attempt reruns the migration, priced like a deadlock retry."""
 
     def test_a_lock_timed_out_migration_rolls_back_and_retries(self, monkeypatch, tmp_path):
@@ -1305,7 +1230,7 @@ class TestMigrationLockTimeoutRecovery:
             repeat_last=True,
         )
 
-        with pytest.raises(RuntimeError, match="LITELLM_MIGRATION_DDL_LOCK_TIMEOUT"):
+        with pytest.raises(RuntimeError, match="SET LOCAL lock_timeout"):
             harness.run()
         assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
         assert harness.rolled_back == [_LOCK_TIMEOUT_MIGRATION] * _ATTEMPT_BUDGET
@@ -2150,3 +2075,11 @@ def test_redact_command_error_masks_password_in_tuple_url_argument(
     assert message.startswith("Command '('")
     assert password not in message
     assert "postgresql://REDACTED@db:5432/litellm" in message
+
+
+def test_repair_survives_an_unreachable_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:9/x?schema=whatever")
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes() is False
+

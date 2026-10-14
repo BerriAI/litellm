@@ -11,6 +11,8 @@ interface ModelGroupAliasSettingsProps {
   accessToken: string;
   initialModelGroupAlias?: Record<string, ModelGroupAliasValue>;
   onAliasUpdate?: (updatedAlias: { [key: string]: string }) => void;
+  managedByConfig?: boolean;
+  ownershipLoading?: boolean;
 }
 
 interface AliasItem {
@@ -23,10 +25,13 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   accessToken,
   initialModelGroupAlias = {},
   onAliasUpdate,
+  managedByConfig = false,
+  ownershipLoading = false,
 }) => {
   const [aliases, setAliases] = useState<AliasItem[]>([]);
   const [newAlias, setNewAlias] = useState({ aliasName: "", targetModelGroup: "" });
   const [editingAlias, setEditingAlias] = useState<AliasItem | null>(null);
+  const writesDisabled = managedByConfig || ownershipLoading;
   const [isExpanded, setIsExpanded] = useState(true);
 
   useEffect(() => {
@@ -73,6 +78,8 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   };
 
   const handleAddAlias = async () => {
+    if (writesDisabled) return;
+
     if (!newAlias.aliasName || !newAlias.targetModelGroup) {
       toast.fromError("Please provide both alias name and target model group");
       return;
@@ -100,10 +107,13 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   };
 
   const handleEditAlias = (alias: AliasItem) => {
+    if (writesDisabled) return;
+
     setEditingAlias({ ...alias });
   };
 
   const handleUpdateAlias = async () => {
+    if (writesDisabled) return;
     if (!editingAlias) return;
 
     if (!editingAlias.aliasName || !editingAlias.targetModelGroup) {
@@ -131,6 +141,8 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   };
 
   const deleteAlias = async (aliasId: string) => {
+    if (writesDisabled) return;
+
     const updatedAliases = aliases.filter((alias) => alias.id !== aliasId);
 
     if (await saveAliasesToBackend(updatedAliases)) {
@@ -170,6 +182,11 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
       {isExpanded && (
         <div className="mt-4">
           <div className="mb-6">
+            {managedByConfig && (
+              <p className="mb-2 text-sm text-muted-foreground">
+                These aliases are defined in config.yaml and are read-only here. Edit the config file to change them.
+              </p>
+            )}
             <p className="text-sm font-medium text-foreground mb-2">Add New Alias</p>
             <div className="grid grid-cols-3 gap-4">
               <div>
@@ -177,6 +194,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                 <input
                   type="text"
                   value={newAlias.aliasName}
+                  disabled={writesDisabled}
                   onChange={(e) =>
                     setNewAlias({
                       ...newAlias,
@@ -184,7 +202,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                     })
                   }
                   placeholder="e.g., gpt-4o"
-                  className="w-full px-3 py-2 border border-border rounded-md text-sm"
+                  className="w-full px-3 py-2 border border-border rounded-md text-sm disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
                 />
               </div>
               <div>
@@ -192,6 +210,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                 <input
                   type="text"
                   value={newAlias.targetModelGroup}
+                  disabled={writesDisabled}
                   onChange={(e) =>
                     setNewAlias({
                       ...newAlias,
@@ -199,14 +218,14 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                     })
                   }
                   placeholder="e.g., gpt-4o-mini-openai"
-                  className="w-full px-3 py-2 border border-border rounded-md text-sm"
+                  className="w-full px-3 py-2 border border-border rounded-md text-sm disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed"
                 />
               </div>
               <div className="flex items-end">
                 <button
                   onClick={handleAddAlias}
-                  disabled={!newAlias.aliasName || !newAlias.targetModelGroup}
-                  className={`flex items-center px-4 py-2 rounded-md text-sm ${!newAlias.aliasName || !newAlias.targetModelGroup ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-success text-success-foreground hover:bg-success/80"}`}
+                  disabled={writesDisabled || !newAlias.aliasName || !newAlias.targetModelGroup}
+                  className={`flex items-center px-4 py-2 rounded-md text-sm ${writesDisabled || !newAlias.aliasName || !newAlias.targetModelGroup ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-success text-success-foreground hover:bg-success/80"}`}
                 >
                   <PlusCircleIcon className="w-4 h-4 mr-1" />
                   Add Alias
@@ -229,7 +248,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                 <TableBody>
                   {aliases.map((alias) => (
                     <TableRow key={alias.id} className="h-8">
-                      {editingAlias && editingAlias.id === alias.id ? (
+                      {editingAlias && !writesDisabled && editingAlias.id === alias.id ? (
                         <>
                           <TableCell className="py-0.5">
                             <input
@@ -286,13 +305,17 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                             <div className="flex space-x-2">
                               <button
                                 onClick={() => handleEditAlias(alias)}
-                                className="text-xs bg-info/10 text-info px-2 py-1 rounded-sm hover:bg-info/15"
+                                disabled={writesDisabled}
+                                aria-label={`Edit alias ${alias.aliasName}`}
+                                className={`text-xs px-2 py-1 rounded-sm ${writesDisabled ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-info/10 text-info hover:bg-info/15"}`}
                               >
                                 <PencilIcon className="w-3 h-3" />
                               </button>
                               <button
                                 onClick={() => deleteAlias(alias.id)}
-                                className="text-xs bg-destructive/10 text-destructive px-2 py-1 rounded-sm hover:bg-destructive/15"
+                                disabled={writesDisabled}
+                                aria-label={`Delete alias ${alias.aliasName}`}
+                                className={`text-xs px-2 py-1 rounded-sm ${writesDisabled ? "bg-border text-muted-foreground cursor-not-allowed" : "bg-destructive/10 text-destructive hover:bg-destructive/15"}`}
                               >
                                 <TrashIcon className="w-3 h-3" />
                               </button>

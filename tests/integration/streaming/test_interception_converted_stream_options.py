@@ -1,6 +1,5 @@
 import asyncio
 import json
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
@@ -882,18 +881,21 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_restreaming_with_usag
         held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, owned.wire.url) for pid in workers})
         assert sum(held_by.values()) == 20, held_by
         victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-        victim: Final = psutil.Process(victim_pid)
-        victim.suspend()
-        victim.send_signal(signal.SIGKILL)
-        release.set()
-        served: Final = await burst
-        assert held_by[survivor_pid] >= 10, held_by
-        assert len(served) == held_by[survivor_pid], (held_by, len(served))
-        identities: Final = frozenset(
-            _assert_restreamed(item.stream, iv.answer(_BURST_DEPLOYMENT), usage=iv.FOLLOWUP_USAGE) for item in served
-        )
-        (follow_up,) = await _burst(owned.base_url, owned.gateway.key, (_chat_request(deployment),))
-        recovered: Final = _assert_restreamed(follow_up.stream, iv.answer(_BURST_DEPLOYMENT), usage=iv.FOLLOWUP_USAGE)
+        with owned.proxy.replacing_worker(victim_pid) as kill:
+            kill.freeze()
+            await asyncio.to_thread(kill)
+            release.set()
+            served: Final = await burst
+            assert held_by[survivor_pid] >= 10, held_by
+            assert len(served) == held_by[survivor_pid], (held_by, len(served))
+            identities: Final = frozenset(
+                _assert_restreamed(item.stream, iv.answer(_BURST_DEPLOYMENT), usage=iv.FOLLOWUP_USAGE)
+                for item in served
+            )
+            (follow_up,) = await _burst(owned.base_url, owned.gateway.key, (_chat_request(deployment),))
+            recovered: Final = _assert_restreamed(
+                follow_up.stream, iv.answer(_BURST_DEPLOYMENT), usage=iv.FOLLOWUP_USAGE
+            )
         rows: Final = _spend_rows(_BURST_MODEL, len(identities) + 1)
         landed: Final = tuple(string_value(row["request_id"]) for row in rows if row["status"] == "success")
         assert sorted(landed) == sorted((*identities, recovered)), rows

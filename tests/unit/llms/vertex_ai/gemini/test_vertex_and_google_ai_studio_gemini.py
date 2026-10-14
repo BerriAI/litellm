@@ -2,7 +2,7 @@ import asyncio, importlib, os, uuid
 import json
 import re
 from copy import deepcopy
-from typing import Final, List, cast, get_args
+from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -812,6 +812,102 @@ def test_vertex_ai_url_context_tool_use_tokens_billed_as_input_tokens():
     assert usage.total_tokens - usage.prompt_tokens - usage.completion_tokens == 0
 
 
+def test_url_context_tool_use_tokens_are_priced_as_input():
+    """
+    URL context tool-use tokens are billed at the input token rate, so the input cost must
+    cover every token counted in usage.prompt_tokens, not just the reported text modality.
+    See https://github.com/BerriAI/litellm/issues/45991
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "urlContextMetadata": {"urlMetadata": []},
+                "groundingMetadata": {
+                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                },
+            }
+        ],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=23,
+            candidatesTokenCount=10,
+            toolUsePromptTokenCount=14115,
+            totalTokenCount=14148,
+            promptTokensDetails=[{"modality": "TEXT", "tokenCount": 23}],
+            toolUsePromptTokensDetails=[{"modality": "TEXT", "tokenCount": 14115}],
+        ),
+    }
+
+    usage = v.calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 23 + 14115
+    assert usage.prompt_tokens_details.text_tokens == usage.prompt_tokens
+    input_rate: Final = litellm.get_model_info("gemini-2.5-flash")["input_cost_per_token"]
+    prompt_cost, _ = litellm.cost_per_token(model="gemini/gemini-2.5-flash", usage_object=usage)
+    assert prompt_cost == usage.prompt_tokens * input_rate
+
+
+def test_search_grounding_tool_use_tokens_stay_unpriced():
+    """
+    Grounding with Google Search tokens are not billed at the input token rate (a separate
+    per-query search fee applies), so neither prompt_tokens nor the input cost may grow with
+    toolUsePromptTokenCount.
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [{"groundingMetadata": {"webSearchQueries": ["latest nobel physics"]}}],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=23,
+            candidatesTokenCount=10,
+            toolUsePromptTokenCount=14115,
+            totalTokenCount=14148,
+            promptTokensDetails=[{"modality": "TEXT", "tokenCount": 23}],
+            toolUsePromptTokensDetails=[{"modality": "TEXT", "tokenCount": 14115}],
+        ),
+    }
+
+    usage = v.calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 23
+    assert usage.prompt_tokens_details.text_tokens == 23
+    input_rate: Final = litellm.get_model_info("gemini-2.5-flash")["input_cost_per_token"]
+    prompt_cost, _ = litellm.cost_per_token(model="gemini/gemini-2.5-flash", usage_object=usage)
+    assert prompt_cost == 23 * input_rate
+
+
+def test_missing_prompt_tokens_details_still_prices_the_full_prompt():
+    """
+    Gemini omits promptTokensDetails on some tool-use responses, leaving text_tokens unset.
+    That None must be preserved so input billing falls back to the full prompt_tokens, and
+    must not be turned into a concrete count that prices only part of the prompt.
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "urlContextMetadata": {"urlMetadata": []},
+                "groundingMetadata": {
+                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                },
+            }
+        ],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=23,
+            candidatesTokenCount=10,
+            toolUsePromptTokenCount=14115,
+            totalTokenCount=14148,
+        ),
+    }
+
+    usage = v.calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 23 + 14115
+    assert usage.prompt_tokens_details.text_tokens is None
+    input_rate: Final = litellm.get_model_info("gemini-2.5-flash")["input_cost_per_token"]
+    prompt_cost, _ = litellm.cost_per_token(model="gemini/gemini-2.5-flash", usage_object=usage)
+    assert prompt_cost == usage.prompt_tokens * input_rate
+
+
 def test_streaming_chunk_includes_reasoning_tokens():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
@@ -1390,7 +1486,7 @@ def test_vertex_ai_streaming_usage_calculation():
         iterator.chunk_parser(chunk)
 
         # Verify calculate_usage was called with correct parameters
-        mock_calculate_usage.assert_called_once_with(completion_response=chunk)
+        mock_calculate_usage.assert_called_once_with(completion_response=chunk, cache_creation_tokens=0)
 
     # Test non-streaming response parsing
     with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
@@ -1416,6 +1512,7 @@ def test_vertex_ai_streaming_usage_calculation():
         # Verify _calculate_usage was called with correct parameters
         mock_calculate_usage.assert_called_once_with(
             completion_response=completion_response,
+            cache_creation_tokens=0,
         )
 
 
@@ -3013,7 +3110,7 @@ def test_is_gemini_3_or_newer():
     ],
 )
 def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
-    """Test that reasoning_effort maps to thinkingLevel and default temperature=1.0"""
+    """Test that reasoning_effort maps to thinkingLevel and no temperature is injected"""
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
@@ -3038,7 +3135,7 @@ def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
             "thinkingLevel": effort,
             "includeThoughts": True,
         }
-        assert mapped["temperature"] == 1.0
+        assert "temperature" not in mapped
         assert "thinkingBudget" not in mapped["thinkingConfig"]
 
 
@@ -3473,28 +3570,58 @@ def test_reasoning_effort_dict_format_gemini_3():
     assert "thinkingConfig" not in result
 
 
-def test_temperature_default_for_gemini_3():
-    """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
+@pytest.mark.parametrize("model", ["gemini-3-pro-preview", "gemini-flash-latest"])
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_gemini_3_omits_temperature_when_not_specified(model: str, config_cls: Literal["vertex", "studio"]) -> None:
+    """Gemini 3+ requests must not gain a temperature the caller did not send"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    v = VertexGeminiConfig()
-    model = "gemini-3-pro-preview"
-    optional_params = {}
-
-    # No temperature specified
-    non_default_params = {}
-    result = v.map_openai_params(
-        non_default_params=non_default_params,
-        optional_params=optional_params,
+    cfg: Final = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+    result: Final = cfg.map_openai_params(
+        non_default_params={},
+        optional_params={},
         model=model,
         drop_params=False,
     )
 
-    # Should default to 1.0
-    assert "temperature" in result
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
+
+
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_gemini_3_explicit_temperature_is_still_forwarded(config_cls: Literal["vertex", "studio"]) -> None:
+    """An explicitly supplied temperature is still forwarded"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    cfg: Final = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+    result: Final = cfg.map_openai_params(
+        non_default_params={"temperature": 0.4},
+        optional_params={},
+        model="gemini-3-pro-preview",
+        drop_params=False,
+    )
+
+    assert result["temperature"] == 0.4
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_get_optional_params_gemini_3_has_no_default_temperature(
+    custom_llm_provider: Literal["gemini", "vertex_ai"],
+) -> None:
+    """Neither the gemini nor the vertex_ai route injects a temperature"""
+    from litellm.utils import get_optional_params
+
+    optional_params: Final = get_optional_params(
+        model="gemini-3-pro-preview",
+        custom_llm_provider=custom_llm_provider,
+        reasoning_effort="medium",
+    )
+
+    assert "temperature" not in optional_params
+    assert optional_params["thinkingConfig"]["thinkingLevel"] == "medium"
 
 
 def test_media_resolution_from_detail_parameter():
@@ -3744,8 +3871,7 @@ def test_gemini_3_image_models_no_thinking_config():
 
     # Should NOT have thinkingConfig automatically added
     assert "thinkingConfig" not in result
-    # But should still get temperature=1.0 for Gemini 3
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_3_text_models_get_thinking_config():
@@ -3773,7 +3899,7 @@ def test_gemini_3_text_models_get_thinking_config():
 
     # Should NOT have thinkingConfig automatically added when user provides no reasoning_effort
     assert "thinkingConfig" not in result
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_image_models_excluded_from_thinking():
@@ -9389,6 +9515,39 @@ def test_vertex_ai_gemini_audio_ogg():
     print(response)
 
 
+def test_vertex_ai_cache_creation_kwarg_cannot_change_usage_or_cost() -> None:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+    }
+    client = HTTPHandler()
+    httpx_mock = MagicMock(return_value=mock_response)
+    with (
+        patch.object(client, "post", new=httpx_mock),
+        patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")),
+    ):
+        response = litellm.completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            vertex_project="fake-project",
+            vertex_location="us-central1",
+            vertex_ai_cache_creation_input_tokens=-1000000,
+            client=client,
+        )
+
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.cache_creation_input_tokens is None
+    assert response._hidden_params["response_cost"] > 0
+
+
 def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
     print("loading vertex ai credentials")
@@ -9473,3 +9632,55 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
         drop_params=False,
     )
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+_CACHED_PROMPT_USAGE_METADATA = {
+    "promptTokenCount": 1536,
+    "candidatesTokenCount": 40,
+    "totalTokenCount": 1576,
+    "cachedContentTokenCount": 1280,
+    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1536}],
+}
+
+
+def test_calculate_usage_bills_context_cache_creation_tokens_once():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    usage = VertexGeminiConfig._calculate_usage(
+        {"candidates": [], "usageMetadata": _CACHED_PROMPT_USAGE_METADATA}, cache_creation_tokens=1280
+    )
+
+    assert usage.prompt_tokens == 1536 + 1280
+    assert usage.total_tokens == 1576 + 1280
+    assert usage.cache_creation_input_tokens == 1280
+    assert usage.cache_read_input_tokens == 1280
+    assert usage.prompt_tokens_details.text_tokens == 256
+    assert usage.prompt_tokens_details.cache_creation_tokens == 1280
+
+
+def test_calculate_usage_without_cache_creation_leaves_usage_unchanged():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    usage = VertexGeminiConfig._calculate_usage({"candidates": [], "usageMetadata": _CACHED_PROMPT_USAGE_METADATA})
+
+    assert usage.prompt_tokens == 1536
+    assert usage.total_tokens == 1576
+    assert usage.cache_creation_input_tokens is None
+
+
+def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+    logging_obj = MagicMock()
+    logging_obj.vertex_ai_cache_creation_input_tokens = 1280
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=logging_obj)
+
+    chunk = iterator.chunk_parser(
+        {
+            "candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP", "index": 0}],
+            "usageMetadata": _CACHED_PROMPT_USAGE_METADATA,
+        }
+    )
+
+    assert chunk.usage.prompt_tokens == 1536 + 1280
+    assert chunk.usage.cache_creation_input_tokens == 1280

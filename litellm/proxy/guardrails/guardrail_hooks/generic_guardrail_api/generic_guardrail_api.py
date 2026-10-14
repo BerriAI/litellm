@@ -8,7 +8,7 @@
 import fnmatch
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
 
@@ -194,7 +194,7 @@ class GenericGuardrailAPI(CustomGuardrail):
 
     def __init__(
         self,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
         additional_provider_specific_params: Mapping[str, object] | None = None,
