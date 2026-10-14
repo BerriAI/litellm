@@ -318,6 +318,9 @@ class LiteLLMRoutes(enum.Enum):
         "/realtime",
         "/v1/realtime",
         "/openai/v1/realtime",
+        "/live/sessions",
+        "/v1/live/sessions",
+        "/openai/v1/live/sessions",
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
@@ -2796,7 +2799,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     enforce_fallback_model_access: bool | None = Field(
         None,
-        description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.",
+        description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is True. Set False to disable fallback model access enforcement.",
     )
     disable_fallbacks_on_per_model_rate_limits: bool | None = Field(
         None,

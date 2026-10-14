@@ -1425,6 +1425,25 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
     assert control["key"] == "eu.amazon.nova-pro-v1:0"
 
 
+@pytest.mark.parametrize("route", ["bedrock/", "bedrock/converse/", "bedrock/invoke/", "bedrock/eu-west-1/"])
+def test_get_model_info_bedrock_inference_profile_arn_keeps_regional_row(local_model_cost_map, route):
+    regional = litellm.model_cost["eu.amazon.nova-pro-v1:0"]
+    base = litellm.model_cost["amazon.nova-pro-v1:0"]
+    assert regional["input_cost_per_token"] > base["input_cost_per_token"]
+    arn_prefix = "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/"
+
+    info = litellm.get_model_info(model=f"{route}{arn_prefix}eu.amazon.nova-pro-v1:0")
+    assert info["key"] == "eu.amazon.nova-pro-v1:0"
+    assert info["input_cost_per_token"] == regional["input_cost_per_token"]
+    assert info["output_cost_per_token"] == regional["output_cost_per_token"]
+
+    bare = litellm.get_model_info(model=f"{route}{arn_prefix}amazon.nova-pro-v1:0")
+    assert bare["key"] == "amazon.nova-pro-v1:0"
+    assert bare["input_cost_per_token"] == base["input_cost_per_token"]
+
+
+
+
 @pytest.mark.parametrize(
     "bare_key",
     [
@@ -6245,25 +6264,30 @@ async def test_wrapper_async_preserves_original_exception_when_hook_await_is_can
     the caller - not get replaced by CancelledError/TimeoutError from the hook's own
     await getting cancelled."""
 
+    hook_entered: Final = asyncio.Event()
+    hook_released: Final = asyncio.Event()
+
     class SlowLogger(CustomLogger):
         async def async_post_call_failure_deployment_hook(
             self, request_data, exception, call_type, fallback_depth=None
         ):
-            await asyncio.sleep(5)
+            hook_entered.set()
+            await hook_released.wait()
 
     monkeypatch.setattr(litellm, "callbacks", [SlowLogger()])
 
-    with pytest.raises(litellm.AuthenticationError):
-        await asyncio.wait_for(
-            litellm.acompletion(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": "hi"}],
-                mock_response=litellm.AuthenticationError(
-                    message="bad key", llm_provider="openai", model="gpt-4o-mini"
-                ),
-            ),
-            timeout=0.2,
+    call: Final = asyncio.create_task(
+        litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
         )
+    )
+    assert await asyncio.wait_for(hook_entered.wait(), timeout=5)
+    call.cancel()
+
+    with pytest.raises(litellm.AuthenticationError):
+        await call
 
 
 @pytest.mark.asyncio

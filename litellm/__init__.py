@@ -170,6 +170,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "focus",
     "mavvrik",
     "vantage",
+    "ternary",
     "posthog",
     "levo",
     "compression_interception",
@@ -440,7 +441,6 @@ autorouter_presets_url: str = os.getenv(
     "LITELLM_AUTOROUTER_PRESETS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/public_endpoints/autorouter_presets.json",
 )
-whats_new_url: str | None = os.getenv("LITELLM_WHATS_NEW_URL")
 suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
