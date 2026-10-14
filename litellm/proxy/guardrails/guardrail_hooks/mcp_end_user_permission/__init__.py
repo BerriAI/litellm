@@ -15,7 +15,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     # We check the raw guardrail dict because LitellmParams normalizes None → False,
     # making it impossible to distinguish "not set" from "explicitly false" via litellm_params.
     _raw_default_on: Final = cast(dict[str, Any], guardrail).get("litellm_params", {}).get("default_on")
-    _default_on: Final = False if _raw_default_on is False else True
+    _default_on: Final = _raw_default_on is not False
 
     _callback: Final = MCPEndUserPermissionGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),

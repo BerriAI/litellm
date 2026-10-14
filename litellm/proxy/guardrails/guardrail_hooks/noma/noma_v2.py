@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
+from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
@@ -61,6 +62,7 @@ class NomaV2Guardrail(CustomGuardrail):
         application_id: str | None = None,
         monitor_mode: bool | None = None,
         block_failures: bool | None = None,
+        gateway_name: str | None = None,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -68,6 +70,9 @@ class NomaV2Guardrail(CustomGuardrail):
         self.api_key = api_key or os.environ.get("NOMA_API_KEY")
         self.api_base = (api_base or os.environ.get("NOMA_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
         self.application_id = application_id or os.environ.get("NOMA_APPLICATION_ID")
+        self.gateway_name = self._get_non_empty_str(gateway_name) or self._get_non_empty_str(
+            os.environ.get("NOMA_GATEWAY_NAME")
+        )
         if monitor_mode is None:
             self.monitor_mode = os.environ.get("NOMA_MONITOR_MODE", "false").lower() == "true"
         else:
@@ -83,7 +88,8 @@ class NomaV2Guardrail(CustomGuardrail):
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
-        super().__init__(**kwargs)
+        base_kwargs: Final[GuardrailBaseInitKwargs] = kwargs
+        super().__init__(**base_kwargs)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -114,7 +120,7 @@ class NomaV2Guardrail(CustomGuardrail):
         return parsed.hostname == _DEFAULT_API_BASE_HOSTNAME
 
     @staticmethod
-    def _get_non_empty_str(value: Any) -> str | None:
+    def _get_non_empty_str(value: object) -> str | None:
         if not isinstance(value, str):
             return None
         stripped: Final = value.strip()
@@ -156,7 +162,7 @@ class NomaV2Guardrail(CustomGuardrail):
                 else model_call_details
             )
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "inputs": inputs,
             "request_data": payload_request_data,
             "input_type": input_type,
@@ -164,6 +170,8 @@ class NomaV2Guardrail(CustomGuardrail):
         }
         if application_id:
             payload["application_id"] = application_id
+        if self.gateway_name:
+            payload["gateway_name"] = self.gateway_name
         return payload
 
     @staticmethod
@@ -212,6 +220,7 @@ class NomaV2Guardrail(CustomGuardrail):
             url=endpoint,
             headers=headers,
             json=sanitized_payload,
+            timeout=self.timeout,
         )
         verbose_proxy_logger.debug(
             "Noma v2 AIDR response: status_code=%s body=%s",
@@ -324,8 +333,9 @@ class NomaV2Guardrail(CustomGuardrail):
 
         except NomaBlockedMessage as e:
             guardrail_status = "guardrail_intervened"
+            blocked_detail: Final[dict[str, object]] = {"error": "blocked"}
             guardrail_json_response = (
-                response_json if isinstance(response_json, dict) else getattr(e, "detail", {"error": "blocked"})
+                response_json if isinstance(response_json, dict) else getattr(e, "detail", blocked_detail)
             )
             raise
         except Exception as e:

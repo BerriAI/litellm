@@ -1,0 +1,38 @@
+[package]
+name = "litellm-token-counter"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["fast", "huggingface", "tiktoken"]
+fast = ["dep:litellm-token-counter-fast"]
+huggingface = ["dep:litellm-token-counter-huggingface"]
+tiktoken = ["dep:litellm-token-counter-tiktoken"]
+
+[dependencies]
+indexmap = { version = "2.14.0", features = ["serde"] }
+itoa = "1.0"
+litellm-token-counter-fast = { workspace = true, optional = true }
+litellm-token-counter-huggingface = { workspace = true, optional = true }
+litellm-token-counter-tiktoken = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+rand.workspace = true
+rstest.workspace = true
+tokenizers.workspace = true
+
+[[bench]]
+name = "token_counter"
+harness = false
+required-features = ["fast"]
+
+[[bench]]
+name = "allocations"
+harness = false
+required-features = ["fast"]

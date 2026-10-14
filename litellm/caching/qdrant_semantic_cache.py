@@ -12,7 +12,8 @@ import ast
 import asyncio
 import json
 import os
-from typing import TYPE_CHECKING, Any, Final, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
 from litellm._logging import print_verbose
@@ -21,8 +22,9 @@ from litellm.constants import (
     QDRANT_VECTOR_SIZE,
     SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS,
 )
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    get_semantic_cache_prompt_from_messages,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -35,8 +37,16 @@ from ._embedding_router import (
 )
 from .base_cache import BaseCache
 
+_WAIT_FOR_INDEXING: Final = MappingProxyType({"wait": "true"})
+
 if TYPE_CHECKING:
     from litellm.router import Router
+
+
+class _QdrantCollectionDetailsResponse(Protocol):
+    """The qdrant `/collections/{name}` response, whose body is kept as an opaque JSON object."""
+
+    def json(self) -> dict[str, object]: ...
 
 
 class QdrantSemanticCache(BaseCache):
@@ -58,8 +68,8 @@ class QdrantSemanticCache(BaseCache):
         embedding_timeout: float | None = None,
     ):
         from litellm.llms.custom_httpx.http_handler import (
-            _get_httpx_client,
             get_async_httpx_client,
+            get_httpx_client,
             httpxSpecialProvider,
         )
         from litellm.secret_managers.main import get_secret_str
@@ -102,7 +112,7 @@ class QdrantSemanticCache(BaseCache):
 
         self.headers = headers
 
-        self.sync_client = _get_httpx_client()
+        self.sync_client = get_httpx_client()
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Caching)
 
         if quantization_config is None:
@@ -115,15 +125,15 @@ class QdrantSemanticCache(BaseCache):
             raise ValueError(f"Error from qdrant checking if /collections exist {collection_exists.text}")
 
         if collection_exists.json()["result"]["exists"]:
-            collection_details = self.sync_client.get(
+            collection_details: _QdrantCollectionDetailsResponse = self.sync_client.get(
                 url=f"{self.qdrant_api_base}/collections/{self.collection_name}",
                 headers=self.headers,
             )
-            self.collection_info = collection_details.json()
+            self.collection_info: dict[str, object] = collection_details.json()
             print_verbose(f"Collection already exists.\nCollection details:{self.collection_info}")
             self._ensure_cache_key_payload_index()
         else:
-            quantization_params: dict[str, Any]
+            quantization_params: dict[str, dict[str, object]]
             if quantization_config is None or quantization_config == "binary":
                 quantization_params = {
                     "binary": {
@@ -214,7 +224,7 @@ class QdrantSemanticCache(BaseCache):
             resolve_embedding_max_input_tokens(self.embedding_max_input_tokens, self.embedding_model, router),
         )
 
-    def _get_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> EmbeddingResponse:
+    def _get_embedding(self, prompt: str, metadata: dict[str, object] | None = None) -> EmbeddingResponse:
         """Embed via the proxy Router when it serves the model, else direct."""
         try:
             from litellm.proxy.proxy_server import llm_model_list, llm_router
@@ -241,7 +251,7 @@ class QdrantSemanticCache(BaseCache):
             num_retries=0,
         )
 
-    async def _get_async_embedding(self, prompt: str, metadata: dict[str, Any] | None = None) -> EmbeddingResponse:
+    async def _get_async_embedding(self, prompt: str, metadata: dict[str, object] | None = None) -> EmbeddingResponse:
         try:
             from litellm.proxy.proxy_server import llm_model_list, llm_router
         except ImportError:
@@ -249,7 +259,7 @@ class QdrantSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
-        embedding_input: Final = self._embedding_input(prompt, router)
+        embedding_input: Final = await asyncify(self._embedding_input)(prompt, router)
         embedding_call: Final = (
             router.aembedding(
                 model=self.embedding_model,
@@ -276,7 +286,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # create an embedding for prompt
         embedding_response: Final = cast(
@@ -306,6 +316,7 @@ class QdrantSemanticCache(BaseCache):
         self.sync_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params=_WAIT_FOR_INDEXING,
             json=data,
         )
 
@@ -314,7 +325,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # convert to embedding
         embedding_response: Final = cast(
@@ -389,7 +400,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
@@ -415,6 +426,7 @@ class QdrantSemanticCache(BaseCache):
         await self.async_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params=_WAIT_FOR_INDEXING,
             json=data,
         )
 
@@ -423,7 +435,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 

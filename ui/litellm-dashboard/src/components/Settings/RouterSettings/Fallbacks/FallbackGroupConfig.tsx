@@ -32,12 +32,8 @@ export function FallbackGroupConfig({
   // Filter available options for fallbacks (exclude primary only, allow already selected to be shown for deselection)
   const availableFallbackOptions = availableModels.filter((m) => m !== group.primaryModel);
 
-  const handlePrimaryChange = (value: string) => {
-    let newFallbacks = [...group.fallbackModels];
-    // Remove from fallbacks if it was there
-    if (newFallbacks.includes(value)) {
-      newFallbacks = newFallbacks.filter((m) => m !== value);
-    }
+  const handlePrimaryChange = (value: string | null) => {
+    const newFallbacks = group.fallbackModels.filter((model) => model !== value);
     onChange({
       ...group,
       primaryModel: value,
@@ -76,7 +72,7 @@ export function FallbackGroupConfig({
         <SearchSelect
           inputId={primaryModelInputId}
           options={availableModels.map((m) => ({ label: m, value: m }))}
-          value={group.primaryModel ?? ""}
+          value={group.primaryModel}
           onValueChange={handlePrimaryChange}
           placeholder="Select primary model"
           emptyText="No models found"

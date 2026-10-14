@@ -12,7 +12,7 @@ import os
 from typing import Final
 
 import litellm
-from litellm.proxy._types import KeyManagementSystem
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 
 def validate_environment():

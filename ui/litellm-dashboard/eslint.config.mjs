@@ -58,6 +58,10 @@ const eslintConfig = [
               message:
                 "@tremor/react is being phased out; build new UI with shadcn/ui primitives instead of adding tremor imports.",
             },
+            {
+              group: ["zod/*"],
+              message: 'Import Zod from "zod"; the dashboard uses Zod 4 only.',
+            },
           ],
         },
       ],
@@ -96,6 +100,11 @@ const eslintConfig = [
     rules: { "local/no-ad-hoc-z-index": ["error", { allowPopupLayer: true }] },
   },
   {
+    files: ["src/components/lens/**/*.tsx"],
+    ignores: ["src/**/*.test.tsx"],
+    rules: { "local/no-arbitrary-design-value": "error" },
+  },
+  {
     files: ["tests/eslint-rules/**/*.{ts,tsx}"],
     rules: { "local/no-noop-hover-variant": "off", "local/no-ad-hoc-z-index": "off" },
   },
@@ -104,10 +113,13 @@ const eslintConfig = [
     plugins: { "testing-library": testingLibrary, "jest-dom": jestDom },
     rules: {
       "testing-library/await-async-queries": "error",
+      "testing-library/no-container": "warn",
+      "testing-library/no-node-access": "warn",
       "testing-library/no-wait-for-multiple-assertions": "error",
       "testing-library/no-wait-for-side-effects": "error",
       "testing-library/prefer-find-by": "error",
       "testing-library/prefer-presence-queries": "error",
+      "testing-library/prefer-screen-queries": "warn",
       "jest-dom/prefer-checked": "error",
       "jest-dom/prefer-empty": "error",
       "jest-dom/prefer-enabled-disabled": "error",

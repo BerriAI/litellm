@@ -2,6 +2,9 @@ import ast
 import os
 
 ALLOWED_FILES = [
+    # Lens data traffic owns one pool per app lifespan, isolated from model traffic and closed on shutdown.
+    "../../litellm/tracing/remote.py",
+    "./litellm/tracing/remote.py",
     # local files
     "../../litellm/__init__.py",
     "../../litellm/llms/custom_httpx/http_handler.py",

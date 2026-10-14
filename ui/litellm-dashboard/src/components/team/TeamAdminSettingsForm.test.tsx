@@ -1,0 +1,196 @@
+import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+
+import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
+
+import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
+
+const renderForm = (
+  editableFields: ReadonlySet<string>,
+  overrides: { isSaving?: boolean; mayRaiseMaxBudget?: boolean } = {},
+) => {
+  const onSave = vi.fn().mockResolvedValue(undefined);
+  const onCancel = vi.fn();
+  renderWithProviders(
+    <TeamAdminSettingsForm
+      initialValues={{
+        tpm_limit: 1000,
+        rpm_limit: 50,
+        max_budget: 20,
+        soft_budget: 15,
+        team_member_budget: 10,
+        team_member_budget_duration: "30d",
+        team_member_tpm_limit: 100,
+        team_member_rpm_limit: 5,
+      }}
+      editableFields={editableFields}
+      mayRaiseMaxBudget={overrides.mayRaiseMaxBudget ?? false}
+      isSaving={overrides.isSaving ?? false}
+      onCancel={onCancel}
+      onSave={onSave}
+    />,
+  );
+  return { onSave, onCancel };
+};
+
+describe("TeamAdminSettingsForm", () => {
+  it("shows the team's current values for every field the proxy lets team admins edit", () => {
+    renderForm(new Set(["tpm_limit", "rpm_limit", "max_budget"]));
+
+    expect(screen.getByLabelText("Tokens per minute Limit (TPM)")).toHaveValue(1000);
+    expect(screen.getByLabelText("Requests per minute Limit (RPM)")).toHaveValue(50);
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveValue(20);
+  });
+
+  it("hides the fields the proxy has not enabled for team admins", () => {
+    renderForm(new Set(["rpm_limit"]));
+
+    expect(screen.getByLabelText("Requests per minute Limit (RPM)")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Tokens per minute Limit (TPM)")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Max Budget (USD)")).not.toBeInTheDocument();
+  });
+
+  it("saves the new TPM limit and nothing else", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(new Set(["tpm_limit"]));
+
+    fireEvent.change(screen.getByLabelText("Tokens per minute Limit (TPM)"), { target: { value: "5000" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ tpm_limit: 5000 }));
+  });
+
+  it("saves a lowered budget and a new RPM limit without resending the unchanged TPM limit", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(new Set(["tpm_limit", "rpm_limit", "max_budget"]));
+
+    fireEvent.change(screen.getByLabelText("Requests per minute Limit (RPM)"), { target: { value: "80" } });
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "12.5" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ rpm_limit: 80, max_budget: 12.5 }));
+  });
+
+  it("saves a cleared TPM limit as no limit", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(new Set(["tpm_limit"]));
+
+    fireEvent.change(screen.getByLabelText("Tokens per minute Limit (TPM)"), { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ tpm_limit: null }));
+  });
+
+  it("keeps Save disabled until the TPM limit differs from the team's", () => {
+    renderForm(new Set(["tpm_limit"]));
+    const tpmInput = screen.getByLabelText("Tokens per minute Limit (TPM)");
+    const save = screen.getByRole("button", { name: /save changes/i });
+
+    expect(save).toBeDisabled();
+    fireEvent.change(tpmInput, { target: { value: "5000" } });
+    expect(save).toBeEnabled();
+    fireEvent.change(tpmInput, { target: { value: "1000" } });
+    expect(save).toBeDisabled();
+  });
+
+  it("shows the team's member defaults when the proxy lets team admins edit them", () => {
+    renderForm(
+      new Set(["team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"]),
+    );
+
+    expect(screen.getByLabelText("Member Default Budget (USD)")).toHaveValue(10);
+    expect(screen.getByLabelText("Member Default Budget Duration")).toHaveTextContent("monthly");
+    expect(screen.getByLabelText("Member Default TPM Limit")).toHaveValue(100);
+    expect(screen.getByLabelText("Member Default RPM Limit")).toHaveValue(5);
+  });
+
+  it("saves a new member default budget and a weekly reset without resending the unchanged limits", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(
+      new Set(["team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"]),
+    );
+
+    fireEvent.change(screen.getByLabelText("Member Default Budget (USD)"), { target: { value: "25" } });
+    await chooseSelectOption(user, screen.getByLabelText("Member Default Budget Duration"), "weekly");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith({ team_member_budget: 25, team_member_budget_duration: "7d" }),
+    );
+  });
+
+  it("saves a member budget that never resets as a null duration", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(new Set(["team_member_budget_duration"]));
+
+    await chooseSelectOption(user, screen.getByLabelText("Member Default Budget Duration"), "Never resets");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ team_member_budget_duration: null }));
+  });
+
+  it("shows a stored member budget that never resets as Never resets", () => {
+    renderWithProviders(
+      <TeamAdminSettingsForm
+        initialValues={{ team_member_budget: 10, team_member_budget_duration: null }}
+        editableFields={new Set(["team_member_budget_duration"])}
+        mayRaiseMaxBudget={false}
+        isSaving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText("Member Default Budget Duration")).toHaveTextContent("Never resets");
+  });
+
+  it("shows the soft budget when the proxy lets team admins edit it", () => {
+    renderForm(new Set(["soft_budget"]));
+
+    expect(screen.getByLabelText("Soft Budget (USD)")).toHaveValue(15);
+  });
+
+  it("saves a lowered soft budget and nothing else", async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm(new Set(["soft_budget", "max_budget"]));
+
+    fireEvent.change(screen.getByLabelText("Soft Budget (USD)"), { target: { value: "10.5" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ soft_budget: 10.5 }));
+  });
+
+  it("closes without saving on cancel", async () => {
+    const user = userEvent.setup();
+    const { onSave, onCancel } = renderForm(new Set(["tpm_limit"]));
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("locks both buttons while a save is in flight", () => {
+    renderForm(new Set(["tpm_limit"]), { isSaving: true });
+    fireEvent.change(screen.getByLabelText("Tokens per minute Limit (TPM)"), { target: { value: "5000" } });
+
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
+  });
+
+  it.each([
+    [false, "You can keep or lower this budget. Ask a proxy admin to raise it."],
+    [true, "You can raise this budget. Raises are capped by your organization's budget when the team belongs to one."],
+  ])("when mayRaiseMaxBudget is %s, describes only the Max Budget input with: %s", (mayRaiseMaxBudget, hint) => {
+    renderForm(new Set(["tpm_limit", "max_budget"]), { mayRaiseMaxBudget });
+
+    expect(screen.getByLabelText("Max Budget (USD)")).toHaveAccessibleDescription(hint);
+    expect(screen.getByLabelText("Tokens per minute Limit (TPM)")).not.toHaveAccessibleDescription();
+  });
+
+  it("shows no budget hint when the proxy has not enabled Max Budget for team admins", () => {
+    renderForm(new Set(["tpm_limit"]), { mayRaiseMaxBudget: true });
+
+    expect(screen.queryByText(/this budget/)).not.toBeInTheDocument();
+  });
+});

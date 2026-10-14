@@ -2,8 +2,11 @@ export interface GuardrailPreset {
   provider: string;
   categoryName?: string;
   guardrailNameSuggestion: string;
-  mode: string;
+  // A guardrail that both rewrites the request and repairs the response needs two
+  // modes seeded, not one; the form already normalises either shape.
+  mode: string | string[];
   defaultOn: boolean;
+  decisionProvider?: string;
 }
 
 export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
@@ -161,6 +164,43 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     defaultOn: false,
   },
 
+  // ── Decision Models ──
+  dm_typesafe_jev: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "TypeSafe Jev",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "typesafe",
+  },
+  dm_perplexity: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "Perplexity Decision",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "perplexity",
+  },
+  dm_microsoft: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "Microsoft Decision Model",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "azure_ai",
+  },
+  dm_openai: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "OpenAI Decision Model",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "openai",
+  },
+  dm_databricks: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "Databricks Decision Model",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "databricks",
+  },
+
   // ── Partner Guardrails ──
   presidio: {
     provider: "PresidioPII",
@@ -309,6 +349,39 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
   straiker: {
     provider: "Straiker",
     guardrailNameSuggestion: "Straiker Guardrail",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  alice: {
+    provider: "Alice",
+    guardrailNameSuggestion: "Alice",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  agent_365: {
+    provider: "Agent365",
+    guardrailNameSuggestion: "Microsoft Agent 365 Guardrail",
+    mode: "pre_mcp_call",
+    // MCP-only: default_on is the only activation path on the MCP hook
+    defaultOn: true,
+  },
+  llm_shield_proxy: {
+    provider: "LLM Shield Proxy",
+    guardrailNameSuggestion: "LLM Shield Proxy",
+    // Both halves are required. With only pre_call the request is redacted and the
+    // placeholders are handed straight back to the caller.
+    mode: ["pre_call", "post_call"],
+    defaultOn: false,
+  },
+  conduct: {
+    provider: "Conduct",
+    guardrailNameSuggestion: "Conduct Guard",
+    mode: "pre_call",
+    defaultOn: false,
+  },
+  wingback: {
+    provider: "Wingback",
+    guardrailNameSuggestion: "Wingback Runtime Security",
     mode: "pre_call",
     defaultOn: false,
   },
