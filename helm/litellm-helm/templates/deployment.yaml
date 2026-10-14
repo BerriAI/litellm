@@ -56,6 +56,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             {{- include "litellm.proxyEnv" . | nindent 12 }}
             {{- if .Values.liteadmin.enabled }}
             - name: LITELLM_ADMIN_AGENT_URL
