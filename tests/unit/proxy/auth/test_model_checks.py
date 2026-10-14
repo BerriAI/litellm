@@ -932,6 +932,26 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
 
 
+def test_wildcard_lists_a_model_once_when_registered_both_bare_and_provider_prefixed():
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    bare: Final = "gpt-dedupe-regression"
+    entry: Final = {"litellm_provider": "openai", "mode": "chat"}
+    try:
+        litellm.register_model({bare: entry, f"openai/{bare}": entry}, persist_across_reloads=False)
+
+        listed: Final = get_known_models_from_wildcard("openai/*")
+
+        assert listed.count(f"openai/{bare}") == 1
+    finally:
+        litellm.model_cost.pop(bare, None)
+        litellm.model_cost.pop(f"openai/{bare}", None)
+        litellm.open_ai_chat_completion_models.discard(bare)
+        litellm.open_ai_chat_completion_models.discard(f"openai/{bare}")
+        litellm.add_known_models(model_cost_map={})
+
+
 def test_get_complete_model_list_drops_no_default_models_sentinel():
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
