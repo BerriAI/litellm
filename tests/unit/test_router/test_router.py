@@ -4021,10 +4021,9 @@ async def test_acompletion_mid_stream_fallback_honors_a_per_request_fallbacks_no
 
     with patch("litellm.acompletion", side_effect=fake_acompletion) as provider_calls:
         with pytest.raises(litellm.InternalServerError, match="provider 500 from openai/primary-model"):
-            response: Final = await router.acompletion(
+            await router.acompletion(
                 model="primary", messages=[{"role": "user", "content": "hi"}], stream=True, fallbacks=None
             )
-            [chunk async for chunk in response]
 
     assert _groups_called(provider_calls) == ["primary"]
 
@@ -16838,10 +16837,9 @@ async def test_acompletion_disable_fallbacks_reaches_the_mid_stream_hop():
 
     with patch("litellm.acompletion", side_effect=primary_stream) as provider_calls:
         with pytest.raises(litellm.InternalServerError) as raised:
-            response = await router.acompletion(
+            await router.acompletion(
                 model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
             )
-            [chunk async for chunk in response]
 
     assert raised.value is primary_error
     assert [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list] == ["primary"]
@@ -16857,10 +16855,9 @@ def test_completion_disable_fallbacks_reaches_the_mid_stream_hop():
 
     with patch("litellm.completion", side_effect=primary_stream) as provider_calls:
         with pytest.raises(litellm.InternalServerError) as raised:
-            response = router.completion(
+            router.completion(
                 model="primary", messages=[{"role": "user", "content": "Hi"}], stream=True, disable_fallbacks=True
             )
-            list(response)
 
     assert raised.value is primary_error
     assert [call.kwargs["metadata"]["model_group"] for call in provider_calls.call_args_list] == ["primary"]
