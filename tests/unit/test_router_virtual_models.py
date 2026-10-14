@@ -5,6 +5,7 @@ Virtual models provide ordered failover across deployments referenced by model_i
 This test suite validates routing, failover, retry, and timeout semantics.
 """
 
+from datetime import datetime
 from typing import Final
 from unittest.mock import patch
 
@@ -2468,9 +2469,9 @@ async def test_429_retry_after_benches_for_hinted_duration():
 
 
 @pytest.mark.asyncio
-async def test_virtual_model_cooldown_time_beats_retry_after_header():
+async def test_429_vm_cooldown_time_not_used_for_deployment_wide_cooldown():
     """
-    AND: a virtual-model-configured cooldown_time beats the header.
+    VM's cooldown_time no longer overrides the deployment-wide cooldown duration. The Retry-After header or router default is used instead.
     """
     import httpx
 
@@ -3373,3 +3374,163 @@ async def test_no_alias_behavior_unchanged():
     strategy, selector = router._get_routing_context(model=vm_name)
 
     assert strategy == "least-busy", f"Expected 'least-busy' strategy from virtual model, got {strategy}"
+
+
+@pytest.mark.asyncio
+async def test_vm_timeout_408_does_not_bench_shared_deployment():
+    """
+    A VM timeout override sets client_side_timeout=True, so a 408 from exceeding that timeout
+    is recognized as caller-controlled and does NOT bench the deployment.
+    """
+    vm_name = f"{VIRTUAL_MODEL_PREFIX}test-model"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key1", "mock_response": "success from dep1"},
+                "model_info": {"id": "dep1"},
+            },
+            {
+                "model_name": "dep2-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key2", "mock_response": "success from dep2"},
+                "model_info": {"id": "dep2"},
+            },
+        ],
+        num_retries=0,
+        allowed_fails=0,
+    )
+
+    router.set_virtual_models(
+        {
+            vm_name: VirtualModelRouterState(
+                members={"dep1": 1, "dep2": 2}, timeout=1, allowed_fails=0, cooldown_time=86400
+            )
+        }
+    )
+
+    exception = litellm.Timeout(message="Request timed out", model="gpt-4o", llm_provider="openai")
+
+    start_time = datetime(2026, 1, 1, 0, 0, 0)
+    end_time = datetime(2026, 1, 1, 0, 0, 2)
+
+    router.deployment_callback_on_failure(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_params": {
+                "metadata": {"deployment": "dep1-model", "model_group": vm_name},
+                "model_info": {"id": "dep1"},
+                "timeout": 1,
+                "client_side_timeout": True,
+            },
+            "exception": exception,
+            "api_call_start_time": start_time,
+            "end_time": end_time,
+        },
+        completion_response=None,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    active_cooldowns = router.cooldown_cache.get_active_cooldowns(model_ids=["dep1"], parent_otel_span=None)
+    assert len(active_cooldowns) == 0
+
+    direct_response = await router.acompletion(
+        model="dep1-model",
+        messages=[{"role": "user", "content": "test"}],
+    )
+    assert direct_response._hidden_params["model_id"] == "dep1"
+
+
+@pytest.mark.asyncio
+async def test_vm_timeout_408_before_deadline_still_benches():
+    """
+    A provider-side 408 that arrives BEFORE the VM's timeout deadline is NOT skipped,
+    because the 408 came from the provider, not from the VM's timeout expiring.
+    """
+    vm_name = f"{VIRTUAL_MODEL_PREFIX}test-model"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key1", "mock_response": "success from dep1"},
+                "model_info": {"id": "dep1"},
+            },
+            {
+                "model_name": "dep2-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key2", "mock_response": "success from dep2"},
+                "model_info": {"id": "dep2"},
+            },
+        ],
+        num_retries=0,
+        allowed_fails=0,
+    )
+
+    router.set_virtual_models({vm_name: VirtualModelRouterState(members={"dep1": 1, "dep2": 2}, timeout=5)})
+
+    exception = litellm.Timeout(message="Request timed out", model="gpt-4o", llm_provider="openai")
+
+    start_time = datetime(2026, 1, 1, 0, 0, 0)
+    end_time = datetime(2026, 1, 1, 0, 0, 2)
+
+    router.deployment_callback_on_failure(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_params": {
+                "metadata": {"deployment": "dep1-model", "model_group": vm_name},
+                "model_info": {"id": "dep1"},
+                "timeout": 5,
+                "client_side_timeout": True,
+            },
+            "exception": exception,
+            "api_call_start_time": start_time,
+            "end_time": end_time,
+        },
+        completion_response=None,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    active_cooldowns = router.cooldown_cache.get_active_cooldowns(model_ids=["dep1"], parent_otel_span=None)
+    assert len(active_cooldowns) == 1
+    assert active_cooldowns[0][0] == "dep1"
+
+
+def test_get_virtual_model_deployments_sets_client_side_timeout():
+    """
+    _get_virtual_model_deployments sets client_side_timeout in litellm_params when the VM has a timeout override,
+    and does NOT set it when the VM has no timeout override.
+    """
+    vm_with_timeout = f"{VIRTUAL_MODEL_PREFIX}vm-with-timeout"
+    vm_without_timeout = f"{VIRTUAL_MODEL_PREFIX}vm-without-timeout"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key1"},
+                "model_info": {"id": "dep1"},
+            },
+            {
+                "model_name": "dep2-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key2"},
+                "model_info": {"id": "dep2"},
+            },
+        ],
+        num_retries=0,
+    )
+
+    router.set_virtual_models(
+        {
+            vm_with_timeout: VirtualModelRouterState(members={"dep1": 1}, timeout=10),
+            vm_without_timeout: VirtualModelRouterState(members={"dep2": 1}),
+        }
+    )
+
+    deployments_with_timeout = router.get_all_deployments(model_name=vm_with_timeout)
+    assert len(deployments_with_timeout) == 1
+    for deployment in deployments_with_timeout:
+        assert deployment["litellm_params"].get("client_side_timeout") is True
+
+    deployments_without_timeout = router.get_all_deployments(model_name=vm_without_timeout)
+    assert len(deployments_without_timeout) == 1
+    for deployment in deployments_without_timeout:
+        assert deployment["litellm_params"].get("client_side_timeout") is None

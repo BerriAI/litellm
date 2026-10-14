@@ -8780,27 +8780,15 @@ class Router:
                 or {}
             ).get("model_group")
 
-            vm_aggregate: Final = self._virtual_models
-
-            def _get_vm_cooldown(model_group: str | None) -> float | None:
-                if model_group is None or model_group not in vm_aggregate.names:
-                    return None
-                vm_cfg: Final = vm_aggregate.configs.get(model_group)
-                return vm_cfg.cooldown_time if vm_cfg is not None else None
-
-            vm_cooldown: Final = _get_vm_cooldown(requested_model_group)  # pyright: ignore[reportUnknownArgumentType]  # requested_model_group is unknown from untyped kwargs
-
             ##############################################
             # Logic to determine cooldown time
-            # Precedence: deployment config > Retry-After header > virtual model config > router default
+            # Precedence: deployment config > Retry-After header > router default
             ##############################################
             _time_to_cooldown: float
             if deployment_cooldown is not None and deployment_cooldown >= 0:
                 _time_to_cooldown = deployment_cooldown
             elif header_cooldown is not None and header_cooldown >= 0:
                 _time_to_cooldown = header_cooldown  # rebind-ok: computed via conditional chain
-            elif vm_cooldown is not None and vm_cooldown >= 0:
-                _time_to_cooldown = vm_cooldown  # rebind-ok: computed via conditional chain
             else:
                 _time_to_cooldown = self.cooldown_time
 
@@ -12338,6 +12326,7 @@ class Router:
                 **({"timeout": config.timeout} if config.timeout is not None else {}),
                 **({"stream_timeout": config.stream_timeout} if config.stream_timeout is not None else {}),
                 **({"num_retries": config.num_retries} if config.num_retries is not None else {}),
+                **({"client_side_timeout": True} if config.timeout is not None else {}),
             }
 
             return {  # pyright: ignore[reportReturnType,reportUnknownVariableType]  # returning dict with unknown keys/values from untyped model_list
