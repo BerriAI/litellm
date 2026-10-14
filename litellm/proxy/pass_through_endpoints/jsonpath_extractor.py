@@ -9,6 +9,31 @@ from typing import Any, Final
 from litellm._logging import verbose_proxy_logger
 
 
+def _normalize_wildcard_segments(expr: str) -> list[str]:
+    """Normalize ``key[*]`` into ``key`` + ``[*]`` segments.
+
+    Idempotent: the recursion in :meth:`JsonPathExtractor.evaluate` passes
+    already-normalized paths (e.g. ``content.[*].text``) back through here,
+    and re-running ``expr.replace("[*]", ".[*]")`` on those would inject
+    empty segments (``content..[*].text``) and silently drop every
+    nested-wildcard expression, skipping the guardrail (#46302).
+    """
+    segments: list[str] = []
+    for segment in expr.split("."):
+        if segment == "[*]":
+            segments.append("[*]")
+            continue
+        # Peel trailing wildcards one at a time so adjacent wildcards
+        # ("a[*][*]") and already-normalized paths both split cleanly.
+        while segment.endswith("[*]"):
+            segments.append(segment[:-3])
+            segments.append("[*]")
+            segment = ""
+        if segment:
+            segments.append(segment)
+    return segments
+
+
 class JsonPathExtractor:
     """Extracts field values from data using JSONPath-like expressions."""
 
@@ -55,26 +80,7 @@ class JsonPathExtractor:
         if not expr or not data:
             return None
 
-        # Normalize "key[*]" into "key" + "[*]" segments. Idempotent: the
-        # recursion below passes already-normalized paths (e.g.
-        # "content.[*].text") back through here, and re-running
-        # expr.replace("[*]", ".[*]") on those would inject empty segments
-        # ("content..[*].text") and silently drop every nested-wildcard
-        # expression, skipping the guardrail (#46302).
-        segments: list[str] = []
-        for segment in expr.split("."):
-            if segment == "[*]":
-                segments.append("[*]")
-                continue
-            # Peel trailing wildcards one at a time so adjacent wildcards
-            # ("a[*][*]") and already-normalized paths both split cleanly.
-            while segment.endswith("[*]"):
-                segments.append(segment[:-3])
-                segments.append("[*]")
-                segment = ""
-            if segment:
-                segments.append(segment)
-        parts: Final = segments
+        parts: Final = _normalize_wildcard_segments(expr)
         current: Any = data
 
         for i, part in enumerate(parts):
