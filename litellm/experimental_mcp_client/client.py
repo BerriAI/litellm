@@ -534,6 +534,17 @@ class MCPClient:
     async def discovery_auth_fingerprint(self) -> str:
         return self._hash_discovery_auth(await self.prepare_request_auth(), self._aws_identity())
 
+    async def subscription_auth_fingerprint(self) -> str:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+            ClientCredentialsBearerAuth,
+        )
+
+        request: Final = await self.prepare_request_auth()
+        auth: Final = self._resolved_auth
+        if isinstance(auth, ClientCredentialsBearerAuth) and auth.subscription_identity is not None:
+            request.headers[auth.header_name] = "managed-grant:" + auth.subscription_identity
+        return self._hash_discovery_auth(request, self._aws_identity())
+
     def _aws_identity(self) -> tuple[str, str, str | None, str | None] | None:
         return self._aws_auth.identity if isinstance(self._aws_auth, MCPSigV4Auth) else None
 

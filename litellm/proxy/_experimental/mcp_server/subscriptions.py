@@ -101,7 +101,7 @@ async def _targets(context: OperationContext) -> tuple[SubscriptionTarget, ...]:
                 raw_headers=headers,
                 client_ip=ip,
             )
-            return SubscriptionTarget(server, client, await client.discovery_auth_fingerprint())
+            return SubscriptionTarget(server, client, await client.subscription_auth_fingerprint())
 
         return tuple([await prepare(server) for server in allowed])
 

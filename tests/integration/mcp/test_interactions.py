@@ -416,6 +416,9 @@ def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_pat
         ("tools", "setup-race"),
         ("tools", "metadata"),
         ("tools", "config-change"),
+        ("tools", "renewal"),
+        ("tools", "renewal-scopes"),
+        ("tools", "renewal-failed"),
     ],
 )
 def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
@@ -441,7 +444,8 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
     from mcp.types import DiscoverResult, ListToolsResult, PaginatedRequestParams, SubscriptionsListenRequestParams
     from sse_starlette.sse import AppStatus
     from starlette.applications import Starlette
-    from starlette.routing import Mount
+    from starlette.routing import Mount, Route
+    from starlette.responses import JSONResponse
 
     from integration._support.asgi import asgi_server
     from integration._support.mcp import _drain_sse_streams
@@ -452,6 +456,24 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
 
     disconnected: Final = Event()
     connected: Final = Event()
+    token_grants = []
+    renewal_started = Event()
+    async def token_endpoint(request):
+        from urllib.parse import parse_qs
+
+        form = parse_qs((await request.body()).decode())
+        assert form["grant_type"] == ["client_credentials"]
+        assert form["client_id"] == ["subscription-service"]
+        assert form["scope"] == ["read write"]
+        token_grants.append(form)
+        if renewal_started.is_set() and access == "renewal-failed":
+            return JSONResponse({"error": "invalid_client"}, status_code=401)
+        return JSONResponse({
+            "access_token": "synthetic-renewal-" + str(len(token_grants)),
+            "token_type": "Bearer", "expires_in": 70,
+            "scope": "read" if renewal_started.is_set() and access == "renewal-scopes" else "read write",
+        })
+
     listener_credentials = []
     catalog_credentials = []
     setup_changed = Event()
@@ -608,13 +630,25 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                                 await asyncio.wait_for(anext(subscription), 20)
                             assert await asyncio.to_thread(disconnected.wait, 3)
                             return
+                        if access.startswith("renewal"):
+                            assert token_grants
+                            admitted_grants = len(token_grants)
+                            renewal_started.set()
+                            async with asyncio.timeout(25):
+                                while len(token_grants) == admitted_grants:
+                                    try:
+                                        await session.list_tools()
+                                    except MCPError:
+                                        assert access == "renewal-failed"
+                                    await asyncio.sleep(0.2)
+                            assert token_grants[0] == token_grants[-1]
                         if access != "setup-race":
                             async with streamable_http_client(upstream_url + "/mcp") as direct_streams:
                                 async with ClientSession(direct_streams[0], direct_streams[1]) as direct:
                                     direct.adopt(DiscoverResult.model_validate(await direct.send_discover("2026-07-28")))
                                     changed = await direct.call_tool("change_tools", {})
                                     assert not changed.is_error
-                        if access in ("revoked", "identity", "team", "org", "end-user", "idle", "upstream-ended", "config-change"):
+                        if access in ("revoked", "identity", "team", "org", "end-user", "idle", "upstream-ended", "config-change", "renewal-scopes", "renewal-failed"):
                             with pytest.raises((SubscriptionLost, StopAsyncIteration)):
                                 await asyncio.wait_for(anext(subscription), 5)
                             assert await asyncio.to_thread(disconnected.wait, 3)
@@ -672,7 +706,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         watchers = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
         await asyncio.wait_for(asyncio.gather(*watchers), 2)
 
-    hosted: Final = Starlette(routes=[Mount("/", app=app)], lifespan=lifespan)
+    hosted: Final = Starlette(routes=[Route("/token", token_endpoint, methods=["POST"]), Mount("/", app=app)], lifespan=lifespan)
     with asgi_server(hosted) as upstream_url, httpx.Client() as client:
         config: Final = tmp_path / "proxy.yaml"
         config.write_text(
@@ -682,6 +716,11 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                     "mcp_servers": {
                         "peer": {
                             "server_id": "subscription-server",
+                            **({
+                                "auth_type": "oauth2", "oauth2_flow": "client_credentials",
+                                "client_id": "subscription-service", "client_secret": "synthetic-client-secret",
+                                "token_url": upstream_url + "/token", "scopes": ["read", "write"],
+                            } if access.startswith("renewal") else {}),
                             "url": upstream_url + "/mcp",
                             "transport": "http",
                             "protocol_version": "2025-11-25" if access == "legacy" else "2026-07-28",
