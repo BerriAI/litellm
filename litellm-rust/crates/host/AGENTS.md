@@ -16,7 +16,7 @@ Each driver owns terminal dispatch. Hooks can change or fail execution. Passive 
 
 `interceptors.rs` owns `Interceptors` and its request/response payload types. `lifecycle.rs` owns `CallObserver`, `CallEvent`, `ExecutionEvent`, timing, failure origin, and the observation wrappers. Event payloads are generic so a runtime can retain its own response, exception and raw-response references without introducing a language dependency. `snapshot()` projects them into the owned observation contract without retaining runtime objects. Pass interceptors and observers separately at direct route and HTTP entrypoints. Routes publish execution events independently of interception
 
-`hooks.rs` owns the call-stage interface and its runtime-associated types. It contains no Python types or legacy callback policy. A runtime supplies its context and continuation representation through `HookRuntime`
+`hooks.rs` owns the async call-stage interface and its runtime-associated types. `hooks::HookChain` composes stages in order, using `DynCallHooks` for boxed storage and `CallHooks` for callback authors. A terminal notification reaches every group, and `ChainRuntime::terminal_notification_failed` decides whether a group's error is reported or stops the chain. A runtime supplies its context through `HookRuntime` and its stored hook type through `ChainRuntime`. Python ownership and cancellation guards stay in the Python adapter
 
 `protocol.rs` owns `Protocol` and suspension messages, including `InterceptRequest` and `StreamDelivery`. `call.rs` owns route outputs and their adaptation into a hosted machine. Rust service handling belongs in `host-native::services`. Coroutine channel handles stay in `machine/context.rs`
 
