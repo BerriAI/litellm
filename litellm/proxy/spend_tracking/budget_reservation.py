@@ -378,18 +378,28 @@ async def reconcile_budget_reservation(
     return pending
 
 
+_SETTLING_CALL_ID: Final = "settling_call_id"
+
+
+def share_budget_reservation_across_calls(budget_reservation: dict[str, object] | None) -> None:
+    if budget_reservation is not None:
+        budget_reservation.setdefault(_SETTLING_CALL_ID, None)
+
+
 def claim_budget_reservation(
     budget_reservation: dict[str, object] | None, litellm_call_id: str | None
 ) -> dict[str, object] | None:
-    """Hand the reservation to the first call that settles it.
+    """Hand a shared reservation to the first call that settles it.
 
-    A native Responses WebSocket connection shares its one reservation with every turn it logs, each under its
-    own call id. Two turns settling it at once would both move the counter from the estimate to their own cost,
-    so the first claimant keeps the reservation and every later call sees none and charges its cost directly."""
-    if budget_reservation is None or litellm_call_id is None:
+    A Responses WebSocket connection shares its one reservation with every turn it logs, each under its own
+    call id. Two turns settling it at once would both move the counter from the estimate to their own cost,
+    so the first claimant keeps the reservation and every later call sees none and charges its cost directly.
+    A reservation no connection shared belongs to its one call and is returned unchanged."""
+    if budget_reservation is None or litellm_call_id is None or _SETTLING_CALL_ID not in budget_reservation:
         return budget_reservation
-    settling_call_id: Final = budget_reservation.setdefault("settling_call_id", litellm_call_id)
-    return budget_reservation if settling_call_id == litellm_call_id else None
+    if budget_reservation[_SETTLING_CALL_ID] is None:
+        budget_reservation[_SETTLING_CALL_ID] = litellm_call_id
+    return budget_reservation if budget_reservation[_SETTLING_CALL_ID] == litellm_call_id else None
 
 
 def stamp_budget_reservation_actual_cost(budget_reservation: dict | None, actual_cost: float | None) -> None:

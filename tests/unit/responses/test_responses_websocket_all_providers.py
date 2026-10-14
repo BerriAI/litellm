@@ -3343,6 +3343,54 @@ class TestNativeWebSocketPerTurnLogging:
         for turn in recorder.turns:
             turn.dispatch_failure_handlers.assert_not_awaited()
 
+    @pytest.mark.parametrize(
+        ("guardrail_callbacks", "logged_text"),
+        [([], "mail alice@example.com"), ([_FakeWSGuardrail()], "mail <EMAIL_ADDRESS_1>")],
+    )
+    @pytest.mark.asyncio
+    async def test_each_turn_logs_the_frame_the_client_sent_not_the_frame_sent_upstream(
+        self, guardrail_callbacks: list[_FakeWSGuardrail], logged_text: str
+    ):
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        wrapped_previous = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="deployment-1", response_id="resp_upstream_prev"
+        )
+        client_frame = {
+            "type": "response.create",
+            "model": "client-model-group",
+            "input": "mail alice@example.com",
+            "previous_response_id": wrapped_previous,
+        }
+        recorder = _TurnLoggingRecorder()
+        client = _ScriptedClient([json.dumps(client_frame)], recorder.logged_turns)
+        backend = _ScriptedBackend([_completed_turn("resp_1", 10, 1)])
+        handler = _make_streaming(
+            websocket=client,
+            backend_ws=backend,
+            logging_obj=recorder.connection,
+            request_data={},
+            authorized_model="gpt-5.4-mini-deployment",
+            request_defaults=_deployment_defaults(),
+            guardrail_callbacks=guardrail_callbacks,
+        )
+
+        await handler.bidirectional_forward()
+
+        assert json.loads(backend.sent[0]) == {
+            "type": "response.create",
+            "model": "gpt-5.4-mini-deployment",
+            "input": logged_text,
+            "previous_response_id": "resp_upstream_prev",
+            "reasoning": {"effort": "high"},
+            "service_tier": "priority",
+            "provider_default": "configured",
+        }
+        assert [turn.request_body for turn in recorder.turns] == [{**client_frame, "input": logged_text}]
+        assert recorder.turns[0].model_call_details["messages"] == [{"role": "user", "content": logged_text}]
+
     @pytest.mark.asyncio
     async def test_a_turn_whose_input_is_nested_under_response_logs_its_user_message(self):
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)

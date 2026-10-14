@@ -557,6 +557,18 @@ def _provider_response_id(source: object) -> str | None:
     return candidate if isinstance(candidate, str) and candidate else None
 
 
+def _logged_response_id(
+    response: Mapping[str, object], litellm_call_id: object, falls_back_on_empty_id: bool
+) -> str | None:
+    call_id: Final = litellm_call_id if isinstance(litellm_call_id, str) else None
+    if falls_back_on_empty_id:
+        return _provider_response_id(response) or call_id
+    if "id" not in response:
+        return call_id
+    response_id: Final = response["id"]
+    return None if response_id is None else str(response_id)
+
+
 def mask_api_base_credentials(api_base: str) -> str:
     if "key=" not in api_base:
         return api_base
@@ -6688,7 +6700,12 @@ def get_standard_logging_object_payload(
             else raw_usage_dict
         )
 
-        id = _provider_response_id(response_obj) or kwargs.get("litellm_call_id")
+        litellm_call_id: Final[object] = kwargs.get("litellm_call_id")
+        id = _logged_response_id(
+            response_obj,
+            litellm_call_id,
+            falls_back_on_empty_id=isinstance(init_response_obj, LiteLLMRealtimeStreamLoggingObject),
+        )
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")

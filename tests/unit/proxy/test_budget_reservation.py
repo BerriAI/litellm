@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -46,6 +47,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     invalidate_budget_reservation_counters,
     release_budget_reservation,
     release_budget_reservation_on_cancel,
+    share_budget_reservation_across_calls,
     reserve_budget_for_request,
 )
 from litellm.proxy.spend_tracking.input_tokens import (
@@ -3723,6 +3725,19 @@ async def test_unreserved_model_access_group_is_charged_alongside_a_reserved_one
     ) == pytest.approx(4.2)
 
 
+def test_a_reservation_no_connection_shared_is_left_as_its_call_made_it():
+    reservation: dict[str, object] = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:k", "reserved_cost": 0.5}],
+    }
+    made_by_its_call = copy.deepcopy(reservation)
+
+    claims = [claim_budget_reservation(budget_reservation=reservation, litellm_call_id=call) for call in ("a", "b")]
+
+    assert claims == [reservation, reservation]
+    assert reservation == made_by_its_call
+
+
 @pytest.mark.asyncio
 async def test_should_charge_both_turns_when_two_calls_settle_one_reservation_at_once(
     spend_counter_state,
@@ -3756,6 +3771,7 @@ async def test_should_charge_both_turns_when_two_calls_settle_one_reservation_at
 
     from litellm.proxy.proxy_server import increment_spend_counters
 
+    share_budget_reservation_across_calls(reservation)
     first_turn = claim_budget_reservation(budget_reservation=reservation, litellm_call_id="turn-1")
     second_turn = claim_budget_reservation(budget_reservation=reservation, litellm_call_id="turn-2")
     assert first_turn is reservation

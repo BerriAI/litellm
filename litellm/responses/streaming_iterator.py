@@ -1938,6 +1938,31 @@ def _restore_wrapped_ids_in_response_create(msg_obj: Mapping[str, object]) -> di
     return {**msg_obj, **top_fields, **restored_nested}
 
 
+_RESPONSE_CREATE_MASKED_FIELDS: Final = ("input", "instructions")
+
+
+def _with_masked_fields(client: Mapping[str, object], forwarded: Mapping[str, object]) -> Mapping[str, object]:
+    masked: Final = {
+        key: forwarded[key] for key in _RESPONSE_CREATE_MASKED_FIELDS if key in client and key in forwarded
+    }
+    return {**client, **masked}
+
+
+def _client_frame_with_masked_text(client_frame: str, forwarded_frame: str) -> str:
+    client: Final = _json_object_or_none(client_frame)
+    forwarded: Final = _json_object_or_none(forwarded_frame)
+    if client is None or forwarded is None:
+        return client_frame
+    client_nested: Final = client.get("response")
+    forwarded_nested: Final = forwarded.get("response")
+    nested: Final = (
+        {"response": _with_masked_fields(client_nested, forwarded_nested)}
+        if _is_json_object(client_nested) and _is_json_object(forwarded_nested)
+        else {}
+    )
+    return json.dumps({**_with_masked_fields(client, forwarded), **nested})
+
+
 def _wrap_output_item_encrypted_content(
     event_obj: Mapping[str, object], litellm_metadata: Mapping[str, object]
 ) -> dict[str, object] | None:
@@ -2014,6 +2039,11 @@ class ResponsesWebSocketStreaming:
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
+
+    def _logged_client_frame(self, client_frame: str, forwarded_frame: str) -> str:
+        if not self.guardrail_callbacks or forwarded_frame is client_frame:
+            return client_frame
+        return _client_frame_with_masked_text(client_frame, forwarded_frame)
 
     def _record_client_frame(self, client_frame: str) -> None:
         frame: Final = _json_object_or_none(client_frame)
@@ -2504,7 +2534,7 @@ class ResponsesWebSocketStreaming:
         try:
             if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
                 masked_first: Final = await self._mask_response_create(self.first_message)
-                self._record_client_frame(masked_first)
+                self._record_client_frame(self._logged_client_frame(self.first_message, masked_first))
                 await self.backend_ws.send(masked_first)
 
             while True:
@@ -2512,7 +2542,7 @@ class ResponsesWebSocketStreaming:
                 if not await self._enforce_or_reject_frame(message):
                     continue
                 masked = await self._mask_response_create(message)
-                self._record_client_frame(masked)
+                self._record_client_frame(self._logged_client_frame(message, masked))
                 await self.backend_ws.send(masked)
 
         except Exception as e:

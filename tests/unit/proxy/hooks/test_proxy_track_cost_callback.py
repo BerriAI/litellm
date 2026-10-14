@@ -2724,7 +2724,10 @@ async def test_collector_events_let_only_the_first_turn_settle_a_shared_reservat
         budget_reservation_from_metadata,
         get_litellm_metadata_from_kwargs,
     )
-    from litellm.proxy.spend_tracking.budget_reservation import claim_budget_reservation
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        claim_budget_reservation,
+        share_budget_reservation_across_calls,
+    )
     from litellm.proxy.spend_tracking.spend_event import spend_event_callback_args
 
     handler = _RecordingHandler()
@@ -2736,6 +2739,9 @@ async def test_collector_events_let_only_the_first_turn_settle_a_shared_reservat
     )
     logger = ProxyDBLogger(producer)
     connection_kwargs = _offload_kwargs()
+    share_budget_reservation_across_calls(
+        budget_reservation_from_metadata(get_litellm_metadata_from_kwargs(connection_kwargs))
+    )
 
     for turn_call_id in ("turn-1", "turn-2", "turn-3"):
         await logger.async_log_success_event(
@@ -3088,7 +3094,7 @@ async def test_track_cost_callback_hands_a_shared_reservation_to_the_first_turn_
     """Every turn of a Responses WebSocket connection carries the connection's one reservation under its
     own call id. The first turn settles it; a later turn reconciling the same estimate again would
     under-count the key, so it must charge its cost without the reservation."""
-    reservation = {"reserved_cost": 0.5, "entries": []}
+    reservation = {"reserved_cost": 0.5, "entries": [], "settling_call_id": None}
 
     first_turn = await _reservation_handed_to_the_counters(_shared_reservation_turn_kwargs("turn-1", reservation))
     second_turn = await _reservation_handed_to_the_counters(_shared_reservation_turn_kwargs("turn-2", reservation))
@@ -3100,7 +3106,7 @@ async def test_track_cost_callback_hands_a_shared_reservation_to_the_first_turn_
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook_releases_a_shared_reservation_for_the_first_turn_only():
     logger = ProxyDBLogger()
-    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    budget_reservation = {"reserved_cost": 0.5, "entries": [], "settling_call_id": None}
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
         request_route="/custom/route",

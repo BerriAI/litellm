@@ -3,7 +3,7 @@ Test for response_api_endpoints/endpoints.py
 """
 
 import unittest
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from typing import Any, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -884,6 +884,65 @@ class TestResponsesWSFirstFrameModelAuth:
         assert "first_message" not in turn_request
         assert turn_request["proxy_server_request"] == turn_proxy_server_request
         proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once_with(user_api_key_dict)
+
+    @pytest.mark.asyncio
+    async def test_endpoint_hands_the_connection_reservation_to_its_first_settling_turn_only(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+        from litellm.proxy.spend_tracking.budget_reservation import claim_budget_reservation
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": "first turn"})
+        )
+        ws.close = AsyncMock()
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-token", budget_reservation={"reserved_cost": 0.5, "entries": []}
+        )
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock()
+
+        async def relay() -> None:
+            return None
+
+        def route(**_: object) -> Coroutine[object, object, None]:
+            return relay()
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; the reservation it leaves is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing starts the relay, which needs a live upstream socket
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route,
+            ),
+            patch(  # test-quality-ok: the disconnect release reads proxy_logging_obj off proxy_server
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=user_api_key_dict)
+
+        reservation = user_api_key_dict.budget_reservation
+        assert claim_budget_reservation(budget_reservation=reservation, litellm_call_id="turn-1") is reservation
+        assert claim_budget_reservation(budget_reservation=reservation, litellm_call_id="turn-2") is None
 
     @pytest.mark.asyncio
     async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(self):

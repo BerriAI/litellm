@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     StandardLoggingPayloadSetup,
     _extract_response_obj_and_hidden_params,
     _get_status_fields,
+    get_standard_logging_object_payload,
     set_callbacks,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -8261,6 +8262,28 @@ def test_responses_websocket_turn_is_logged_under_the_response_id_the_client_saw
 
     assert payload is not None
     assert payload["id"] == expected_request_id
+
+
+@pytest.mark.parametrize(
+    ("response_obj", "expected_id"),
+    (({"id": ""}, ""), ({"id": "chatcmpl-1"}, "chatcmpl-1"), ({}, "http-call")),
+)
+def test_non_websocket_payload_id_is_the_response_id_field_as_returned(
+    logging_obj: LitellmLogging, response_obj: dict[str, str], expected_id: str
+):
+    now = datetime.datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "http-call", "model": "gpt-4o", "messages": []},
+        init_response_obj=response_obj,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["id"] == expected_id
 
 
 def test_copy_for_new_call_gives_each_call_its_own_id_clock_and_metadata():

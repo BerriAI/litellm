@@ -37,6 +37,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_set_request_parsed_body,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.proxy.spend_tracking.budget_reservation import share_budget_reservation_across_calls
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -1622,6 +1623,7 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
+    share_budget_reservation_across_calls(user_api_key_dict.budget_reservation)
     routed_data: Final = dict(
         data,
         user_api_key_dict=user_api_key_dict,
