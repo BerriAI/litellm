@@ -60,6 +60,7 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "enable_tag_filtering",
         "tag_routing_prefix",
         "optional_pre_call_checks",
+        "fallback_on_unsupported_params",
     }
 )
 ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
