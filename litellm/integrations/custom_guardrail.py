@@ -1135,8 +1135,8 @@ class CustomGuardrail(CustomLogger):
 
         Guardrails that scan only part of the rows (the latest user turn, the
         last row, the turns after the last assistant turn, or no tool results),
-        or derive their returned texts from the rows, override this to return
-        False. Translation handlers that can rewrite the request from ``texts``
+        derive their returned texts from the rows, or cannot rewrite rows whose
+        content is a list of parts, override this to return False. Translation handlers that can rewrite the request from ``texts``
         alone, like Bedrock Converse, then hand them only ``texts``.
         """
         return True

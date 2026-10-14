@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.db import tool_registry_writer
+from litellm.proxy.guardrails.guardrail_hooks.airia.airia import AiriaGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.conduct import conduct as conduct_module
@@ -3258,6 +3259,7 @@ _FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
         guardrail_name="qualifire", api_key="qf-test", api_base="http://127.0.0.1:9", evaluation_id="eval-test"
     ),
     _conduct_with_its_plugin,
+    lambda: AiriaGuardrail(guardrail_name="airia", api_key="airia-test", api_base="http://127.0.0.1:9"),
 )
 
 
@@ -3312,6 +3314,7 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
             "singulr",
             "qualifire",
             "conduct",
+            "airia",
         ],
     )
     async def test_guardrail_gets_every_flat_text_and_its_mask_reaches_every_turn(self, make_guardrail, monkeypatch):

@@ -317,6 +317,22 @@ def _bedrock_guardrail_verdict(body: Mapping[str, JsonValue]) -> Reply:
     )
 
 
+def _airia_verdict(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    """The Airia gateway's reply as observed live on 2026-10-14: it masks texts and string row content, and blocks
+    a request whose rows carry a list of content parts it would have to rewrite."""
+    texts: Final = list_value(body.get("texts") or [])
+    rows: Final = list_value(body.get("structured_messages") or [])
+    if _CARD_PATTERN.search(json.dumps([texts, rows])) is None:
+        return {"action": "NONE"}
+    if any(isinstance(object_value(row).get("content"), list) for row in rows):
+        return {"action": "BLOCKED", "blocked_reason": "Your message could not be safely rewritten"}
+    return {
+        "action": "GUARDRAIL_INTERVENED",
+        "texts": _masked(texts),
+        "structured_messages": _masked(rows) if rows else None,
+    }
+
+
 def _vendor(request: Request) -> Reply:
     if request.target.startswith("/akto/"):
         return _akto_verdict(request.body)
@@ -365,6 +381,8 @@ def _vendor(request: Request) -> Reply:
     if request.target == "/qualifire/api/evaluation/invoke":
         flagged_input: Final = _INJECTION in str(body.get("input"))
         return Reply(body=json.dumps({"evaluationResults": [{"results": [{"flagged": flagged_input}]}]}).encode())
+    if request.target == "/airia/v1/guardrails/litellm":
+        return Reply(body=json.dumps(_airia_verdict(body)).encode())
     if request.target == "/promptguard/api/v1/guard":
         messages: Final = body.get("messages")
         if _CARD_PATTERN.search(json.dumps(messages)) is None:
@@ -437,6 +455,9 @@ def _guardrails(vendor_url: str) -> tuple[dict[str, JsonValue], ...]:
                 "api_key": "synthetic-qualifire-key",
                 "evaluation_id": "synthetic-evaluation",
             },
+        ),
+        _guardrail(
+            "airia", {"guardrail": "airia", "api_base": f"{vendor_url}/airia", "api_key": "synthetic-airia-key"}
         ),
         _guardrail(
             "ovalix",
@@ -1000,6 +1021,23 @@ def test_qualifire_evaluation_gets_the_latest_text_as_its_input_as_on_main(rig: 
     _refused(rig, _converse(rig, "qualifire", body))
 
     assert [payload.get("input") for payload in _vendor_bodies(rig)] == [_INJECTION]
+
+
+def test_airia_masks_a_card_in_every_converse_turn_as_on_main(rig: _Rig) -> None:
+    body: Final = {
+        "system": [{"text": f"Billing card {_CARD}."}],
+        "messages": [
+            _user({"text": f"My card is {_CARD}."}),
+            _assistant({"text": "Noted."}),
+            _user({"text": "Thanks."}),
+        ],
+    }
+
+    sent: Final = _forwarded(rig, _converse(rig, "airia", body))
+
+    assert _CARD not in json.dumps(sent)
+    assert sent["system"] == [{"text": f"Billing card {_MASK}."}]
+    assert [payload.get("structured_messages") for payload in _vendor_bodies(rig)] == [[]]
 
 
 def test_ovalix_blocks_a_request_field_injection_listed_last_as_on_main(rig: _Rig) -> None:
