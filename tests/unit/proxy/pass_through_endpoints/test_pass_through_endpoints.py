@@ -12,6 +12,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9033,6 +9034,55 @@ async def test_the_reload_job_keeps_db_pass_throughs_only_when_the_db_read_fails
 
     assert (served_before.status_code, served_after.status_code) == (200, expected_status)
     assert [str(request.url) for request in db_upstream] == expected_upstream
+
+
+@pytest.mark.asyncio
+async def test_a_failed_model_reconcile_never_serves_a_new_db_pass_through_with_its_old_auth_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging, invalidate_config_param
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[],
+        db_pass_through_endpoints=[
+            {"id": "db-guarded", "path": "/db-guarded", "target": "http://public-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+    proxy.config_table.rows["general_settings"] = {
+        "pass_through_endpoints": [
+            {
+                "id": "db-guarded",
+                "path": "/db-guarded",
+                "target": "http://protected-upstream.test/api",
+                "headers": {"x-upstream-key": "upstream-secret"},
+                "auth": True,
+            }
+        ]
+    }
+    await invalidate_config_param("general_settings")
+
+    async def failing_router_update(new_models: object, proxy_logging_obj: object) -> frozenset[str]:
+        raise RuntimeError("router update failed")
+
+    monkeypatch.setitem(
+        proxy_server.proxy_config.settings, "supported_db_objects", ["models", "pass_through_endpoints"]
+    )
+    monkeypatch.setattr(proxy_server.proxy_config, "_update_llm_router", failing_router_update)
+    assert proxy_server.prisma_client is not None
+    await proxy_server.proxy_config.add_deployment(
+        prisma_client=proxy_server.prisma_client, proxy_logging_obj=MagicMock(spec=ProxyLogging)
+    )
+    anonymous, anonymous_upstream = await _send_through_proxy("/db-guarded", {})
+
+    assert anonymous.status_code == 200
+    assert [(str(request.url), request.headers.get("x-upstream-key")) for request in anonymous_upstream] == [
+        ("http://public-upstream.test/api", None)
+    ]
 
 
 @pytest.mark.asyncio

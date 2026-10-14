@@ -8441,6 +8441,9 @@ class ProxyConfig:
                     db_general_settings=db_general_settings.param_value,
                 )
 
+            if self._should_load_db_object(object_type="pass_through_endpoints"):
+                await self._init_pass_through_endpoints_in_db()
+
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
 
@@ -8538,9 +8541,6 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="agents"):
             await self._init_agents_in_db(prisma_client=prisma_client)
-
-        if self._should_load_db_object(object_type="pass_through_endpoints"):
-            await self._init_pass_through_endpoints_in_db()
 
         if self._should_load_db_object(object_type="prompts"):
             await self._init_prompts_in_db(prisma_client=prisma_client)
