@@ -1804,9 +1804,14 @@ class TestAddressesUnissuedResponseId:
             await addresses_unissued_response_id(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", pc)
 
     @pytest.mark.asyncio
-    async def test_no_database_counts_as_unissued_only_when_an_id_is_addressed(self):
-        assert await addresses_unissued_response_id(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", None) is True
-        assert await addresses_unissued_response_id("/v1/responses", {"model": "gpt-5.6"}, "openai", None) is False
+    async def test_without_a_database_the_pass_through_issues_only_raw_ids_so_none_is_refused(self):
+        assert await addresses_unissued_response_id(f"/v1/responses/{UNISSUED_RESPONSE_ID}", {}, "openai", None) is False
+        assert (
+            await addresses_unissued_response_id(
+                "/v1/responses", {"previous_response_id": UNISSUED_RESPONSE_ID}, "openai", None
+            )
+            is False
+        )
 
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")

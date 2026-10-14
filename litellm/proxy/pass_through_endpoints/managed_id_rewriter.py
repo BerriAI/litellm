@@ -493,12 +493,9 @@ async def addresses_unissued_response_id(
     provider: str,
     prisma_client: PrismaClient | None,
 ) -> bool:
-    addressed: Final = _addressed_raw_response_ids(path, body)
-    if not addressed:
-        return False
     if prisma_client is None:
-        return True
-    for raw_id in addressed:
+        return False
+    for raw_id in _addressed_raw_response_ids(path, body):
         if not await _passthrough_issued_response_id(raw_id, provider, prisma_client):
             return True
     return False

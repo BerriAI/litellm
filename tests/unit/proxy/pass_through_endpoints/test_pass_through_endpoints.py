@@ -3761,6 +3761,13 @@ async def _run_managed_responses_pass_through(
 _RESPONSE_ID_ROUTES: Final = (
     ("GET", f"https://api.openai.com/v1/responses/{_UNISSUED_RESPONSE_ID}", None),
     ("GET", f"https://api.openai.com/v1/responses/{_UNISSUED_RESPONSE_ID}/input_items", None),
+    ("DELETE", f"https://api.openai.com/v1/responses/{_UNISSUED_RESPONSE_ID}", None),
+    ("POST", f"https://api.openai.com/v1/responses/{_UNISSUED_RESPONSE_ID}/cancel", None),
+    (
+        "POST",
+        "https://api.openai.com/v1/responses/input_tokens",
+        {"model": "gpt-5.6", "previous_response_id": _UNISSUED_RESPONSE_ID},
+    ),
     (
         "POST",
         "https://api.openai.com/v1/responses/compact",
