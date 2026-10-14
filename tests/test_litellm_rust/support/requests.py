@@ -48,6 +48,48 @@ MESSAGES_EVENTS: Final = (
 )
 
 
+RESPONSES_MODEL: Final = "openai/gpt-6.1-sol"
+RESPONSES_RESPONSE: Final = {
+    "id": "resp_native",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": RESPONSES_MODEL.removeprefix("openai/"),
+    "output": [
+        {
+            "id": "msg_native",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Hello from native Responses", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 5, "output_tokens": 4, "total_tokens": 9},
+}
+RESPONSES_EVENTS: Final = (
+    (
+        "response.created",
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {**RESPONSES_RESPONSE, "status": "in_progress", "output": []},
+        },
+    ),
+    (
+        "response.output_text.delta",
+        {
+            "type": "response.output_text.delta",
+            "sequence_number": 1,
+            "item_id": "msg_native",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello from native Responses",
+        },
+    ),
+    ("response.completed", {"type": "response.completed", "sequence_number": 2, "response": RESPONSES_RESPONSE}),
+)
+
+
 def ocr_arguments(server: RecordingServer, **kwargs: object) -> dict[str, object]:
     return {
         "model": OCR_MODEL,
