@@ -1,5 +1,7 @@
 """App factory for the LiteLLM global control plane. Enterprise only: refuses to build without a valid license."""
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Final, Protocol
 
@@ -8,7 +10,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm.proxy.control_plane.audit.dependencies import get_audit_log
 from litellm.proxy.control_plane.audit.router import router as audit_router
-from litellm.proxy.control_plane.auth.dependencies import get_token_verifier
+from litellm.proxy.control_plane.auth.dependencies import get_telemetry, get_token_verifier
 from litellm.proxy.control_plane.auth.router import get_login_service
 from litellm.proxy.control_plane.auth.router import router as auth_router
 from litellm.proxy.control_plane.common.exceptions import (
@@ -82,14 +84,25 @@ class ControlPlaneRequestSizeLimitMiddleware:
 def create_app(container: Container, license_check: License) -> FastAPI:
     if not license_check.is_premium():
         raise LicenseRequired()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
+        try:
+            yield
+        finally:
+            container.telemetry.shutdown()
+
     app: Final = FastAPI(
         title=TITLE,
         version="1",
         docs_url=f"{container.settings.api_prefix}/docs",
         openapi_url=f"{container.settings.api_prefix}/openapi.json",
+        lifespan=lifespan,
     )
     app.add_middleware(ControlPlaneRequestSizeLimitMiddleware)
+    container.telemetry.instrument(app)
     app.dependency_overrides[get_token_verifier] = lambda: container.token_verifier
+    app.dependency_overrides[get_telemetry] = lambda: container.telemetry
     app.dependency_overrides[get_login_service] = lambda: container.login_service
     app.dependency_overrides[get_registry] = lambda: container.registry
     app.dependency_overrides[get_control_plane_settings] = lambda: container.settings
