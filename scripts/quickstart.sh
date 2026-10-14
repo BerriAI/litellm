@@ -317,6 +317,7 @@ install it finds. Actions:
   open        open the admin UI in your browser
   update      download the latest image and restart on it
   uninstall   remove its containers, its database, and its files
+  help        show this help (also: -h, --help)
 
   --yes, -y   ask nothing; without a terminal, uninstall needs it
 
@@ -607,6 +608,18 @@ gateway_version() {
     grep -o '"version": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
 }
 
+# How many requests the gateway has handled, failed ones included, counted from
+# its request logs. It needs the admin key, which curl reads from stdin so it
+# stays off the command line. Empty when the gateway cannot say.
+gateway_requests() {
+  key="$(sed -n 's/^LITELLM_MASTER_KEY=//p' .env | tail -n 1)"
+  [ -n "$key" ] || return 0
+  printf 'header = "Authorization: Bearer %s"\n' "$key" |
+    curl -fsS --max-time 5 -K - \
+      "http://127.0.0.1:$PORT/global/activity?start_date=2000-01-01&end_date=$(date -u +%Y-%m-%d)" 2>/dev/null |
+    grep -o '"sum_api_requests": *[0-9]*' | grep -o '[0-9]*$'
+}
+
 # Stops the container port_owner found, or its whole Compose project.
 stop_owner() {
   if [ -n "$OWNER_PROJECT" ]; then
@@ -746,8 +759,14 @@ show_status() {
     Up*)
       uptime="${status#Up }"
       version="$(gateway_version)"
+      requests="$(gateway_requests)" || requests=''
+      case "$requests" in
+        '') ;;
+        0) requests='Requests|none yet' ;;
+        *) requests="Requests|$requests handled" ;;
+      esac
       box "LiteLLM is running" "Admin UI|$url" "Version|${version:-starting}" "Uptime|${uptime%% (*}" \
-        "Folder|$(tildify "$DIR")" "Image|$image" ${desktop:+"$desktop"} "Stop it|$(hint down)"
+        ${requests:+"$requests"} "Folder|$(tildify "$DIR")" "Image|$image" ${desktop:+"$desktop"} "Stop it|$(hint down)"
       ;;
     *)
       box "LiteLLM is stopped" "Folder|$(tildify "$DIR")" "Image|$image" ${desktop:+"$desktop"} \

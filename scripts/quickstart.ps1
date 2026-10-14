@@ -65,6 +65,7 @@ function Invoke-LiteLLMQuickstart {
       '  open        open the admin UI in your browser'
       '  update      download the latest image and restart on it'
       '  uninstall   remove its containers, its database, and its files'
+      '  help        show this help (also: -h, --help)'
       ''
       '  -Yes, -y    ask nothing; without a console, uninstall needs it'
       ''
@@ -704,6 +705,20 @@ function Invoke-LiteLLMQuickstart {
     return ''
   }
 
+  # How many requests the gateway has handled, failed ones included, counted
+  # from its request logs. It needs the admin key. Empty when the gateway cannot say.
+  function Get-RequestCount {
+    $key = Read-EnvValue 'LITELLM_MASTER_KEY'
+    if (-not $key) { return '' }
+    $today = [DateTime]::UtcNow.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    try {
+      $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Headers @{ Authorization = "Bearer $key" } `
+        -Uri "http://127.0.0.1:$($inst.Port)/global/activity?start_date=2000-01-01&end_date=$today"
+      if ("$($r.Content)" -match '"sum_api_requests": *([0-9]+)') { return $Matches[1] }
+    } catch { <# an older gateway, or no database yet #> }
+    return ''
+  }
+
   function Get-Images {
     return @((Invoke-Native $docker ($cf + @('config', '--images'))).Out | Where-Object { $_ } | ForEach-Object { "$_" })
   }
@@ -826,9 +841,12 @@ function Invoke-LiteLLMQuickstart {
       $uptime = ($status -replace '^Up ', '') -replace ' \(.*$', ''
       $version = Get-GatewayVersion
       if (-not $version) { $version = 'starting' }
+      $requests = Get-RequestCount
       $null = $rows.Add(@('Admin UI', $inst.Url))
       $null = $rows.Add(@('Version', $version))
       $null = $rows.Add(@('Uptime', $uptime))
+      if ($requests -eq '0') { $requests = 'none yet' } elseif ($requests) { $requests = "$requests handled" }
+      if ($requests) { $null = $rows.Add(@('Requests', $requests)) }
       $null = $rows.Add(@('Folder', (Tildify $inst.Dir)))
       $null = $rows.Add(@('Image', $image))
       if ($desktop) { $null = $rows.Add(@('Desktop', $desktop)) }
