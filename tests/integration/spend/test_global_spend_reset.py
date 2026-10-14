@@ -87,7 +87,15 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
         internal_user: Final = scenario.user(user_role="internal_user")
         internal_key: Final = scenario.key(user_id=internal_user, models=[model])
         _seed_spend(gateway, model, team_id, key_a, key_b)
-        before: Final = _spend_log_totals((key_a, key_b))
+        before: Final = eventually(
+            lambda: _spend_log_totals((key_a, key_b)),
+            lambda rows: (
+                len(rows) == 1
+                and int(str(rows[0]["rows"])) == 2
+                and float(str(rows[0]["total_spend"])) == pytest.approx(0.12)
+            ),
+            seconds=70,
+        )
         assert float(str(before[0]["total_spend"])) == pytest.approx(0.12), before
 
         refused: Final = gateway.request("POST", "/global/spend/reset", key=internal_key)
