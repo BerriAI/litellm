@@ -212,6 +212,40 @@ async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
 
 
 @pytest.mark.asyncio
+async def test_legacy_values_without_pynacl_still_count_so_the_boot_keeps_the_variable(monkeypatch):
+    """Without PyNaCl the count must not read legacy rows as "not encrypted with the previous key":
+    the boot would report NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY and tell the operator to delete
+    LITELLM_MIGRATE_FROM_MASTER_KEY while values under that key remain, unreadable."""
+    import sys
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_value = str(encrypt_value_helper("legacy-secret", new_encryption_key=PREVIOUS_KEY))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_Config": [
+            {"param_name": "environment_variables", "param_value": {"LANGFUSE_SECRET_KEY": legacy_value}}
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert isinstance(outcome, Migrated)
+    assert outcome.remaining == 1
+    assert database.writes == []  # nothing it cannot read is ever rewritten
+
+
+@pytest.mark.asyncio
 async def test_only_rows_holding_values_under_the_previous_key_are_written():
     database = _FakeDatabase(_seeded_tables())
 

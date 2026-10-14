@@ -153,7 +153,7 @@ def is_migrated(value: object) -> bool:
     return isinstance(value, str) and is_versioned_gcm(value)
 
 
-def classify_value(value: object, key: str = "scan") -> ValueClass:
+def classify_value(value: object, key: str = "scan", *, plaintext_metadata: bool = False) -> ValueClass:
     """Classify a stored value for the residual scanner.
 
     * ``not-a-string`` — not a string (numbers/bools/None left as-is on disk).
@@ -166,10 +166,16 @@ def classify_value(value: object, key: str = "scan") -> ValueClass:
       the current key (wrong key / corrupt); preserved, never deleted. For
       unversioned values ``classify_value`` cannot tell a corrupt nacl blob
       from plaintext, so it returns ``plaintext`` for both.
+
+    ``plaintext_metadata`` marks a leaf the write path stores as plaintext by
+    construction (a string nested inside a list/dict param, where the writer
+    only ever encrypts top-level strings). Such a leaf can never be ciphertext,
+    so it classifies as plaintext without the legacy reader — a fully migrated
+    store with nested params still passes the no-PyNaCl preflight.
     """
     if not isinstance(value, str):
         return "not-a-string"
-    if value == "":
+    if value == "" or plaintext_metadata:
         return "plaintext"
     versioned: Final = is_versioned_gcm(value)
     if not versioned:
@@ -583,22 +589,49 @@ def _mcp_encrypted_leaves(col: str, raw: object) -> Iterator[str]:
     )
 
 
-def _encrypted_leaves(db_attr: str, col: str, raw: object) -> Iterator[str]:
+# Tables whose writers encrypt each top-level litellm_params string value and leave everything
+# nested inside a list/dict param (tags, routing metadata, …) stored as plaintext.
+_LITELLM_PARAMS_TABLES: Final = frozenset({"litellm_proxymodeltable", "litellm_searchtoolstable"})
+
+
+def _top_level_param_leaves(params: Mapping[str, object]) -> Iterator[tuple[str, bool]]:
+    """(leaf, plaintext_metadata) pairs for one row of a litellm_params column.
+
+    The write path runs the encryptor per top-level param value and it encrypts
+    strings only, so only a top-level string is ever stored ciphertext: those
+    leaves stay gated on the legacy reader. Strings nested inside a list or dict
+    param are stored plaintext by construction, so they are reported as
+    plaintext metadata without the gate — a fully migrated store carrying such
+    params must still pass the no-PyNaCl preflight.
+    """
+    for k, v in params.items():
+        if k in _PLAINTEXT_LITELLM_PARAMS:
+            continue
+        if isinstance(v, str):
+            yield v, False
+        else:
+            for nested in _iter_encrypted_strings(v):
+                yield nested, True
+
+
+def _encrypted_leaves(db_attr: str, col: str, raw: object) -> Iterator[tuple[str, bool]]:
+    """(leaf, plaintext_metadata) pairs of one JSON column; plaintext_metadata is True for leaves
+    the write path stores as plaintext by construction (never gated on the legacy reader)."""
     if db_attr in _MCP_CREDENTIAL_TABLES and col in ("credentials", "env_vars"):
-        return _mcp_encrypted_leaves(col, raw)
-    if db_attr == "litellm_proxymodeltable" and (params := _object_map(raw)) is not None:
-        return _iter_encrypted_strings({k: v for k, v in params.items() if k not in _PLAINTEXT_LITELLM_PARAMS})
-    return _iter_encrypted_strings(raw)
+        return ((leaf, False) for leaf in _mcp_encrypted_leaves(col, raw))
+    if db_attr in _LITELLM_PARAMS_TABLES and (params := _object_map(raw)) is not None:
+        return _top_level_param_leaves(params)
+    return ((leaf, False) for leaf in _iter_encrypted_strings(raw))
 
 
-def _classify_into_report(report: LocationReport, value: str) -> None:
+def _classify_into_report(report: LocationReport, value: str, *, plaintext_metadata: bool = False) -> None:
     """Classify one stored string and bump the matching read-only counter.
 
     Only genuine nacl ciphertext lands in ``legacy``; non-secret strings (model
     names, base URLs, …) do not decrypt and fall through to ``plaintext``, so
     over-scanning a column is harmless to the residual count.
     """
-    report.count(classify_value(value, key="scan"))
+    report.count(classify_value(value, key="scan", plaintext_metadata=plaintext_metadata))
 
 
 def _secret_map_ciphertext(value: object) -> object:
@@ -654,8 +687,8 @@ async def _scan_one_table(
                     raw = json.loads(raw)
                 except (ValueError, TypeError):
                     pass
-            for s in _encrypted_leaves(db_attr, col, raw):
-                _classify_into_report(report, s)
+            for leaf, plaintext_metadata in _encrypted_leaves(db_attr, col, raw):
+                _classify_into_report(report, leaf, plaintext_metadata=plaintext_metadata)
         for col in scalar_columns:
             v = getattr(row, col, None)
             if isinstance(v, str):

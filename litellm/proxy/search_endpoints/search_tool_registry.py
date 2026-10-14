@@ -17,6 +17,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # 
     decrypt_if_encrypted_with,
     encrypt_value_helper,
     get_salt_key,
+    legacy_unreadable,
 )
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient
@@ -91,15 +92,30 @@ def _search_tool_plaintext(value: str) -> str | None:
 
 
 def _decrypted_search_tool_value(value: object) -> object:
+    """The stored value decrypted; as stored when it was never ciphertext; None when it is legacy
+    ciphertext this install has no PyNaCl to read — never the ciphertext blob itself."""
     if not isinstance(value, str):
         return value
     plaintext: Final = _search_tool_plaintext(value)
-    return value if plaintext is None else plaintext
+    if plaintext is not None:
+        return plaintext
+    return None if legacy_unreadable(value) else value
 
 
 def decrypt_search_tool_litellm_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-    """Decrypt stored litellm_params values; values that are not ciphertext are returned unchanged."""
-    return {key: _decrypted_search_tool_value(value) for key, value in litellm_params.items()}
+    """Decrypt stored litellm_params values; values that are not ciphertext are returned unchanged.
+
+    A value that is legacy ciphertext this install has no PyNaCl for reads as unset and is
+    dropped — the same read-as-unset posture as credential hydration — instead of being served
+    to the search provider as the stored blob.
+    """
+    decrypted: Final[dict[str, object]] = {}  # mutable-ok: accumulates one entry per stored param
+    for key, value in litellm_params.items():
+        resolved = _decrypted_search_tool_value(value)
+        if resolved is None and isinstance(value, str):
+            continue  # legacy-unreadable: read as unset, never serve the ciphertext
+        decrypted[key] = resolved
+    return decrypted
 
 
 def _reencrypt_search_tool_value(value: object, encryption_key: str) -> object:

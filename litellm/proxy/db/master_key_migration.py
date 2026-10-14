@@ -10,7 +10,11 @@ from typing_extensions import assert_never
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy.auth.master_key_boot_check import MIGRATE_FROM_MASTER_KEY_ENV_VAR, SALT_KEY_ENV_VAR
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_if_encrypted_with,
+    encrypt_value_helper,
+    legacy_unreadable,
+)
 from litellm.proxy.db.create_views import SupportsRawQueries
 
 
@@ -73,7 +77,13 @@ def replace_ciphertexts(value: JsonValue, replacement_for: ReplaceCiphertext, de
 
 async def count_values_encrypted_with(database: SupportsRawQueries, signing_key: str) -> int:
     def keep(value: str) -> str | None:
-        return None if decrypt_if_encrypted_with(value, signing_key) is None else value
+        decrypted: Final = decrypt_if_encrypted_with(value, signing_key)
+        if decrypted is not None:
+            return value
+        # A legacy value PyNaCl is needed to read still counts: without this, the boot would
+        # report nothing encrypted with the previous key and tell the operator to delete
+        # LITELLM_MIGRATE_FROM_MASTER_KEY while values under that key remain, unreadable.
+        return value if legacy_unreadable(value) else None
 
     return sum(
         [

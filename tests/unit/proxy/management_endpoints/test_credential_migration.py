@@ -228,6 +228,72 @@ async def test_check_and_rotation_preflight_pass_without_pynacl_when_only_comple
     }
 
 
+@pytest.mark.asyncio
+async def test_check_and_rotation_preflight_pass_without_pynacl_for_plaintext_nested_model_params(
+    salt_key, monkeypatch
+):
+    """A fully migrated store must pass the scan/preflight without PyNaCl even when a model row
+    carries plaintext nested params (``tags``, nested dicts): the write path encrypts only
+    top-level string values, so nested strings are stored plaintext by construction and can never
+    be legacy ciphertext. A top-level stored secret with no versioned prefix must still refuse."""
+    legacy_secret: Final = _legacy_ct("unmigrated-secret", monkeypatch)  # minted while nacl is importable
+    _enable_aes(monkeypatch)
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                litellm_params={
+                    "model": encrypt_value_helper("openai/gpt-5.4-mini"),
+                    "api_key": encrypt_value_helper("migrated-secret"),
+                    "tags": ["prod"],
+                    "routing": {"tier": "gold"},
+                }
+            )
+        ]
+    )
+    client.db.litellm_searchtoolstable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(litellm_params={"search_provider": encrypt_value_helper("tavily"), "tags": ["prod"]})
+        ]
+    )
+
+    report: Final = await cm.check_encryption(prisma_client=client)
+
+    assert report.residual_legacy == 0, report.as_dict()
+    assert report.as_dict()["locations"]["model_table"] == {
+        "scanned": 4,
+        "migrated": 0,
+        "already_v2": 2,
+        "plaintext": 2,
+        "undecryptable": 0,
+        "preserved": 0,
+        "legacy": 0,
+    }
+    assert report.as_dict()["locations"]["search_tools"] == {
+        "scanned": 2,
+        "migrated": 0,
+        "already_v2": 1,
+        "plaintext": 1,
+        "undecryptable": 0,
+        "preserved": 0,
+        "legacy": 0,
+    }
+
+    # A top-level stored secret with no versioned prefix still refuses the scan without PyNaCl.
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(litellm_params={"api_key": legacy_secret})]
+    )
+    with pytest.raises(RuntimeError, match="legacy-encryption"):
+        await cm.check_encryption(prisma_client=client)
+
+
 @pytest.mark.parametrize(
     "db_attr, build_row",
     [
