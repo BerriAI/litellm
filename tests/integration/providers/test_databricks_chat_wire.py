@@ -313,9 +313,75 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             "/chat/completions",
             id="A5-responses-list-input",
         ),
+        pytest.param(
+            "json-object-two-blocks",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A6-chat-json-object-two-blocks-joined",
+        ),
+        pytest.param(
+            "json-object-two-blocks-stream",
+            "/v1/chat/completions",
+            "databricks-qwen35-122b-a10b",
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}
+                ],
+                "response_format": {"type": "json_object"},
+                "stream": True,
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A7-chat-stream-json-object-two-blocks-joined",
+        ),
+        pytest.param(
+            "json-object-system-blocks",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {"role": "system", "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}]},
+                    {"role": "system", "content": "Bravo rule."},
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "system", "content": "Alpha rule.\n\nBravo rule."}, {"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A8-chat-json-object-system-blocks-keep-break",
+        ),
+        pytest.param(
+            "json-object-responses-two-parts",
+            "/v1/responses",
+            "databricks-qwen35-122b-a10b",
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Reply"}, {"type": "input_text", "text": " in JSON"}],
+                    }
+                ],
+                "text": {"format": {"type": "json_object"}},
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A9-responses-json-object-two-parts-joined",
+        ),
     ],
 )
-def test_databricks_non_claude_single_text_block_reaches_upstream_as_string(
+def test_databricks_non_claude_plain_text_content_reaches_upstream_as_string(
     gateway: Gateway,
     case: str,
     endpoint: str,
@@ -325,7 +391,7 @@ def test_databricks_non_claude_single_text_block_reaches_upstream_as_string(
     responses_mode: bool,
     upstream_path: str,
 ) -> None:
-    identity: Final = f"databricks-single-text-{case}-{uuid.uuid4().hex}"
+    identity: Final = f"databricks-plain-text-{case}-{uuid.uuid4().hex}"
     streaming: Final = request_body.get("stream") is True
 
     def respond(request: Request) -> Reply:

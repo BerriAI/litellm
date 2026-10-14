@@ -485,13 +485,6 @@ def test_transform_request_preserves_unity_model_service_name():
         ),
         pytest.param(
             "databricks-meta-llama-3-3-70b-instruct",
-            [{"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}],
-            {"response_format": {"type": "json_object"}},
-            [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
-            id="multiple-text-blocks",
-        ),
-        pytest.param(
-            "databricks-meta-llama-3-3-70b-instruct",
             [
                 {
                     "role": "user",
@@ -545,6 +538,103 @@ def test_transform_request_collapses_single_plain_text_block_for_non_claude_mode
     )
 
     assert outgoing_messages == [{**messages[0], "content": expected_content}]
+
+
+_TWO_TEXT_BLOCKS: Final = [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]
+_JSON_OBJECT: Final = {"response_format": {"type": "json_object"}}
+_IMAGE_BLOCK: Final = {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
+_CACHED_BLOCK: Final = {"type": "text", "text": " in JSON", "cache_control": {"type": "ephemeral"}}
+
+
+def _outgoing_messages(
+    model: str, messages: list[AllMessageValues], optional_params: dict[str, object]
+) -> list[dict[str, object]]:
+    request: Final = TypeAdapter(dict[str, object]).validate_python(
+        DatabricksConfig().transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook is untyped
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+    )
+    return TypeAdapter(list[dict[str, object]]).validate_python(request["messages"])
+
+
+@pytest.mark.parametrize(
+    "model,messages,optional_params,expected_content",
+    [
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            _JSON_OBJECT,
+            "Reply in JSON",
+            id="json-object-two-blocks-joined",
+        ),
+        pytest.param(
+            "databricks-qwen35-122b-a10b",
+            [{"role": "user", "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B json"}] * 2}],
+            _JSON_OBJECT,
+            "AB jsonAB json",
+            id="json-object-four-blocks-joined-as-sent",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            {},
+            _TWO_TEXT_BLOCKS,
+            id="no-response-format-stays-list",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            {"response_format": {"type": "json_schema", "json_schema": {"name": "r", "schema": {"type": "object"}}}},
+            _TWO_TEXT_BLOCKS,
+            id="json-schema-stays-list",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply"}, _CACHED_BLOCK]}],
+            _JSON_OBJECT,
+            [{"type": "text", "text": "Reply"}, _CACHED_BLOCK],
+            id="json-object-cache-control-stays-list",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}, _IMAGE_BLOCK]}],
+            _JSON_OBJECT,
+            [{"type": "text", "text": "Reply in JSON"}, _IMAGE_BLOCK],
+            id="json-object-text-and-image-stays-list",
+        ),
+        pytest.param(
+            "databricks-claude-sonnet-5",
+            [{"role": "user", "content": _TWO_TEXT_BLOCKS}],
+            _JSON_OBJECT,
+            _TWO_TEXT_BLOCKS,
+            id="json-object-claude-stays-list",
+        ),
+    ],
+)
+def test_transform_request_joins_plain_text_blocks_only_for_non_claude_json_object(
+    model: str,
+    messages: list[AllMessageValues],
+    optional_params: dict[str, object],
+    expected_content: object,
+) -> None:
+    assert _outgoing_messages(model, messages, optional_params) == [{"role": "user", "content": expected_content}]
+
+
+def test_transform_request_json_object_join_keeps_the_break_between_system_messages() -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}]},
+        {"role": "system", "content": "Bravo rule."},
+        {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
+    ]
+
+    assert _outgoing_messages("databricks-meta-llama-3-3-70b-instruct", messages, _JSON_OBJECT) == [
+        {"role": "system", "content": "Alpha rule.\n\nBravo rule."},
+        {"role": "user", "content": "Reply in JSON"},
+    ]
 
 
 def test_transform_request_strips_thinking_blocks_and_reasoning_content():

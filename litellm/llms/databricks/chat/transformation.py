@@ -75,13 +75,65 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     )
 
 
+_CONTENT_BLOCKS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _plain_text(block: object) -> str | None:
+    match block:
+        case {"type": "text", "text": str() as text} if block == {"type": "text", "text": text}:
+            return text
+        case _:
+            return None
+
+
+def _plain_texts(message: Mapping[str, object]) -> tuple[str, ...]:
+    match content := message.get("content"):
+        case list():
+            blocks: Final = _CONTENT_BLOCKS.validate_python(content)
+            texts: Final = tuple(text for block in blocks if (text := _plain_text(block)) is not None)
+            return texts if len(texts) == len(blocks) else ()
+        case _:
+            return ()
+
+
 def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
-    content: Final = message.get("content")
-    match content:
-        case [{"type": "text", "text": str() as text}] if content == [{"type": "text", "text": text}]:
+    match _plain_texts(message):
+        case (text,):
             return {**message, "content": text}
         case _:
             return message
+
+
+def _join_plain_text_blocks(message: AllMessageValues) -> AllMessageValues:
+    match _plain_texts(message):
+        case ():
+            return message
+        case texts:
+            return cast(AllMessageValues, {**message, "content": "".join(texts)})  # cast-ok: spread keeps the shape
+
+
+def _json_object_ready_messages(
+    model: str,
+    messages: list[AllMessageValues],  # mutable-ok: inherited transform_request contract
+    response_format: object,
+) -> list[AllMessageValues]:  # mutable-ok: inherited transform_request contract
+    match response_format:
+        case {"type": "json_object"} if "claude" not in model:
+            return [_join_plain_text_blocks(message) for message in messages]
+        case _:
+            return messages
+
+
+def _is_empty_text_block(block: object) -> bool:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text", "text": object() as text}:
+            return not text
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
 
 
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
@@ -102,9 +154,7 @@ def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
             message_dict.pop("content")
             return
         filtered: Final = [
-            block
-            for block in content
-            if not (isinstance(block, dict) and block.get("type") == "text" and not (block.get("text") or "").strip())
+            block for block in _CONTENT_BLOCKS.validate_python(content) if not _is_empty_text_block(block)
         ]
         if not filtered:
             message_dict.pop("content")
@@ -451,6 +501,22 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             return True
 
         return False
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],  # mutable-ok: inherited contract
+        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        headers: dict[str, object],  # mutable-ok: inherited contract
+    ) -> dict[str, object]:  # mutable-ok: inherited contract
+        return super().transform_request(
+            model=model,
+            messages=_json_object_ready_messages(model, messages, optional_params.get("response_format")),
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     @overload
     def _transform_messages(
