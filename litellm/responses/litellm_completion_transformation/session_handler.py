@@ -51,6 +51,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
+        item_cache_control: bool = False,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -86,6 +87,7 @@ class ResponsesSessionHandler:
                     spend_log=spend_log,
                     proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
+                    item_cache_control=item_cache_control,
                 )
             )
 
@@ -117,6 +119,7 @@ class ResponsesSessionHandler:
             | ChatCompletionResponseMessage
             | Message
         ],
+        item_cache_control: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -148,6 +151,7 @@ class ResponsesSessionHandler:
                     input=response_input_param,
                     responses_api_request={},
                     replay_reasoning=True,
+                    item_cache_control=item_cache_control,
                 )
             )
 

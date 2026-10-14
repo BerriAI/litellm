@@ -1191,8 +1191,10 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
     it returns False for unmapped models, the opposite polarity.
     """
-    if model is None:
-        return True
+    return model is None or bedrock_declared_cache_point_support(model) is not False
+
+
+def bedrock_declared_cache_point_support(model: str) -> bool | None:
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
     map_keys: Final = (model, get_bedrock_base_model(model))
@@ -1209,7 +1211,7 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     if explicit_marker_support is not None:
         return explicit_marker_support
     if not any(key in litellm.model_cost for key in map_keys):
-        return True
+        return None
     return any(
         entry.get("supports_prompt_caching") is True
         for key in map_keys
