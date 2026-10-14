@@ -469,9 +469,9 @@ def _stored_endpoint(endpoint_id: str) -> dict[str, JsonValue]:
     return matches[0]
 
 
-def _query(request: Request) -> tuple[str, dict[str, str]]:
+def _query(request: Request) -> tuple[str, tuple[tuple[str, str], ...]]:
     path, _, query = request.target.partition("?")
-    return path, dict(parse_qsl(query, keep_blank_values=True))
+    return path, tuple(parse_qsl(query, keep_blank_values=True))
 
 
 def _multipart_parts(content_type: str, body: bytes) -> list[tuple[str, str | None, str | None, bytes]]:
@@ -540,10 +540,10 @@ def test_configured_endpoint_forwards_json_multipart_and_query_and_an_update_kee
         assert nested.status_code == 200, nested.text
         before: Final = wire.drain()
         assert [(request.method, *_query(request)) for request in before] == [
-            ("POST", "/base", {"api-version": "2024-01-01", "trace": "1"}),
-            ("POST", "/base", {"api-version": "2025-02-02"}),
-            ("POST", "/base", {"api-version": "2024-01-01"}),
-            ("POST", "/nested/sub/route", {"q": "1"}),
+            ("POST", "/base", (("api-version", "2024-01-01"), ("trace", "1"))),
+            ("POST", "/base", (("api-version", "2025-02-02"),)),
+            ("POST", "/base", (("api-version", "2024-01-01"),)),
+            ("POST", "/nested/sub/route", (("q", "1"),)),
         ], before
         for request in before[:3]:
             assert request.headers["authorization"] == f"Bearer {_CONTRACT_TOKEN}", request.headers
