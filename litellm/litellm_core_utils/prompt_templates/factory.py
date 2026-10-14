@@ -23,7 +23,6 @@ from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     message_field,
-    parts_of,
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
@@ -1836,21 +1835,10 @@ def find_anthropic_server_tool_result(
     )
 
 
-def _server_tool_use_ids(message: object) -> Iterator[str]:
-    fields: Final = message_field(message, "provider_specific_fields")
-    web_search_results: Final = parts_of(message_field(fields, "web_search_results"))
-    tool_results: Final = parts_of(message_field(fields, "tool_results"))
-    tool_ids: Final = (message_field(tool_call, "id") for tool_call in parts_of(message_field(message, "tool_calls")))
-    return (
-        tool_id
-        for tool_id in tool_ids
-        if isinstance(tool_id, str)
-        and find_anthropic_server_tool_result(tool_id, web_search_results, tool_results) is not None
+def _tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
+    return frozenset(
+        tool_call_id for message in messages if isinstance(tool_call_id := message_field(message, "tool_call_id"), str)
     )
-
-
-def _tool_call_ids_rebuilt_as_server_tool_use(messages: Sequence[object]) -> frozenset[str]:
-    return frozenset(itertools.chain.from_iterable(_server_tool_use_ids(message) for message in messages))
 
 
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
@@ -1860,6 +1848,7 @@ def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
+    answered_tool_ids: Container[str] = frozenset(),
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -1920,7 +1909,11 @@ def convert_to_anthropic_tool_invoke(
             context="Anthropic tool invoke",
         )
 
-        server_tool_result = find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
+        server_tool_result = (
+            None
+            if tool_id in answered_tool_ids
+            else find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
+        )
         if server_tool_result is not None:
             anthropic_tool_invoke.append(
                 {
@@ -2483,7 +2476,7 @@ def anthropic_messages_pt(
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
-    server_tool_use_ids: Final = _tool_call_ids_rebuilt_as_server_tool_use(messages)
+    client_answered_tool_ids: Final = _tool_call_ids_answered_by_client(messages)
 
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
@@ -2605,9 +2598,7 @@ def anthropic_messages_pt(
 
                     user_content.append(_anthropic_content_text_element)
 
-            elif (
-                user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function"
-            ) and message_field(user_message_types_block, "tool_call_id") not in server_tool_use_ids:
+            elif user_message_types_block["role"] == "tool" or user_message_types_block["role"] == "function":
                 # OpenAI's tool message content will always be a string
                 user_content.append(
                     convert_to_anthropic_tool_result(user_message_types_block, force_base64=force_base64)
@@ -2675,6 +2666,7 @@ def anthropic_messages_pt(
                     assistant_tool_calls,
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
+                    answered_tool_ids=client_answered_tool_ids,
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -2858,6 +2850,7 @@ def anthropic_messages_pt(
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                     tool_results=_tool_results,
+                    answered_tool_ids=client_answered_tool_ids,
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates
