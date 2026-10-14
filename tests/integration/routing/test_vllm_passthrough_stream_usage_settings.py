@@ -159,7 +159,7 @@ def _spend(prompt: JsonValue, completion: JsonValue) -> float:
     return prompt * _INPUT_COST + completion * _OUTPUT_COST
 
 
-def test_always_include_stream_usage_true_injects_usage_and_keeps_the_usage_frame_for_the_caller(
+def test_always_include_stream_usage_true_injects_usage_and_relays_the_stream_the_caller_asked_for(
     tmp_path: Path,
 ) -> None:
     with _vllm_proxy(tmp_path, _streaming, {"always_include_stream_usage": True}) as rig:
@@ -168,7 +168,7 @@ def test_always_include_stream_usage_true_injects_usage_and_keeps_the_usage_fram
         assert response.status_code == 200, response.text
         (posted,) = _posted(rig.wire)
         assert posted["stream_options"] == {"include_usage": True}, posted
-        assert response.content == b"".join(_stream_bytes(posted)), response.text
+        assert response.content == b"".join(_stream_bytes(body)), response.text
         (row,) = _rows(rig.model, 1)
         assert row["request_id"] == _identity(body), row
         assert (row["status"], row["prompt_tokens"], row["completion_tokens"]) == ("success", 5, 3), row
