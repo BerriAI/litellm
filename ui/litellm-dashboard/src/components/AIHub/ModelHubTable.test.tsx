@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { act } from "@testing-library/react";
 import type { MCPServerData } from "./MCPHubTableColumns";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
 
 const mockUseUISettings = vi.hoisted(() => vi.fn());
@@ -24,7 +24,30 @@ vi.mock("@/components/networking", () => ({
   makeMCPPublicCall: vi.fn(),
   getUiSettings: vi.fn(),
   getClaudeCodePluginsList: vi.fn(() => Promise.resolve({ plugins: [] })),
+  modelCostMap: vi.fn(() => Promise.resolve({})),
+  getProviderCreateMetadata: vi.fn(() => Promise.resolve([])),
+  getGuardrailUISettings: vi.fn(() => Promise.resolve({})),
 }));
+
+const GARDEN_COST_MAP = {
+  "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+  "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+  "newvendor/decider": { litellm_provider: "newvendor", mode: "evaluation" },
+  "laya/english": { litellm_provider: "laya", mode: "evaluation", supported_endpoints: ["/v1/systemone"] },
+  "claude-opus-4-8": { litellm_provider: "anthropic", mode: "chat" },
+};
+
+const ADDABLE_PROVIDER_FIELDS = [
+  { provider: "TypeSafe", provider_display_name: "TypeSafe", litellm_provider: "typesafe", credential_fields: [] },
+  { provider: "Laya", provider_display_name: "Laya", litellm_provider: "laya", credential_fields: [] },
+  { provider: "OpenAI", provider_display_name: "OpenAI", litellm_provider: "openai", credential_fields: [] },
+  {
+    provider: "Azure_AI_Studio",
+    provider_display_name: "Azure AI Foundry (Studio)",
+    litellm_provider: "azure_ai",
+    credential_fields: [],
+  },
+];
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -72,6 +95,7 @@ describe("ModelHubTable", () => {
       writable: true,
     });
     vi.clearAllMocks();
+    testQueryClient.clear();
   });
 
   // Reusable helper function to setup mocks for auth redirect tests
@@ -123,6 +147,7 @@ describe("ModelHubTable", () => {
           premiumUser={false}
           userRole={null}
           canOpenPlayground={false}
+          canAddModels={false}
         />,
       );
 
@@ -163,6 +188,7 @@ describe("ModelHubTable", () => {
         premiumUser={false}
         userRole={null}
         canOpenPlayground
+        canAddModels
       />,
     );
 
@@ -181,7 +207,14 @@ describe("ModelHubTable", () => {
     });
 
     renderWithProviders(
-      <ModelHubTable accessToken={null} publicPage={false} premiumUser={false} userRole={null} canOpenPlayground />,
+      <ModelHubTable
+        accessToken={null}
+        publicPage={false}
+        premiumUser={false}
+        userRole={null}
+        canOpenPlayground
+        canAddModels
+      />,
     );
 
     expect(await screen.findByText("No models yet")).toBeInTheDocument();
@@ -215,6 +248,7 @@ describe("ModelHubTable", () => {
         premiumUser={false}
         userRole={null}
         canOpenPlayground={false}
+        canAddModels={false}
       />,
     );
 
@@ -248,6 +282,7 @@ describe("ModelHubTable", () => {
           premiumUser={false}
           userRole="Admin"
           canOpenPlayground={canOpenPlayground}
+          canAddModels
         />,
       );
       await user.click(await screen.findByRole("button", { name: model.model_group }));
@@ -289,6 +324,241 @@ describe("ModelHubTable", () => {
     });
   });
 
+  describe("decision model garden", () => {
+    const renderHub = async (
+      models: { model_group: string; providers: string[]; mode: string }[],
+      {
+        userRole = "Admin",
+        canAddModels = true,
+        loadProxySettings = async () => ({ decision_model_providers: ["typesafe", "cloudflare"] }),
+        costMap = GARDEN_COST_MAP,
+      }: {
+        userRole?: string;
+        canAddModels?: boolean;
+        loadProxySettings?: () => Promise<unknown>;
+        costMap?: Record<string, unknown>;
+      } = {},
+    ) => {
+      vi.mocked(networking.modelHubCall).mockResolvedValue({ data: models });
+      vi.mocked(networking.modelCostMap).mockResolvedValue(costMap);
+      vi.mocked(networking.getProviderCreateMetadata).mockResolvedValue([
+        ...ADDABLE_PROVIDER_FIELDS,
+        {
+          provider: "NewVendor",
+          provider_display_name: "NewVendor",
+          litellm_provider: "newvendor",
+          credential_fields: [],
+        },
+      ]);
+      vi.mocked(networking.getGuardrailUISettings).mockImplementation(loadProxySettings);
+      vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      vi.mocked(networking.getUiSettings).mockResolvedValue({ values: {} });
+      mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ModelHubTable
+          accessToken="test-token"
+          publicPage={false}
+          premiumUser={false}
+          userRole={userRole}
+          canOpenPlayground
+          canAddModels={canAddModels}
+        />,
+      );
+      await screen.findByText(/Showing \d+ of \d+ models/);
+      return { user, modeSelect: () => screen.getByDisplayValue("All Modes") };
+    };
+
+    const chatOnly = [{ model_group: "claude-opus-4-8", providers: ["anthropic"], mode: "chat" }];
+
+    it("lists the decision models from the cost map when the proxy has none configured", async () => {
+      await renderHub(chatOnly);
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("2 decision models across 2 providers answer on /v1/decisions");
+      expect(within(garden).getByTestId("decision-model-card-typesafe/jev-latest")).toHaveTextContent("TypeSafe");
+      expect(within(garden).getByTestId("decision-model-card-cloudflare/clef")).toHaveTextContent("Cloudflare");
+      expect(within(garden).queryByText("claude-opus-4-8")).not.toBeInTheDocument();
+    });
+
+    it("sends a self-hosted model that does not answer on /v1/decisions to its own docs, with no Add Model link", async () => {
+      await renderHub(chatOnly);
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("1 more is self-hosted and answers on its own route.");
+      const layaCard = within(garden).getByTestId("decision-model-card-laya/english");
+      expect(within(layaCard).queryByRole("link", { name: "/v1/decisions docs" })).not.toBeInTheDocument();
+      expect(within(layaCard).getByRole("link", { name: "Self-hosted, own route" })).toHaveAttribute(
+        "href",
+        "https://docs.litellm.ai/docs/decisions#self-hosted-laya-and-nimble",
+      );
+      expect(await within(garden).findAllByRole("link", { name: "Add model" })).toHaveLength(1);
+      expect(within(layaCard).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+    });
+
+    it("links each card to the decisions docs and to Add Model prefilled with that provider and model", async () => {
+      await renderHub(chatOnly);
+
+      const card = within(await screen.findByTestId("decision-model-garden")).getByTestId(
+        "decision-model-card-typesafe/jev-latest",
+      );
+      expect(within(card).getByRole("link", { name: "/v1/decisions docs" })).toHaveAttribute(
+        "href",
+        "https://docs.litellm.ai/docs/decisions",
+      );
+      expect(await within(card).findByRole("link", { name: "Add model" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\/models-and-endpoints\?tab=add&provider=typesafe&litellm_model=typesafe%2Fjev-latest$/),
+      );
+    });
+
+    it("labels a model whose provider this proxy cannot serve on /v1/decisions, with no Add Model and no count", async () => {
+      await renderHub(chatOnly);
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("2 decision models across 2 providers answer on /v1/decisions");
+      expect(garden).toHaveTextContent("1 more needs a newer LiteLLM version.");
+      const newCard = within(garden).getByTestId("decision-model-card-newvendor/decider");
+      expect(within(newCard).getByRole("link", { name: "Needs a newer LiteLLM" })).toHaveAttribute(
+        "href",
+        "https://docs.litellm.ai/docs/decisions#supported-providers",
+      );
+      expect(await within(garden).findAllByRole("link", { name: "Add model" })).toHaveLength(1);
+      expect(within(newCard).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+    });
+
+    it("lists OpenAI's chat model that answers on /v1/decisions, with Add Model prefilled", async () => {
+      await renderHub(chatOnly, {
+        loadProxySettings: async () => ({ decision_model_providers: ["openai"] }),
+        costMap: {
+          "gpt-6-luna": {
+            litellm_provider: "openai",
+            mode: "chat",
+            supported_endpoints: ["/v1/chat/completions", "/v1/decisions"],
+          },
+          "gpt-5.5": { litellm_provider: "openai", mode: "chat", supported_endpoints: ["/v1/chat/completions"] },
+        },
+      });
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("1 decision model across 1 provider answers on /v1/decisions.");
+      const card = within(garden).getByTestId("decision-model-card-gpt-6-luna");
+      expect(await within(card).findByRole("link", { name: "Add model" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?tab=add&provider=openai&litellm_model=gpt-6-luna$/),
+      );
+      expect(within(garden).queryByTestId("decision-model-card-gpt-5.5")).not.toBeInTheDocument();
+    });
+
+    it("sends a Foundry decision model to the docs for its deployment name instead of prefilling one Azure refuses", async () => {
+      await renderHub(chatOnly, {
+        loadProxySettings: async () => ({ decision_model_providers: ["typesafe", "azure_ai"] }),
+        costMap: {
+          "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+          "azure_ai/Microsoft-Decision-1": { litellm_provider: "azure_ai", mode: "evaluation" },
+        },
+      });
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("2 decision models across 2 providers answer on /v1/decisions");
+      const foundryCard = within(garden).getByTestId("decision-model-card-azure_ai/Microsoft-Decision-1");
+      expect(within(foundryCard).getByRole("link", { name: "Deploy under your own name" })).toHaveAttribute(
+        "href",
+        "https://docs.litellm.ai/docs/decisions#supported-providers",
+      );
+      expect(await within(garden).findAllByRole("link", { name: "Add model" })).toHaveLength(1);
+      expect(within(foundryCard).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+    });
+
+    it("falls back to the cost map alone when this proxy's decision provider list cannot be read", async () => {
+      await renderHub(chatOnly, {
+        loadProxySettings: async () => {
+          throw new Error("Failed to get guardrail UI settings");
+        },
+      });
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("3 decision models across 3 providers answer on /v1/decisions");
+      expect(garden).not.toHaveTextContent("a newer LiteLLM version");
+    });
+
+    it("offers a decisions mode option that keeps the garden, hides the chat rows, and points at the garden", async () => {
+      const { user, modeSelect } = await renderHub(chatOnly);
+      await screen.findByTestId("decision-model-garden");
+
+      expect(within(modeSelect()).queryByRole("option", { name: "evaluation" })).not.toBeInTheDocument();
+      await user.selectOptions(modeSelect(), "decisions");
+
+      expect(screen.getByTestId("decision-model-garden")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "claude-opus-4-8" })).not.toBeInTheDocument();
+      expect(screen.getByText("Showing 0 of 1 models")).toBeInTheDocument();
+      expect(screen.getByText("No model on this proxy uses the decisions mode")).toBeInTheDocument();
+      expect(screen.queryByText("Adjust the filters to see more models.")).not.toBeInTheDocument();
+    });
+
+    it("hides the garden while a non-decision mode is selected", async () => {
+      const { user, modeSelect } = await renderHub(chatOnly);
+      await screen.findByTestId("decision-model-garden");
+
+      await user.selectOptions(modeSelect(), "chat");
+      expect(screen.queryByTestId("decision-model-garden")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Clear Filters" }));
+      expect(await screen.findByTestId("decision-model-garden")).toBeInTheDocument();
+    });
+
+    it("labels a configured evaluation model as decisions in the table and under the decisions filter", async () => {
+      const { user, modeSelect } = await renderHub([
+        ...chatOnly,
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+      ]);
+
+      const row = screen.getByRole("button", { name: "jev-latest" }).closest("tr");
+      expect(row).toHaveTextContent("decisions");
+      expect(row).not.toHaveTextContent("evaluation");
+
+      await user.selectOptions(modeSelect(), "decisions");
+      expect(screen.getByText("Showing 1 of 2 models")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "jev-latest" })).toBeInTheDocument();
+    });
+
+    it("drops the Add Model link for an admin session that cannot add models", async () => {
+      await renderHub(chatOnly, { canAddModels: false });
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(within(garden).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+      expect(within(garden).getAllByRole("link", { name: "/v1/decisions docs" })).toHaveLength(2);
+    });
+
+    it("drops the Add Model link on a card whose provider the Add Model form cannot create", async () => {
+      await renderHub(chatOnly);
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      const typesafeCard = within(garden).getByTestId("decision-model-card-typesafe/jev-latest");
+      const cloudflareCard = within(garden).getByTestId("decision-model-card-cloudflare/clef");
+      expect(await within(typesafeCard).findByRole("link", { name: "Add model" })).toBeInTheDocument();
+      expect(within(cloudflareCard).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+      expect(within(cloudflareCard).getByRole("link", { name: "/v1/decisions docs" })).toBeInTheDocument();
+    });
+
+    it("sorts the Mode column by the label it shows, placing decisions between chat and embedding", async () => {
+      const { user } = await renderHub([
+        { model_group: "text-embedding-4", providers: ["openai"], mode: "embedding" },
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+        ...chatOnly,
+      ]);
+
+      await user.click(screen.getByTestId("sort-header-mode"));
+
+      const order = screen
+        .getAllByRole("button", { name: /^(claude-opus-4-8|jev-latest|text-embedding-4)$/ })
+        .map((button) => button.textContent);
+      expect(order).toEqual(["claude-opus-4-8", "jev-latest", "text-embedding-4"]);
+    });
+  });
+
   describe("hub tabs", () => {
     const renderHub = async (agents: object[] = [], mcpServers: Promise<MCPServerData[]> = Promise.resolve([])) => {
       vi.mocked(networking.modelHubCall).mockResolvedValue({
@@ -308,6 +578,7 @@ describe("ModelHubTable", () => {
           premiumUser={false}
           userRole="Admin"
           canOpenPlayground
+          canAddModels
         />,
       );
       return { user, search: await screen.findByPlaceholderText("Search model names...") };

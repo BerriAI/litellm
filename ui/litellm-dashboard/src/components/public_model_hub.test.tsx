@@ -62,9 +62,14 @@ const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): Mo
 
 const DEFAULT_MODELS = [model({ model_group: "gpt-4" }), model({ model_group: "claude-3", providers: ["anthropic"] })];
 
-const respondWith = (rows: ModelGroupInfo[], totalCount: number = rows.length, pageSize: number = 50) =>
+const respondWith = (
+  rows: ModelGroupInfo[],
+  totalCount: number = rows.length,
+  pageSize: number = 50,
+  facetValues: Record<string, string[]> = FACET_VALUES,
+) =>
   apiGetMock.mockImplementation((path: string) => {
-    const facet = FACET_VALUES[path];
+    const facet = facetValues[path];
     if (facet) {
       return Promise.resolve({
         data: facet,
@@ -275,6 +280,45 @@ describe("PublicModelHub", () => {
     await user.click(await screen.findByRole("option", { name: "embedding" }));
 
     await waitFor(() => expect(lastModelQuery()["filter[mode][in]"]).toBe("embedding"));
+  });
+
+  it("shows decision models as decisions and filters on every spelling the route stores", async () => {
+    respondWith([model({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" })], 1, 50, {
+      ...FACET_VALUES,
+      [`${MODEL_HUB_PATH}/modes`]: ["chat", "evaluation", "decisions"],
+    });
+    const user = userEvent.setup();
+    renderHub();
+    const row = (await screen.findByText("jev-latest")).closest("tr");
+    expect(row).toHaveTextContent("decisions");
+    expect(row).not.toHaveTextContent("evaluation");
+
+    await user.click(screen.getByPlaceholderText("Select modes"));
+    expect(screen.getAllByRole("option", { name: "decisions" })).toHaveLength(1);
+    expect(screen.queryByRole("option", { name: "evaluation" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "decisions" }));
+
+    await waitFor(() => expect(lastModelQuery()["filter[mode][in]"]).toBe("evaluation,decisions"));
+  });
+
+  it("shows a decision model's usage example on /v1/systemone instead of chat completions", async () => {
+    respondWith([model({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" })]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "jev-latest" }));
+
+    const example = (await screen.findByText(/\/v1\/systemone/)).closest("pre");
+    expect(example).toHaveTextContent('"model": "jev-latest"');
+    expect(example).not.toHaveTextContent("chat.completions");
+  });
+
+  it("keeps the chat completions usage example for a chat model", async () => {
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "gpt-4" }));
+
+    const example = (await screen.findByText(/chat\.completions\.create/)).closest("pre");
+    expect(example).toHaveTextContent('model="gpt-4"');
   });
 
   it("filters by several providers at once, and returns to the first page", async () => {
