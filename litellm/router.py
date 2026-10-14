@@ -710,7 +710,7 @@ async def _aread_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
     from litellm.exceptions import MidStreamFallbackError
 
     try:
-        return _FirstChunk(chunk=await stream.__anext__())
+        return _FirstChunk(chunk=await anext(aiter(stream)))
     except StopAsyncIteration:
         return _FirstChunk(chunk=None)
     except MidStreamFallbackError as e:
@@ -722,7 +722,7 @@ def _read_first_chunk(stream: CustomStreamWrapper) -> _FirstChunk:
     from litellm.exceptions import MidStreamFallbackError
 
     try:
-        return _FirstChunk(chunk=next(stream))
+        return _FirstChunk(chunk=next(iter(stream)))
     except StopIteration:
         return _FirstChunk(chunk=None)
     except MidStreamFallbackError as e:
