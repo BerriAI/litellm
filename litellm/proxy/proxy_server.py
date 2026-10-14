@@ -545,7 +545,7 @@ from litellm.proxy.container_endpoints.endpoints import router as container_rout
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup, first_cleanup_run_kwargs
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
@@ -5537,6 +5537,7 @@ _CLEANUP_SCHEDULE_KEYS: Final = (
     "maximum_daily_tag_spend_retention_period",
     "maximum_spend_logs_cleanup_cron",
     "maximum_spend_logs_retention_interval",
+    "maximum_spend_logs_cleanup_run_on_startup",
 )
 
 
@@ -8058,6 +8059,7 @@ class ProxyConfig:
             id="spend_log_cleanup_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            **first_cleanup_run_kwargs(_current_general_settings(), datetime.now(timezone.utc)),
         )
         verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
 
@@ -11229,6 +11231,7 @@ class ProxyStartupEvent:
                         id="spend_log_cleanup_job",
                         replace_existing=True,
                         misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                        **first_cleanup_run_kwargs(cleanup_settings, datetime.now(timezone.utc)),
                     )
                 except (ValueError, OverflowError):
                     verbose_proxy_logger.error(

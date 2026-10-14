@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Final
@@ -18,16 +18,70 @@ from litellm.constants import (
     SPEND_LOG_CLEANUP_BATCH_SIZE,
     SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP,
     SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS,
+    SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS,
+    SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
     TableCleanupResult,
+    first_cleanup_run_kwargs,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
 )
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"maximum_health_check_retention_period": "90d"},
+        {"maximum_health_check_retention_period": "90d", "maximum_spend_logs_cleanup_run_on_startup": False},
+        {"maximum_health_check_retention_period": "90d", "maximum_spend_logs_cleanup_run_on_startup": "true"},
+        {
+            "maximum_health_check_retention_period": "90d",
+            "maximum_spend_logs_cleanup_run_on_startup": True,
+            "maximum_spend_logs_cleanup_cron": "0 4 * * *",
+        },
+    ],
+)
+def test_first_cleanup_run_kwargs_leaves_the_schedule_alone_unless_opted_in(settings: Mapping[str, object]):
+    assert dict(first_cleanup_run_kwargs(settings, datetime(2026, 1, 1, tzinfo=timezone.utc))) == {}
+
+
+def test_first_cleanup_run_kwargs_runs_soon_after_startup_when_opted_in():
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    settings: Final = {"maximum_spend_logs_cleanup_run_on_startup": True}
+    delays: Final = {
+        (first_cleanup_run_kwargs(settings, now)["next_run_time"] - now).total_seconds() for _ in range(200)
+    }
+    assert min(delays) >= SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS
+    assert max(delays) <= SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS
+    assert len(delays) > 1
+
+
+@pytest.mark.parametrize("interval, interval_seconds", [("30s", 30), ("2m", 120)])
+def test_first_cleanup_run_kwargs_never_runs_later_than_a_short_interval(interval: str, interval_seconds: int):
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    settings: Final = {
+        "maximum_spend_logs_cleanup_run_on_startup": True,
+        "maximum_spend_logs_retention_interval": interval,
+    }
+    delays: Final = {
+        (first_cleanup_run_kwargs(settings, now)["next_run_time"] - now).total_seconds() for _ in range(200)
+    }
+    assert max(delays) <= interval_seconds, delays
+    assert min(delays) >= min(SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS, interval_seconds), delays
+
+
+@pytest.mark.parametrize("interval", ["not-a-duration", 3600])
+def test_first_cleanup_run_kwargs_leaves_an_invalid_interval_to_the_caller(interval: object):
+    settings: Final = {
+        "maximum_spend_logs_cleanup_run_on_startup": True,
+        "maximum_spend_logs_retention_interval": interval,
+    }
+    assert dict(first_cleanup_run_kwargs(settings, datetime(2026, 1, 1, tzinfo=timezone.utc))) == {}
 
 
 def _far_deadline() -> float:

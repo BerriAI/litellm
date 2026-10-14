@@ -16,16 +16,18 @@ import re
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from apscheduler.job import Job
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS, SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.types.router import Deployment, LiteLLM_Params
@@ -4225,6 +4227,10 @@ async def test_ProxyConfig__update_general_settings_updates_health_check_retenti
     reschedule.assert_awaited_once()
 
 
+def _second_run_gap_seconds(job: Job) -> float:
+    return (job.trigger.get_next_fire_time(job.next_run_time, job.next_run_time) - job.next_run_time).total_seconds()
+
+
 def _paused_scheduler(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -4233,6 +4239,55 @@ def _paused_scheduler(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     return real_scheduler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_on_startup", [None, False, True])
+async def test_ProxyConfig__reschedule_spend_log_cleanup_job_first_run_only_moves_up_when_opted_in(
+    monkeypatch: pytest.MonkeyPatch, run_on_startup: bool | None
+):
+    real_scheduler: Final = _paused_scheduler(monkeypatch)
+    opt_in: Final = {} if run_on_startup is None else {"maximum_spend_logs_cleanup_run_on_startup": run_on_startup}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"maximum_health_check_retention_period": "90d", "maximum_spend_logs_retention_interval": "1d", **opt_in},
+    )
+    before: Final = datetime.now(timezone.utc)
+    try:
+        await ProxyConfig()._reschedule_spend_log_cleanup_job()
+        job: Final = real_scheduler.get_job("spend_log_cleanup_job")
+        delay: Final = (job.next_run_time - before).total_seconds()
+        assert _second_run_gap_seconds(job) == 86400
+        if run_on_startup:
+            assert delay <= SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS + 5
+        else:
+            assert delay >= 86400 - 5
+    finally:
+        real_scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__reschedule_spend_log_cleanup_job_opt_in_never_delays_a_short_interval(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    real_scheduler: Final = _paused_scheduler(monkeypatch)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "maximum_health_check_retention_period": "90d",
+            "maximum_spend_logs_retention_interval": "30s",
+            "maximum_spend_logs_cleanup_run_on_startup": True,
+        },
+    )
+    before: Final = datetime.now(timezone.utc)
+    try:
+        await ProxyConfig()._reschedule_spend_log_cleanup_job()
+        job: Final = real_scheduler.get_job("spend_log_cleanup_job")
+        delay: Final = (job.next_run_time - before).total_seconds()
+        assert delay <= 30 + 1, delay
+        assert _second_run_gap_seconds(job) == 30
+    finally:
+        real_scheduler.shutdown(wait=False)
 
 
 def _scheduler_whose_first_add_job_raises(monkeypatch):

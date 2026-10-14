@@ -1,11 +1,14 @@
 import asyncio
+import random
 import time
+from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, TypedDict
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -17,6 +20,8 @@ from litellm.constants import (
     SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES,
     SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP,
     SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS,
+    SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS,
+    SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS,
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -93,6 +98,34 @@ SPEND_LOG_CLEANUP_BOUND_SETTINGS: Final = (
     "maximum_spend_logs_cleanup_run_budget",
     "maximum_spend_logs_cleanup_batch_timeout",
 )
+
+
+class FirstCleanupRunKwargs(TypedDict, total=False):
+    next_run_time: ReadOnly[datetime]
+
+
+def first_cleanup_run_kwargs(settings: Mapping[str, object], now: datetime) -> FirstCleanupRunKwargs:
+    """
+    Extra ``add_job`` kwargs for the interval cleanup job. Empty unless
+    ``maximum_spend_logs_cleanup_run_on_startup`` is true, so the first run otherwise stays one interval out.
+    The startup delay is capped at the configured interval so opting in never makes the first run later.
+    """
+    if (
+        settings.get("maximum_spend_logs_cleanup_cron")
+        or settings.get("maximum_spend_logs_cleanup_run_on_startup") is not True
+    ):
+        return {}
+    retention_interval: Final = settings.get("maximum_spend_logs_retention_interval", "1d")
+    if not isinstance(retention_interval, str):
+        return {}
+    try:
+        interval_seconds: Final = duration_in_seconds(retention_interval)
+    except (ValueError, OverflowError):
+        return {}
+    startup_delay_seconds: Final = SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + random.randint(
+        0, SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS
+    )
+    return {"next_run_time": now + timedelta(seconds=min(startup_delay_seconds, interval_seconds))}
 
 
 class SpendLogCleanup:
