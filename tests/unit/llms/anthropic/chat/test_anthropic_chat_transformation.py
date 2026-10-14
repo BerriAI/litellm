@@ -39,6 +39,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 def test_response_format_transformation_unit_test():
@@ -9082,3 +9083,93 @@ def test_completion_surfaces_response_citations_in_provider_specific_fields(resp
     assert response.choices[0].message.provider_specific_fields["citations"] == [
         [{**citation, "supported_text": "the grass is green"}]
     ]
+
+
+def _refusal_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "stop_reason": stop_reason, "stop_details": stop_details}
+
+
+def _transform_message_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+
+def test_refusal_stop_details_kept_in_provider_specific_fields():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    result: Final = _transform_message_body(ANTHROPIC_DOCS_REFUSAL_MESSAGE)
+
+    assert result.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == stop_details
+    assert result._hidden_params["provider_specific_fields"]["stop_details"] == stop_details
+
+
+def test_refusal_without_stop_details_keeps_the_native_stop_reason():
+    result: Final = _transform_message_body(_refusal_message_body("refusal", None))
+
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert "stop_details" not in provider_fields
+
+
+def test_end_turn_response_carries_no_stop_details():
+    result: Final = _transform_message_body(_refusal_message_body("end_turn", None))
+
+    assert result.choices[0].finish_reason == "stop"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert "stop_details" not in provider_fields
+    assert "stop_reason" not in provider_fields
+
+
+def _json_mode_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {
+        **_refusal_message_body(stop_reason, stop_details),
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": "Hello"}}
+        ],
+    }
+
+
+def _transform_json_mode_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=True,
+        prefix_prompt=None,
+    )
+
+
+def test_json_mode_refusal_keeps_stop_details_on_the_message():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    result: Final = _transform_json_mode_body(_json_mode_message_body("refusal", stop_details))
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert message.provider_specific_fields == {"stop_reason": "refusal", "stop_details": stop_details}
+
+
+def test_json_mode_tool_use_turn_adds_no_stop_fields_to_the_message():
+    result: Final = _transform_json_mode_body(_json_mode_message_body("tool_use", None))
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert not message.provider_specific_fields
+
+
+def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> None:
+    result = AnthropicConfig().transform_parsed_response(
+        completion_response=MagicMock(),
+        raw_response=httpx.Response(200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    provider_specific_fields = result.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_specific_fields

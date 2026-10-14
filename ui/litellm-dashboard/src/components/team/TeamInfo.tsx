@@ -1306,7 +1306,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const teamAdminSettingsEditor =
     teamEditAccess.kind === "team_admin" ? (
       <TeamAdminSettingsForm
-        initialValues={{ tpm_limit: info.tpm_limit, rpm_limit: info.rpm_limit, max_budget: info.max_budget }}
+        initialValues={{
+          tpm_limit: info.tpm_limit,
+          rpm_limit: info.rpm_limit,
+          max_budget: info.max_budget,
+          soft_budget: info.soft_budget,
+          team_member_budget: info.team_member_budget_table?.max_budget,
+          team_member_budget_duration: info.team_member_budget_table?.budget_duration,
+          team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
+          team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
+        }}
         editableFields={teamEditAccess.editableFields}
         mayRaiseMaxBudget={teamEditAccess.mayRaiseMaxBudget}
         isSaving={isTeamSaving}

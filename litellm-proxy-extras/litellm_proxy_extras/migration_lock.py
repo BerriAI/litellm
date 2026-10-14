@@ -13,6 +13,7 @@ from litellm_proxy_extras.prisma_toolchain import (
 )
 
 MIGRATION_LOCK_KEY: Final = int.from_bytes(b"llm_mig2", "big")
+PRISMA_ADVISORY_LOCK_KEY: Final = 72707369
 
 if TYPE_CHECKING:
     import psycopg
@@ -32,7 +33,7 @@ def migration_environment(environment: Mapping[str, str]) -> Mapping[str, str]:
     if not database_url:
         return environment
     migration_url: Final = _migration_url(database_url, environment.get("DIRECT_URL"))
-    return {**environment, "DATABASE_URL": migration_url}
+    return {**environment, "DATABASE_URL": migration_url, "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK": "1"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,10 +56,15 @@ class MigrationCoordinator:
     def check_connection(self) -> None:
         self.connection.execute("SELECT 1")
 
+    def release_statement_snapshot(self) -> None:
+        # a parameterized statement leaves its portal snapshot registered on the backend until the
+        # next statement, and CREATE INDEX CONCURRENTLY waits for every such snapshot to go away
+        self.connection.execute("SELECT 1")
+
     def acquire_prisma_lock(self) -> None:
         deadline: Final = time.monotonic() + migration_lock_timeout()
         while time.monotonic() < deadline:
-            if _try_lock(self.connection, 72707369):
+            if _try_lock(self.connection, PRISMA_ADVISORY_LOCK_KEY):
                 return
             time.sleep(min(random.uniform(0.5, 1.5), max(0.0, deadline - time.monotonic())))
         raise RuntimeError(
@@ -93,6 +99,17 @@ def migration_lock(database_url: str) -> Generator[MigrationCoordinator, None, N
         f"Timed out waiting for another v2 migration resolver after {wait_seconds}s. "
         f"Check the running migration or increase {MIGRATION_LOCK_TIMEOUT_ENV_VAR}."
     )
+
+
+@contextmanager
+def prisma_migration_lock(database_url: str) -> Generator[None, None, None]:
+    """Hold the coordinator lock and Prisma's own lock key as transaction-level locks on one
+    pinned connection while a Prisma command runs with its session advisory lock disabled, so a
+    transaction pooler can never strand that lock on an idle backend after the command exits."""
+    with migration_lock(database_url) as coordinator:
+        coordinator.acquire_prisma_lock()
+        coordinator.release_statement_snapshot()
+        yield
 
 
 @contextmanager

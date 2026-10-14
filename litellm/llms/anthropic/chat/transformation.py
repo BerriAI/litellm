@@ -104,10 +104,12 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
+    REFUSAL_STOP_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
     process_anthropic_headers,
+    refusal_provider_specific_fields,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
 )
@@ -294,7 +296,6 @@ DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING: Final = (
 DROP_UNSUPPORTED_SPEED_WARNING: Final = (
     "Dropping unsupported `speed` for model=%s (drop_params=True). Fast mode is only supported on select Opus models."
 )
-
 SERVICE_TIER_PROVIDERS: Final = frozenset({"anthropic", "azure_ai"})
 
 OPENAI_TO_ANTHROPIC_SERVICE_TIER: Final = MappingProxyType(
@@ -304,6 +305,12 @@ OPENAI_TO_ANTHROPIC_SERVICE_TIER: Final = MappingProxyType(
 DROP_UNSUPPORTED_SERVICE_TIER_WARNING: Final = (
     "Dropping unsupported `service_tier` for model=%s (drop_params=True). "
     "Anthropic only accepts 'auto' and 'standard_only'."
+)
+
+MESSAGES_SERVICE_TIER_PROVIDERS: Final = SERVICE_TIER_PROVIDERS | {"bedrock_mantle"}
+
+DROP_SERVICE_TIER_PROVIDER_WARNING: Final = (
+    "Dropping `service_tier` for model=%s on provider=%s. Only the Anthropic API routes accept it."
 )
 
 
@@ -540,6 +547,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return cls._maybe_drop_speed_param(model, optional_params, drop_params, custom_llm_provider)
 
     @staticmethod
+    def provider_supports_service_tier(custom_llm_provider: str | None) -> bool:
+        """Anthropic's ``service_tier`` is accepted by the direct API and the Foundry and Mantle gateways in
+        front of it. Vertex rejects the field and Bedrock Invoke only takes its own tier names."""
+        return custom_llm_provider is None or custom_llm_provider in MESSAGES_SERVICE_TIER_PROVIDERS
+
+    @classmethod
+    def maybe_drop_service_tier_param(
+        cls,
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        custom_llm_provider: str | None = None,
+    ) -> None:
+        if "service_tier" not in optional_params or cls.provider_supports_service_tier(custom_llm_provider):
+            return
+        litellm.verbose_logger.warning(DROP_SERVICE_TIER_PROVIDER_WARNING, model, custom_llm_provider)
+        optional_params.pop("service_tier", None)
+
+    @staticmethod
     def _raise_invalid_reasoning_effort(model: str, value: object, llm_provider: str) -> NoReturn:
         """Raise a ``BadRequestError`` for an unrecognised ``reasoning_effort``.
 
@@ -717,12 +742,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Already handled above
                 continue
 
-            if key == "properties" and isinstance(value, dict):
-                result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in value.items()}
+            if key in ("properties", "$defs") and isinstance(value, dict):
+                nested_schemas: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
+                result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in nested_schemas.items()}
             elif key == "items" and isinstance(value, dict):
-                result[key] = AnthropicConfig.filter_anthropic_output_schema(value)
-            elif key == "$defs" and isinstance(value, dict):
-                result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in value.items()}
+                nested_schema: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
+                result[key] = AnthropicConfig.filter_anthropic_output_schema(nested_schema)
             elif key == "anyOf" and isinstance(value, list):
                 result["anyOf"] = result.get("anyOf", []) + [
                     AnthropicConfig.filter_anthropic_output_schema(item) for item in value
@@ -2700,7 +2725,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
 
-        return provider_specific_fields
+        refusal_fields: Final = refusal_provider_specific_fields(
+            REFUSAL_STOP_FIELDS.validate_python(completion_response)
+        )
+        return {**provider_specific_fields, **refusal_fields}
 
     def transform_parsed_response(
         self,
@@ -2785,7 +2813,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _message.provider_specific_fields = provider_specific_fields
 
         if json_mode_message is not None:
+            refusal_fields: Final = refusal_provider_specific_fields(
+                REFUSAL_STOP_FIELDS.validate_python(completion_response)
+            )
             completion_response["stop_reason"] = "stop"
+            if refusal_fields:
+                json_mode_message.provider_specific_fields = dict(refusal_fields)
             _message = json_mode_message
 
         model_response.choices[0].message = _message

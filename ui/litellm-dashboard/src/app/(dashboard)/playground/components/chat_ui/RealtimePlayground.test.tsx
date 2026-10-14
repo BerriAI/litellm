@@ -5,6 +5,7 @@ import RealtimePlayground from "./RealtimePlayground";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "https://proxy.example.com",
+  getGatewayBaseUrl: () => "https://gateway.example.com",
 }));
 
 class FakeSocket {
@@ -112,7 +113,7 @@ describe("RealtimePlayground", () => {
 
     await user.click(screen.getByRole("button", { name: /Connect/i }));
 
-    expect(latestSocket().url).toBe("wss://proxy.example.com/v1/realtime?model=gpt-realtime");
+    expect(latestSocket().url).toBe("wss://gateway.example.com/v1/realtime?model=gpt-realtime");
     expect(latestSocket().protocols).toEqual(["realtime", "openai-insecure-api-key.sk-realtime"]);
   });
 

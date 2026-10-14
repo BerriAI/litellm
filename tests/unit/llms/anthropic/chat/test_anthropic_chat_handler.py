@@ -22,6 +22,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
 from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 @pytest.mark.asyncio
@@ -3366,6 +3367,53 @@ def test_anthropic_streaming_invalid_key_maps_to_authentication_error() -> None:
     assert exc_info.value.status_code == 401
     assert exc_info.value.llm_provider == "anthropic"
     assert route.calls.last.request.headers["x-api-key"] == "bad-anthropic-key"
+
+
+def _message_stream_events(stop_reason: str, stop_details: dict | None) -> tuple[dict, ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": ANTHROPIC_DOCS_REFUSAL_MESSAGE["id"],
+                "type": "message",
+                "role": "assistant",
+                "model": ANTHROPIC_DOCS_REFUSAL_MESSAGE["model"],
+                "content": [],
+                "usage": {"input_tokens": 412, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details},
+            "usage": {"output_tokens": 0},
+        },
+        {"type": "message_stop"},
+    )
+
+
+def _assemble_stream(events: tuple[dict, ...]) -> litellm.ModelResponse:
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+    return litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+
+def test_streamed_refusal_stop_details_reach_the_assembled_message():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
+
+    assert assembled.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == stop_details
+
+
+def test_streamed_end_turn_carries_no_stop_details():
+    assembled: Final = _assemble_stream(_message_stream_events("end_turn", None))
+
+    assert assembled.choices[0].finish_reason == "stop"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_fields
+    assert "stop_reason" not in provider_fields
 
 
 def _accumulate_tool_call_args(iterator, chunks):
