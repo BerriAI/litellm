@@ -5595,15 +5595,41 @@ def test_a_null_cache_control_on_the_current_turn_takes_no_slot_from_the_replaye
     assert ["cache_control" in message for message in messages[:4]] == [True, True, True, True]
 
 
-def test_replayed_marks_a_provider_would_refuse_drop_only_under_drop_params():
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_replayed_marks_a_provider_would_refuse_drop_with_or_without_drop_params(drop_params: bool):
     replayed_turns: Final = [{"role": "user", "content": "turn 0", "cache_control": {"type": "forever"}}]
     current: Final = {"role": "user", "content": "newest"}
 
-    assert _replayed_messages_from(replayed_turns, current)[0] == replayed_turns[0]
-    assert _replayed_messages_from(replayed_turns, current, drop_params=True)[0] == {
+    assert _replayed_messages_from(replayed_turns, current, drop_params=drop_params)[0] == {
         "role": "user",
         "content": "turn 0",
     }
+
+
+def test_replayed_tool_marks_drop_for_nova_without_drop_params():
+    replayed_turns: Final = [
+        {"role": "user", "content": "Summarize the gateway latency report."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_latency_report", "arguments": "{}"},
+                    "cache_control": _EPHEMERAL,
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "p50 12 ms", "cache_control": _EPHEMERAL},
+    ]
+
+    messages: Final = _replayed_messages_from(
+        replayed_turns, {"role": "user", "content": "newest"}, model="us.amazon.nova-2-lite-v1:0"
+    )
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 0
+    assert messages[2] == {"role": "tool", "tool_call_id": "call_1", "content": "p50 12 ms"}
 
 
 def test_replayed_marks_stay_untouched_for_a_target_without_cache_points():

@@ -448,11 +448,12 @@ class _ItemMarkRules:
     refuses_tool_block_marks: bool
     external_marks: int
 
-    def checked(self, message: _MessageT) -> _MessageT:
-        if not self.drop_params:
-            return message
+    def sanitized(self, message: _MessageT) -> _MessageT:
         valid: Final = _with_cache_control(message, _validated_cache_control)
         return _without_tool_block_marks(valid) if self.refuses_tool_block_marks else valid
+
+    def checked(self, message: _MessageT) -> _MessageT:
+        return self.sanitized(message) if self.drop_params else message
 
 
 def _item_mark_rules(
@@ -480,7 +481,7 @@ def _replayed_messages_for_cache_points(
     as_system: Final = tuple(_developer_message_as_system_message(message) for message in replayed_messages)
     current_marks: Final = sum(_cache_control_count(message) for message in current_messages)
     return _messages_within_cache_control_limit(
-        tuple(map(rules.checked, as_system)), current_marks + rules.external_marks
+        tuple(map(rules.sanitized, as_system)), current_marks + rules.external_marks
     )
 
 
