@@ -202,6 +202,32 @@ def test_invalid_preference_is_refused_on_update(gateway: Gateway, preference: J
         assert marketplace_entry(gateway, name)["installationPreference"] == "available"
 
 
+@pytest.mark.parametrize("preference", PREFERENCES)
+def test_preference_on_a_git_source_is_refused(gateway: Gateway, preference: str) -> None:
+    name: Final = plugin_name()
+    with gateway.scenario() as scenario:
+        body: Final = {
+            "name": name,
+            "source": {"source": "github", "repo": "example-org/example-plugin"},
+            "installation_preference": preference,
+        }
+        response: Final = register(scenario, body)
+        assert response.status_code == 400, response.text
+        assert "archive source" in response.text
+        assert stored_rows(name) == []
+
+
+def test_both_preference_spellings_are_refused(gateway: Gateway) -> None:
+    name: Final = plugin_name()
+    with gateway.scenario() as scenario:
+        response: Final = register(
+            scenario, registration(name, installation_preference="required", installationPreference="available")
+        )
+        assert response.status_code == 422, response.text
+        assert "not both" in response.text
+        assert stored_rows(name) == []
+
+
 def test_duplicate_json_key_keeps_the_last_value(gateway: Gateway) -> None:
     name: Final = plugin_name()
     raw: Final = (

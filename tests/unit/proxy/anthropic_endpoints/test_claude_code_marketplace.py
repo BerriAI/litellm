@@ -495,18 +495,15 @@ async def test_register_accepts_the_camel_case_installation_preference_key():
     assert marketplace["plugins"][0]["installationPreference"] == "auto_install"
 
 
-_SOURCES_DESKTOP_NEVER_INSTALLS = [
+_NON_ARCHIVE_SOURCES = [
     {"source": "github", "repo": "org/repo"},
     {"source": "url", "url": "https://github.com/org/repo.git"},
     _GIT_SUBDIR_SOURCE,
-    {"source": "archive", "url": "https://artifacts.example.com/plugin.zip"},
 ]
+_UNPINNED_ARCHIVE_SOURCE = {"source": "archive", "url": "https://artifacts.example.com/plugin.zip"}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("preference", ["auto_install", "required"])
-@pytest.mark.parametrize("source", _SOURCES_DESKTOP_NEVER_INSTALLS)
-async def test_self_installing_preference_needs_an_archive_with_sha256(preference, source):
+async def _assert_preference_refused(source, preference):
     with pytest.raises(HTTPException) as register_error:
         await register_plugin(
             request=RegisterPluginRequest(name="no-op-plugin", source=source, installation_preference=preference),
@@ -526,14 +523,49 @@ async def test_self_installing_preference_needs_an_archive_with_sha256(preferenc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", _SOURCES_DESKTOP_NEVER_INSTALLS)
-async def test_available_preference_is_accepted_on_any_source(source):
+@pytest.mark.parametrize("preference", ["available", "auto_install", "required"])
+@pytest.mark.parametrize("source", _NON_ARCHIVE_SOURCES)
+async def test_every_preference_needs_an_archive_source(preference, source):
+    await _assert_preference_refused(source, preference)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preference", ["auto_install", "required"])
+async def test_self_installing_preference_needs_the_archive_sha256(preference):
+    await _assert_preference_refused(_UNPINNED_ARCHIVE_SOURCE, preference)
+
+
+@pytest.mark.asyncio
+async def test_available_preference_is_accepted_on_an_unpinned_archive():
     response = await register_plugin(
-        request=RegisterPluginRequest(name="listed-plugin", source=source, installation_preference="available"),
+        request=RegisterPluginRequest(
+            name="listed-plugin", source=_UNPINNED_ARCHIVE_SOURCE, installation_preference="available"
+        ),
         user_api_key_dict=_USER,
     )
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
 
     assert response.plugin.installation_preference == "available"
+    assert marketplace["plugins"][0]["installationPreference"] == "available"
+
+
+@pytest.mark.parametrize(
+    "build_request",
+    [
+        lambda body: RegisterPluginRequest.model_validate({"name": "s3-skill", **body}),
+        UpdatePluginRequest.model_validate,
+    ],
+    ids=["register", "update"],
+)
+def test_plugin_request_rejects_both_preference_spellings(build_request):
+    with pytest.raises(ValidationError, match="not both"):
+        build_request(
+            {
+                "source": _ARCHIVE_SOURCE,
+                "installation_preference": "auto_install",
+                "installationPreference": "available",
+            }
+        )
 
 
 @pytest.mark.asyncio

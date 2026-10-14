@@ -277,17 +277,24 @@ def _validate_plugin_source(source: Mapping[str, str]) -> None:
 
 
 def _validate_installation_preference(spec: PluginSpec) -> None:
-    if spec.installation_preference not in _SELF_INSTALLING_PREFERENCES:
+    if spec.installation_preference is None:
         return
-    if spec.source.get("source") == "archive" and spec.source.get("sha256"):
-        return
-    raise HTTPException(
-        status_code=400,
-        detail={
-            "error": f"installation_preference '{spec.installation_preference}' needs an archive source with a "
-            "sha256, the only plugins Claude Desktop installs on its own"
-        },
-    )
+    if spec.source.get("source") != "archive":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "installation_preference needs an archive source, the only plugins Claude Desktop lists "
+                "from a marketplace.json URL"
+            },
+        )
+    if spec.installation_preference in _SELF_INSTALLING_PREFERENCES and not spec.source.get("sha256"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"installation_preference '{spec.installation_preference}' needs the archive's sha256, "
+                "since Claude Desktop installs only pinned archives on its own"
+            },
+        )
 
 
 def _build_plugin_manifest(name: str, spec: PluginSpec) -> Mapping[str, object]:

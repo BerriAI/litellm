@@ -7375,7 +7375,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. 'auto_install' and 'required' need an archive source with a sha256, since Claude Desktop installs only those on its own, and only when the archive and marketplace.json share its inference gateway origin. Claude Code 2.1.75 and older reject a marketplace.json that carries the field on any plugin",
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
               "title": "Installation Preference"
             },
             "keywords": {
@@ -7542,7 +7542,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. 'auto_install' and 'required' need an archive source with a sha256, since Claude Desktop installs only those on its own, and only when the archive and marketplace.json share its inference gateway origin. Claude Code 2.1.75 and older reject a marketplace.json that carries the field on any plugin",
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
               "title": "Installation Preference"
             },
             "keywords": {

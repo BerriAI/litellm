@@ -2,13 +2,19 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, TypeAdapter, model_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
 InstallationPreference: TypeAlias = Literal["available", "auto_install", "required"]
+_BOTH_PREFERENCE_SPELLINGS: Final = frozenset({"installation_preference", "installationPreference"})
+_REQUEST_KEYS: Final = TypeAdapter(dict[str, object])
+
+
+def _request_keys(data: object) -> frozenset[str]:
+    return frozenset(_REQUEST_KEYS.validate_python(data)) if isinstance(data, dict) else frozenset()
 
 
 class PluginAuthor(LiteLLMBaseModel):
@@ -51,12 +57,19 @@ class PluginSpec(LiteLLMBaseModel):
         None,
         validation_alias=AliasChoices("installation_preference", "installationPreference"),
         description=(
-            "Emitted as installationPreference on this plugin's marketplace.json entry. 'auto_install' and "
-            "'required' need an archive source with a sha256, since Claude Desktop installs only those on its own, "
-            "and only when the archive and marketplace.json share its inference gateway origin. Claude Code 2.1.75 "
-            "and older reject a marketplace.json that carries the field on any plugin"
+            "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, "
+            "the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' "
+            "also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share "
+            "its inference gateway origin"
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_both_preference_spellings(cls, data: object) -> object:
+        if _BOTH_PREFERENCE_SPELLINGS.issubset(_request_keys(data)):
+            raise ValueError("send installation_preference or installationPreference, not both")
+        return data
 
 
 class RegisterPluginRequest(PluginSpec):
