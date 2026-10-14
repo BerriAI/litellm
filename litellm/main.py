@@ -210,6 +210,8 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor as ChunkProcessor,  # noqa: PLC0414  # public re-export
 )
 from .llms.anthropic.chat import AnthropicChatCompletion
+from .llms.anthropic.chat.prompt_cache_breakpoints import claude_prompt_cache, resolved_claude_prompt_cache
+from .llms.anthropic.chat.transformation import AnthropicConfig
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -5555,8 +5557,35 @@ def completion(
                 base_model=base_model,
             )
 
+        claude_drop_params: Final = litellm.drop_params is True or (
+            "drop_params" in kwargs
+            and normalize_drop_params(cast(object, kwargs["drop_params"])) is True  # cast-ok: untyped request kwargs
+        )
+        claude_cache: Final = (
+            resolved_claude_prompt_cache(
+                claude_prompt_cache(
+                    cast(list[object], messages),  # cast-ok: completion types messages as a bare List
+                    cast(list[object] | None, tools),  # cast-ok: completion types tools as a bare List
+                    non_default_params,
+                    accepts_automatic_caching=isinstance(provider_config, AnthropicConfig),
+                    drop_params=claude_drop_params,
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+            if provider_config is not None
+            and _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model)
+            else None
+        )
+        claude_messages: Final = (
+            None
+            if claude_cache is None
+            else cast(list[AllMessageValues], list(claude_cache.messages))  # cast-ok: marks renamed in place
+        )
         if provider_config is not None:
-            messages = provider_config.translate_developer_role_to_system_role(messages=messages)
+            messages = provider_config.translate_developer_role_to_system_role(
+                messages=messages if claude_messages is None else claude_messages
+            )
 
         if (
             supports_system_message is not None
@@ -5599,7 +5628,7 @@ def completion(
             "custom_llm_provider": custom_llm_provider,
             "response_format": response_format,
             "seed": seed,
-            "tools": tools,
+            "tools": tools if claude_cache is None or claude_cache.tools is None else list(claude_cache.tools),
             "tool_choice": tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
@@ -5623,7 +5652,9 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
-        optional_params = get_optional_params(**optional_param_args, **non_default_params)
+        optional_params = get_optional_params(
+            **optional_param_args, **(non_default_params if claude_cache is None else claude_cache.params)
+        )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,

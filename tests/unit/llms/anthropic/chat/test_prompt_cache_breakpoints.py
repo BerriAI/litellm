@@ -2,409 +2,201 @@ from typing import Final
 
 import pytest
 
-import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
-    CacheBreakpointCapExceeded,
-    ClaudeCacheMarks,
-    PromptCacheOptionsUnsupported,
-    claude_cache_marks,
-    claude_extra_body,
-    drop_params_enabled,
-    resolved_claude_cache_marks,
-    resolved_claude_extra_body,
-    tools_carry_prompt_cache_breakpoint,
+    ClaudePromptCache,
+    UnsupportedPromptCacheParam,
+    claude_prompt_cache,
+    resolved_claude_prompt_cache,
 )
 
-EPHEMERAL: Final = {"type": "ephemeral"}
-EXPLICIT: Final = {"mode": "explicit"}
-EXPLICIT_30M: Final = {"mode": "explicit", "ttl": "30m"}
-MODEL: Final = "claude-opus-5-5"
+_EXPLICIT: Final = {"mode": "explicit"}
+_EPHEMERAL: Final = {"type": "ephemeral"}
 
 
-def _text(text: str, **fields: object) -> dict[str, object]:
-    return {"type": "text", "text": text, **fields}
+def _cache(
+    messages: list[object],
+    tools: list[object] | None = None,
+    params: dict[str, object] | None = None,
+    *,
+    accepts_automatic_caching: bool = True,
+    drop_params: bool = False,
+) -> ClaudePromptCache | UnsupportedPromptCacheParam:
+    return claude_prompt_cache(
+        messages,
+        tools,
+        params or {},
+        accepts_automatic_caching=accepts_automatic_caching,
+        drop_params=drop_params,
+    )
 
 
-def _tool(**fields: object) -> dict[str, object]:
-    return {"type": "function", "function": {"name": "lookup", "parameters": {}}, **fields}
+def _resolved(
+    messages: list[object],
+    tools: list[object] | None = None,
+    params: dict[str, object] | None = None,
+    *,
+    accepts_automatic_caching: bool = True,
+    drop_params: bool = False,
+) -> ClaudePromptCache:
+    outcome: Final = _cache(
+        messages, tools, params, accepts_automatic_caching=accepts_automatic_caching, drop_params=drop_params
+    )
+    assert isinstance(outcome, ClaudePromptCache), outcome
+    return outcome
 
 
-def _call(identity: str, **fields: object) -> dict[str, object]:
-    return {"id": identity, "type": "function", "function": {"name": "lookup", "arguments": "{}"}, **fields}
+def _part(text: str, **marks: object) -> dict[str, object]:
+    return {"type": "text", "text": text, **marks}
 
 
-def _six_breakpoints() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """A tool definition, a system part, a user part, a tool call, a tool result part and a string message, every
-    one marked, in the order Claude reads them"""
+def test_breakpoints_become_cache_control_on_every_block_that_carries_one():
     messages: Final = [
-        {"role": "system", "content": [_text("rules", prompt_cache_breakpoint=EXPLICIT)]},
-        {"role": "user", "content": [_text("hi", prompt_cache_breakpoint=EXPLICIT_30M)]},
-        {"role": "assistant", "content": "", "tool_calls": [_call("call_1", prompt_cache_breakpoint=EXPLICIT)]},
-        {"role": "tool", "tool_call_id": "call_1", "content": [_text("sunny", prompt_cache_breakpoint=EXPLICIT)]},
-        {"role": "user", "content": "done", "prompt_cache_breakpoint": EXPLICIT},
-    ]
-    return messages, [_tool(prompt_cache_breakpoint=EXPLICIT)]
-
-
-def test_drop_params_keeps_the_latest_four_marks_in_wire_order() -> None:
-    messages, tools = _six_breakpoints()
-
-    marks: Final = claude_cache_marks(messages, tools, automatic_breakpoint=False, drop_params=True)
-
-    assert marks == ClaudeCacheMarks(
-        messages=(
-            {"role": "system", "content": [_text("rules")]},
-            {"role": "user", "content": [_text("hi", cache_control=EPHEMERAL)]},
-            {"role": "assistant", "content": "", "tool_calls": [_call("call_1", cache_control=EPHEMERAL)]},
-            {"role": "tool", "tool_call_id": "call_1", "content": [_text("sunny", cache_control=EPHEMERAL)]},
-            {"role": "user", "content": "done", "cache_control": EPHEMERAL},
-        ),
-        tools=(_tool(),),
-    )
-
-
-def test_four_breakpoints_are_renamed_without_dropping_anything() -> None:
-    messages, tools = _six_breakpoints()
-
-    marks: Final = claude_cache_marks(messages[2:], tools, automatic_breakpoint=False, drop_params=False)
-
-    assert marks == ClaudeCacheMarks(
-        messages=(
-            {"role": "assistant", "content": "", "tool_calls": [_call("call_1", cache_control=EPHEMERAL)]},
-            {"role": "tool", "tool_call_id": "call_1", "content": [_text("sunny", cache_control=EPHEMERAL)]},
-            {"role": "user", "content": "done", "cache_control": EPHEMERAL},
-        ),
-        tools=(_tool(cache_control=EPHEMERAL),),
-    )
-
-
-def test_the_automatic_breakpoint_takes_a_slot_and_is_never_dropped() -> None:
-    parts: Final = [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]
-
-    marks: Final = claude_cache_marks(
-        [{"role": "user", "content": parts}], None, automatic_breakpoint=True, drop_params=True
-    )
-
-    assert marks == ClaudeCacheMarks(
-        messages=(
-            {
-                "role": "user",
-                "content": [
-                    _text("part 0"),
-                    *(_text(f"part {index}", cache_control=EPHEMERAL) for index in range(1, 4)),
-                ],
-            },
-        ),
-        tools=(),
-    )
-
-
-def test_without_drop_params_the_excess_is_reported_with_the_count() -> None:
-    messages, tools = _six_breakpoints()
-
-    assert claude_cache_marks(messages, tools, automatic_breakpoint=False, drop_params=False) == (
-        CacheBreakpointCapExceeded(found=6)
-    )
-
-
-def test_a_request_without_breakpoints_is_forwarded_as_written_even_past_the_cap() -> None:
-    messages: Final = [
-        {"role": "user", "content": [_text(f"part {index}", cache_control=EPHEMERAL) for index in range(5)]}
-    ]
-    tools: Final = [_tool(cache_control=EPHEMERAL)]
-
-    marks: Final = claude_cache_marks(messages, tools, automatic_breakpoint=True, drop_params=True)
-
-    assert marks == ClaudeCacheMarks(messages=(messages[0],), tools=(tools[0],))
-    assert marks.messages[0] is messages[0]
-
-
-def test_a_message_level_mark_on_list_content_takes_no_slot_because_claude_never_renders_it() -> None:
-    marked_parts: Final = [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(3)]
-    messages: Final = [
-        {"role": "user", "content": "first", "prompt_cache_breakpoint": EXPLICIT},
-        {"role": "user", "content": [*marked_parts, _text("tail")], "prompt_cache_breakpoint": EXPLICIT},
-    ]
-
-    marks: Final = claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False)
-
-    assert marks == ClaudeCacheMarks(
-        messages=(
-            {"role": "user", "content": "first", "cache_control": EPHEMERAL},
-            {
-                "role": "user",
-                "content": [*(_text(f"part {index}", cache_control=EPHEMERAL) for index in range(3)), _text("tail")],
-                "cache_control": EPHEMERAL,
-            },
-        ),
-        tools=(),
-    )
-
-
-def test_a_message_level_mark_on_a_tool_result_with_list_content_takes_a_slot() -> None:
-    messages: Final = [
-        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]},
-        {
-            "role": "tool",
-            "tool_call_id": "call_1",
-            "content": [_text("sunny")],
-            "prompt_cache_breakpoint": EXPLICIT,
-        },
-    ]
-
-    assert claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False) == (
-        CacheBreakpointCapExceeded(found=5)
-    )
-
-
-def test_a_message_level_mark_on_a_function_result_with_list_content_takes_a_slot() -> None:
-    messages: Final = [
-        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]},
-        {"role": "function", "name": "lookup", "content": [_text("sunny")], "prompt_cache_breakpoint": EXPLICIT},
-    ]
-
-    assert claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False) == (
-        CacheBreakpointCapExceeded(found=5)
-    )
-
-
-def _four_marked_parts_then(message: dict[str, object]) -> list[dict[str, object]]:
-    return [
-        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]},
-        message,
-    ]
-
-
-def test_a_mark_on_an_empty_assistant_string_takes_no_anthropic_slot_but_a_converse_slot() -> None:
-    messages: Final = _four_marked_parts_then({"role": "assistant", "content": "", "prompt_cache_breakpoint": EXPLICIT})
-
-    anthropic: Final = claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False)
-    converse: Final = claude_cache_marks(
-        messages, None, automatic_breakpoint=False, drop_params=False, wire="bedrock_converse"
-    )
-
-    assert isinstance(anthropic, ClaudeCacheMarks), anthropic
-    assert converse == CacheBreakpointCapExceeded(found=5)
-
-
-def test_a_mark_on_a_tool_call_rebuilt_as_server_tool_use_takes_no_anthropic_slot() -> None:
-    messages: Final = _four_marked_parts_then(
+        {"role": "system", "content": [_part("sys", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": "hi", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
         {
             "role": "assistant",
-            "content": "searching",
-            "tool_calls": [_call("srvtoolu_web_search", prompt_cache_breakpoint=EXPLICIT)],
-            "provider_specific_fields": {"web_search_results": [{"tool_use_id": "srvtoolu_web_search"}]},
-        }
-    )
-
-    anthropic: Final = claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False)
-    converse: Final = claude_cache_marks(
-        messages, None, automatic_breakpoint=False, drop_params=False, wire="bedrock_converse"
-    )
-
-    assert isinstance(anthropic, ClaudeCacheMarks), anthropic
-    assert converse == CacheBreakpointCapExceeded(found=5)
-
-
-def test_tools_already_mapped_to_the_anthropic_shape_still_arm_the_cap() -> None:
-    mapped_tools: Final = [
-        {"name": f"tool_{index}", "input_schema": {}, "cache_control": EPHEMERAL} for index in range(4)
-    ]
-    messages: Final = [{"role": "user", "content": [_text("hi", prompt_cache_breakpoint=EXPLICIT)]}]
-
-    assert claude_cache_marks(
-        messages, mapped_tools, automatic_breakpoint=False, drop_params=False, tools_carried_breakpoint=True
-    ) == CacheBreakpointCapExceeded(found=5)
-    assert claude_cache_marks(
-        messages, mapped_tools, automatic_breakpoint=False, drop_params=True, tools_carried_breakpoint=True
-    ) == ClaudeCacheMarks(
-        messages=({"role": "user", "content": [_text("hi", cache_control=EPHEMERAL)]},),
-        tools=({"name": "tool_0", "input_schema": {}}, *mapped_tools[1:]),
-    )
-
-
-def _tool_result_with_two_marked_parts() -> list[dict[str, object]]:
-    return [
-        {"role": "system", "content": [_text("rules", prompt_cache_breakpoint=EXPLICIT)]},
-        {"role": "user", "content": [_text("hi", prompt_cache_breakpoint=EXPLICIT)]},
-        {"role": "assistant", "content": "", "tool_calls": [_call("call_1")]},
-        {
-            "role": "tool",
-            "tool_call_id": "call_1",
-            "content": [
-                _text("sunny", prompt_cache_breakpoint=EXPLICIT),
-                _text("warm", prompt_cache_breakpoint=EXPLICIT),
-            ],
+            "content": None,
+            "tool_calls": [{"id": "c1", "type": "function", "prompt_cache_breakpoint": _EXPLICIT}],
         },
-        {"role": "user", "content": "done", "prompt_cache_breakpoint": EXPLICIT},
+    ]
+    tools: Final = [
+        {"type": "function", "function": {"name": "a"}, "prompt_cache_breakpoint": _EXPLICIT},
+        {"type": "function", "function": {"name": "b", "prompt_cache_breakpoint": _EXPLICIT}},
     ]
 
+    result: Final = _resolved(messages, tools)
 
-def test_a_tool_result_with_two_marked_parts_takes_one_converse_slot_and_two_anthropic_slots() -> None:
-    messages: Final = _tool_result_with_two_marked_parts()
-
-    converse: Final = claude_cache_marks(
-        messages, None, automatic_breakpoint=False, drop_params=False, wire="bedrock_converse"
-    )
-
-    assert converse == ClaudeCacheMarks(
-        messages=(
-            {"role": "system", "content": [_text("rules", cache_control=EPHEMERAL)]},
-            {"role": "user", "content": [_text("hi", cache_control=EPHEMERAL)]},
-            {"role": "assistant", "content": "", "tool_calls": [_call("call_1")]},
-            {
-                "role": "tool",
-                "tool_call_id": "call_1",
-                "content": [_text("sunny", cache_control=EPHEMERAL), _text("warm", cache_control=EPHEMERAL)],
-            },
-            {"role": "user", "content": "done", "cache_control": EPHEMERAL},
-        ),
-        tools=(),
-    )
-    assert claude_cache_marks(messages, None, automatic_breakpoint=False, drop_params=False) == (
-        CacheBreakpointCapExceeded(found=5)
-    )
-
-
-def test_dropping_a_converse_tool_result_slot_clears_every_mark_on_that_message() -> None:
-    messages: Final = [
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("sys", cache_control=_EPHEMERAL)]},
+        {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {
-            "role": "tool",
-            "tool_call_id": "call_1",
-            "content": [
-                _text("sunny", prompt_cache_breakpoint=EXPLICIT),
-                _text("warm", prompt_cache_breakpoint=EXPLICIT),
-            ],
-            "prompt_cache_breakpoint": EXPLICIT,
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "type": "function", "cache_control": _EPHEMERAL}],
         },
-        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]},
+    ]
+    assert list(result.tools or ()) == [
+        {"type": "function", "function": {"name": "a"}, "cache_control": _EPHEMERAL},
+        {"type": "function", "function": {"name": "b", "cache_control": _EPHEMERAL}},
     ]
 
-    marks: Final = claude_cache_marks(
-        messages, None, automatic_breakpoint=False, drop_params=True, wire="bedrock_converse"
-    )
 
-    assert marks == ClaudeCacheMarks(
-        messages=(
-            {"role": "tool", "tool_call_id": "call_1", "content": [_text("sunny"), _text("warm")]},
-            {"role": "user", "content": [_text(f"part {index}", cache_control=EPHEMERAL) for index in range(4)]},
-        ),
-        tools=(),
-    )
+def test_a_request_without_breakpoints_or_options_is_returned_as_written():
+    messages: Final = [{"role": "user", "content": [_part("hi", cache_control=_EPHEMERAL)] * 5}]
+    params: Final = {"temperature": 0.1}
+
+    result: Final = _resolved(messages, None, params, drop_params=True)
+
+    assert result == ClaudePromptCache(tuple(messages), None, params)
 
 
-def test_a_function_level_cache_control_takes_no_converse_slot() -> None:
-    tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {}, "cache_control": EPHEMERAL}}]
+def test_a_client_cache_control_on_the_same_block_wins():
+    hour: Final = {"type": "ephemeral", "ttl": "1h"}
     messages: Final = [
-        {"role": "user", "content": [_text(f"part {index}", prompt_cache_breakpoint=EXPLICIT) for index in range(4)]}
+        {"role": "user", "content": [_part("hi", cache_control=hour, prompt_cache_breakpoint={"ttl": "9d"})]}
     ]
 
-    converse: Final = claude_cache_marks(
-        messages, tools, automatic_breakpoint=False, drop_params=False, wire="bedrock_converse"
-    )
-
-    assert converse == ClaudeCacheMarks(
-        messages=(
-            {"role": "user", "content": [_text(f"part {index}", cache_control=EPHEMERAL) for index in range(4)]},
-        ),
-        tools=(tools[0],),
-    )
-    assert claude_cache_marks(messages, tools, automatic_breakpoint=False, drop_params=False) == (
-        CacheBreakpointCapExceeded(found=5)
-    )
-
-
-def test_the_cap_error_is_a_public_bad_request_naming_drop_params() -> None:
-    with pytest.raises(litellm.BadRequestError) as caught:
-        resolved_claude_cache_marks(CacheBreakpointCapExceeded(found=6), model=MODEL, llm_provider="anthropic")
-
-    assert "Claude accepts at most 4 cache breakpoints, found 6" in str(caught.value)
-    assert "drop_params=True" in str(caught.value)
-    assert caught.value.status_code == 400
-    assert caught.value.llm_provider == "anthropic"
-
-
-def test_marks_within_the_cap_resolve_to_themselves() -> None:
-    marks: Final = ClaudeCacheMarks(messages=(), tools=())
-
-    assert resolved_claude_cache_marks(marks, model=MODEL, llm_provider="anthropic") is marks
-
-
-def test_prompt_cache_options_are_reported_before_the_marks_unless_drop_params() -> None:
-    messages, tools = _six_breakpoints()
-
-    assert claude_cache_marks(
-        messages, tools, automatic_breakpoint=False, drop_params=False, prompt_cache_options=EXPLICIT
-    ) == PromptCacheOptionsUnsupported(EXPLICIT)
-    kept: Final = claude_cache_marks(
-        messages, tools, automatic_breakpoint=False, drop_params=True, prompt_cache_options=EXPLICIT
-    )
-    assert isinstance(kept, ClaudeCacheMarks)
-    assert claude_cache_marks(messages, tools, automatic_breakpoint=False, drop_params=True) == kept
-
-
-def test_the_prompt_cache_options_error_is_an_unsupported_param_naming_drop_params() -> None:
-    with pytest.raises(litellm.UnsupportedParamsError) as caught:
-        resolved_claude_cache_marks(PromptCacheOptionsUnsupported(EXPLICIT), model=MODEL, llm_provider="anthropic")
-
-    assert "prompt_cache_options" in str(caught.value)
-    assert "drop_params" in str(caught.value)
-    assert caught.value.status_code == 400
+    assert list(_resolved(messages).messages) == [{"role": "user", "content": [_part("hi", cache_control=hour)]}]
 
 
 @pytest.mark.parametrize(
-    ("extra_body", "drop_params", "expected"),
-    [
-        ({"metadata": {"a": 1}}, False, {"metadata": {"a": 1}}),
-        ({"metadata": {"a": 1}, "prompt_cache_options": EXPLICIT}, True, {"metadata": {"a": 1}}),
-        ({"metadata": {"a": 1}, "prompt_cache_options": EXPLICIT}, False, PromptCacheOptionsUnsupported(EXPLICIT)),
-    ],
-    ids=["no-options", "dropped", "rejected"],
+    "marker, kept",
+    [({"mode": "explicit", "ttl": "30m"}, _EPHEMERAL), ({"mode": "sometimes"}, None), ("yes", None)],
 )
-def test_extra_body_follows_the_prompt_cache_options_rule(
-    extra_body: dict[str, object], drop_params: bool, expected: object
-) -> None:
-    assert claude_extra_body(extra_body, drop_params=drop_params) == expected
+def test_a_breakpoint_claude_cannot_honor_is_reported_or_adjusted_under_drop_params(marker: object, kept: object):
+    messages: Final = [{"role": "user", "content": "hi", "prompt_cache_breakpoint": marker}]
+
+    problem: Final = _cache(messages)
+    dropped: Final = _resolved(messages, drop_params=True)
+
+    assert isinstance(problem, UnsupportedPromptCacheParam)
+    assert (problem.param, problem.value) == ("prompt_cache_breakpoint", marker)
+    assert list(dropped.messages) == [{"role": "user", "content": "hi", **({"cache_control": kept} if kept else {})}]
 
 
-def test_a_rejected_extra_body_raises_and_an_accepted_one_resolves_to_itself() -> None:
-    body: Final = {"metadata": {"a": 1}}
+def test_an_unsupported_breakpoint_raises_a_400_naming_drop_params():
+    problem: Final = _cache(
+        [{"role": "user", "content": "hi", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}]
+    )
 
-    assert resolved_claude_extra_body(body, model=MODEL, llm_provider="anthropic") is body
-    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
-        resolved_claude_extra_body(PromptCacheOptionsUnsupported(EXPLICIT), model=MODEL, llm_provider="anthropic")
+    with pytest.raises(UnsupportedParamsError) as raised:
+        resolved_claude_prompt_cache(problem, model="claude-x", llm_provider="anthropic")
+
+    assert raised.value.status_code == 400
+    assert "30m" in raised.value.message and "drop_params" in raised.value.message
 
 
 @pytest.mark.parametrize(
-    ("global_drop", "litellm_params", "expected"),
-    [
-        (False, {}, False),
-        (True, {}, True),
-        (False, {"drop_params": True}, True),
-        (False, {"drop_params": "true"}, True),
-        (False, {"drop_params": False}, False),
-    ],
-    ids=["off", "global", "request", "request-string", "request-false"],
+    "options, automatic",
+    [({"mode": "implicit"}, _EPHEMERAL), ({"mode": "implicit", "ttl": "1h"}, {"type": "ephemeral", "ttl": "1h"})],
 )
-def test_drop_params_enabled_reads_the_global_and_the_request(
-    global_drop: bool, litellm_params: dict[str, object], expected: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", global_drop)
+def test_implicit_options_become_claude_automatic_caching(options: object, automatic: object):
+    result: Final = _resolved([{"role": "user", "content": "hi"}], None, {"prompt_cache_options": options, "top_p": 1})
 
-    assert drop_params_enabled(litellm_params) is expected
+    assert result.params == {"top_p": 1, "cache_control": automatic}
+
+
+def test_implicit_options_leave_a_client_top_level_cache_control_alone():
+    hour: Final = {"type": "ephemeral", "ttl": "1h"}
+
+    result: Final = _resolved([], None, {"prompt_cache_options": {"mode": "implicit"}, "cache_control": hour})
+
+    assert result.params == {"cache_control": hour}
+
+
+@pytest.mark.parametrize("options", [{"mode": "explicit"}, {}])
+def test_options_without_implicit_mode_add_nothing_and_never_reach_claude(options: object):
+    assert _resolved([], None, {"prompt_cache_options": options}).params == {}
 
 
 @pytest.mark.parametrize(
-    ("tools", "expected"),
+    "options, accepts_automatic_caching, kept",
     [
-        ([_tool(prompt_cache_breakpoint=EXPLICIT)], True),
-        ([{"type": "function", "function": {"name": "lookup", "prompt_cache_breakpoint": EXPLICIT}}], True),
-        ((_tool(prompt_cache_breakpoint=EXPLICIT),), True),
-        ([_tool(cache_control=EPHEMERAL), _tool()], False),
-        (None, False),
-        ("not a list", False),
+        ({"mode": "implicit"}, False, {}),
+        ({"mode": "implicit", "ttl": "30m"}, True, {"cache_control": _EPHEMERAL}),
+        ({"mode": "explicit", "ttl": "30m"}, True, {}),
+        ({"mode": "always"}, True, {}),
+        ("on", True, {}),
     ],
-    ids=["top-level", "under-function", "tuple", "cache-control-only", "none", "opaque"],
 )
-def test_tools_carry_prompt_cache_breakpoint_reads_both_tool_shapes(tools: object, expected: bool) -> None:
-    assert tools_carry_prompt_cache_breakpoint(tools) is expected
+def test_options_claude_cannot_honor_are_reported_or_adjusted_under_drop_params(
+    options: object, accepts_automatic_caching: bool, kept: dict[str, object]
+):
+    params: Final = {"prompt_cache_options": options}
+
+    problem: Final = _cache([], None, params, accepts_automatic_caching=accepts_automatic_caching)
+    dropped: Final = _resolved([], None, params, accepts_automatic_caching=accepts_automatic_caching, drop_params=True)
+
+    assert isinstance(problem, UnsupportedPromptCacheParam)
+    assert (problem.param, problem.value) == ("prompt_cache_options", options)
+    assert dropped.params == kept
+
+
+def test_drop_params_keeps_the_latest_four_marks_in_the_order_claude_renders_them():
+    tools: Final = [{"type": "function", "function": {"name": "t"}, "prompt_cache_breakpoint": _EXPLICIT}]
+    messages: Final = [
+        {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
+        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]},
+    ]
+
+    result: Final = _resolved(messages, tools, {"prompt_cache_options": {"mode": "implicit"}}, drop_params=True)
+
+    assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t"}}]
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s")]},
+        {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(3)]},
+    ]
+    assert result.params == {"cache_control": _EPHEMERAL}
+
+
+def test_without_drop_params_more_than_four_marks_are_sent_for_claude_to_answer():
+    messages: Final = [
+        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(5)]}
+    ]
+
+    result: Final = _resolved(messages)
+
+    assert list(result.messages) == [
+        {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(5)]}
+    ]

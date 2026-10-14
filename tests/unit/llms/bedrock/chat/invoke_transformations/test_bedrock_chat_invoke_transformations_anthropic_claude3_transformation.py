@@ -873,49 +873,6 @@ async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sourc
     } in captured["body"]["messages"][0]["content"]
 
 
-async def test_bedrock_invoke_claude_holds_extra_body_prompt_cache_options_to_drop_params(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    bodies: Final[list[dict[str, object]]] = []  # mutable-ok: the transport records each request
-
-    def handle(request: httpx.Request) -> httpx.Response:
-        bodies.append(json.loads(request.content))
-        return httpx.Response(
-            200,
-            json={
-                "id": "msg_1",
-                "type": "message",
-                "role": "assistant",
-                "model": "us.anthropic.claude-sonnet-5",
-                "content": [{"type": "text", "text": "hi"}],
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            },
-        )
-
-    client: Final = AsyncHTTPHandler()
-    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
-    request: Final = {
-        "model": "bedrock/invoke/us.anthropic.claude-sonnet-5",
-        "messages": [{"role": "user", "content": "hi"}],
-        "extra_body": {"prompt_cache_options": {"mode": "explicit"}, "top_k": 3},
-        "aws_access_key_id": "AKIAEXAMPLE",
-        "aws_secret_access_key": "fake-secret",
-        "aws_region_name": "us-east-1",
-        "client": client,
-    }
-
-    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params"):
-        await litellm.acompletion(**request)
-    assert bodies == []
-
-    await litellm.acompletion(**request, drop_params=True)
-
-    assert "prompt_cache_options" not in bodies[-1]
-    assert bodies[-1]["top_k"] == 3
-
-
 @pytest.mark.parametrize(
     "model, expected_betas",
     [
@@ -1394,97 +1351,6 @@ class TestBedrockAnthropicPromptCachingRegression:
             has_cache_control = any(isinstance(c, dict) and "cache_control" in c for c in user_msg["content"])
             assert has_cache_control, "cache_control should be present in invoke messages"
 
-    @staticmethod
-    def _claude_config(model_prefix: str):
-        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-            AmazonAnthropicClaudeConfig,
-        )
-
-        return AmazonConverseConfig() if "converse" in model_prefix else AmazonAnthropicClaudeConfig()
-
-    @pytest.mark.parametrize("model_prefix", ["bedrock/invoke/", "bedrock/converse/"])
-    def test_prompt_cache_breakpoint_lands_on_the_same_block_for_both_routes(self, model_prefix: str) -> None:
-        messages: Final = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": LARGE_DOCUMENT_FOR_CACHING,
-                        "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
-                    },
-                    {"type": "text", "text": "What are the payment terms?"},
-                ],
-            }
-        ]
-
-        result: Final = self._claude_config(model_prefix).transform_request(
-            model="anthropic.claude-opus-5-5", messages=messages, optional_params={}, litellm_params={}, headers={}
-        )
-
-        assert "prompt_cache_breakpoint" not in json.dumps(result)
-        if "converse" in model_prefix:
-            assert result["messages"][0]["content"] == [
-                {"text": LARGE_DOCUMENT_FOR_CACHING},
-                {"cachePoint": {"type": "default"}},
-                {"text": "What are the payment terms?"},
-            ]
-        else:
-            assert result["messages"][0]["content"] == [
-                {"type": "text", "text": LARGE_DOCUMENT_FOR_CACHING, "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": "What are the payment terms?"},
-            ]
-
-    @pytest.mark.parametrize("drop_params_source", ["litellm_params", "global"])
-    @pytest.mark.parametrize("model_prefix", ["bedrock/invoke/", "bedrock/converse/"])
-    def test_five_breakpoints_are_cut_to_four_only_under_drop_params_for_both_routes(
-        self, model_prefix: str, drop_params_source: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import litellm
-
-        monkeypatch.setattr(litellm, "drop_params", False)
-        marked: Final = [
-            {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
-            for index in range(5)
-        ]
-        config: Final = self._claude_config(model_prefix)
-
-        with pytest.raises(litellm.BadRequestError, match=r"Claude accepts at most 4 cache breakpoints, found 5"):
-            config.transform_request(
-                model="anthropic.claude-opus-5-5",
-                messages=[{"role": "user", "content": marked}],
-                optional_params={},
-                litellm_params={},
-                headers={},
-            )
-
-        monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
-        result: Final = config.transform_request(
-            model="anthropic.claude-opus-5-5",
-            messages=[{"role": "user", "content": marked}],
-            optional_params={},
-            litellm_params={"drop_params": True} if drop_params_source == "litellm_params" else {},
-            headers={},
-        )
-        if "converse" in model_prefix:
-            assert result["messages"][0]["content"] == [
-                {"text": "part 0"},
-                *(
-                    block
-                    for index in range(1, 5)
-                    for block in ({"text": f"part {index}"}, {"cachePoint": {"type": "default"}})
-                ),
-            ]
-        else:
-            assert result["messages"][0]["content"] == [
-                {"type": "text", "text": "part 0"},
-                *(
-                    {"type": "text", "text": f"part {index}", "cache_control": {"type": "ephemeral"}}
-                    for index in range(1, 5)
-                ),
-            ]
-
     @pytest.mark.parametrize(
         "model_prefix",
         [
@@ -1553,7 +1419,6 @@ class TestBedrockAnthropicPromptCachingRegression:
             additional_fields = result["additionalModelRequestFields"]
             if "anthropic_beta" in additional_fields:
                 assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropic1MContextRegression:
@@ -1739,7 +1604,6 @@ class TestBedrockAnthropic1MContextRegression:
         # Verify both headers are present
         assert "context-1m-2025-08-07" in beta_headers
         assert "computer-use-2024-10-22" in beta_headers
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestBedrockAnthropicCombinedRegressions:

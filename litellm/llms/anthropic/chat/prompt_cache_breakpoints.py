@@ -1,278 +1,270 @@
-"""OpenAI's ``prompt_cache_breakpoint`` on a request bound for Claude.
+"""OpenAI's ``prompt_cache_breakpoint`` and ``prompt_cache_options`` on a chat request bound for Claude, rewritten as
+Claude's ``cache_control``."""
 
-The marks become Anthropic's ``cache_control`` on the same blocks, and a request that carried at least one is held
-to Claude's cap of four breakpoints, which a client writing the OpenAI dialect cannot see. ``prompt_cache_options``
-has no Claude equivalent and is rejected or dropped like any other unsupported param."""
-
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
-from typing import Final, Literal, NoReturn, TypeAlias
+from types import MappingProxyType
+from typing import Final, NoReturn, TypeAlias
 
-from typing_extensions import assert_never
+from pydantic import TypeAdapter
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
-from litellm.exceptions import BadRequestError, UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    message_fields,
-    message_without_cache_control_marks,
-    messages_with_prompt_cache_breakpoints_as_cache_control,
-    tools_with_prompt_cache_breakpoints_as_cache_control,
+from litellm.exceptions import UnsupportedParamsError
+from litellm.types.llms.openai import ChatCompletionCachedContent
+
+_Path: TypeAlias = tuple[str | int, ...]
+_Fields: TypeAlias = Mapping[str, object]
+_Mark: TypeAlias = Callable[[_Path, _Fields], _Fields]
+_MESSAGE_BLOCK_KEYS: Final = ("content", "tool_calls")
+_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_BLOCKS: Final = TypeAdapter(Sequence[object])
+_CLAUDE_TTL_MARKS: Final = MappingProxyType(
+    {
+        "5m": ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
+        "1h": ChatCompletionCachedContent(type="ephemeral", ttl="1h"),
+    }
 )
-from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
-from litellm.types.llms.openai import AllMessageValues
-
-PROMPT_CACHE_BREAKPOINT_ON_TOOLS: Final = "_litellm_prompt_cache_breakpoint_on_tools"
-_Site: TypeAlias = tuple[Literal["tool", "message", "part", "tool_call", "tool_message"], int, int]
-ClaudeWire: TypeAlias = Literal["anthropic", "bedrock_converse"]
 
 
 @dataclass(frozen=True, slots=True)
-class ClaudeCacheMarks:
-    messages: tuple[AllMessageValues, ...]
-    tools: tuple[object, ...]
+class ClaudePromptCache:
+    messages: tuple[object, ...]
+    tools: tuple[object, ...] | None
+    params: _Fields
 
 
 @dataclass(frozen=True, slots=True)
-class CacheBreakpointCapExceeded:
-    found: int
+class UnsupportedPromptCacheParam:
+    param: str
+    value: object
+    reason: str
+    fallback: ChatCompletionCachedContent | None
 
 
-@dataclass(frozen=True, slots=True)
-class PromptCacheOptionsUnsupported:
-    options: object
+def _fields(value: object) -> _Fields | None:
+    return _FIELDS.validate_python(value) if isinstance(value, Mapping) else None
 
 
-ClaudeCacheRefusal: TypeAlias = CacheBreakpointCapExceeded | PromptCacheOptionsUnsupported
+def _blocks(value: object) -> Sequence[object] | None:
+    return _BLOCKS.validate_python(value) if isinstance(value, list) else None
 
 
-def drop_params_enabled(litellm_params: Mapping[str, object]) -> bool:
-    """``drop_params`` from the global setting, or from the request or deployment (both arrive in ``litellm_params``)."""
-    return bool(litellm.drop_params) or normalize_drop_params(litellm_params.get("drop_params")) is True
-
-
-def _as_mapping(value: object) -> Mapping[str, object] | None:
-    return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # keys are read one by one
-
-
-def _as_blocks(value: object) -> Sequence[object] | None:
-    return value if isinstance(value, (list, tuple)) else None  # pyright: ignore[reportUnknownVariableType]  # blocks are parsed one by one
-
-
-def _carries(block: object, key: str) -> bool:
-    fields: Final = _as_mapping(block)
-    return fields is not None and fields.get(key) is not None
-
-
-def _tool_carries(tool: object, key: str) -> bool:
-    fields: Final = _as_mapping(tool)
-    return fields is not None and (fields.get(key) is not None or _carries(fields.get("function"), key))
-
-
-def tools_carry_prompt_cache_breakpoint(tools: object) -> bool:
-    return any(_tool_carries(tool, "prompt_cache_breakpoint") for tool in _as_blocks(tools) or ())
-
-
-def _renders_message_mark(message: Mapping[str, object], wire: ClaudeWire) -> bool:
-    """Claude's message builder keeps a message-level mark on string content and on tool results only. Anthropic's
-    builder skips an empty assistant string, mark included, where Converse still emits its ``cachePoint``."""
-    content: Final = message.get("content")
-    if isinstance(content, str):
-        return bool(content) or message.get("role") != "assistant" or wire == "bedrock_converse"
-    return message.get("role") in ("tool", "function")
-
-
-def _renders_tool_call_mark(message: Mapping[str, object], call: object, wire: ClaudeWire) -> bool:
-    """Anthropic rebuilds a tool call answered by a server tool as ``server_tool_use``, which carries no mark."""
-    return wire == "bedrock_converse" or not tool_call_is_rebuilt_as_server_tool_use(
-        (_as_mapping(call) or {}).get("id"), message.get("provider_specific_fields")
-    )
-
-
-def _message_sites(index: int, message: object, key: str, wire: ClaudeWire) -> Iterator[_Site]:
-    fields: Final = _as_mapping(message)
-    if fields is None:
-        return
-    if fields.get(key) is not None and _renders_message_mark(fields, wire):
-        yield ("message", index, -1)
-    for position, part in enumerate(_as_blocks(fields.get("content")) or ()):
-        if _carries(part, key):
-            yield ("part", index, position)
-    for position, call in enumerate(_as_blocks(fields.get("tool_calls")) or ()):
-        if _carries(call, key) and _renders_tool_call_mark(fields, call, wire):
-            yield ("tool_call", index, position)
-
-
-def _converse_message_sites(index: int, message: object, key: str) -> Iterator[_Site]:
-    """Converse emits a single ``cachePoint`` per tool message, however many of its blocks carry a mark."""
-    fields: Final = _as_mapping(message)
-    if fields is None or fields.get("role") != "tool":
-        yield from _message_sites(index, message, key, "bedrock_converse")
-        return
-    if fields.get(key) is not None or any(_carries(part, key) for part in _as_blocks(fields.get("content")) or ()):
-        yield ("tool_message", index, -1)
-
-
-def _sites(messages: Sequence[object], tools: Sequence[object], key: str, wire: ClaudeWire) -> tuple[_Site, ...]:
-    """Every mark of ``key`` the ``wire`` renders, in wire order: tool definitions first, then the messages as
-    listed. Converse reads only a tool definition's top-level mark."""
-    if wire == "bedrock_converse":
-        return (
-            *(("tool", index, -1) for index, tool in enumerate(tools) if _carries(tool, key)),
-            *chain.from_iterable(
-                _converse_message_sites(index, message, key) for index, message in enumerate(messages)
-            ),
-        )
+def _ttl_mark(ttl: object, param: str, value: object) -> ChatCompletionCachedContent | UnsupportedPromptCacheParam:
+    if ttl is None:
+        return ChatCompletionCachedContent(type="ephemeral")
+    known: Final = _CLAUDE_TTL_MARKS.get(ttl) if isinstance(ttl, str) else None
     return (
-        *(("tool", index, -1) for index, tool in enumerate(tools) if _tool_carries(tool, key)),
-        *chain.from_iterable(_message_sites(index, message, key, wire) for index, message in enumerate(messages)),
+        ChatCompletionCachedContent(**known)
+        if known is not None
+        else UnsupportedPromptCacheParam(
+            param,
+            value,
+            "Claude caches for a ttl of 5m or 1h only",
+            fallback=ChatCompletionCachedContent(type="ephemeral"),
+        )
     )
 
 
-def _without_cache_control(block: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: value for key, value in block.items() if key != "cache_control"}
+def _breakpoint_mark(marker: object) -> ChatCompletionCachedContent | UnsupportedPromptCacheParam:
+    fields: Final = _fields(marker)
+    if fields is None or fields.get("mode") != "explicit":
+        return UnsupportedPromptCacheParam(
+            "prompt_cache_breakpoint", marker, 'expected {"mode": "explicit"} with an optional ttl', fallback=None
+        )
+    return _ttl_mark(fields.get("ttl"), "prompt_cache_breakpoint", marker)
 
 
-def _tool_without_cache_control(tool: object) -> object:
-    fields: Final = _as_mapping(tool)
+def _automatic_mark(
+    options: object, accepts_automatic_caching: bool
+) -> ChatCompletionCachedContent | UnsupportedPromptCacheParam | None:
+    if options is None:
+        return None
+    fields: Final = _fields(options)
+    if fields is None or fields.get("mode") not in (None, "implicit", "explicit"):
+        return UnsupportedPromptCacheParam(
+            "prompt_cache_options", options, 'expected a "mode" of "implicit" or "explicit"', fallback=None
+        )
+    if fields.get("mode") != "implicit":
+        return (
+            None
+            if fields.get("ttl") is None
+            else UnsupportedPromptCacheParam(
+                "prompt_cache_options", options, 'Claude applies a ttl only with "mode": "implicit"', fallback=None
+            )
+        )
+    if not accepts_automatic_caching:
+        return UnsupportedPromptCacheParam(
+            "prompt_cache_options", options, "this route has no automatic caching", fallback=None
+        )
+    return _ttl_mark(fields.get("ttl"), "prompt_cache_options", options)
+
+
+def _indexed_fields(values: Sequence[object]) -> Iterator[tuple[int, _Fields]]:
+    return ((index, fields) for index, fields in enumerate(map(_fields, values)) if fields is not None)
+
+
+def _markable_in_message(index: int, message: _Fields) -> Iterator[tuple[_Path, _Fields]]:
+    yield ("messages", index), message
+    for key in _MESSAGE_BLOCK_KEYS:
+        yield from (
+            (("messages", index, key, j), block) for j, block in _indexed_fields(_blocks(message.get(key)) or ())
+        )
+
+
+def _markable_in_tool(index: int, tool: _Fields) -> Iterator[tuple[_Path, _Fields]]:
+    yield ("tools", index), tool
+    function: Final = _fields(tool.get("function"))
+    if function is not None:
+        yield ("tools", index, "function"), function
+
+
+def _markable(messages: Sequence[object], tools: Sequence[object]) -> Iterator[tuple[_Path, _Fields]]:
+    """Every block that can carry a cache mark, in the order Claude renders them: tool definitions, then messages."""
+    for index, tool in _indexed_fields(tools):
+        yield from _markable_in_tool(index, tool)
+    for index, message in _indexed_fields(messages):
+        yield from _markable_in_message(index, message)
+
+
+def _marked_block(path: _Path, block: object, mark: _Mark) -> object:
+    fields: Final = _fields(block)
+    return block if fields is None else mark(path, fields)
+
+
+def _marked_blocks(message: _Fields, path: _Path, key: str, mark: _Mark) -> _Fields:
+    blocks: Final = _blocks(message.get(key))
+    if blocks is None:
+        return {}
+    return {key: [_marked_block((*path, key, j), block, mark) for j, block in enumerate(blocks)]}
+
+
+def _marked_message(index: int, message: object, mark: _Mark) -> object:
+    fields: Final = _fields(message)
     if fields is None:
-        return tool
-    function: Final = _as_mapping(fields.get("function"))
+        return message
+    marked: Final = mark(("messages", index), fields)
     return {
-        **_without_cache_control(fields),
-        **({"function": _without_cache_control(function)} if function is not None else {}),
+        **marked,
+        **_marked_blocks(marked, ("messages", index), "content", mark),
+        **_marked_blocks(marked, ("messages", index), "tool_calls", mark),
     }
 
 
-def _dropped_positions(dropped: frozenset[_Site], kind: str, index: int) -> frozenset[int]:
-    return frozenset(
-        position for site_kind, site_index, position in dropped if (site_kind, site_index) == (kind, index)
-    )
+def _marked_tool(index: int, tool: object, mark: _Mark) -> object:
+    fields: Final = _fields(tool)
+    if fields is None:
+        return tool
+    marked: Final = mark(("tools", index), fields)
+    function: Final = _fields(marked.get("function"))
+    return marked if function is None else {**marked, "function": mark(("tools", index, "function"), function)}
 
 
-def _message_without(index: int, message: AllMessageValues, dropped: frozenset[_Site]) -> AllMessageValues:
-    if ("tool_message", index, -1) in dropped:
-        content: Final = _as_blocks(message_fields(message).get("content")) or ()
-        return message_without_cache_control_marks(
-            message, message_mark=True, parts=frozenset(range(len(content))), tool_calls=frozenset()
-        )
-    return message_without_cache_control_marks(
-        message,
-        message_mark=("message", index, -1) in dropped,
-        parts=_dropped_positions(dropped, "part", index),
-        tool_calls=_dropped_positions(dropped, "tool_call", index),
-    )
-
-
-def _prompt_cache_options_refusal(options: object, drop_params: bool) -> PromptCacheOptionsUnsupported | None:
-    if options is None:
+def _breakpoint_problem(block: _Fields) -> UnsupportedPromptCacheParam | None:
+    marker: Final = block.get("prompt_cache_breakpoint")
+    if marker is None or block.get("cache_control") is not None:
         return None
-    if not drop_params:
-        return PromptCacheOptionsUnsupported(options)
-    verbose_logger.debug("Dropping prompt_cache_options=%r: Claude caches through cache_control.", options)
-    return None
+    mark: Final = _breakpoint_mark(marker)
+    return mark if isinstance(mark, UnsupportedPromptCacheParam) else None
 
 
-def claude_cache_marks(
-    messages: Sequence[AllMessageValues],
-    tools: object,
+def _renamed(_path: _Path, block: _Fields) -> _Fields:
+    """A ``cache_control`` the client already wrote on the block wins over the breakpoint."""
+    marker: Final = block.get("prompt_cache_breakpoint")
+    if marker is None:
+        return block
+    unmarked: Final = {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
+    if unmarked.get("cache_control") is not None:
+        return unmarked
+    mark: Final = _breakpoint_mark(marker)
+    cache_control: Final = mark.fallback if isinstance(mark, UnsupportedPromptCacheParam) else mark
+    return unmarked if cache_control is None else {**unmarked, "cache_control": cache_control}
+
+
+def _marked_request(
+    messages: Sequence[object], tools: Sequence[object], mark: _Mark
+) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    return (
+        tuple(_marked_message(index, message, mark) for index, message in enumerate(messages)),
+        tuple(_marked_tool(index, tool, mark) for index, tool in enumerate(tools)),
+    )
+
+
+def _without_cache_control(dropped: frozenset[_Path]) -> _Mark:
+    def mark(path: _Path, block: _Fields) -> _Fields:
+        return {key: value for key, value in block.items() if key != "cache_control"} if path in dropped else block
+
+    return mark
+
+
+def claude_prompt_cache(
+    messages: Sequence[object],
+    tools: Sequence[object] | None,
+    params: _Fields,
     *,
-    automatic_breakpoint: bool,
+    accepts_automatic_caching: bool,
     drop_params: bool,
-    prompt_cache_options: object = None,
-    tools_carried_breakpoint: bool = False,
-    wire: ClaudeWire = "anthropic",
-) -> ClaudeCacheMarks | ClaudeCacheRefusal:
-    """The request's ``prompt_cache_breakpoint`` marks renamed to ``cache_control`` and, when it carried any, held to
-    Claude's cap: ``drop_params`` keeps the latest four in wire order, otherwise the excess is reported. A request
-    that carried none is forwarded as written so the provider's own answer reaches the client.
-
-    ``prompt_cache_options`` has no Claude equivalent: the caller has already taken it out of the request, and it is
-    reported unless ``drop_params``. ``automatic_breakpoint`` is the request-level ``cache_control`` (Anthropic's
-    automatic caching), which takes one slot of its own and is never dropped. ``tools_carried_breakpoint`` covers
-    tools already mapped to Anthropic's shape, where the mark was renamed before this census ran. ``wire`` is the
-    body the marks are rendered into, so the count matches the breakpoints the provider receives."""
-    options_refusal: Final = _prompt_cache_options_refusal(prompt_cache_options, drop_params)
-    if options_refusal is not None:
-        return options_refusal
-    listed_tools: Final = _as_blocks(tools) or ()
-    if not tools_carried_breakpoint and not _sites(messages, listed_tools, "prompt_cache_breakpoint", wire):
-        return ClaudeCacheMarks(tuple(messages), tuple(listed_tools))
-    renamed_messages: Final = messages_with_prompt_cache_breakpoints_as_cache_control(messages)
-    renamed_tools: Final = tools_with_prompt_cache_breakpoints_as_cache_control(listed_tools)
-    sites: Final = _sites(renamed_messages, renamed_tools, "cache_control", wire)
-    found: Final = len(sites) + int(automatic_breakpoint)
-    if found <= MAX_CACHE_CONTROL_BLOCKS:
-        return ClaudeCacheMarks(renamed_messages, renamed_tools)
-    if not drop_params:
-        return CacheBreakpointCapExceeded(found)
-    dropped: Final = frozenset(sites[: found - MAX_CACHE_CONTROL_BLOCKS])
-    verbose_logger.debug(
-        "Dropping the earliest %d of %d cache breakpoints: Claude accepts at most %d.",
-        len(dropped),
-        found,
-        MAX_CACHE_CONTROL_BLOCKS,
+) -> ClaudePromptCache | UnsupportedPromptCacheParam:
+    """``prompt_cache_breakpoint`` marks renamed to ``cache_control``, and ``prompt_cache_options`` with
+    ``"mode": "implicit"`` turned into the request-level ``cache_control`` (Claude's automatic caching). A mark or
+    option Claude cannot honor is reported unless ``drop_params``, which keeps what Claude can use and, when the
+    request ends up with more than Claude's four breakpoints, the latest four. A request carrying neither param is
+    returned as written."""
+    listed_tools: Final = tools or ()
+    options: Final = params.get("prompt_cache_options")
+    blocks: Final = tuple(block for _, block in _markable(messages, listed_tools))
+    if options is None and all(block.get("prompt_cache_breakpoint") is None for block in blocks):
+        return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools), params)
+    automatic: Final = _automatic_mark(options, accepts_automatic_caching)
+    problem: Final = (
+        automatic
+        if isinstance(automatic, UnsupportedPromptCacheParam)
+        else next(filter(None, map(_breakpoint_problem, blocks)), None)
     )
-    return ClaudeCacheMarks(
-        messages=tuple(_message_without(index, message, dropped) for index, message in enumerate(renamed_messages)),
-        tools=tuple(
-            _tool_without_cache_control(tool) if ("tool", index, -1) in dropped else tool
-            for index, tool in enumerate(renamed_tools)
+    if problem is not None and not drop_params:
+        return problem
+    if problem is not None:
+        verbose_logger.debug("Claude: adjusting %s=%r because %s", problem.param, problem.value, problem.reason)
+    automatic_mark: Final = automatic.fallback if isinstance(automatic, UnsupportedPromptCacheParam) else automatic
+    request_params: Final = {
+        **{key: value for key, value in params.items() if key != "prompt_cache_options"},
+        **(
+            {"cache_control": automatic_mark}
+            if automatic_mark is not None and params.get("cache_control") is None
+            else {}
         ),
+    }
+    renamed_messages, renamed_tools = _marked_request(messages, listed_tools, _renamed)
+    sites: Final = tuple(
+        path for path, block in _markable(renamed_messages, renamed_tools) if block.get("cache_control") is not None
     )
+    excess: Final = len(sites) + int(request_params.get("cache_control") is not None) - MAX_CACHE_CONTROL_BLOCKS
+    if excess > 0 and drop_params:
+        verbose_logger.debug("Claude: dropping the earliest %d cache breakpoints", excess)
+    trimmed_messages, trimmed_tools = (
+        _marked_request(renamed_messages, renamed_tools, _without_cache_control(frozenset(sites[:excess])))
+        if excess > 0 and drop_params
+        else (renamed_messages, renamed_tools)
+    )
+    return ClaudePromptCache(trimmed_messages, None if tools is None else trimmed_tools, request_params)
 
 
-def claude_extra_body(
-    extra_body: Mapping[str, object], drop_params: bool
-) -> Mapping[str, object] | PromptCacheOptionsUnsupported:
-    """``extra_body`` merged into a Claude body, held to the same ``prompt_cache_options`` rule as the request."""
-    refusal: Final = _prompt_cache_options_refusal(extra_body.get("prompt_cache_options"), drop_params)
-    if refusal is not None:
-        return refusal
-    if "prompt_cache_options" not in extra_body:
-        return extra_body
-    return {key: value for key, value in extra_body.items() if key != "prompt_cache_options"}
-
-
-def raise_claude_cache_refusal(refusal: ClaudeCacheRefusal, model: str, llm_provider: str) -> NoReturn:
-    match refusal:
-        case CacheBreakpointCapExceeded(found=found):
-            raise BadRequestError(
-                message=(
-                    f"Claude accepts at most {MAX_CACHE_CONTROL_BLOCKS} cache breakpoints, found {found}. "
-                    "Set drop_params=True (proxy: litellm_settings: drop_params: true) to keep the latest four."
-                ),
-                model=model,
-                llm_provider=llm_provider,
-            )
-        case PromptCacheOptionsUnsupported(options=options):
-            raise UnsupportedParamsError(
-                message=(
-                    f"{model} does not support prompt_cache_options={options!r}. It caches through cache_control "
-                    "marks (or prompt_cache_breakpoint on the OpenAI dialect). To drop unsupported params, set "
-                    "`litellm.drop_params = True`."
-                ),
-                model=model,
-                status_code=400,
-            )
-        case _:
-            assert_never(refusal)
-
-
-def resolved_claude_cache_marks(
-    outcome: ClaudeCacheMarks | ClaudeCacheRefusal, model: str, llm_provider: str
-) -> ClaudeCacheMarks:
-    if isinstance(outcome, ClaudeCacheMarks):
+def resolved_claude_prompt_cache(
+    outcome: ClaudePromptCache | UnsupportedPromptCacheParam, model: str, llm_provider: str
+) -> ClaudePromptCache:
+    if isinstance(outcome, ClaudePromptCache):
         return outcome
-    raise_claude_cache_refusal(outcome, model=model, llm_provider=llm_provider)
+    raise_unsupported_prompt_cache_param(outcome, model=model, llm_provider=llm_provider)
 
 
-def resolved_claude_extra_body(
-    outcome: Mapping[str, object] | PromptCacheOptionsUnsupported, model: str, llm_provider: str
-) -> Mapping[str, object]:
-    if isinstance(outcome, PromptCacheOptionsUnsupported):
-        raise_claude_cache_refusal(outcome, model=model, llm_provider=llm_provider)
-    return outcome
+def raise_unsupported_prompt_cache_param(
+    problem: UnsupportedPromptCacheParam, model: str, llm_provider: str
+) -> NoReturn:
+    raise UnsupportedParamsError(
+        message=(
+            f"{model} does not support {problem.param}={problem.value!r}: {problem.reason}. "
+            "To drop unsupported params, set `litellm.drop_params = True`."
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )

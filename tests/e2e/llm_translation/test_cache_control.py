@@ -36,8 +36,9 @@ Each case asserts the feature actually happened, not just a 200. Coverage matrix
   system message, a user part, a tool result, a tool call or a tool definition,
   or beside a ``cache_control`` on the same system part, must write the cache
   on the first call and read it on the second. On
-  anthropic and Converse, a 30m breakpoint, five breakpoints and
-  ``prompt_cache_options`` under drop_params must still cache.
+  anthropic and Converse, a 30m breakpoint and five breakpoints under
+  drop_params must still cache. On anthropic, ``prompt_cache_options`` with
+  ``"mode": "implicit"`` must cache with no breakpoint at all.
 
 service_tier lives in test_provider_features_e2e.py.
 
@@ -110,9 +111,7 @@ def _cacheable_prefix() -> str:
     """A prefix long enough to clear provider minimum cacheable sizes (Haiku is
     2048 tokens), unique per run so the first call writes and the second reads."""
     marker = unique_marker()
-    body = " ".join(
-        f"Cacheable reference paragraph {index} for run {marker}." for index in range(600)
-    )
+    body = " ".join(f"Cacheable reference paragraph {index} for run {marker}." for index in range(600))
     return f"{body}\nEnd of reference material {marker}."
 
 
@@ -168,9 +167,7 @@ def _plain_cache_chat(
     )
 
 
-def _assert_cache_read_on_second_call(
-    model: str, send: Callable[[str], Result[ChatResponse]]
-) -> None:
+def _assert_cache_read_on_second_call(model: str, send: Callable[[str], Result[ChatResponse]]) -> None:
     prefix = _cacheable_prefix()
 
     first = unwrap(send(prefix))
@@ -296,9 +293,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_bedrock_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_bedrock_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-bedrock-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -322,9 +317,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_vertex_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_vertex_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-vertex-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -356,9 +349,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_anthropic_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_anthropic_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-anthropic-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -455,9 +446,7 @@ class TestCacheControl:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_openai_prompt_caching_reads_cache(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
+    def test_openai_prompt_caching_reads_cache(self, client: PassthroughClient, resources: ResourceManager) -> None:
         model = f"e2e-openai-cache-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -709,8 +698,8 @@ def _assert_claude_writes_then_reads_cache(client: PassthroughClient, key: str, 
 class TestPromptCacheBreakpointOnClaude:
     """OpenAI's ``prompt_cache_breakpoint`` sent to a Claude deployment caches the prefix it marks.
 
-    The calls that leave drop_params off (more than four breakpoints, or ``prompt_cache_options``) answer 400 before
-    any provider call, so the wire tests in tests/integration prove them: the shared stack sets
+    The 400s that need drop_params off (a 30m ttl, or implicit ``prompt_cache_options`` on Converse) happen before any
+    provider call, so the wire tests in tests/integration prove them: the shared stack sets
     ``litellm_settings.drop_params: true``, which no deployment can switch back off."""
 
     @pytest.mark.parametrize(
@@ -766,17 +755,17 @@ class TestPromptCacheBreakpointOnClaude:
         )
         _assert_claude_writes_then_reads_cache(client, scoped_key, body)
 
-    @pytest.mark.parametrize("route", [_claude_route_param(route) for route in ("anthropic", "bedrock_converse")])
-    def test_prompt_cache_options_are_dropped_under_drop_params(
+    @pytest.mark.parametrize("route", [_claude_route_param("anthropic")])
+    def test_implicit_prompt_cache_options_cache_without_any_breakpoint(
         self, client: PassthroughClient, resources: ResourceManager, scoped_key: str, route: ClaudeRoute
     ) -> None:
-        model: Final = _register_claude(client, resources, route, drop_params=True)
+        model: Final = _register_claude(client, resources, route)
         body: Final = ChatBody(
             model=model,
             max_tokens=64,
-            prompt_cache_options=PromptCacheOptions(mode="explicit"),
+            prompt_cache_options=PromptCacheOptions(mode="implicit"),
             messages=[
-                ChatMessage(role="system", content=[_marked(_cacheable_prefix())]),
+                ChatMessage(role="system", content=_cacheable_prefix()),
                 ChatMessage(role="user", content="Reply with one word."),
             ],
         )

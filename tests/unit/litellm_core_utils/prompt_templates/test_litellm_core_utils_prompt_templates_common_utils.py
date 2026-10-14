@@ -23,18 +23,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
-    message_with_prompt_cache_breakpoints_as_cache_control,
-    message_without_cache_control_marks,
-    messages_with_prompt_cache_breakpoints_as_cache_control,
     parse_tool_call_arguments,
-    prompt_cache_breakpoint_as_cache_control,
     responses_reasoning_items_from_thinking_blocks,
     salvage_concatenated_tool_arguments,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
     system_messages_first,
-    tool_with_prompt_cache_breakpoint_as_cache_control,
-    tools_with_prompt_cache_breakpoints_as_cache_control,
     update_messages_with_model_file_ids,
     with_prompt_cache_breakpoint,
 )
@@ -2311,130 +2305,4 @@ def test_a_breakpoint_the_client_wrote_survives_a_per_part_cache_control() -> No
         "type": "input_text",
         "text": "rules",
         "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"},
-    }
-
-
-_EPHEMERAL: Final = {"type": "ephemeral"}
-_EXPLICIT: Final = {"mode": "explicit"}
-_EXPLICIT_30M: Final = {"mode": "explicit", "ttl": "30m"}
-
-
-def _lookup_call(identity: str, **fields: object) -> dict[str, object]:
-    return {"id": identity, "type": "function", "function": {"name": "lookup", "arguments": "{}"}, **fields}
-
-
-def test_prompt_cache_breakpoint_becomes_an_ephemeral_cache_control_without_the_ttl() -> None:
-    marked: Final = {"type": "text", "text": "rules", "prompt_cache_breakpoint": _EXPLICIT_30M}
-
-    assert prompt_cache_breakpoint_as_cache_control(marked) == {
-        "type": "text",
-        "text": "rules",
-        "cache_control": _EPHEMERAL,
-    }
-
-
-def test_a_cache_control_the_client_wrote_wins_over_the_breakpoint_on_the_same_block() -> None:
-    both: Final = {
-        "type": "text",
-        "text": "rules",
-        "cache_control": {"type": "ephemeral", "ttl": "1h"},
-        "prompt_cache_breakpoint": _EXPLICIT_30M,
-    }
-
-    assert prompt_cache_breakpoint_as_cache_control(both) == {
-        "type": "text",
-        "text": "rules",
-        "cache_control": {"type": "ephemeral", "ttl": "1h"},
-    }
-
-
-def test_a_block_without_a_breakpoint_is_returned_untouched() -> None:
-    unmarked: Final = {"type": "text", "text": "rules", "cache_control": _EPHEMERAL}
-
-    assert prompt_cache_breakpoint_as_cache_control(unmarked) is unmarked
-
-
-def test_breakpoints_are_renamed_at_the_message_level_on_parts_and_on_tool_calls() -> None:
-    message: Final = {
-        "role": "assistant",
-        "content": [{"type": "text", "text": "a", "prompt_cache_breakpoint": _EXPLICIT}, {"type": "text", "text": "b"}],
-        "tool_calls": [_lookup_call("call_1", prompt_cache_breakpoint=_EXPLICIT_30M), _lookup_call("call_2")],
-        "prompt_cache_breakpoint": _EXPLICIT,
-    }
-
-    assert message_with_prompt_cache_breakpoints_as_cache_control(message) == {
-        "role": "assistant",
-        "content": [{"type": "text", "text": "a", "cache_control": _EPHEMERAL}, {"type": "text", "text": "b"}],
-        "tool_calls": [_lookup_call("call_1", cache_control=_EPHEMERAL), _lookup_call("call_2")],
-        "cache_control": _EPHEMERAL,
-    }
-
-
-def test_a_message_level_breakpoint_on_string_content_is_renamed_and_other_messages_are_kept() -> None:
-    unmarked: Final = {"role": "user", "content": "unmarked"}
-
-    renamed: Final = messages_with_prompt_cache_breakpoints_as_cache_control(
-        [{"role": "user", "content": "hi", "prompt_cache_breakpoint": _EXPLICIT}, unmarked]
-    )
-
-    assert renamed == ({"role": "user", "content": "hi", "cache_control": _EPHEMERAL}, unmarked)
-    assert renamed[1] is unmarked
-
-
-@pytest.mark.parametrize(
-    "tool",
-    [
-        {"type": "function", "function": {"name": "lookup", "parameters": {}}, "prompt_cache_breakpoint": _EXPLICIT},
-        {"type": "function", "function": {"name": "lookup", "parameters": {}, "prompt_cache_breakpoint": _EXPLICIT}},
-    ],
-    ids=["top-level", "under-function"],
-)
-def test_a_tool_breakpoint_becomes_a_top_level_cache_control(tool: dict[str, object]) -> None:
-    assert tool_with_prompt_cache_breakpoint_as_cache_control(tool) == {
-        "type": "function",
-        "function": {"name": "lookup", "parameters": {}},
-        "cache_control": _EPHEMERAL,
-    }
-
-
-def test_a_tool_cache_control_the_client_wrote_wins_over_the_breakpoint() -> None:
-    tool: Final = {
-        "type": "function",
-        "function": {
-            "name": "lookup",
-            "cache_control": {"type": "ephemeral", "ttl": "1h"},
-            "prompt_cache_breakpoint": _EXPLICIT_30M,
-        },
-    }
-
-    assert tool_with_prompt_cache_breakpoint_as_cache_control(tool) == {
-        "type": "function",
-        "function": {"name": "lookup", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
-    }
-
-
-def test_tools_that_are_not_a_list_carry_no_marks_and_unmarked_tools_are_kept() -> None:
-    unmarked: Final = {"type": "function", "function": {"name": "lookup"}}
-
-    assert tools_with_prompt_cache_breakpoints_as_cache_control(None) == ()
-    assert tools_with_prompt_cache_breakpoints_as_cache_control([unmarked, "opaque"]) == (unmarked, "opaque")
-
-
-def test_message_without_cache_control_marks_strips_only_the_listed_positions() -> None:
-    message: Final = {
-        "role": "assistant",
-        "content": [
-            {"type": "text", "text": "a", "cache_control": _EPHEMERAL},
-            {"type": "text", "text": "b", "cache_control": _EPHEMERAL},
-        ],
-        "tool_calls": [_lookup_call("call_1", cache_control=_EPHEMERAL), _lookup_call("call_2", cache_control=_EPHEMERAL)],
-        "cache_control": _EPHEMERAL,
-    }
-
-    assert message_without_cache_control_marks(
-        message, message_mark=True, parts=frozenset({0}), tool_calls=frozenset({1})
-    ) == {
-        "role": "assistant",
-        "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b", "cache_control": _EPHEMERAL}],
-        "tool_calls": [_lookup_call("call_1", cache_control=_EPHEMERAL), _lookup_call("call_2")],
     }
