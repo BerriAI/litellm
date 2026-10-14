@@ -28,6 +28,9 @@ _SYSTEMONE_RESPONSE: Final[Mapping[str, object]] = {
     "usage": {"input_tokens": 12, "output_tokens": 1},
 }
 _TYPESAFE_URL: Final = "https://api.typesafe.ai/v1/systemone"
+_CLOUDFLARE_API_BASE: Final = "https://api.cloudflare.com/client/v4/accounts/acct/ai/run"
+_CLOUDFLARE_CLEF_URL: Final = f"{_CLOUDFLARE_API_BASE}/@cf/cloudflare/clef"
+_PNG_DATA_URL: Final = "data:image/png;base64,AA=="
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +106,25 @@ async def test_decisions_with_state_still_sends_the_systemone_format_and_warns(
     }
     assert isinstance(response, DecisionsResponse)
     assert response.answers["is_refund"].model_dump(mode="json") == {"type": "noul", "noul": 0.93}
+
+
+@pytest.mark.asyncio
+async def test_decisions_with_state_still_sends_its_images(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_CLOUDFLARE_CLEF_URL).respond(json=_SYSTEMONE_RESPONSE)
+
+    with pytest.warns(UserWarning, match=r"litellm\.systemone"):
+        await litellm.adecisions(
+            model="cloudflare/clef",
+            state=_STATE,
+            questions=_SYSTEMONE_QUESTIONS,
+            images=[_PNG_DATA_URL],
+            api_key="caller-key",
+            api_base=_CLOUDFLARE_API_BASE,
+        )
+
+    sent: Final = json.loads(respx_mock.calls.last.request.content)
+    assert sent["images"] == [_PNG_DATA_URL]
+    assert route.called
 
 
 @pytest.mark.asyncio
