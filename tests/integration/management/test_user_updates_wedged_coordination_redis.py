@@ -1,6 +1,5 @@
 import os
 import re
-import signal
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -10,7 +9,6 @@ from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-import psutil
 import psycopg
 import pytest
 from psycopg import sql
@@ -18,13 +16,15 @@ from pydantic import JsonValue
 from redis import Redis
 from redis.client import PubSub
 
+from tests.integration._support.budget import case_timeout_seconds
 from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import owned_proxy_process
 from tests.integration._support.redis_process import owned_redis
 
 _USERS: Final = 60
 _BURST: Final = 30
+_WEDGED_PUBLISHES_PER_BURST_USER: Final = 2
 _HANDLER_BUDGET_SECONDS: Final = 0.75
 _BULK_BUDGET_SECONDS: Final = 2.0
 _CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
@@ -55,26 +55,6 @@ def _received(pubsub: PubSub) -> tuple[dict[str, JsonValue], ...]:
             messages.append(JSON_OBJECT.validate_json(data))
 
 
-def _worker_pid(port: int) -> int:
-    for process in psutil.process_iter():
-        parent = process.parent()
-        if parent is None:
-            continue
-        try:
-            cmdline = parent.cmdline()
-            own_cmdline = process.cmdline()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-        if (
-            "integration._support.proxy" in cmdline
-            and "--port" in cmdline
-            and str(port) in cmdline
-            and not any("prisma" in part for part in own_cmdline)
-        ):
-            return process.pid
-    raise AssertionError(f"no uvicorn worker found under the owned proxy on port {port}")
-
-
 def _burst_call(
     index: int, users: tuple[str, ...], key: str, team_id: str, customer_id: str
 ) -> tuple[str, dict[str, JsonValue]]:
@@ -91,7 +71,7 @@ def _burst_call(
             return "/customer/update", {"user_id": customer_id, "max_budget": 7.0 + index}
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(case_timeout_seconds())
 @pytest.mark.covers(
     "mgmt.user.update.budget_change_returns_promptly_with_wedged_coordination_redis",
     "mgmt.user.bulk_update.budget_change_returns_promptly_with_wedged_coordination_redis",
@@ -115,7 +95,7 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
             prior_logs: Final = frozenset(results_dir.glob("owned-proxy-*.log"))
             with (
                 owned_redis(tmp_path) as coordination,
-                owned_proxy(
+                owned_proxy_process(
                     gateway,
                     tmp_path,
                     {
@@ -126,9 +106,10 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     config=Path("tests/integration/coordination_redis_proxy_config.yaml"),
                     remove_environment=("DATABASE_URL_READ_REPLICA",),
                     workers=2,
-                ) as candidate,
+                ) as owned,
                 Redis(host=coordination.host, port=coordination.port, socket_timeout=1) as subscriber_client,
             ):
+                candidate: Final = owned.gateway
                 pubsub: Final = subscriber_client.pubsub()
                 pubsub.subscribe(_CHANNEL)
                 received: list[dict[str, JsonValue]] = []
@@ -171,8 +152,8 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                 assert timings["h2_healthy_control"] < _HANDLER_BUDGET_SECONDS, (
                     f"healthy control update took {timings['h2_healthy_control']:.3f}s"
                 )
-                coordination.signal(signal.SIGSTOP)
-                try:
+                with owned.replacing_worker(min(owned.worker_pids())) as kill, coordination.paused():
+                    kill()
                     timings["s2_wedged_control"] = _timed_post(
                         candidate, "/user/update", {"user_id": users[0], "tpm_limit": 1000}
                     )
@@ -228,22 +209,17 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                         f"/user/update with an invalid body took {timings['s8_invalid_body']:.3f}s"
                     )
 
-                    def burst_request(path: str, body: Mapping[str, JsonValue]) -> tuple[object, float]:
+                    def burst_request(path: str, body: Mapping[str, JsonValue]) -> tuple[int, float]:
                         started: Final = time.monotonic()
-                        try:
-                            response: Final = candidate.client.request(
-                                "POST",
-                                path,
-                                json=body,
-                                headers={"Authorization": f"Bearer {candidate.key}"},
-                                timeout=60,
-                            )
-                            return response.status_code, time.monotonic() - started
-                        except Exception as error:  # noqa: BLE001  # the killed worker drops in-flight requests
-                            return error, time.monotonic() - started
+                        response: Final = candidate.client.request(
+                            "POST",
+                            path,
+                            json=body,
+                            headers={"Authorization": f"Bearer {candidate.key}"},
+                            timeout=60,
+                        )
+                        return response.status_code, time.monotonic() - started
 
-                    port: Final = candidate.client.base_url.port
-                    assert port is not None, f"owned proxy client has no port: {candidate.client.base_url}"
                     with ThreadPoolExecutor(_BURST) as pool:
                         futures: Final = [
                             pool.submit(
@@ -252,15 +228,9 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                             )
                             for i in range(_BURST)
                         ]
-                        os.kill(_worker_pid(port), signal.SIGKILL)
                         results: Final = [future.result() for future in futures]
-                    responses: Final = [(status, elapsed) for status, elapsed in results if isinstance(status, int)]
-                    failures: Final = [status for status, _elapsed in responses if status != 200]
+                    failures: Final = [status for status, _elapsed in results if status != 200]
                     assert not failures, f"burst responses that were not 200: {failures}"
-                    transport_errors: Final = [status for status, _elapsed in results if not isinstance(status, int)]
-                    assert len(transport_errors) <= 3, (
-                        f"{len(transport_errors)} requests raised transport errors: {transport_errors!r}"
-                    )
                     elapsed_sorted: Final = sorted(
                         elapsed for i, (status, elapsed) in enumerate(results) if i % 5 in (0, 1, 4) and status == 200
                     )
@@ -279,39 +249,38 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     assert timings["c1_survivor"] < _HANDLER_BUDGET_SECONDS, (
                         f"control update on the surviving worker took {timings['c1_survivor']:.3f}s"
                     )
-                finally:
-                    coordination.signal(signal.SIGCONT)
-                wedged_keys: Final = {users[i] for i in range(_BURST) if i % 5 == 0 and i != 0} | {f"team_id:{team_id}"}
+                    wedged_keys: Final = {users[i] for i in range(_BURST) if i % 5 == 0 and i != 0} | {
+                        f"team_id:{team_id}"
+                    }
 
-                def proxy_log() -> str:
-                    return "".join(
-                        path.read_text() for path in results_dir.glob("owned-proxy-*.log") if path not in prior_logs
+                    def proxy_log() -> str:
+                        return "".join(
+                            path.read_text() for path in results_dir.glob("owned-proxy-*.log") if path not in prior_logs
+                        )
+
+                    team_wedged_key: Final = f"team_id:{team_id}"
+                    eventually(
+                        proxy_log,
+                        lambda text: (
+                            all(
+                                text.count(f"publish for {wedged_key} failed") >= _WEDGED_PUBLISHES_PER_BURST_USER
+                                for wedged_key in wedged_keys
+                                if wedged_key != team_wedged_key
+                            )
+                            and (
+                                f"publish for {team_wedged_key} failed" in text
+                                or f"internal usage cache entry {team_wedged_key}" in text
+                            )
+                        ),
+                        seconds=45,
                     )
-
-                team_wedged_key: Final = f"team_id:{team_id}"
-                eventually(
-                    proxy_log,
-                    lambda text: (
-                        all(
-                            f"publish for {wedged_key} failed" in text
-                            for wedged_key in wedged_keys
-                            if wedged_key != team_wedged_key
-                        )
-                        and (
-                            f"publish for {team_wedged_key} failed" in text
-                            or f"internal usage cache entry {team_wedged_key}" in text
-                        )
-                    ),
-                    seconds=45,
-                )
                 marker: Final = len(received)
                 drained()
                 recovered_keys: Final = {str(message.get("cache_key")) for message in received[marker:]}
                 assert recovered_keys.isdisjoint(wedged_keys), (
                     f"wedged publishes unexpectedly landed after recovery: {sorted(recovered_keys & wedged_keys)}"
                 )
-                coordination.signal(signal.SIGSTOP)
-                try:
+                with coordination.paused():
                     timings["r1b_short_wedge_a"] = _timed_post(
                         candidate, "/user/update", {"user_id": users[4], "max_budget": 15.0}
                     )
@@ -324,8 +293,6 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     assert timings["r1b_short_wedge_b"] < _HANDLER_BUDGET_SECONDS, (
                         f"/user/update inside a short wedge took {timings['r1b_short_wedge_b']:.3f}s"
                     )
-                finally:
-                    coordination.signal(signal.SIGCONT)
                 eventually(
                     drained,
                     lambda messages: {str(message.get("cache_key")) for message in messages} >= {users[4], users[5]},

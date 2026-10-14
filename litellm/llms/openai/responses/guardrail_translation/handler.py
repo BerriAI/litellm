@@ -66,6 +66,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     BaseLiteLLMOpenAIResponseObject,
@@ -101,8 +102,8 @@ if TYPE_CHECKING:
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import ResponseInputParam
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class _ToolCallShape(NamedTuple):
@@ -110,14 +111,14 @@ class _ToolCallShape(NamedTuple):
     arguments: str
 
 
-class _ToolCallFunctionFields(BaseModel):
+class _ToolCallFunctionFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str | None = None
     arguments: str = ""
 
 
-class _ToolCallFields(BaseModel):
+class _ToolCallFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     function: _ToolCallFunctionFields
