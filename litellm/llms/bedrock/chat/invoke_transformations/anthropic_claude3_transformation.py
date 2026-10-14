@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
@@ -41,6 +43,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -105,7 +109,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         optional_params = AnthropicConfig.map_openai_params(
             self,
-            non_default_params,
+            {
+                **non_default_params,
+                **self._tools_param_with_openai_tool_search_mapped(
+                    _NON_DEFAULT_PARAMS.validate_python(non_default_params), original_model, drop_params
+                ),
+            },
             optional_params,
             model,
             drop_params,

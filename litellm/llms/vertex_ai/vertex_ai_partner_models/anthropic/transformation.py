@@ -1,8 +1,10 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
@@ -15,6 +17,8 @@ from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class VertexAIError(Exception):
@@ -172,7 +176,12 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         # Call parent method with potentially modified model name
         optional_params = super().map_openai_params(
-            non_default_params=non_default_params,
+            non_default_params={
+                **non_default_params,
+                **self._tools_param_with_openai_tool_search_mapped(
+                    _NON_DEFAULT_PARAMS.validate_python(non_default_params), original_model, drop_params
+                ),
+            },
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,

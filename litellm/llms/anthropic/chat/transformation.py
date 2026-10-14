@@ -47,6 +47,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
@@ -149,12 +150,20 @@ _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _DEFERRAL_CARRYING_TOOL_KEYS: Final = frozenset({"function", "tools"})
 
 
-def _is_openai_tool_search_tool(tool: object) -> bool:
+def _tool_type(tool: object) -> str | None:
     match tool:
-        case {"type": "tool_search"}:
-            return True
+        case {"type": str() as tool_type}:
+            return tool_type
         case _:
-            return False
+            return None
+
+
+def _is_openai_tool_search_tool(tool: object) -> bool:
+    return _tool_type(tool) == "tool_search"
+
+
+def _is_anthropic_tool_search_tool(tool: object) -> bool:
+    return _tool_type(tool) in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
 def _without_deferral(tool: object) -> object:
@@ -329,7 +338,7 @@ DROP_UNSUPPORTED_SPEED_WARNING: Final = (
 
 DROP_UNSUPPORTED_TOOL_SEARCH_WARNING: Final = (
     "Dropping the OpenAI `tool_search` tool and the `defer_loading` of the other tools for model=%s on %s "
-    "(drop_params=True): this route cannot run tool search."
+    "(drop_params=True) because this route cannot run that tool search."
 )
 
 
@@ -341,7 +350,8 @@ def tools_without_unsupported_tool_search(
     if not (litellm.drop_params or drop_params):
         raise litellm.utils.UnsupportedParamsError(
             message=(
-                f"{model} on {route} cannot run the OpenAI `tool_search` tool. To drop it "
+                f"{model} on {route} cannot run the OpenAI `tool_search` tool as sent. Only a server-executed "
+                "`tool_search` on a route that supports tool search becomes Anthropic's tool search. To drop it "
                 "and the `defer_loading` of the other tools, set `litellm.drop_params = True`."
             ),
             status_code=400,
@@ -1061,16 +1071,39 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             is_server_tool_search_tool,
         )
 
-        search_tools: Final = tuple(tool for tool in tools if _is_openai_tool_search_tool(tool))
-        if not search_tools:
-            return tools
-        if all(is_server_tool_search_tool(tool) for tool in search_tools) and litellm.supports_tool_search(
-            model, self._resolved_provider
-        ):
-            return [anthropic_tool_search_chat_tool() if _is_openai_tool_search_tool(tool) else tool for tool in tools]
-        return tools_without_unsupported_tool_search(
-            tools=tools, model=model, route=self._resolved_provider, drop_params=drop_params
+        first_search_tool_index: Final = next(
+            (index for index, tool in enumerate(tools) if _is_openai_tool_search_tool(tool)), None
         )
+        if first_search_tool_index is None:
+            return tools
+        if any(_is_anthropic_tool_search_tool(tool) for tool in tools):
+            return [tool for tool in tools if not _is_openai_tool_search_tool(tool)]
+        route_runs_the_search: Final = all(
+            is_server_tool_search_tool(tool) for tool in tools if _is_openai_tool_search_tool(tool)
+        ) and litellm.supports_tool_search(model, self._resolved_provider)
+        if not route_runs_the_search:
+            return tools_without_unsupported_tool_search(
+                tools=tools, model=model, route=self._resolved_provider, drop_params=drop_params
+            )
+        return [
+            *tools[:first_search_tool_index],
+            anthropic_tool_search_chat_tool(),
+            *(tool for tool in tools[first_search_tool_index + 1 :] if not _is_openai_tool_search_tool(tool)),
+        ]
+
+    def _tools_param_with_openai_tool_search_mapped(
+        self, non_default_params: Mapping[str, object], model: str, drop_params: bool
+    ) -> Mapping[str, object]:
+        tools: Final = non_default_params.get("tools")
+        if not isinstance(tools, list):
+            return {}
+        return {
+            "tools": list(
+                self._tools_with_openai_tool_search_mapped(
+                    tools=_TOOLS_ADAPTER.validate_python(tools), model=model, drop_params=drop_params
+                )
+            )
+        }
 
     def _map_tools(
         self,
