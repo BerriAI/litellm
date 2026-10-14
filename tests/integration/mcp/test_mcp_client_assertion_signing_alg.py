@@ -221,7 +221,9 @@ def test_unauthenticated_server_post_with_hs256_is_rejected(gateway: Gateway) ->
     assert response.status_code == 401, response.text
 
 
-def _seeded_row_loads_with_fallback_warning(gateway: Gateway, tmp_path: Path, algorithm: str) -> None:
+def _seeded_row_loads_with_fallback_warning(
+    gateway: Gateway, tmp_path: Path, algorithm: str, expected_phrases: "tuple[str, ...]"
+) -> None:
     identity: Final = "dualread" + uuid.uuid4().hex[:8]
     name: Final = "dualread" + uuid.uuid4().hex[:8]
     with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
@@ -249,21 +251,37 @@ def _seeded_row_loads_with_fallback_warning(gateway: Gateway, tmp_path: Path, al
             assert listed.status_code == 200, listed.text
             log_text: Final = eventually(
                 lambda: owned.log.read_text(),
-                lambda text: name in text and "not an approved algorithm" in text and "using RS256" in text,
+                lambda text: name in text and all(phrase in text for phrase in expected_phrases),
                 seconds=30,
             )
-            assert name in log_text and "not an approved algorithm" in log_text and "using RS256" in log_text
+            assert name in log_text and all(phrase in log_text for phrase in expected_phrases)
     finally:
         with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
             connection.execute('DELETE FROM "LiteLLM_MCPServerTable" WHERE server_id = %s', (identity,))
 
 
 def test_seeded_hs256_row_loads_with_rs256_fallback_warning(gateway: Gateway, tmp_path: Path) -> None:
-    _seeded_row_loads_with_fallback_warning(gateway, tmp_path, "HS256")
+    _seeded_row_loads_with_fallback_warning(
+        gateway,
+        tmp_path,
+        "HS256",
+        ("not an approved algorithm", "using RS256"),
+    )
 
 
 def test_seeded_eddsa_row_loads_with_rs256_fallback_warning(gateway: Gateway, tmp_path: Path) -> None:
-    _seeded_row_loads_with_fallback_warning(gateway, tmp_path, "EdDSA")
+    # EdDSA gets the honest wording: an Ed25519 key cannot produce the RS256 fallback at all.
+    _seeded_row_loads_with_fallback_warning(
+        gateway,
+        tmp_path,
+        "EdDSA",
+        (
+            "legacy and not approved for signing",
+            "cannot sign the RS256 fallback",
+            "token exchange will fail",
+            "rotated to RSA or EC",
+        ),
+    )
 
 
 def test_chat_still_works_after_alg_rejection(gateway: Gateway) -> None:
