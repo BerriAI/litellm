@@ -1050,6 +1050,7 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
         "schema": {
             "type": "object",
             "properties": {"answer": {"type": "string"}},
+            "additionalProperties": False,
         },
     }
     optional_params = {
@@ -3195,11 +3196,11 @@ def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(lo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     legacy_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"legacy_field": {"type": "string"}}},
+        "schema": {"type": "object", "properties": {"legacy_field": {"type": "string"}}, "additionalProperties": False},
     }
     newer_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"newer_field": {"type": "string"}}},
+        "schema": {"type": "object", "properties": {"newer_field": {"type": "string"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -3229,7 +3230,7 @@ def test_bedrock_messages_drop_params_keeps_native_output_config_format(local_mo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -3254,7 +3255,7 @@ def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_mo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(

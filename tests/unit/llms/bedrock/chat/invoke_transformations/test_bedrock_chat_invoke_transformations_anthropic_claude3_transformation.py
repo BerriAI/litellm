@@ -529,7 +529,7 @@ def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_mo
     for models with native structured-output support (Claude Sonnet 4.6)."""
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "additionalProperties": False},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(
@@ -670,7 +670,7 @@ def test_bedrock_chat_invoke_drop_params_keeps_native_output_config_format(local
     monkeypatch.setattr(litellm, "drop_params", True)
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(

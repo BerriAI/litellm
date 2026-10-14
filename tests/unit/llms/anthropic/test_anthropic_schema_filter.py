@@ -508,3 +508,46 @@ class TestFilterAnthropicOutputSchema:
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
 
         assert "type" not in result["properties"]["rows"]["items"]["properties"]["c"]
+
+    def test_closes_nullable_object(self):
+        """``type: ["object", "null"]`` is still an object and must be closed too,
+        otherwise the API answers "'additionalProperties' must be explicitly set
+        to false"."""
+        schema = {
+            "type": "object",
+            "properties": {"meta": {"type": ["object", "null"], "properties": {"a": {"type": "string"}}}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["properties"]["meta"]["additionalProperties"] is False
+        assert result["properties"]["meta"]["type"] == ["object", "null"]
+
+    def test_closes_untyped_node_that_declares_properties(self):
+        """A node with ``properties`` but no ``type`` is an object by structure.
+        The API rejects it with "Schema type is missing", so it is typed and closed."""
+        schema = {
+            "type": "object",
+            "properties": {"meta": {"properties": {"a": {"type": "string"}}, "required": ["a"]}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["properties"]["meta"] == {
+            "properties": {"a": {"type": "string"}},
+            "required": ["a"],
+            "type": "object",
+            "additionalProperties": False,
+        }
+
+    def test_moves_unsupported_string_format_into_description(self):
+        """A ``format`` outside the supported set 400s ("format 'int64' is not
+        supported"), so it is dropped and noted like any other constraint."""
+        schema = {
+            "type": "object",
+            "properties": {"id": {"type": "string", "format": "int64", "description": "row id"}},
+        }
+
+        result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+        assert result["properties"]["id"] == {"type": "string", "description": "row id Note: format: int64."}
