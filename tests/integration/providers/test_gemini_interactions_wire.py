@@ -259,6 +259,11 @@ def test_stream_interaction_ends_without_openai_done_terminator(gateway: Gateway
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1beta/interactions?alt=sse"
+        assert json.loads(request.body) == {
+            "model": "gemini-2.5-flash",
+            "input": "plan a trip",
+            "stream": True,
+        }
         return Reply(content_type="text/event-stream", chunks=frames)
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -268,7 +273,7 @@ def test_stream_interaction_ends_without_openai_done_terminator(gateway: Gateway
             "POST", prefix, {"model": model, "input": "plan a trip", "stream": True}, key=key
         )
         assert response.status_code == 200, response.text
-        assert "[DONE]" not in response.text, response.text
-        received: Final = [json.loads(part.removeprefix("data: ")) for part in response.text.split("\n\n") if part]
-        assert received == [{**payload, "model": model} for _event_type, payload in _STREAM_EVENTS], response.text
+        assert response.headers["content-type"].startswith("text/event-stream"), response.headers
+        expected: Final = b"".join(_proxy_stream_event(payload, model) for _event_type, payload in _STREAM_EVENTS)
+        assert response.content == expected, response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions?alt=sse")]

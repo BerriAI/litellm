@@ -13,9 +13,7 @@ _CONTENTS: Final = ({"role": "user", "parts": [{"text": "spend probe"}]},)
 _USAGE: Final = {"promptTokenCount": 11, "candidatesTokenCount": 7, "totalTokenCount": 18}
 
 _REPLY_BODY: Final = {
-    "candidates": [
-        {"content": {"parts": [{"text": "ok"}], "role": "model"}, "finishReason": "STOP", "index": 0}
-    ],
+    "candidates": [{"content": {"parts": [{"text": "ok"}], "role": "model"}, "finishReason": "STOP", "index": 0}],
     "usageMetadata": _USAGE,
 }
 
@@ -59,8 +57,6 @@ def test_generate_content_bills_from_usage_metadata(gateway: Gateway, stream: bo
             key=key,
         )
         assert response.status_code == 200, response.text
-        if not stream:
-            assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.025), response.headers
         digest: Final = sha256(key.encode()).hexdigest()
         rows: Final = eventually(
             lambda: read_rows(
@@ -85,6 +81,8 @@ def test_generate_content_bills_from_usage_metadata(gateway: Gateway, stream: bo
             (digest,),
         )
         assert reread == rows, reread
+        if not stream:
+            assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.025), response.headers
         assert [(r.method, r.target) for r in wire.drain()] == [
             ("POST", f"/models/gemini-2.5-flash:{action}{'?alt=sse' if stream else ''}")
         ]

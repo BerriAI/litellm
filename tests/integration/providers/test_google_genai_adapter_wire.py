@@ -1,5 +1,6 @@
 import json
 import uuid
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -212,7 +213,7 @@ def _openai_stream_frames() -> tuple[bytes, ...]:
     )
 
 
-def _expected_gemini_stream_frames(usage: object) -> list[dict]:
+def _expected_gemini_stream_frames(usage: Mapping[str, int] | None) -> list[dict]:
     return [
         {
             "candidates": [
@@ -246,7 +247,7 @@ def _expected_gemini_stream_frames(usage: object) -> list[dict]:
                     "safetyRatings": [],
                 }
             ],
-            "usageMetadata": usage,
+            **({"usageMetadata": dict(usage)} if usage is not None else {}),
         },
     ]
 
@@ -470,7 +471,9 @@ def test_stream_generate_content_adapts_openai_sse_to_gemini_frames(gateway: Gat
             "candidatesTokenCount",
             "totalTokenCount",
         }, text
-        assert parsed == _expected_gemini_stream_frames(parsed[-1]["usageMetadata"]), text
+        assert [
+            {key: value for key, value in frame.items() if key != "usageMetadata"} for frame in parsed
+        ] == _expected_gemini_stream_frames(None), text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1/chat/completions")]
 
 
@@ -520,8 +523,9 @@ def test_generate_content_adapter_accepts_snake_case_generation_config(gateway: 
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1/chat/completions")], response.text
 
 
+@pytest.mark.parametrize("prefix", _PREFIXES)
 @pytest.mark.parametrize("backend", ["openai", "anthropic"])
-def test_stream_generate_content_adapter_reports_upstream_usage(gateway: Gateway, backend: str) -> None:
+def test_stream_generate_content_adapter_reports_upstream_usage(gateway: Gateway, prefix: str, backend: str) -> None:
     pytest.skip(
         "BUG: native Google stream served by an openai or anthropic deployment ends with usageMetadata 0/0/0 although the upstream sent usage 20/9/29"
     )
@@ -543,23 +547,26 @@ def test_stream_generate_content_adapter_reports_upstream_usage(gateway: Gateway
         )
         key: Final = scenario.key(models=[model])
         response: Final = gateway.client.post(
-            f"/v1beta/models/{model}:streamGenerateContent?alt=sse",
+            f"{prefix}/{model}:streamGenerateContent?alt=sse",
             json={
                 "contents": _contents(marker),
                 "systemInstruction": _SYSTEM_INSTRUCTION,
+                **({"generationConfig": {"maxOutputTokens": 50}} if backend == "anthropic" else {}),
                 "tools": _TOOLS,
                 "toolConfig": {"functionCallingConfig": {"mode": "ANY"}},
             },
             headers={"Authorization": f"Bearer {key}"},
         )
         assert response.status_code == 200, response.text
+        assert "data: [DONE]" not in response.text, response.text
         frames_out: Final = [part for part in response.text.split("\n\n") if part]
         parsed: Final = [json.loads(part.removeprefix("data: ")) for part in frames_out]
-        assert parsed[-1]["usageMetadata"] == {
-            "promptTokenCount": 20,
-            "candidatesTokenCount": 9,
-            "totalTokenCount": 29,
-        }, response.text
+        assert parsed == _expected_gemini_stream_frames(
+            {"promptTokenCount": 20, "candidatesTokenCount": 9, "totalTokenCount": 29}
+        ), response.text
+        assert [(r.method, r.target) for r in wire.drain()] == [
+            ("POST", "/v1/chat/completions" if backend == "openai" else "/v1/messages")
+        ], response.text
 
 
 def _anthropic_stream_frames() -> tuple[bytes, ...]:
@@ -668,7 +675,9 @@ def test_stream_generate_content_adapts_anthropic_sse_to_gemini_frames(gateway: 
             "candidatesTokenCount",
             "totalTokenCount",
         }, text
-        assert parsed == _expected_gemini_stream_frames(parsed[-1]["usageMetadata"]), text
+        assert [
+            {key: value for key, value in frame.items() if key != "usageMetadata"} for frame in parsed
+        ] == _expected_gemini_stream_frames(None), text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1/messages")]
 
 
