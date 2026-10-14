@@ -348,16 +348,6 @@ describe("blank context", () => {
     ]);
   });
 
-  it("reports a blank question name once even when its body has several errors", () => {
-    const raw = JSON.stringify({
-      state: "A ticket",
-      questions: { "": { type: "choice", instructions: 5, criteria: {} } },
-    });
-    expect(validateSystemOnePayload(raw).issues).toEqual([
-      { path: "questions", label: "Questions", message: "Give every question a name.", severity: "error" },
-    ]);
-  });
-
   it("labels a /v1/systemone question by its key even when the key is all digits", () => {
     const raw = JSON.stringify({
       state: "A ticket",

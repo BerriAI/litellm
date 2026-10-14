@@ -40,12 +40,6 @@ const toIssue = (path: PropertyKey[], message: string): SystemOnePayloadIssue =>
     ? error(["questions"], "Give every question a name.")
     : error(path, message);
 
-const dedupe = (issues: SystemOnePayloadIssue[]): SystemOnePayloadIssue[] =>
-  issues.filter(
-    (issue, index) =>
-      issues.findIndex((other) => other.path === issue.path && other.message === issue.message) === index,
-  );
-
 const invalid = (path: string, message: string) => ({
   isValid: false,
   issues: [error([path], message)],
@@ -54,8 +48,8 @@ const invalid = (path: string, message: string) => ({
 export function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
   try {
     return { ok: true, value: JSON.parse(raw) };
-  } catch (error: unknown) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  } catch (cause: unknown) {
+    return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
   }
 }
 
@@ -83,7 +77,7 @@ function validatePayload<T>(raw: string, schema: z.ZodType<T>): PayloadValidatio
   if (!result.success) {
     return {
       isValid: false,
-      issues: dedupe(result.error.issues.map((issue) => toIssue(issue.path, issue.message))),
+      issues: result.error.issues.map((issue) => toIssue(issue.path, issue.message)),
     };
   }
 
