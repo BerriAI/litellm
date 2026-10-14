@@ -25,18 +25,12 @@ from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.repositories.table_repositories import MCPServerRepository
 
 if TYPE_CHECKING:
-    from prisma import Prisma
     from prisma import models as prisma_models
 
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionTable,
         LiteLLM_TeamTableCachedObj,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class ObjectPermissionClient:
-    db: "Prisma"
 
 
 async def attach_object_permission_to_dict(
@@ -127,7 +121,6 @@ async def prepare_object_permission_upsert(
         for field, value in new_object_permission.items()
         if value is not None and field != "object_permission_id"
     }
-    # Omitted request fields become None; preserve stored grants and Prisma column defaults.
     merged: Final[dict[str, object]] = {
         **existing_fields,
         **requested_fields,
