@@ -1863,7 +1863,7 @@ class ProxyBaseLLMRequestProcessing:
         litellm_logging_obj: LiteLLMLoggingObj | None = None,
         read_timing_from_logging_obj: bool = True,
         **kwargs,
-    ) -> dict:
+    ) -> dict[str, str]:  # mutable-ok: callers merge custom headers in place
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
         resolved_call_id: Final = (
@@ -2530,9 +2530,6 @@ class ProxyBaseLLMRequestProcessing:
         raw_api_base: Final[object] = hidden_params.get("api_base")
         raw_fastest_response_batch_completion: Final[object] = hidden_params.get("fastest_response_batch_completion")
         raw_additional_headers: Final[object] = hidden_params.get("additional_headers")
-        additional_headers: Final = (
-            raw_additional_headers if isinstance(raw_additional_headers, Mapping) else MappingProxyType({})
-        )
         headers: Final[Mapping[str, str]] = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
             call_id=logging_obj.litellm_call_id,
@@ -2550,12 +2547,9 @@ class ProxyBaseLLMRequestProcessing:
             request_data=self.data,
             hidden_params=hidden_params,
             litellm_logging_obj=logging_obj,
+            **(raw_additional_headers if isinstance(raw_additional_headers, Mapping) else MappingProxyType({})),
         )
-        with_additional_headers: Final[Mapping[str, str]] = {
-            **headers,
-            **{str(key): str(value) for key, value in additional_headers.items() if value not in {"", None, "None"}},
-        }
-        merged_headers: Final[Mapping[str, str]] = {**with_additional_headers, **callback_headers}
+        merged_headers: Final[Mapping[str, str]] = {**headers, **callback_headers}
         return MappingProxyType(
             {
                 key: value
