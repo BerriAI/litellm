@@ -250,7 +250,7 @@ export function CustomerForm({
           )}
         </FormField>
         <MCPToolPermissions
-          initializeDefaultPermissions={!isEdit}
+          preserveUnrestrictedServers={isEdit ? initialValues.mcp_servers_and_groups.servers : undefined}
           accessToken={accessToken ?? ""}
           selectedServers={selection.servers}
           selectedAccessGroups={selection.accessGroups}

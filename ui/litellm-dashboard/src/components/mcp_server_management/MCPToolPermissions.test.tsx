@@ -37,7 +37,7 @@ describe("MCPToolPermissions", () => {
         selectedServers={[mockServerId]}
         toolPermissions={{}}
         onChange={onChange}
-        initializeDefaultPermissions={false}
+        preserveUnrestrictedServers={[mockServerId]}
       />,
     );
 
@@ -68,7 +68,7 @@ describe("MCPToolPermissions", () => {
       accessToken: mockAccessToken,
       toolPermissions: {},
       onChange,
-      initializeDefaultPermissions: false,
+      preserveUnrestrictedServers: [mockServerId],
     };
     const { rerender } = renderWithProviders(<MCPToolPermissions {...props} selectedServers={[mockServerId]} />);
 
