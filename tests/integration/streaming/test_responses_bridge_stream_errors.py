@@ -35,6 +35,7 @@ from integration._support.responses_stream import (
     frame,
     function_tools,
     healthy_stream,
+    openai_error_event,
     rate_limited_stream,
     serve,
 )
@@ -292,6 +293,14 @@ def test_bridged_error_event_without_an_error_object_is_a_provider_typed_interna
 def test_bridged_error_event_with_a_numeric_code_is_a_throttling_error(gateway: Gateway) -> None:
     identity: Final = "resp_" + uuid.uuid4().hex
     stream: Final = (frame(created(identity)), frame(error_event({"code": "429", "message": RATE_LIMIT_MESSAGE})))
+    response, _ = _in_stream_error_status(gateway, stream)
+    assert response.status_code == 429, response.text
+    assert_provider_typed_rate_limit(error_body(response))
+
+
+def test_bridged_openai_error_event_keeps_the_provider_code_and_message(gateway: Gateway) -> None:
+    identity: Final = "resp_" + uuid.uuid4().hex
+    stream: Final = (frame(created(identity)), frame(openai_error_event("rate_limit_exceeded", RATE_LIMIT_MESSAGE)))
     response, _ = _in_stream_error_status(gateway, stream)
     assert response.status_code == 429, response.text
     assert_provider_typed_rate_limit(error_body(response))

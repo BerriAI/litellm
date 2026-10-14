@@ -282,6 +282,13 @@ def _map_stream_error_to_exception(error_obj: object, model: str, custom_llm_pro
         return mapped_exception
 
 
+def _error_event_error_object(event: object) -> object:
+    nested_error: Final[object] = getattr(event, "error", None)
+    if nested_error is not None:
+        return nested_error
+    return {field: value for field in ("message", "code") if isinstance(value := getattr(event, field, None), str)}
+
+
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
     if isinstance(mapped_exception, litellm.ContentPolicyViolationError):
         return True
@@ -659,7 +666,7 @@ class BaseResponsesAPIStreamingIterator:
         error_obj: Final[object] = (
             getattr(getattr(result, "response", None), "error", None)
             if chunk_type == "response.failed"
-            else getattr(result, "error", None)
+            else _error_event_error_object(result)
         )
 
         mapped_exception: Final = self._map_error_event_exception(error_obj)

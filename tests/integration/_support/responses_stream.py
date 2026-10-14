@@ -36,6 +36,10 @@ def error_event(error: Mapping[str, JsonValue] | None) -> Mapping[str, JsonValue
     return {"type": "error", "sequence_number": 1, **({} if error is None else {"error": dict(error)})}
 
 
+def openai_error_event(code: str, message: str) -> Mapping[str, JsonValue]:
+    return {"type": "error", "sequence_number": 1, "code": code, "message": message, "param": None}
+
+
 def azure_rate_limit() -> Mapping[str, JsonValue]:
     return {
         "type": "too_many_requests",

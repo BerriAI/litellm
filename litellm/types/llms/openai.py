@@ -1931,7 +1931,10 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
     sequence_number: int
-    error: ErrorEventError
+    error: ErrorEventError | None = None
+    code: str | None = None
+    message: str | None = None
+    param: str | None = None
 
 
 class GenericEvent(BaseLiteLLMOpenAIResponseObject):
