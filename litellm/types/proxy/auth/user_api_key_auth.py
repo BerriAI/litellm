@@ -66,7 +66,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_model_max_budget: dict[str, object] | None = None
-    team_models: list[str] = []
+    team_models: list[Any] = []
     team_blocked: bool = False
     soft_budget: float | None = None
     team_model_aliases: _UntypedDict | None = None

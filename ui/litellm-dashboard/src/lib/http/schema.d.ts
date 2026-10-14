@@ -48855,7 +48855,7 @@ export interface components {
              * Team Models
              * @default []
              */
-            team_models: string[];
+            team_models: unknown[];
             team_object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Team Object Permission Id */
             team_object_permission_id?: string | null;
