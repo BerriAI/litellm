@@ -18,7 +18,7 @@ Run the stages
     python3 pipeline.py --stage extract
     python3 pipeline.py --stage discover
     python3 pipeline.py
-    python3 -m unittest -v test_pipeline.py
+    python3 -m unittest -v test_pipeline.py test_presentation.py
 
 Generation performs paid model calls. The full pipeline performs paid taxonomy, classification, and summary calls. Existing successful generation outputs and analysis fingerprints are reused on rerun. Failed or ambiguous network calls are not automatically retried, because a timeout does not establish that a request was unbilled
 
@@ -38,13 +38,27 @@ Pipeline
 
 6. Sum the gateway's request-level spend values with Decimal, without recomputing model pricing. Persist session, request, category, classification and summary relationships in SQLite. Every request contributes to one accounting bucket. Missing costs are identified explicitly, and verification refuses to complete this demo with missing costs or content
 
-7. Summarize each session/category group from original prompt/response evidence. Validate that cited request IDs belong to the group. A final LLM call synthesizes cross-session findings using these summaries. It never calculates displayed spend totals
+7. Generate concise presentation records for sessions, work areas, and their intersections. Batch four scopes per model call. Each record has a 3-6 word title, a one-sentence overview capped at 25 words, 1-3 findings capped at 15 words each, and 2-3 verbatim quotes capped at 30 words each. Validate citation scope, speaker attribution, and exact source-substring matches. Regenerate a batch once if validation fails, then stop if it still fails. Preserve all attempts in analysis accounting
 
-8. Generate HTML, JSON, category CSV and request-lineage CSV. Query report-generation logs separately to reconcile reporting overhead against observed analysis call IDs. Include failed logged analysis attempts in overhead
+8. Render an OpenRouter-inspired rankings layout using current LiteLLM dashboard theme tokens. The default leaderboard ranks sessions by recorded spend. A stacked area chart shows spend per time bucket, and a 100% stacked bar shows category shares. Work-area tabs filter the session ranking and time chart. The share chart remains an overview of all categories for the selected user and time window
+
+9. Clicking a session or work area opens a drawer with concise findings and quotes. A quote opens its original request evidence. All metrics respect the UTC interval and user filter. For partial windows, suppress full-scope overviews and retain only findings whose cited requests are all selected. Quotes outside the selected window are hidden. The reporting overhead card always covers the full report-generation run and is labeled separately
+
+10. Query report-generation logs separately and reconcile every observed analysis call ID. Reuse cached extraction, taxonomy and Jev results when only presentation changes. Do not regenerate demo traffic just to redraw the UI
 
 Artifacts
 
-report.html                 Main report, expandable request evidence and cited findings
+report.html                 Interactive rankings, charts, filters and detail drawers
+semantic-spend-rankings.html Identical standalone HTML with a descriptive filename
+presentation.json           Concise findings and exact-source quotes by scope
+presentation-data.json      All data embedded in the standalone HTML
+presentation-verification.json Word-limit, citation and quote validation results
+browser-verification.json   Executed Chrome interaction checks
+rankings-overview.png       Desktop overview screenshot
+rankings-session-detail.png Session drawer screenshot
+rankings-category-detail.png Category drawer screenshot
+rankings-mobile.png         Mobile layout screenshot
+ui-provenance.json          LiteLLM main commit and referenced theme files
 report.json                 Machine-readable report
 report.sqlite               Relational dataset, schema in schema.sql
 category-spend.csv          Category totals and percentages
@@ -53,7 +67,7 @@ taxonomy.json               Discovered category definitions and examples
 requests.json               Scoped, sanitized request records
 classifications.json        Jev outcomes, probabilities and analysis call IDs
 summaries.json              Grounded findings per session/category
-findings.json               Cross-session category findings
+findings.json               Concise category findings derived from presentation records
 verification.json           Accounting, scope, completeness and prompt checks
 overhead.json               Gateway-recorded analysis requests and costs
 traffic/                    Sanitized Claude outputs and session continuity evidence
@@ -76,3 +90,11 @@ Category totals are arithmetic facts from logs. Labels and summaries remain mode
 The generated SQLite file and exports are local artifacts. They include the authorized user's ID and synthetic request content, so do not publish them as public repository files without review. No gateway secret is stored in the artifacts
 
 No existing LiteLLM repository files or persistent user Claude settings are changed by this POC
+
+UI verification
+
+The browser check requires Playwright and an installed Google Chrome. It is optional for using the generated report. Run python test_report_browser.py in an existing compatible browser environment. The POC development run reused an existing environment without installing packages or browsers
+
+The report works directly from a local file, without a server or external JavaScript dependencies. Theme tokens are copied from the LiteLLM main commit recorded in ui-provenance.json. Inter is declared with local system font fallbacks. The standalone report does not bundle the entire dashboard React application
+
+The pipeline tests cover quote paraphrases, wrong-speaker attribution, out-of-scope citations, word limits, and grouping, in addition to accounting tests. Browser checks exercise filters, sorting, drawers, quote evidence, empty/invalid windows, keyboard navigation, chart totals and mobile layout
