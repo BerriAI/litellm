@@ -197,7 +197,7 @@ class TestKeyRotationSecretNamingStability:
                 existing_key_row=existing_key,
                 response=response,
                 user_api_key_dict=UserAPIKeyAuth(
-                    user_role="proxy_admin", api_key="sk-1234", user_id="1234"
+                    user_role="proxy_admin", api_key="sk-9876", user_id="1234"
                 ),
             )
 

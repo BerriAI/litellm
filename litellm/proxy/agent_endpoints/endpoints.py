@@ -335,9 +335,9 @@ async def _resolve_daily_activity_agent_ids(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
 ) -> tuple[str, ...] | None:
-    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
 
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return agent_ids
     permitted_agent_ids: Final = await _permitted_daily_activity_agent_ids(
         user_api_key_dict=user_api_key_dict,
