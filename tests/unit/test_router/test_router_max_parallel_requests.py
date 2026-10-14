@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from typing import Final
 
 import httpx
 import litellm
 import pytest
+from litellm.router import _hold_slot_until_closed
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
+from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.utils import calculate_max_parallel_requests
 
 
@@ -200,3 +203,38 @@ async def test_aspeech_holds_its_deployment_slot_until_the_audio_is_released(
     await asyncio.sleep(0)
 
     assert (while_audio_open, await _second_caller()) == ("refused" if stream else "admitted", "admitted")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "releases_immediately"),
+    [
+        pytest.param(HttpxBinaryResponseContent(httpx.Response(200, content=b"audio")), True, id="buffered-body"),
+        pytest.param("not-a-binary-response", True, id="non-binary-response"),
+        pytest.param(
+            HttpxBinaryResponseContent(httpx.Response(200, stream=_OneChunkAudioStream())), False, id="unread-body"
+        ),
+    ],
+)
+async def test_hold_slot_until_closed_keys_off_whether_the_body_is_still_arriving(
+    response: object, releases_immediately: bool
+) -> None:
+    """Only a response whose body has yet to be read keeps its slot, everything else frees it."""
+    released: Final[list[str]] = []
+
+    @contextlib.asynccontextmanager
+    async def _slot():
+        try:
+            yield
+        finally:
+            released.append("released")
+
+    stack: Final = contextlib.AsyncExitStack()
+    await stack.enter_async_context(_slot())
+
+    await _hold_slot_until_closed(response, stack)
+
+    assert bool(released) is releases_immediately
+    if not releases_immediately:
+        await response.aclose()
+        assert released == ["released"]
