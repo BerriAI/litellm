@@ -54,6 +54,7 @@ ENVELOPE_SIGNING: Final = b"litellm-mcp-bridge:envelope-signing:"
 ENVELOPE_ENCRYPTION: Final = b"litellm-mcp-bridge:envelope-encryption:"
 SESSION_SIGNING: Final = b"litellm-mcp-gateway:session-signing:"
 GRACE: Final = {"LITELLM_MCP_LEGACY_KDF_GRACE": "true"}
+NO_GRACE: Final = {"LITELLM_MCP_LEGACY_KDF_GRACE": "false"}
 
 
 class _RefreshGrantForm(TypedDict):
@@ -239,14 +240,39 @@ def test_envelope_minted_under_hkdf_sha256_keys_is_admitted(gateway: Gateway) ->
         _assert_admitted(_tools_list(gateway.client, f"/{alias}/mcp", envelope), peer, upstream_token)
 
 
-def test_envelope_minted_under_legacy_scrypt_keys_is_rejected_without_grace(gateway: Gateway) -> None:
-    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+def test_envelope_minted_under_legacy_scrypt_keys_is_rejected_when_grace_is_explicitly_disabled(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with (
+        owned_proxy(gateway, tmp_path, NO_GRACE) as strict,
+        mcp_peer() as peer,
+        oauth_server() as auth,
+        strict.scenario() as scenario,
+    ):
         alias: Final = "kdf" + uuid.uuid4().hex[:8]
         identity: Final = _register_bridge(scenario, peer, alias, auth.issuer)
         key: Final = scenario.key(user_id=scenario.user(), object_permission=_ObjectPermission(mcp_servers=(identity,)))
         peer.drain()
-        envelope: Final = _envelope(identity, key, _scrypt_envelope_keys(gateway.key), "up-" + uuid.uuid4().hex)
-        _assert_rejected(_tools_list(gateway.client, f"/{alias}/mcp", envelope), peer)
+        envelope: Final = _envelope(identity, key, _scrypt_envelope_keys(strict.key), "up-" + uuid.uuid4().hex)
+        _assert_rejected(_tools_list(strict.client, f"/{alias}/mcp", envelope), peer)
+
+
+def test_envelope_minted_under_legacy_scrypt_keys_is_admitted_by_default_without_the_grace_variable(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with (
+        owned_proxy(gateway, tmp_path, {}) as plain,
+        mcp_peer() as peer,
+        oauth_server() as auth,
+        plain.scenario() as scenario,
+    ):
+        alias: Final = "kdf" + uuid.uuid4().hex[:8]
+        identity: Final = _register_bridge(scenario, peer, alias, auth.issuer)
+        key: Final = scenario.key(user_id=scenario.user(), object_permission=_ObjectPermission(mcp_servers=(identity,)))
+        upstream_token: Final = "up-" + uuid.uuid4().hex
+        peer.drain()
+        envelope: Final = _envelope(identity, key, _scrypt_envelope_keys(plain.key), upstream_token)
+        _assert_admitted(_tools_list(plain.client, f"/{alias}/mcp", envelope), peer, upstream_token)
 
 
 @pytest.mark.parametrize("kdf", ("hkdf", "scrypt"))
@@ -285,11 +311,11 @@ def test_envelope_under_a_foreign_master_key_is_rejected_during_grace(gateway: G
             _assert_rejected(_tools_list(graced.client, f"/{alias}/mcp", _envelope(identity, key, keys, "up")), peer)
 
 
-def test_grace_variable_set_to_anything_but_true_keeps_legacy_envelopes_rejected(
+def test_grace_variable_set_to_an_explicit_false_keeps_legacy_envelopes_rejected(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with (
-        owned_proxy(gateway, tmp_path, {"LITELLM_MCP_LEGACY_KDF_GRACE": "yes"}) as proxy,
+        owned_proxy(gateway, tmp_path, {"LITELLM_MCP_LEGACY_KDF_GRACE": "false"}) as proxy,
         mcp_peer() as peer,
         oauth_server() as auth,
         proxy.scenario() as scenario,
@@ -310,12 +336,24 @@ def test_session_token_minted_under_hkdf_sha256_key_is_admitted(gateway: Gateway
         assert "tools" in response.text, response.text
 
 
-def test_session_token_minted_under_legacy_scrypt_key_is_rejected_without_grace(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
-        token: Final = _session(scenario.user(), _scrypt_session_keys(gateway.key))
-        response: Final = _tools_list(gateway.client, "/mcp", token)
+def test_session_token_minted_under_legacy_scrypt_key_is_rejected_when_grace_is_explicitly_disabled(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with owned_proxy(gateway, tmp_path, NO_GRACE) as strict, strict.scenario() as scenario:
+        token: Final = _session(scenario.user(), _scrypt_session_keys(strict.key))
+        response: Final = _tools_list(strict.client, "/mcp", token)
         assert response.status_code == 401, response.text
         assert "invalid_token" in response.headers.get("www-authenticate", ""), response.headers
+
+
+def test_session_token_minted_under_legacy_scrypt_key_is_admitted_by_default_without_the_grace_variable(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with owned_proxy(gateway, tmp_path, {}) as plain, plain.scenario() as scenario:
+        token: Final = _session(scenario.user(), _scrypt_session_keys(plain.key))
+        response: Final = _tools_list(plain.client, "/mcp", token)
+        assert response.status_code == 200, response.text
+        assert "tools" in response.text, response.text
 
 
 @pytest.mark.parametrize("kdf", ("hkdf", "scrypt"))
@@ -358,15 +396,21 @@ def test_bridge_refresh_envelope_minted_under_hkdf_sha256_keys_is_renewed(gatewa
         assert isinstance(opened, OpenedRefreshEnvelope), opened
 
 
-def test_bridge_refresh_envelope_minted_under_legacy_scrypt_keys_is_rejected_without_grace(
+def test_bridge_refresh_envelope_minted_under_legacy_scrypt_keys_is_rejected_when_grace_is_explicitly_disabled(
     gateway: Gateway,
+    tmp_path: Path,
 ) -> None:
-    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+    with (
+        owned_proxy(gateway, tmp_path, NO_GRACE) as strict,
+        mcp_peer() as peer,
+        oauth_server() as auth,
+        strict.scenario() as scenario,
+    ):
         alias: Final = "kdf" + uuid.uuid4().hex[:8]
         identity: Final = _register_bridge(scenario, peer, alias, auth.issuer)
         key: Final = scenario.key(user_id=scenario.user(), object_permission=_ObjectPermission(mcp_servers=(identity,)))
-        envelope: Final = _refresh_envelope(identity, key, _scrypt_envelope_keys(gateway.key), _upstream_refresh(auth))
-        response: Final = gateway.client.post(
+        envelope: Final = _refresh_envelope(identity, key, _scrypt_envelope_keys(strict.key), _upstream_refresh(auth))
+        response: Final = strict.client.post(
             f"/{alias}/token",
             headers=(("x-litellm-api-key", key),),
             data=_RefreshGrantForm(grant_type="refresh_token", refresh_token=envelope, client_id="kdf-client"),
@@ -430,11 +474,13 @@ def test_session_refresh_token_minted_under_hkdf_sha256_key_is_renewed(gateway: 
         assert isinstance(opened, OpenedSessionToken), opened
 
 
-def test_session_refresh_token_minted_under_legacy_scrypt_key_is_rejected_without_grace(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
-        client_id: Final = _register_gateway_client(gateway.client)
-        refresh: Final = _session_refresh(scenario.user(), client_id, _scrypt_session_keys(gateway.key))
-        response: Final = gateway.client.post(
+def test_session_refresh_token_minted_under_legacy_scrypt_key_is_rejected_when_grace_is_explicitly_disabled(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with owned_proxy(gateway, tmp_path, NO_GRACE) as strict, strict.scenario() as scenario:
+        client_id: Final = _register_gateway_client(strict.client)
+        refresh: Final = _session_refresh(scenario.user(), client_id, _scrypt_session_keys(strict.key))
+        response: Final = strict.client.post(
             "/token", data=_RefreshGrantForm(grant_type="refresh_token", refresh_token=refresh, client_id=client_id)
         )
         assert response.status_code == 400, response.text
@@ -536,7 +582,21 @@ def test_claude_code_gateway_refresh_of_an_hkdf_session_token_is_renewed_without
         assert isinstance(opened, OpenedSessionToken), opened
 
 
-def test_claude_code_gateway_refresh_of_a_legacy_scrypt_session_token_is_rejected_without_grace(
+def test_claude_code_gateway_refresh_of_a_legacy_scrypt_session_token_is_rejected_when_grace_is_explicitly_disabled(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    config: Final = _claude_code_gateway_config(tmp_path)
+    with owned_proxy(gateway, tmp_path, NO_GRACE, config=config) as graced, graced.scenario() as scenario:
+        refresh: Final = _proxy_api_session_refresh(scenario.user(), _scrypt_session_keys(graced.key))
+        response: Final = graced.client.post(
+            "/claude_code_gateway/oauth/token",
+            data=_ClaudeCodeTokenForm(grant_type="refresh_token", refresh_token=refresh),
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["error"] == "invalid_grant", response.text
+
+
+def test_claude_code_gateway_refresh_of_a_legacy_scrypt_session_token_is_renewed_by_default_without_the_grace_variable(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     config: Final = _claude_code_gateway_config(tmp_path)
@@ -546,8 +606,12 @@ def test_claude_code_gateway_refresh_of_a_legacy_scrypt_session_token_is_rejecte
             "/claude_code_gateway/oauth/token",
             data=_ClaudeCodeTokenForm(grant_type="refresh_token", refresh_token=refresh),
         )
-        assert response.status_code == 400, response.text
-        assert response.json()["error"] == "invalid_grant", response.text
+        assert response.status_code == 200, response.text
+        renewed: Final = response.json()
+        opened: Final = open_session_refresh_token(
+            renewed["refresh_token"], _hkdf_session_keys(graced.key), datetime.now(timezone.utc)
+        )
+        assert isinstance(opened, OpenedSessionToken), opened
 
 
 def test_claude_code_gateway_refresh_of_a_legacy_scrypt_session_token_is_renewed_during_the_legacy_grace_window(

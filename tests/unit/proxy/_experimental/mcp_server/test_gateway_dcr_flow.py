@@ -2632,10 +2632,43 @@ async def test_claude_code_refresh_of_a_legacy_scrypt_token_is_renewed_during_th
 
 
 @pytest.mark.asyncio
-async def test_claude_code_refresh_of_a_legacy_scrypt_token_is_rejected_without_grace(monkeypatch):
-    """Without the grace variable the same scrypt-minted token answers invalid_grant and
-    the minter never runs."""
+async def test_claude_code_refresh_of_a_legacy_scrypt_token_is_renewed_by_default_without_the_grace_variable(
+    monkeypatch,
+):
+    """The grace window defaults on: with no ``LITELLM_MCP_LEGACY_KDF_GRACE`` in the
+    environment a scrypt-minted refresh token still renews, so operators do not lose
+    main-era tokens on upgrade day because they never heard of the variable."""
     monkeypatch.delenv("LITELLM_MCP_LEGACY_KDF_GRACE", raising=False)
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    minter: Final = _Minter()
+    renewed: Final = await refresh_proxy_credential(
+        refresh_token=_legacy_session_refresh(),
+        client_id="claude_code",
+        master_key=MASTER_KEY,
+        cache=DualCache(),
+        mint_proxy_credential=minter,
+    )
+    assert renewed.status_code == 200, renewed.body
+
+
+def _hkdf_session_refresh(user_id="u1", client_id="claude_code", team_id="team-b"):
+    minted: Final = mint_session_refresh_token(
+        SessionPrincipal(user_id=user_id, client_id=client_id, audience="proxy_api", team_id=team_id),
+        session_keys_from_master_key(MASTER_KEY),
+        datetime.now(timezone.utc),
+    )
+    assert isinstance(minted, MintedSessionToken)
+    return minted.token.get_secret_value()
+
+
+@pytest.mark.asyncio
+async def test_claude_code_refresh_rejects_a_legacy_token_but_renews_an_hkdf_one_when_grace_is_explicitly_disabled(
+    monkeypatch,
+):
+    """``LITELLM_MCP_LEGACY_KDF_GRACE=false`` is the operator's opt-out: the scrypt token
+    answers invalid_grant without running the minter, while an HKDF control renews fine."""
+    monkeypatch.setenv("LITELLM_MCP_LEGACY_KDF_GRACE", "false")
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
     minter: Final = _Minter()
     refused: Final = await refresh_proxy_credential(
         refresh_token=_legacy_session_refresh(),
@@ -2647,3 +2680,12 @@ async def test_claude_code_refresh_of_a_legacy_scrypt_token_is_rejected_without_
     assert refused.status_code == 400
     assert json.loads(refused.body)["error"] == "invalid_grant"
     assert minter.calls == []
+    control: Final = await refresh_proxy_credential(
+        refresh_token=_hkdf_session_refresh(),
+        client_id="claude_code",
+        master_key=MASTER_KEY,
+        cache=DualCache(),
+        mint_proxy_credential=minter,
+    )
+    assert control.status_code == 200, control.body
+    assert json.loads(control.body)["access_token"] == "sk-cli-u1"

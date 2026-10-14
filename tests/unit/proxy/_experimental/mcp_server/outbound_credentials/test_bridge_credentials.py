@@ -411,11 +411,27 @@ def test_legacy_envelope_opens_during_the_grace_window():
     assert result.identity == _IDENTITY
 
 
-def test_legacy_envelope_is_invalid_without_grace():
+def test_legacy_envelope_is_invalid_when_grace_is_explicitly_disabled():
     token: Final = _sealed_token(_legacy_keys(_MASTER_KEY))
-    assert legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ(MappingProxyType({}))) is None
+    assert (
+        legacy_envelope_keys_from_master_key(
+            _MASTER_KEY, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "false"}))
+        )
+        is None
+    )
     result: Final = resolve_bridge_envelope(token, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID)
     assert isinstance(result, BridgeEnvelopeInvalid)
+
+
+def test_legacy_envelope_opens_by_default_without_the_grace_variable():
+    legacy: Final = _legacy_keys(_MASTER_KEY)
+    token: Final = _sealed_token(legacy)
+    grace: Final = legacy_envelope_keys_from_master_key(_MASTER_KEY, environ=_environ(MappingProxyType({})))
+    assert grace == legacy
+    result: Final = resolve_bridge_envelope(
+        token, envelope_keys_from_master_key(_MASTER_KEY), _NOW, _SERVER_ID, legacy_keys=grace
+    )
+    assert isinstance(result, BridgeEnvelopeAdmitted)
 
 
 def test_grace_is_disabled_under_fips():
@@ -426,13 +442,20 @@ def test_grace_is_disabled_under_fips():
     assert grace is None
 
 
-@pytest.mark.parametrize("value", ("yes", "1", "on", "TRUE ", "True"))
-def test_grace_is_enabled_only_by_case_insensitive_true(value: str):
+@pytest.mark.parametrize("value", ("false", "0", "no", "off", "FALSE ", " Off"))
+def test_grace_is_disabled_only_by_explicit_false_style_values(value: str):
     result: Final = legacy_envelope_keys_from_master_key(
         _MASTER_KEY, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: value}))
     )
-    expected: Final = value.strip().lower() == "true"
-    assert (result is not None) is expected
+    assert result is None
+
+
+@pytest.mark.parametrize("value", ("true", "1", "yes", "on", "TRUE ", "True", "", "banana"))
+def test_grace_stays_on_for_unset_true_style_and_unrecognized_values(value: str):
+    result: Final = legacy_envelope_keys_from_master_key(
+        _MASTER_KEY, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: value}))
+    )
+    assert result is not None
 
 
 def test_legacy_refresh_envelope_opens_during_grace():

@@ -2,13 +2,14 @@
 
 Bridge envelopes and gateway session tokens are keyed by HKDF-SHA256 (RFC 5869) over the
 high-entropy proxy ``master_key`` with a per-family domain label as ``info``. The legacy
-scrypt derivation is kept for one release as an opt-in read fallback so tokens minted
+scrypt derivation is kept for one release as a default-on read fallback so tokens minted
 before the rotation still open during the grace window; it is never used under FIPS.
 """
 
 import hashlib
 import os
 from collections.abc import Callable
+from functools import lru_cache
 from typing import Final
 
 from cryptography.hazmat.primitives.hashes import SHA256
@@ -18,6 +19,7 @@ from litellm.proxy.common_utils.fips import is_fips_mode
 
 LEGACY_KDF_GRACE_ENV_VAR: Final = "LITELLM_MCP_LEGACY_KDF_GRACE"
 DERIVED_KEY_BYTES: Final = 32
+_LEGACY_GRACE_DISABLED_VALUES: Final = frozenset({"false", "0", "no", "off"})
 
 # RFC 7914 work factors of the pre-rotation derivation; maxmem is twice the working set.
 _SCRYPT_N: Final = 2**15
@@ -31,9 +33,12 @@ def hkdf_sha256(master_key: str, info: bytes) -> str:
     return HKDF(algorithm=SHA256(), length=DERIVED_KEY_BYTES, salt=None, info=info).derive(master_key.encode()).hex()
 
 
+@lru_cache(maxsize=8)
 def legacy_scrypt(master_key: str, salt: bytes) -> str | None:
     """The pre-rotation derivation. ``None`` when hashlib.scrypt is unavailable (some
-    OpenSSL builds, including FIPS providers, do not expose it)."""
+    OpenSSL builds, including FIPS providers, do not expose it). Cached per process: the
+    work factors are memory-hard, so repeated legacy-format token attempts must not
+    re-derive the same subkeys."""
     try:
         return hashlib.scrypt(
             master_key.encode(),
@@ -49,8 +54,11 @@ def legacy_scrypt(master_key: str, salt: bytes) -> str | None:
 
 
 def legacy_kdf_grace_enabled(environ: Callable[[str], str | None] = os.environ.get) -> bool:
-    """True only when the operator opted the legacy read fallback in and the deployment is
-    not in FIPS mode (scrypt is not a FIPS-approved KDF)."""
+    """True unless the operator explicitly disabled the legacy read fallback and the
+    deployment is not in FIPS mode (scrypt is not a FIPS-approved KDF). The window
+    defaults on so main-era tokens survive the upgrade; only ``false``-style values
+    (``false``/``0``/``no``/``off``) turn it off."""
     if is_fips_mode(environ):
         return False
-    return (environ(LEGACY_KDF_GRACE_ENV_VAR) or "").strip().lower() == "true"
+    raw: Final = environ(LEGACY_KDF_GRACE_ENV_VAR)
+    return raw is None or raw.strip().lower() not in _LEGACY_GRACE_DISABLED_VALUES

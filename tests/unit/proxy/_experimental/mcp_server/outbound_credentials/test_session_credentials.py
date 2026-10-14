@@ -17,6 +17,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.key_derivation import (
     LEGACY_KDF_GRACE_ENV_VAR,
+    legacy_scrypt,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     NotSessionBearer,
@@ -276,10 +277,15 @@ def test_legacy_session_token_opens_during_the_grace_window():
     assert result.principal == PRINCIPAL
 
 
-def test_legacy_session_token_is_invalid_without_grace():
+def test_legacy_session_token_is_invalid_when_grace_is_explicitly_disabled():
     minted: Final = mint_session_token(PRINCIPAL, _legacy_session_keys(MASTER_KEY), NOW)
     assert isinstance(minted, MintedSessionToken)
-    assert legacy_session_keys_from_master_key(MASTER_KEY, KEYS, environ=_environ(MappingProxyType({}))) is None
+    assert (
+        legacy_session_keys_from_master_key(
+            MASTER_KEY, KEYS, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "false"}))
+        )
+        is None
+    )
     result: Final = resolve_session_bearer(f"Bearer {minted.token.get_secret_value()}", KEYS, NOW)
     assert isinstance(result, SessionBearerInvalid)
     assert result.expired is False
@@ -300,6 +306,43 @@ def test_grace_is_disabled_under_fips():
         environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "true", FIPS_MODE_ENV_VAR: "true"})),
     )
     assert grace is None
+
+
+def test_grace_stays_off_under_fips_even_with_the_default_on():
+    """FIPS deployments get no scrypt fallback even though the grace window now defaults on."""
+    grace: Final = legacy_session_keys_from_master_key(
+        MASTER_KEY,
+        KEYS,
+        environ=_environ(MappingProxyType({FIPS_MODE_ENV_VAR: "true"})),
+    )
+    assert grace is None
+
+
+def test_legacy_grace_is_on_by_default_without_the_variable():
+    legacy: Final = _legacy_session_keys(MASTER_KEY)
+    grace: Final = legacy_session_keys_from_master_key(MASTER_KEY, KEYS, environ=_environ(MappingProxyType({})))
+    assert grace == legacy
+
+
+def test_legacy_scrypt_derivation_is_cached_per_process(monkeypatch):
+    """Repeated legacy-format token attempts must not re-run the memory-hard scrypt KDF."""
+    calls: Final[list[int]] = []
+    real_scrypt = hashlib.scrypt
+
+    def counting_scrypt(password, **kwargs):
+        calls.append(1)
+        return real_scrypt(password, **kwargs)
+
+    monkeypatch.setattr(hashlib, "scrypt", counting_scrypt)
+    legacy_scrypt.cache_clear()
+    try:
+        first: Final = legacy_scrypt(MASTER_KEY, b"litellm-mcp-gateway:session-signing:")
+        second: Final = legacy_scrypt(MASTER_KEY, b"litellm-mcp-gateway:session-signing:")
+    finally:
+        legacy_scrypt.cache_clear()
+    assert first is not None
+    assert first == second
+    assert len(calls) == 1
 
 
 def test_legacy_session_refresh_token_opens_during_grace():
