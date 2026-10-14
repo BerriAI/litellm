@@ -126,6 +126,7 @@ describe("teamAdminSettingsChanges for team member defaults", () => {
     ["the stored duration", "30d", stored],
     ["an untouched duration on a team with a stored duration", undefined, stored],
     ["an untouched duration on a team without member defaults", undefined, {}],
+    ["a stored never-resetting duration picked again", null, { team_member_budget_duration: null }],
   ])("sends no duration for %s", (_label, team_member_budget_duration, initialValues) => {
     expect(teamAdminSettingsChanges({ team_member_budget_duration }, initialValues, durationEnabled)).toStrictEqual({});
   });

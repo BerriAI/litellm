@@ -255,6 +255,14 @@ class TestTeamMemberDefaultEdits:
         assert isinstance(verdict, TeamAdminEditAllowed)
         assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "team_member_budget": 5.0}
 
+    def test_existing_member_budget_drops_a_resent_duration_next_to_a_changed_budget(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", team_member_budget=5.0, team_member_budget_duration="7d")
+        stored: Final = TeamMemberDefaults(team_member_budget=1.0, team_member_budget_duration="7d")
+        permitted: Final = _permitted("team_member_budget", "team_member_budget_duration")
+        verdict: Final = team_admin_edit_verdict(data, _team(), permitted, stored)
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert verdict.request.model_dump(exclude_unset=True) == {"team_id": "team-1", "team_member_budget": 5.0}
+
 
 class TestTeamAdminRequestOrRaise:
     def test_allowed_hands_back_its_request(self):
