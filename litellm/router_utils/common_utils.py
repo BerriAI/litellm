@@ -306,7 +306,7 @@ _OPENAI_NATIVE_PROTOCOL_PROVIDERS: Final = frozenset(
 )
 
 
-def _deployment_speaks_openai_protocol(deployment: dict) -> bool:
+def _deployment_speaks_openai_protocol(deployment: dict) -> bool:  # mutable-ok: read-only access; router passes plain deployment dicts and this helper never mutates them
     litellm_params: Final = deployment.get("litellm_params") or {}
     provider: Final = provider_for_generic_call(litellm_params)
     if provider is None:
@@ -315,9 +315,9 @@ def _deployment_speaks_openai_protocol(deployment: dict) -> bool:
 
 
 def filter_tool_protocol_deployments(
-    healthy_deployments: list[dict] | dict,
-    request_kwargs: dict | None = None,
-) -> list[dict] | dict:
+    healthy_deployments: list[dict] | dict,  # mutable-ok: mirrors the router list-or-dict candidate type; the filter builds new lists and never mutates inputs
+    request_kwargs: dict | None = None,  # mutable-ok: matches the OptionalParams dict type used across the router; read-only in this function
+) -> list[dict] | dict:  # mutable-ok: returns the input or a narrowed new list; same list-or-dict contract as the router pipeline
     """
     Keep only OpenAI-protocol deployments for OpenAI-format tool-calling requests.
 
