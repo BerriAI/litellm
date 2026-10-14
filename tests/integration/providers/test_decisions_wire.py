@@ -597,7 +597,6 @@ async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gatew
         await litellm.asystemone(
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
-
     assert systemone_error.value.llm_provider == "openrouter"
 
 
