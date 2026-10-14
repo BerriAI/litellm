@@ -23,11 +23,6 @@ _THREAD: Final[dict[str, JsonValue]] = {
     "metadata": {"project": "alpha"},
     "tool_resources": {"code_interpreter": {"file_ids": ["file-abc"]}, "file_search": None},
 }
-_THREAD_REQUEST: Final[dict[str, JsonValue]] = {
-    "messages": [{"role": "user", "content": "What is in the report?", "metadata": {"turn": "1"}}],
-    "metadata": {"project": "alpha"},
-    "tool_resources": {"code_interpreter": {"file_ids": ["file-abc"]}},
-}
 _MESSAGE: Final[dict[str, JsonValue]] = {
     "id": "msg_abc",
     "assistant_id": None,
@@ -49,6 +44,34 @@ _IMAGE_PARTS: Final[list[JsonValue]] = [
     {"type": "image_file", "image_file": {"file_id": "file-img", "detail": "low"}},
     {"type": "image_url", "image_url": {"url": "https://example.invalid/chart.png", "detail": "high"}},
 ]
+_ATTACHMENTS: Final[list[JsonValue]] = [{"file_id": "file-abc", "tools": [{"type": "file_search"}]}]
+_THREAD_MESSAGES: Final[tuple[dict[str, JsonValue], ...]] = (
+    {"role": "user", "content": "What is in the report?", "metadata": {"turn": "1"}},
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": "What is in the report?"}],
+        "attachments": _ATTACHMENTS,
+        "metadata": {"turn": "1"},
+    },
+    {"role": "user", "content": _IMAGE_PARTS, "attachments": _ATTACHMENTS, "metadata": {"turn": "1"}},
+)
+_RUN_TOOL_FUNCTION: Final[dict[str, JsonValue]] = {
+    "name": "lookup",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+}
+_RAW_RUN_REQUEST: Final[dict[str, JsonValue]] = {
+    "assistant_id": "asst_abc",
+    "tools": [{"type": "function", "function": _RUN_TOOL_FUNCTION}],
+    "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+    "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "answer",
+            "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
+            "strict": True,
+        },
+    },
+}
 _RUN: Final[dict[str, JsonValue]] = {
     "id": "run_abc",
     "assistant_id": "asst_abc",
@@ -121,9 +144,17 @@ def _respond(request: Request) -> Reply:
     return Reply(body=json.dumps(responses[path]).encode())
 
 
+@pytest.mark.parametrize("message", _THREAD_MESSAGES, ids=("string", "parts-attachments", "image-parts-attachments"))
 @pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
-def test_create_thread_forwards_sdk_body(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
+def test_create_thread_forwards_sdk_body(
+    gateway: Gateway, tmp_path: Path, prefix: str, message: dict[str, JsonValue]
+) -> None:
     pytest.skip("BUG: POST /threads reaches the upstream with body {} and drops messages, metadata and tool_resources")
+    thread_request: Final[dict[str, JsonValue]] = {
+        "messages": [message],
+        "metadata": {"project": "alpha"},
+        "tool_resources": {"code_interpreter": {"file_ids": ["file-abc"]}},
+    }
     with wire_server(_respond) as wire:
         config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
@@ -131,7 +162,7 @@ def test_create_thread_forwards_sdk_body(gateway: Gateway, tmp_path: Path, prefi
             with OpenAI(base_url=base_url, api_key=candidate.key, max_retries=0) as client:
                 try:
                     raw: Final = client.beta.threads.with_raw_response.create(
-                        messages=[{"role": "user", "content": "What is in the report?", "metadata": {"turn": "1"}}],
+                        messages=[message],
                         metadata={"project": "alpha"},
                         tool_resources={"code_interpreter": {"file_ids": ["file-abc"]}},
                     )
@@ -141,14 +172,14 @@ def test_create_thread_forwards_sdk_body(gateway: Gateway, tmp_path: Path, prefi
                     assert [(request.method, request.target) for request in failed_requests] == [
                         ("POST", "/v1/threads")
                     ], failure_text
-                    assert json.loads(failed_requests[0].body) == _THREAD_REQUEST, failure_text
+                    assert json.loads(failed_requests[0].body) == thread_request, failure_text
                     pytest.fail(f"SDK thread creation failed with HTTP {error.response.status_code}: {failure_text}")
             assert raw.status_code == 200, raw.http_response.text
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [("POST", "/v1/threads")], (
                 raw.http_response.text
             )
-            assert json.loads(requests[0].body) == _THREAD_REQUEST, raw.http_response.text
+            assert json.loads(requests[0].body) == thread_request, raw.http_response.text
             assert requests[0].headers["authorization"] == "Bearer synthetic-openai-key", raw.http_response.text
             assert isinstance(raw.parse(), _Thread), raw.http_response.text
             assert json.loads(raw.http_response.text) == _THREAD, raw.http_response.text
@@ -255,6 +286,33 @@ def test_run_forwards_every_sdk_field(gateway: Gateway, tmp_path: Path, prefix: 
             run: Final[_Run] = raw.parse()
             assert json.loads(raw.http_response.text) == _RUN, raw.http_response.text
             assert run.status == "queued", raw.http_response.text
+
+
+@pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
+def test_run_raw_body_forwards_stream_false_and_typed_options(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
+    pytest.skip(
+        "BUG: runs.create with a raw stream false body drops tool_choice and response_format, then polls GET /runs/{id}"
+    )
+    with wire_server(_respond) as wire:
+        config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            response: Final = candidate.client.post(
+                f"{prefix}/threads/thread_abc/runs",
+                json={**_RAW_RUN_REQUEST, "stream": False},
+                headers={"Authorization": f"Bearer {candidate.key}"},
+            )
+            requests: Final = wire.drain()
+            assert [(request.method, request.target) for request in requests] == [
+                ("POST", "/v1/threads/thread_abc/runs")
+            ], response.text
+            assert requests[0].headers["authorization"] == "Bearer synthetic-openai-key", response.text
+            upstream_body: Final = json.loads(requests[0].body)
+            assert upstream_body.pop("stream", False) is False, response.text
+            assert upstream_body == _RAW_RUN_REQUEST, response.text
+            assert response.status_code == 200, response.text
+            assert response.headers["content-type"].startswith("application/json"), response.text
+            assert response.json() == _RUN, response.text
+            assert _Run.model_validate(response.json()).status == "queued", response.text
 
 
 @pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))

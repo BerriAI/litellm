@@ -222,6 +222,14 @@ def _assert_provider_error(response: httpx.Response, status: int) -> None:
     assert "scripted provider status" in str(error.get("message")), response.text
 
 
+def _assert_no_gateway_headers(gateway: Gateway, requests: tuple[Request, ...], context: str) -> None:
+    leaked: Final = [
+        {name: value for name, value in request.headers.items() if name == "x-litellm-model" or gateway.key in value}
+        for request in requests
+    ]
+    assert leaked == [{} for _ in requests], context
+
+
 def test_eval_update_forwards_only_client_fields(gateway: Gateway) -> None:
     pytest.skip(
         "BUG: evals.update returns 500 Object of type datetime is not JSON serializable and never reaches the upstream"
@@ -254,6 +262,7 @@ def test_eval_update_forwards_only_client_fields(gateway: Gateway) -> None:
             raw.http_response.text
         )
         assert requests[0].headers["authorization"] == "Bearer synthetic-openai-key", raw.http_response.text
+        _assert_no_gateway_headers(gateway, requests, raw.http_response.text)
         assert json.loads(requests[0].body) == {"name": "renamed", "metadata": {"team": "search"}}, (
             raw.http_response.text
         )
@@ -483,6 +492,7 @@ def _assert_eval_sdk_paths(gateway: Gateway, suffix: str, spelling: str, calls: 
         assert {request.headers["authorization"] for request in requests} == {"Bearer synthetic-openai-key"}, (
             response_text
         )
+        _assert_no_gateway_headers(gateway, requests, response_text)
         assert [json.loads(raw.http_response.text) for raw in raws] == [call.response for call in calls], response_text
         assert [_parsed_types(raw.parse()) for raw in raws] == [(call.parsed,) for call in calls], response_text
 
@@ -493,12 +503,20 @@ def test_eval_routes_reach_sdk_paths_with_bare_api_base(gateway: Gateway, spelli
 
 
 @pytest.mark.parametrize("spelling", ("model-param", "x-litellm-model"))
+@pytest.mark.parametrize("suffix", ("/v1", "/v1/"), ids=("v1", "v1-trailing-slash"))
+def test_eval_routes_reach_sdk_paths_with_v1_api_base(gateway: Gateway, suffix: str, spelling: str) -> None:
+    pytest.skip("BUG: an api_base ending in /v1 sends every eval request to /v1/v1/evals")
+    _assert_eval_sdk_paths(gateway, suffix, spelling, _EVAL_ROUTES_WITHOUT_KNOWN_BUGS)
+
+
+@pytest.mark.parametrize("spelling", ("model-param", "x-litellm-model"))
 @pytest.mark.parametrize("suffix", ("", "/v1", "/v1/"), ids=("bare", "v1", "v1-trailing-slash"))
 def test_every_eval_route_reaches_sdk_path_and_relays_upstream_body(
     gateway: Gateway, suffix: str, spelling: str
 ) -> None:
     pytest.skip(
-        "BUG: evals.runs.cancel goes to /runs/{run_id}/cancel and returns only {id, object, status}, "
+        "BUG: evals.runs.cancel goes to /runs/{run_id}/cancel and returns only {id, object, status} "
+        "instead of relaying the full upstream eval run (the route's response_model=CancelRunResponse strips it), "
         "evals.update returns 500, create and run create drop metadata, runs.list drops status, "
         "run create and retrieve overwrite the run's model with the routing alias, "
         "and an api_base ending in /v1 sends every eval request to /v1/v1/evals"

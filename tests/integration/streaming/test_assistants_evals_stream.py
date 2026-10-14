@@ -393,3 +393,11 @@ def test_run_client_disconnect_does_not_leave_the_proxy_polling(gateway: Gateway
                 ("POST", "/v1/threads/thread_abc/messages"),
             ], marker_text
             assert json.loads(requests[0].body) == {"assistant_id": "asst_abc"}, marker_text
+            with OpenAI(base_url=base_url, api_key=candidate.key, max_retries=0) as client:
+                raw: Final = client.beta.threads.runs.with_raw_response.create("thread_abc", assistant_id="asst_abc")
+            assert raw.headers["content-type"].startswith("application/json"), raw.http_response.text
+            assert json.loads(raw.http_response.text) == _QUEUED_RUN, raw.http_response.text
+            assert raw.parse().status == "queued", raw.http_response.text
+            assert [(request.method, request.target) for request in wire.drain()] == [
+                ("POST", "/v1/threads/thread_abc/runs")
+            ], raw.http_response.text
