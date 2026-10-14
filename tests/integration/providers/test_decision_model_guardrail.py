@@ -522,6 +522,18 @@ def _spend_teams_by_model_group(model_group: str) -> list[dict[str, JsonValue]]:
     return read_rows('SELECT team_id FROM "LiteLLM_SpendLogs" WHERE model_group = %s', (model_group,))
 
 
+def _charged_teams_by_model_group(model_group: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        """SELECT team_id, metadata->>'user_api_key_team_alias' AS team_alias
+        FROM "LiteLLM_SpendLogs" WHERE model_group = %s""",
+        (model_group,),
+    )
+
+
+def _team_alias(team: str) -> JsonValue:
+    return read_rows('SELECT team_alias FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,))[0]["team_alias"]
+
+
 def _spend_requests_by_team(team: str) -> list[dict[str, JsonValue]]:
     return read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE team_id = %s', (team,))
 
@@ -574,6 +586,8 @@ def test_proxy_wide_guardrail_model_spend_is_not_charged_to_the_team_caller(gate
 def test_team_guardrail_model_spend_is_charged_to_the_owner_team(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         team, guard_model, response_id = _guarded_hello(gateway, scenario, team_owns_guard_model=True)
-        assert eventually(lambda: _spend_teams_by_model_group(guard_model), bool, seconds=70) == [{"team_id": team}]
+        assert eventually(lambda: _charged_teams_by_model_group(guard_model), bool, seconds=70) == [
+            {"team_id": team, "team_alias": _team_alias(team)}
+        ]
         charged: Final = [row["request_id"] for row in _spend_requests_by_team(team)]
         assert (len(charged), response_id in charged) == (2, True)

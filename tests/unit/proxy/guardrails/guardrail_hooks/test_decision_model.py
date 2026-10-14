@@ -92,7 +92,7 @@ async def test_team_decision_model_runs_only_for_the_authenticated_owner(
 class _LoggedDecisionCalls(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.model_groups_and_teams: list[tuple[object, object]] = []  # mutable-ok: success callback sink
+        self.model_groups_and_teams: list[tuple[object, object, object]] = []  # mutable-ok: success callback sink
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
@@ -100,7 +100,9 @@ class _LoggedDecisionCalls(CustomLogger):
         litellm_params: Final = kwargs.get("litellm_params")
         metadata: Final = litellm_params.get("metadata") if isinstance(litellm_params, dict) else None
         logged: Final = metadata if isinstance(metadata, dict) else {}
-        self.model_groups_and_teams.append((logged.get("model_group"), logged.get("user_api_key_team_id")))
+        self.model_groups_and_teams.append(
+            (logged.get("model_group"), logged.get("user_api_key_team_id"), logged.get("user_api_key_team_alias"))
+        )
 
 
 _PROXY_WIDE_TEAM_DECISION: Final = {
@@ -116,15 +118,15 @@ _PROXY_WIDE_TEAM_DECISION: Final = {
 @pytest.mark.parametrize(
     ("decision_model", "extra_deployments", "expected_host", "expected_logged"),
     [
-        ("team-decision", (), "team.example", ("team-decision", "owner")),
+        ("team-decision", (), "team.example", ("team-decision", "owner", "owner-team")),
         (
             "team-decision",
             ({"model_name": "*", "litellm_params": {"model": "*"}},),
             "team.example",
-            ("team-decision", "owner"),
+            ("team-decision", "owner", "owner-team"),
         ),
-        ("team-decision", (_PROXY_WIDE_TEAM_DECISION,), "team.example", ("team-decision", "owner")),
-        ("shared-decision", (), "shared.example", ("shared-decision", None)),
+        ("team-decision", (_PROXY_WIDE_TEAM_DECISION,), "team.example", ("team-decision", "owner", "owner-team")),
+        ("shared-decision", (), "shared.example", ("shared-decision", None, None)),
     ],
     ids=["team-model", "catch-all-wildcard", "team-name-shadows-proxy-wide-name", "proxy-wide-model"],
 )
@@ -133,7 +135,7 @@ async def test_decision_call_goes_to_the_owner_team_deployment_and_charges_the_t
     decision_model: str,
     extra_deployments: tuple[dict[str, object], ...],
     expected_host: str,
-    expected_logged: tuple[str, str | None],
+    expected_logged: tuple[str, str | None, str | None],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
@@ -175,7 +177,9 @@ async def test_decision_call_goes_to_the_owner_team_deployment_and_charges_the_t
         shared: Final = respx.post("https://shared.example/v1/systemone").mock(
             return_value=httpx.Response(200, json=answer)
         )
-        request_data: Final[dict[str, object]] = {"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner")}}
+        request_data: Final[dict[str, object]] = {
+            "metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="owner", team_alias="owner-team")}
+        }
         assert await guardrail.apply_guardrail({"texts": ["fine"]}, request_data, "request") == {"texts": ["fine"]}
     for _ in range(100):
         if logged.model_groups_and_teams:

@@ -39,8 +39,11 @@ class _TeamScope(TypedDict, total=False):
     litellm_metadata: ReadOnly[Mapping[str, str]]
 
 
-def _team_scope(team_id: str | None) -> _TeamScope:
-    return {} if team_id is None else {"litellm_metadata": {"user_api_key_team_id": team_id}}
+def _team_scope(team_id: str | None, team_alias: str | None) -> _TeamScope:
+    if team_id is None:
+        return {}
+    alias: Final = {} if team_alias is None else {"user_api_key_team_alias": team_alias}
+    return {"litellm_metadata": {"user_api_key_team_id": team_id, **alias}}
 
 
 class _CheckVerdict(TypedDict):
@@ -166,7 +169,7 @@ class DecisionModelGuardrail(CustomGuardrail):
                 num_retries=0,
                 fallbacks=[],
                 timeout=self.timeout,
-                **_team_scope(team_id),
+                **_team_scope(team_id, auth.team_alias if auth is not None else None),
             )
         return await litellm.adecisions(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportUnknownArgumentType]  # SDK dispatch returns a broad union
             model=self.decision_model,
