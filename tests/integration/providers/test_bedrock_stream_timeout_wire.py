@@ -490,7 +490,7 @@ def test_c7_the_bedrock_passthrough_stream_is_relayed_verbatim(gateway: Gateway)
 
 def test_c8_the_bedrock_passthrough_stream_already_retries_at_the_deployment_timeout(gateway: Gateway) -> None:
     with _peer("stall") as wire, gateway.scenario() as scenario:
-        model: Final = _converse(scenario, wire, timeout=_TIMEOUT_SECONDS)
+        model: Final = _converse(scenario, wire, timeout=_TIMEOUT_SECONDS, num_retries=2)
         with httpx.Client(base_url=_proxy_url(gateway), timeout=_RETRY_WINDOW, trust_env=False) as client:
             response: Final = client.post(
                 f"/bedrock/model/{model}/converse-stream", json=_PASSTHROUGH_BODY, headers=_auth(gateway)

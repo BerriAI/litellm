@@ -16,6 +16,8 @@ from litellm.integrations.focus.focus_logger import FocusLogger
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 else:
     AsyncIOScheduler = Any
 
@@ -91,7 +93,7 @@ class VantageLogger(FocusLogger):
         """
         from litellm.proxy.proxy_server import proxy_logging_obj
 
-        pod_lock_manager = None
+        pod_lock_manager: PodLockManager | None = None
         if proxy_logging_obj is not None:
             writer: Final[object] = getattr(proxy_logging_obj, "db_spend_update_writer", None)
             if writer is not None:

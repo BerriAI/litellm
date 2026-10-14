@@ -30,6 +30,7 @@ interface SearchSelectProps {
   inputId?: string;
   allowClear?: boolean;
   "aria-label"?: string;
+  id?: string;
 }
 
 const matchesQuery = (option: SearchSelectOption, query: string): boolean => {
@@ -49,6 +50,7 @@ export function SearchSelect({
   inputId,
   allowClear = true,
   "aria-label": ariaLabel,
+  id,
 }: SearchSelectProps) {
   const selected =
     value == null || value === "" ? null : options.find((option) => option.value === value) ?? { label: value, value };
@@ -66,7 +68,7 @@ export function SearchSelect({
       disabled={disabled}
     >
       <ComboboxInput
-        id={inputId}
+        id={id ?? inputId}
         aria-label={ariaLabel}
         placeholder={placeholder}
         showClear={allowClear && value != null && value !== ""}
