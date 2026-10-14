@@ -265,9 +265,7 @@ def _enduser_tier(row: _EndUserRow) -> str | None:
 
 def _enduser_ids_by_tier(rows: Sequence[_EndUserRow]) -> Mapping[str | None, tuple[str, ...]]:
     tiers: Final = tuple(dict.fromkeys(_enduser_tier(row) for row in rows))
-    return MappingProxyType(
-        {tier: tuple(row.user_id for row in rows if _enduser_tier(row) == tier) for tier in tiers}
-    )
+    return MappingProxyType({tier: tuple(row.user_id for row in rows if _enduser_tier(row) == tier) for tier in tiers})
 
 
 def _queue_enduser_page_resets(
