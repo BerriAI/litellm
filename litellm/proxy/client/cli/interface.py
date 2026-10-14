@@ -1,7 +1,7 @@
 # stdlib imports
 import functools
 import os
-import shlex
+import re
 from typing import Final, TypeAlias
 
 # third party imports
@@ -9,8 +9,13 @@ import click
 
 from litellm._logging import verbose_logger
 
+from .commands.auth import context_secret_vault
+
 ShellScope: TypeAlias = tuple[str, ...]
-QUOTES: Final = "'\""
+QUOTED: Final = r"""(?<![^\s=])(?:"[^"]*"|'[^']*')"""
+QUOTED_SPAN: Final = re.compile(QUOTED)
+SHELL_WORD: Final = re.compile(rf"(?:{QUOTED}|\S)+")
+OPENING_QUOTE: Final = re.compile(r"""(?<![^\s=])["']""")
 
 
 def styled_prompt(scope: ShellScope = ()):
@@ -155,16 +160,11 @@ def _group_at(group: click.Group, path: ShellScope) -> click.Group | None:
     return functools.reduce(_subgroup, path, group)
 
 
-def _unquoted(word: str) -> str:
-    return word[1:-1] if len(word) >= 2 and word[0] in QUOTES and word[-1] == word[0] else word
-
-
 def split_shell_line(line: str) -> ShellScope:
-    """Split on spaces and unwrap quoted words, keeping backslashes and quotes inside a word as typed"""
-    lexer: Final = shlex.shlex(line, posix=False)
-    lexer.whitespace_split = True
-    lexer.commenters = ""
-    return tuple(_unquoted(word) for word in lexer)
+    """Split on spaces and unwrap quotes that open a word or follow `=`, keeping every other character as typed"""
+    if OPENING_QUOTE.search(QUOTED_SPAN.sub("_", line)):
+        raise ValueError("No closing quotation")
+    return tuple(QUOTED_SPAN.sub(lambda span: span.group()[1:-1], word.group()) for word in SHELL_WORD.finditer(line))
 
 
 def resolve_command_path(words: ShellScope, scope: ShellScope, cli: click.Group) -> ShellScope:
@@ -172,7 +172,7 @@ def resolve_command_path(words: ShellScope, scope: ShellScope, cli: click.Group)
     if words[0] == "lite":
         return words[1:]
     scope_group: Final = _group_at(cli, scope)
-    if scope and scope_group is not None and words[0] in scope_group.commands:
+    if scope and scope_group is not None and (words[0] in scope_group.commands or words[0].startswith("-")):
         return (*scope, *words)
     return words
 
@@ -187,10 +187,14 @@ def scope_after(path: ShellScope, scope: ShellScope, cli: click.Group) -> ShellS
 
 def execute_command(path: ShellScope, ctx: click.Context, cli: click.Group) -> None:
     """Run a resolved command path as `lite` would, so its usage and errors name `lite <command>`."""
-    cmd: Final = cli.commands[path[0]]
     try:
+        if path[0].startswith("-"):
+            cli.main(
+                list(path), prog_name="lite", obj={"secret_vault": context_secret_vault(ctx)}, standalone_mode=False
+            )
+            return
         with ctx.scope():
-            cmd.main(list(path[1:]), prog_name=path[0], parent=ctx, standalone_mode=False)
+            cli.commands[path[0]].main(list(path[1:]), prog_name=path[0], parent=ctx, standalone_mode=False)
 
     except click.ClickException as e:
         e.show()
@@ -217,7 +221,7 @@ def run_shell_line(user_input: str, scope: ShellScope, ctx: click.Context, cli: 
     if not path:
         show_commands()
         return ()
-    if path[0] not in cli.commands:
+    if path[0] not in cli.commands and not path[0].startswith("-"):
         click.echo(f"Unknown command: {path[0]}")
         click.echo("Type 'help' to see available commands.")
         return scope

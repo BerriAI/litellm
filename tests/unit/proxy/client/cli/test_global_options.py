@@ -151,13 +151,15 @@ def test_default_base_url_unchanged_without_config_file(cli_runner, isolated_hom
     assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
 
 
-def _write_login_token(home: Path, base_url: str, key: str) -> None:
+def _write_login_token(home: Path, base_url: str, key: str | None) -> None:
     token_dir = home / ".litellm"
     token_dir.mkdir(exist_ok=True)
-    (token_dir / "token.json").write_text(json.dumps({"base_url": base_url, "key": key, "user_id": "u-1"}))
+    secret: Final = {} if key is None else {"key": key}
+    (token_dir / "token.json").write_text(json.dumps({"base_url": base_url, "user_id": "u-1", **secret}))
 
 
 LOGIN_SERVER: Final = "https://login-gateway.example.com"
+SHELL_VERSION_THEN_QUIT: Final = "version\nquit\n"
 
 
 def test_bare_lite_connects_to_the_server_it_logged_in_to(cli_runner, isolated_home, requests_mock, secret_vault_factory):
@@ -165,12 +167,25 @@ def test_bare_lite_connects_to_the_server_it_logged_in_to(cli_runner, isolated_h
     requests_mock.get(f"{LOGIN_SERVER}/health/readiness", json={"litellm_version": "1.2.3"})
     context: Final[dict[str, object]] = {"secret_vault": secret_vault_factory()}
 
-    result = cli_runner.invoke(cli, ["version"], obj=context)
+    result = cli_runner.invoke(cli, [], obj=context, input=SHELL_VERSION_THEN_QUIT)
 
-    assert result.exit_code == 0
+    assert f"Connected to LiteLLM server: {LOGIN_SERVER}" in result.output
     assert f"LiteLLM Proxy Server URL: {LOGIN_SERVER}" in result.output
     assert requests_mock.last_request.headers.get("Authorization") == "Bearer sk-from-login"
     assert context["base_url_explicit"] is False
+
+
+def test_a_one_shot_command_never_goes_to_the_logged_in_server(
+    cli_runner, isolated_home, requests_mock, secret_vault_factory
+):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+
+    result = cli_runner.invoke(cli, ["version"], obj={"secret_vault": secret_vault_factory()})
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert [request.url for request in requests_mock.request_history] == ["http://localhost:4000/health/readiness"]
 
 
 @pytest.mark.parametrize(
@@ -190,9 +205,9 @@ def test_a_named_server_beats_the_logged_in_one_and_never_gets_its_key(
         monkeypatch.setenv(name, value)
     requests_mock.get(f"{expected_base_url}/health/readiness", json={"litellm_version": "1.2.3"})
 
-    result = cli_runner.invoke(cli, [*args, "version"], obj={"secret_vault": secret_vault_factory()})
+    result = cli_runner.invoke(cli, args, obj={"secret_vault": secret_vault_factory()}, input=SHELL_VERSION_THEN_QUIT)
 
-    assert result.exit_code == 0
+    assert f"Connected to LiteLLM server: {expected_base_url}" in result.output
     assert f"LiteLLM Proxy Server URL: {expected_base_url}" in result.output
     assert requests_mock.last_request.headers.get("Authorization") is None
 
@@ -212,24 +227,32 @@ def test_a_key_given_without_a_server_never_goes_to_the_logged_in_one(
         monkeypatch.setenv(name, value)
     requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
 
-    result = cli_runner.invoke(cli, [*args, "version"], obj={"secret_vault": secret_vault_factory()})
+    result = cli_runner.invoke(cli, args, obj={"secret_vault": secret_vault_factory()}, input=SHELL_VERSION_THEN_QUIT)
 
-    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert "Connected to LiteLLM server: http://localhost:4000" in result.output
     assert [request.url for request in requests_mock.request_history] == ["http://localhost:4000/health/readiness"]
     assert requests_mock.last_request.headers.get("Authorization") == "Bearer sk-named-key"
 
 
-def test_lite_goes_back_to_localhost_after_logout_without_a_keychain(
-    cli_runner, isolated_home, requests_mock, secret_vault_factory
+def test_bare_lite_says_why_it_stays_on_localhost_when_the_keychain_is_locked(
+    cli_runner, isolated_home, secret_vault_factory
 ):
+    _write_login_token(isolated_home, LOGIN_SERVER, None)
+
+    result = cli_runner.invoke(cli, [], obj={"secret_vault": secret_vault_factory(available=False)}, input="quit\n")
+
+    assert "Connected to LiteLLM server: http://localhost:4000" in result.output
+    assert "could not be read" in result.output
+
+
+def test_lite_goes_back_to_localhost_after_logout_without_a_keychain(cli_runner, isolated_home, secret_vault_factory):
     _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
     no_keychain: Final = secret_vault_factory(available=False)
     cli_runner.invoke(cli, ["logout"], obj={"secret_vault": no_keychain})
-    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
 
-    result = cli_runner.invoke(cli, ["version"], obj={"secret_vault": no_keychain})
+    result = cli_runner.invoke(cli, [], obj={"secret_vault": no_keychain}, input="quit\n")
 
-    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert "Connected to LiteLLM server: http://localhost:4000" in result.output
 
 
 def test_corrupt_config_file_falls_back_to_default(cli_runner, isolated_home):

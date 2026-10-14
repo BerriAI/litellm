@@ -58,6 +58,7 @@ def test_every_spelling_of_a_group_subcommand_runs_it(lines, credentials_endpoin
     [
         """create shell-made --info '{"custom_llm_provider": "openai"}' --values '{"api_key": "sk-placeholder"}'""",
         """create shell-made --info {"custom_llm_provider":"openai"} --values {"api_key":"sk-placeholder"}""",
+        """create shell-made --info='{"custom_llm_provider": "openai"}' --values='{"api_key": "sk-placeholder"}'""",
     ],
 )
 def test_quoted_and_compact_json_arguments_reach_the_gateway_as_typed(requests_mock, create_line):
@@ -100,6 +101,28 @@ def test_a_top_level_line_inside_a_group_leaves_the_group(leaving_line, requests
     assert credentials_endpoint.call_count == 0
 
 
+def test_help_inside_a_group_shows_that_group_and_keeps_it(credentials_endpoint):
+    result: Final = _shell("credentials", "--help", "list")
+
+    assert "Unknown command" not in result.output
+    assert result.output.count("Usage: lite credentials [OPTIONS] COMMAND [ARGS]...") == 2
+    assert credentials_endpoint.call_count == 1
+
+
+def test_lite_with_its_own_options_inside_the_shell_runs_against_the_server_it_names(
+    requests_mock, credentials_endpoint
+):
+    other: Final = requests_mock.get(
+        "https://other-gateway.example.com/credentials", json={"credentials": [{"credential_name": "other-openai"}]}
+    )
+
+    result: Final = _shell("lite --base-url https://other-gateway.example.com --api-key sk-other credentials list")
+
+    assert "other-openai" in result.output
+    assert other.last_request.headers["Authorization"] == "Bearer sk-other"
+    assert credentials_endpoint.call_count == 0
+
+
 def test_a_group_that_runs_on_its_own_does_not_become_the_scope(capsys):
     @click.group()
     def root() -> None:
@@ -119,7 +142,7 @@ def test_a_group_that_runs_on_its_own_does_not_become_the_scope(capsys):
     assert "wizard ran" in capsys.readouterr().out
 
 
-def test_a_line_splits_on_spaces_and_unwraps_only_whole_quoted_words(capsys):
+def test_a_line_splits_on_spaces_and_unwraps_quotes_that_open_a_word_or_follow_an_equals_sign(capsys):
     @click.group()
     def root() -> None:
         pass
@@ -130,7 +153,7 @@ def test_a_line_splits_on_spaces_and_unwraps_only_whole_quoted_words(capsys):
         click.echo("\n".join(words))
 
     run_shell_line(
-        r"""echo C:\Users\me\notes.txt "two words" '{"a": 1}' {"b":2} it's issue#1""",
+        r"""echo C:\Users\me\notes.txt "two words" '{"a": 1}' info='{"a": 1}' {"b":2} it's issue#1""",
         (),
         click.Context(root, info_name="lite", obj={}),
         root,
@@ -140,6 +163,7 @@ def test_a_line_splits_on_spaces_and_unwraps_only_whole_quoted_words(capsys):
         r"C:\Users\me\notes.txt",
         "two words",
         '{"a": 1}',
+        'info={"a": 1}',
         '{"b":2}',
         "it's",
         "issue#1",

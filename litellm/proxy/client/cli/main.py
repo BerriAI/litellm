@@ -6,7 +6,7 @@ from typing import Final, Protocol
 import click
 
 from litellm._version import version as litellm_version
-from litellm.litellm_core_utils.cli_token_utils import stored_login_base_url
+from litellm.litellm_core_utils.cli_token_utils import load_cli_token
 from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
@@ -15,6 +15,7 @@ from .commands.auth import (
     auth_group,
     context_secret_vault,
     get_stored_api_key,
+    keychain_unreadable_notice,
     login,
     logout,
     whoami,
@@ -90,7 +91,7 @@ class HideConfiguredCommandsGroup(click.Group):
     envvar="LITELLM_PROXY_URL",
     show_envvar=True,
     default=None,
-    show_default="base_url from `lite config`, else the `lite login` server, else http://localhost:4000",
+    show_default="base_url from `lite config`, else http://localhost:4000, or the `lite login` server for a bare `lite`",
     help="Base URL of the LiteLLM proxy server",
 )
 @click.option(
@@ -106,11 +107,15 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 
     stored_base_url: Final = get_config_value("base_url")
     base_url_provided: Final = base_url is not None
-    login_base_url: Final = (
-        stored_login_base_url(vault=context_secret_vault(ctx))
-        if base_url is None and not stored_base_url and api_key is None
+    shell: Final = ctx.invoked_subcommand is None and not show_version
+    login: Final = (
+        load_cli_token(vault=context_secret_vault(ctx))
+        if shell and base_url is None and not stored_base_url and api_key is None
         else None
     )
+    login_base_url: Final = login.base_url if login is not None and login.key else None
+    if login is not None and login.base_url and not login.key:
+        click.secho(keychain_unreadable_notice(context_secret_vault(ctx)), fg="yellow", err=True)
 
     # Normalize once here so every downstream command (login, agents, http, ...) can safely
     # do f"{base_url}/some/path" without producing a double slash.
@@ -131,7 +136,7 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
     ctx.obj["base_url"] = base_url
     ctx.obj["api_key"] = resolved_api_key
     ctx.obj["api_key_from_token_file"] = api_key_from_token_file
-    # `--base-url` falls back to the `lite login` server or localhost:4000, but
+    # `--base-url` defaults to localhost:4000 for local dev convenience, but
     # apiKeyHelper is invoked bare (no flags) -- commands that must work
     # unattended (print-token) need to tell "user didn't say" apart from
     # "user said localhost:4000 on purpose" so they can fall back to
