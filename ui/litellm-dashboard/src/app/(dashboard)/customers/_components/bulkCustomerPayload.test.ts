@@ -25,7 +25,7 @@ describe("bulk customer edits", () => {
       mcpAccessGroups: { enabled: false, value: ["new-group"] },
       mcpToolsets: { enabled: false, value: ["new-toolset"] },
     };
-    expect(buildBulkCustomerPayload(customers, edits, [])).toEqual({
+    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
       ok: false,
       error: "Choose at least one field to update",
     });
@@ -33,7 +33,7 @@ describe("bulk customer edits", () => {
 
   it("sends only toolsets and customer IDs when only toolsets are opted in", () => {
     const edits = { ...emptyBulkCustomerEdits(), mcpToolsets: { enabled: true, value: ["new-toolset"] } };
-    expect(buildBulkCustomerPayload(customers, edits, [])).toEqual({
+    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
       ok: true,
       payload: {
         customers: [
@@ -55,7 +55,7 @@ describe("bulk customer edits", () => {
       field === "models"
         ? { models: [] }
         : { object_permission: { [apiField]: [], ...(field === "mcpServers" ? { mcp_tool_permissions: {} } : {}) } };
-    expect(buildBulkCustomerPayload(customers, edits, [])).toEqual({
+    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
       ok: true,
       payload: { customers: customers.map((customer) => ({ user_id: customer.user_id, ...update })) },
     });
@@ -68,7 +68,7 @@ describe("bulk customer edits", () => {
       mcpAccessGroups: { enabled: false, value: ["hidden-group"] },
       mcpToolsets: { enabled: true, value: ["replacement-toolset"] },
     };
-    expect(buildBulkCustomerPayload([customers[0]], edits, [])).toEqual({
+    expect(buildBulkCustomerPayload([customers[0]], edits, [], customers)).toEqual({
       ok: true,
       payload: { customers: [{ user_id: "customer-a", object_permission: { mcp_toolsets: ["replacement-toolset"] } }] },
     });
@@ -84,7 +84,7 @@ describe("bulk customer edits", () => {
       mcpAccessGroups: { enabled: true, value: ["group-a"] },
       mcpToolsets: { enabled: true, value: ["toolset-a"] },
     };
-    expect(buildBulkCustomerPayload([customers[0]], edits, [])).toEqual({
+    expect(buildBulkCustomerPayload([customers[0]], edits, [], customers)).toEqual({
       ok: true,
       payload: {
         customers: [
@@ -141,7 +141,7 @@ describe("bulk customer edits", () => {
       },
     }));
     const edits = { ...emptyBulkCustomerEdits(), mcpServers: { enabled: true, value: ["kept"] } };
-    expect(buildBulkCustomerPayload(rows, edits, servers)).toEqual({
+    expect(buildBulkCustomerPayload(rows, edits, servers, customers)).toEqual({
       ok: true,
       payload: {
         customers: rows.map((customer, index) => ({
@@ -174,6 +174,7 @@ describe("bulk customer edits", () => {
             mcpServers: { enabled: true, value: ["kept"] },
           },
           servers,
+          customers,
         ),
       ).toEqual({
         ok: true,
@@ -202,6 +203,7 @@ describe("bulk customer edits", () => {
           mcpServers: { enabled: true, value: [] },
         },
         [],
+        customers,
       ),
     ).toEqual({
       ok: true,
@@ -224,7 +226,7 @@ describe("bulk customer edits", () => {
       ...emptyBulkCustomerEdits(),
       budget: { enabled: true, mode: "max" as const, budgetId: "hidden-budget", maxBudget: "1.5" },
     };
-    expect(buildBulkCustomerPayload(customers, edits, [])).toEqual({
+    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
       ok: true,
       payload: {
         customers: [
@@ -240,22 +242,45 @@ describe("bulk customer edits", () => {
       ...emptyBulkCustomerEdits(),
       budget: { enabled: true, mode: "max" as const, budgetId: "", maxBudget },
     };
-    expect(buildBulkCustomerPayload(customers, edits, [])).toEqual({
+    expect(buildBulkCustomerPayload(customers, edits, [], customers)).toEqual({
       ok: false,
       error: "Enter a maximum budget greater than zero",
     });
   });
 
-  it("rejects a maximum edit when even one customer has a linked budget", () => {
+  it("rejects a maximum edit when a budget is shared with an unselected customer", () => {
     const edits = {
       ...emptyBulkCustomerEdits(),
       budget: { enabled: true, mode: "max" as const, budgetId: "", maxBudget: "100" },
     };
     expect(
-      buildBulkCustomerPayload([customers[0], { ...customers[1], budget_id: "shared-budget" }], edits, []),
+      buildBulkCustomerPayload(
+        [{ ...customers[0], budget_id: "shared-budget" }],
+        edits,
+        [],
+        customers.map((customer) => ({ ...customer, budget_id: "shared-budget" })),
+      ),
     ).toEqual({
       ok: false,
-      error: "Max Budget cannot be changed for customers with linked budgets. Select an existing budget instead",
+      error: "Max Budget cannot be changed for customers with shared budgets. Select an existing budget instead",
+    });
+  });
+
+  it("updates each customer's own budget maximum without replacing budget links", () => {
+    const rows = customers.map((customer) => ({ ...customer, budget_id: `own-${customer.user_id}` }));
+    expect(
+      buildBulkCustomerPayload(
+        rows,
+        {
+          ...emptyBulkCustomerEdits(),
+          budget: { enabled: true, mode: "max", budgetId: "", maxBudget: "75" },
+        },
+        [],
+        rows,
+      ),
+    ).toEqual({
+      ok: true,
+      payload: { customers: rows.map((customer) => ({ user_id: customer.user_id, max_budget: 75 })) },
     });
   });
 
@@ -264,7 +289,7 @@ describe("bulk customer edits", () => {
       ...emptyBulkCustomerEdits(),
       budget: { enabled: true, mode: "link" as const, budgetId: "new-budget", maxBudget: "" },
     };
-    expect(buildBulkCustomerPayload([{ ...customers[0], budget_id: "shared-budget" }], edits, [])).toEqual({
+    expect(buildBulkCustomerPayload([{ ...customers[0], budget_id: "shared-budget" }], edits, [], customers)).toEqual({
       ok: true,
       payload: { customers: [{ user_id: "customer-a", budget_id: "new-budget" }] },
     });
@@ -279,6 +304,7 @@ describe("bulk customer edits", () => {
           budget: { enabled: true, mode: "link", budgetId: "", maxBudget: "" },
         },
         [],
+        customers,
       ),
     ).toEqual({
       ok: false,
@@ -288,7 +314,12 @@ describe("bulk customer edits", () => {
 
   it("rejects clearing an allowed region", () => {
     expect(
-      buildBulkCustomerPayload(customers, { ...emptyBulkCustomerEdits(), region: { enabled: true, value: "" } }, []),
+      buildBulkCustomerPayload(
+        customers,
+        { ...emptyBulkCustomerEdits(), region: { enabled: true, value: "" } },
+        [],
+        customers,
+      ),
     ).toEqual({
       ok: false,
       error: "Choose EU or US for the allowed region",
@@ -301,6 +332,7 @@ describe("bulk customer edits", () => {
         customers,
         { ...emptyBulkCustomerEdits(), defaultModel: { enabled: true, value: " " } },
         [],
+        customers,
       ),
     ).toEqual({
       ok: false,
@@ -310,7 +342,12 @@ describe("bulk customer edits", () => {
 
   it("rejects empty customer selection", () => {
     expect(
-      buildBulkCustomerPayload([], { ...emptyBulkCustomerEdits(), models: { enabled: true, value: [] } }, []),
+      buildBulkCustomerPayload(
+        [],
+        { ...emptyBulkCustomerEdits(), models: { enabled: true, value: [] } },
+        [],
+        customers,
+      ),
     ).toEqual({
       ok: false,
       error: "Select at least one customer",
@@ -329,6 +366,7 @@ describe("bulk customer edits", () => {
         models: { enabled: true, value: [] },
       },
       [],
+      customers,
     );
     expect(result).toEqual({
       ok: true,
@@ -342,7 +380,12 @@ describe("bulk customer edits", () => {
       user_id: `customer-${index}`,
     }));
     expect(
-      buildBulkCustomerPayload(batch, { ...emptyBulkCustomerEdits(), models: { enabled: true, value: [] } }, []),
+      buildBulkCustomerPayload(
+        batch,
+        { ...emptyBulkCustomerEdits(), models: { enabled: true, value: [] } },
+        [],
+        customers,
+      ),
     ).toEqual({
       ok: false,
       error: `Select at most ${MAX_BULK_CUSTOMERS} customers`,

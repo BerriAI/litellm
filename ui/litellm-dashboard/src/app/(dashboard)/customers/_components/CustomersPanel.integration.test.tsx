@@ -152,6 +152,25 @@ describe("Customers management", () => {
     expect(screen.queryByRole("button", { name: "Edit selected" })).not.toBeInTheDocument();
   });
 
+  it("guards a shared maximum even when the other customer is hidden by search", async () => {
+    const rows = customers.map((customer) => ({ ...customer, budget_id: "shared-budget" }));
+    useQuery.mockReturnValue({ data: rows, isLoading: false, isError: false, isFetching: false, refetch });
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersPanel />, { searchParams: "search=Alice" });
+    expect(
+      screen.queryByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: `Select customer ${activeCustomer.user_id}` }));
+    await user.click(screen.getByRole("button", { name: "Edit selected" }));
+    expect(await screen.findByRole("note")).toHaveTextContent("share a budget with other customers");
+    await user.click(screen.getByRole("combobox", { name: "Budget update" }));
+    expect(await screen.findByRole("option", { name: "Set a maximum budget" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("keeps only failed customers selected after cancellation and list refresh before reopening", async () => {
     const { $api } = await vi.importActual<typeof import("@/lib/http/api")>("@/lib/http/api");
     useQuery.mockImplementation($api.useQuery);

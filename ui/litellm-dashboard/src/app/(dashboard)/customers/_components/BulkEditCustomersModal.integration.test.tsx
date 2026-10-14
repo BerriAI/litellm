@@ -45,11 +45,17 @@ const response = (failedIds: string[] = [], rows = customers): BulkUpdateCustome
   })),
 });
 
-const mountModal = (rows = customers) => {
+const mountModal = (rows = customers, allCustomers = rows) => {
   const onCancel = vi.fn();
   const onCompleted = vi.fn();
   const view = renderWithProviders(
-    <BulkEditCustomersModal open selectedCustomers={rows} onCancel={onCancel} onCompleted={onCompleted} />,
+    <BulkEditCustomersModal
+      open
+      allCustomers={allCustomers}
+      selectedCustomers={rows}
+      onCancel={onCancel}
+      onCompleted={onCompleted}
+    />,
   );
   return { ...view, onCancel, onCompleted };
 };
@@ -81,6 +87,7 @@ describe("Bulk customer editor", () => {
       <BulkEditCustomersModal
         open
         selectedCustomers={[{ ...customers[0], user_id: "later-selection" }]}
+        allCustomers={customers}
         onCancel={onCancel}
         onCompleted={onCompleted}
       />,
@@ -355,9 +362,10 @@ describe("Bulk customer editor", () => {
     );
   });
 
-  it("disables maximum edits for linked budgets and explains the effect on unselected customers", async () => {
+  it("disables maximum edits for budgets shared with unselected customers and explains the effect on unselected customers", async () => {
     const user = userEvent.setup();
-    mountModal([customers[0], { ...customers[1], budget_id: "shared-budget" }]);
+    const selected = [{ ...customers[0], budget_id: "shared-budget" }];
+    mountModal(selected, [...selected, { ...customers[1], budget_id: "shared-budget" }]);
     expect(screen.getByRole("note")).toHaveTextContent("can affect unselected customers");
     await user.click(screen.getByRole("combobox", { name: "Budget update" }));
     expect(await screen.findByRole("option", { name: "Set a maximum budget" })).toHaveAttribute(
@@ -369,9 +377,10 @@ describe("Bulk customer editor", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("sets a positive maximum for unlinked customers without sending a budget link", async () => {
+  it("sets a positive maximum for customers with their own budget without replacing the link", async () => {
     const user = userEvent.setup();
-    const { onCancel } = mountModal();
+    const rows = customers.map((customer) => ({ ...customer, budget_id: `own-${customer.user_id}` }));
+    const { onCancel } = mountModal(rows);
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget update" }), "Set a maximum budget");
     await user.click(screen.getByRole("checkbox", { name: "Update budget" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "25" } });

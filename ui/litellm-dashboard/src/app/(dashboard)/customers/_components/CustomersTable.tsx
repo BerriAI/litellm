@@ -306,6 +306,7 @@ export default function CustomersTable({
         <BulkEditCustomersModal
           open
           selectedCustomers={bulkEditCustomers}
+          allCustomers={data}
           onCancel={() => setBulkEditCustomers(null)}
           onCompleted={(successfulIds) =>
             setRowSelection((selection) =>

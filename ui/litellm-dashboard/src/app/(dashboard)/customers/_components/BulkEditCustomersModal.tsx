@@ -29,8 +29,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { extractProxyErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
 import { buildBulkCustomerPayload, emptyBulkCustomerEdits, type BulkCustomerEdits } from "./bulkCustomerPayload";
+import { hasSharedCustomerBudget } from "./customerPayload";
 
 type BulkEditCustomersModalProps = {
+  allCustomers: readonly EndUser[];
   selectedCustomers: EndUser[];
   open: boolean;
   onCancel: () => void;
@@ -142,13 +144,13 @@ const budgetModes = [
 function BudgetEditField({
   edit,
   catalog,
-  hasLinkedBudget,
+  hasSharedBudget,
   disabled,
   onChange,
 }: {
   edit: BulkCustomerEdits["budget"];
   catalog: ReturnType<typeof useBudgetOptions>;
-  hasLinkedBudget: boolean;
+  hasSharedBudget: boolean;
   disabled: boolean;
   onChange: (edit: BulkCustomerEdits["budget"]) => void;
 }) {
@@ -175,16 +177,16 @@ function BudgetEditField({
         </SelectTrigger>
         <SelectContent>
           {budgetModes.map((mode) => (
-            <SelectItem key={mode.value} value={mode.value} disabled={mode.value === "max" && hasLinkedBudget}>
+            <SelectItem key={mode.value} value={mode.value} disabled={mode.value === "max" && hasSharedBudget}>
               {mode.label}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
-      {hasLinkedBudget && (
+      {hasSharedBudget && (
         <p role="note" className="text-sm text-muted-foreground">
-          Some selected customers have linked budgets. Changing a shared budget maximum can affect unselected customers,
-          so choose an existing budget instead.
+          Some selected customers share a budget with other customers. Changing a shared budget maximum can affect
+          unselected customers, so choose an existing budget instead.
         </p>
       )}
       {edit.mode === "link" && <CatalogFeedback label="Budgets" catalog={catalog} />}
@@ -212,7 +214,7 @@ function BudgetEditField({
             min={0}
             step="any"
             value={edit.maxBudget}
-            disabled={disabled || hasLinkedBudget}
+            disabled={disabled || hasSharedBudget}
             onChange={(event) => onChange({ ...edit, maxBudget: event.target.value })}
           />
           <p className="text-sm text-muted-foreground">Enter a maximum greater than zero.</p>
@@ -222,7 +224,12 @@ function BudgetEditField({
   );
 }
 
-function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<BulkEditCustomersModalProps, "open">) {
+function BulkEditSession({
+  selectedCustomers,
+  allCustomers,
+  onCancel,
+  onCompleted,
+}: Omit<BulkEditCustomersModalProps, "open">) {
   const [customers, setCustomers] = useState(() => selectedCustomers);
   const [edits, setEdits] = useState(emptyBulkCustomerEdits);
   const [error, setError] = useState<string | null>(null);
@@ -237,7 +244,7 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
   const toolsets = useMCPToolsets();
   const mutation = useBulkUpdateCustomers();
   const pending = submitting || mutation.isPending;
-  const hasLinkedBudget = customers.some((customer) => customer.budget_id);
+  const hasSharedBudget = customers.some((customer) => hasSharedCustomerBudget(customer, allCustomers));
   const modelOptions = (models.data ?? []).map((model) => ({ label: model, value: model }));
   const modelsUnavailable = models.isLoading || models.isError;
   const actionLabel = results ? "Retry failed customers" : "Apply changes";
@@ -252,7 +259,7 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (inFlight.current) return;
-    const payload = buildBulkCustomerPayload(customers, edits, servers.data ?? []);
+    const payload = buildBulkCustomerPayload(customers, edits, servers.data ?? [], allCustomers);
     if (!payload.ok) {
       setError(payload.error);
       return;
@@ -318,7 +325,7 @@ function BulkEditSession({ selectedCustomers, onCancel, onCompleted }: Omit<Bulk
           <BudgetEditField
             edit={edits.budget}
             catalog={budgets}
-            hasLinkedBudget={hasLinkedBudget}
+            hasSharedBudget={hasSharedBudget}
             disabled={pending}
             onChange={(edit) => update("budget", edit)}
           />
