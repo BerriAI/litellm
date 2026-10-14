@@ -501,29 +501,6 @@ def _model_routed_upload(
             assert_never(spelling)
 
 
-@pytest.mark.parametrize(
-    "spelling",
-    [
-        "sdk_extra_body",
-        "sdk_proxy_fields",
-        "multipart_field",
-        "query_param",
-        "model_header",
-        "multipart_proxy_fields",
-        "sdk_expires_after",
-        "multipart_expires_after",
-    ],
-    ids=[
-        "sdk-extra-body-model",
-        "sdk-extra-body-with-proxy-fields",
-        "multipart-model-field",
-        "query-model",
-        "x-litellm-model-header",
-        "multipart-model-with-proxy-fields",
-        "sdk-expires-after",
-        "multipart-bracketed-expires-after",
-    ],
-)
 def _assert_model_routed_upload_reaches_one_deployment_and_the_encoded_id_reads_back(
     gateway: Gateway, spelling: _ModelRoutedSpelling, sdk_base_url: str
 ) -> None:
