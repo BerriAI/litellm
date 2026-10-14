@@ -239,14 +239,18 @@ def prepare_call(
             llm_provider=provider,
         ) from error
 
-    resolved_api_base: Final = provider_config.resolve_api_base(dynamic_api_base or api_base)
+    try:
+        resolved_api_base, resolved_api_key = provider_config.resolve_connection(
+            dynamic_api_base or api_base, dynamic_api_key or api_key
+        )
+    except ValueError as error:
+        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     if resolved_api_base is None:
         raise litellm.BadRequestError(
             message=provider_config.missing_api_base_message(provider),
             model=model,
             llm_provider=provider,
         )
-    resolved_api_key: Final = provider_config.resolve_api_key(dynamic_api_key or api_key)
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
             message=f"Missing API key for Decisions provider '{provider}'",
