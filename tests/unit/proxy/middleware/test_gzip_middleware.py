@@ -54,6 +54,10 @@ async def _under_off_loop(request: Request) -> Response:
     return Response(b"u" * (OFF_LOOP_SIZE_BYTES - 1), media_type="application/json")
 
 
+async def _at_off_loop(request: Request) -> Response:
+    return Response(b"a" * OFF_LOOP_SIZE_BYTES, media_type="application/json")
+
+
 async def _json_stream(request: Request) -> Response:
     async def chunks():
         for chunk in STREAM_CHUNKS:
@@ -71,6 +75,7 @@ APP = Starlette(
         Route("/etag", _with_etag),
         Route("/huge", _huge),
         Route("/under-off-loop", _under_off_loop),
+        Route("/at-off-loop", _at_off_loop),
         Route("/partial", _partial),
         Route("/no-transform", _no_transform),
     ]
@@ -131,7 +136,7 @@ async def test_body_above_off_loop_threshold_round_trips():
 
 @pytest.mark.parametrize(
     "path, compressed_on_loop_thread",
-    [("/under-off-loop", True), ("/huge", False)],
+    [("/under-off-loop", True), ("/at-off-loop", False), ("/huge", False)],
 )
 @pytest.mark.asyncio
 async def test_only_bodies_under_the_off_loop_threshold_compress_on_the_event_loop(
