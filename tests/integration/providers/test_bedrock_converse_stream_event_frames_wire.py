@@ -670,7 +670,7 @@ def _sibling_deployment(scenario: Scenario, name: str, wire: Wire, **extra: Json
     scenario.cleanups.callback(scenario.delete_model, identity)
 
 
-def test_e02_a_throttling_frame_first_is_a_429_after_one_attempt_even_with_retries_and_a_sibling_deployment(
+def test_e02_a_throttling_frame_first_is_a_429_once_the_retry_budget_is_spent(
     gateway: Gateway,
 ) -> None:
     with wire_server(_stream_peer(_THROTTLING_FRAME)) as wire, gateway.scenario() as scenario:
@@ -679,7 +679,7 @@ def test_e02_a_throttling_frame_first_is_a_429_after_one_attempt_even_with_retri
         streamed: Final = _stream(gateway, "chat", {**_body("chat", model), "num_retries": 2})
         _assert_rejected_chat(streamed, 429, f"throttlingException {_error_body(_THROTTLED)}")
         attempts: Final = len(wire.drain())
-        assert attempts == 1, attempts
+        assert attempts == 3, attempts
         _failure_row(streamed.call_id)
 
 

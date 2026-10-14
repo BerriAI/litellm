@@ -26243,8 +26243,14 @@ class _FirstPullStream:
             raise self._first
         return self._first
 
+    def __iter__(self):
+        return self
+
     def __next__(self) -> object:
         return self._pull(StopIteration)
+
+    def __aiter__(self):
+        return self
 
     async def __anext__(self) -> object:
         return self._pull(StopAsyncIteration)

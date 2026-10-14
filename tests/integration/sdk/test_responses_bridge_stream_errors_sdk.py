@@ -104,24 +104,20 @@ async def test_async_completion_stream_in_stream_rate_limit_wraps_the_provider_e
 def test_router_sync_stream_in_stream_rate_limit_with_fallbacks_disabled_surfaces_the_provider_exception() -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(serve(rate_limited_stream(f"resp_{marker}"), AZURE_TARGET)) as wire:
-        response: Final = _router(wire).completion(
-            model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True, disable_fallbacks=True
-        )
         with pytest.raises(RateLimitError) as raised:
-            for _ in response:
-                pass
+            _router(wire).completion(
+                model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True, disable_fallbacks=True
+            )
         _assert_surfaces_the_provider_exception(raised.value, wire, marker)
 
 
 async def test_router_async_stream_in_stream_rate_limit_without_fallbacks_surfaces_the_provider_exception() -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(serve(rate_limited_stream(f"resp_{marker}"), AZURE_TARGET)) as wire:
-        response: Final = await _router(wire).acompletion(
-            model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True
-        )
         with pytest.raises(RateLimitError) as raised:
-            async for _ in response:
-                pass
+            await _router(wire).acompletion(
+                model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True
+            )
         _assert_surfaces_the_provider_exception(raised.value, wire, marker)
 
 
@@ -130,12 +126,10 @@ async def test_router_async_stream_in_stream_rate_limit_with_fallbacks_disabled_
 ):
     marker: Final = uuid.uuid4().hex
     with wire_server(serve(rate_limited_stream(f"resp_{marker}"), AZURE_TARGET)) as wire:
-        response: Final = await _router(wire).acompletion(
-            model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True, disable_fallbacks=True
-        )
         with pytest.raises(RateLimitError) as raised:
-            async for _ in response:
-                pass
+            await _router(wire).acompletion(
+                model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True, disable_fallbacks=True
+            )
         _assert_surfaces_the_provider_exception(raised.value, wire, marker)
 
 
@@ -168,12 +162,10 @@ async def test_router_async_stream_openai_error_event_rate_limit_surfaces_the_pr
     marker: Final = uuid.uuid4().hex
     stream: Final = _openai_error_stream(marker, "rate_limit_exceeded", RATE_LIMIT_MESSAGE)
     with wire_server(serve(stream, AZURE_TARGET)) as wire:
-        response: Final = await _router(wire).acompletion(
-            model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True
-        )
         with pytest.raises(RateLimitError) as raised:
-            async for _ in response:
-                pass
+            await _router(wire).acompletion(
+                model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True
+            )
         _assert_surfaces_the_provider_exception(raised.value, wire, marker)
 
 
@@ -200,12 +192,10 @@ def test_router_sync_stream_top_level_rate_limit_with_fallbacks_disabled_surface
     marker: Final = uuid.uuid4().hex
     stream: Final = _openai_error_stream(marker, "rate_limit_exceeded", RATE_LIMIT_MESSAGE)
     with wire_server(serve(stream, AZURE_TARGET)) as wire:
-        response: Final = _router(wire).completion(
-            model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True, disable_fallbacks=True
-        )
         with pytest.raises(RateLimitError) as raised:
-            for _ in response:
-                pass
+            _router(wire).completion(
+                model=_GROUP, messages=_messages(marker), tools=_TOOLS, stream=True, disable_fallbacks=True
+            )
         _assert_surfaces_the_provider_exception(raised.value, wire, marker)
 
 
