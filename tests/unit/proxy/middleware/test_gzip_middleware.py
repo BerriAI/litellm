@@ -219,3 +219,36 @@ def test_proxy_app_gzips_large_responses_for_clients_that_accept_it():
     assert compressed.headers["content-encoding"] == "gzip"
     assert int(compressed.headers["content-length"]) < int(identity.headers["content-length"])
     assert compressed.json() == identity.json()
+
+
+async def test_all_compression_runs_off_the_event_loop():
+    """Regression test for #46339: the sub-OFF_LOOP_SIZE_BYTES fast path
+    compressed inline, and a poorly-compressing body (base64 embeddings,
+    824 KB -> ~165 ms at level 6) stalled the worker. Every size now hops to
+    the thread pool."""
+    import threading
+
+    import pytest
+
+    from litellm.proxy.middleware.gzip_middleware import MINIMUM_SIZE_BYTES, _compress
+
+    thread_ids: list[int] = []
+
+    real_compress: Final = gzip.compress
+
+    def tracked_compress(body: bytes, compresslevel: int) -> bytes:
+        thread_ids.append(threading.get_ident())
+        return real_compress(body, compresslevel=compresslevel)
+
+    small = b"x" * (2 * MINIMUM_SIZE_BYTES)  # far below the old threshold
+    large = b"y" * (2 * 1024 * 1024)  # above the old threshold
+
+    loop_thread: Final = threading.get_ident()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("litellm.proxy.middleware.gzip_middleware.gzip.compress", tracked_compress)
+        await _compress(small)
+        await _compress(large)
+
+    assert len(thread_ids) == 2
+    assert all(tid != loop_thread for tid in thread_ids)

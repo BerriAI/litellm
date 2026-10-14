@@ -26,8 +26,12 @@ def accepts_gzip(accept_encoding: str) -> bool:
 
 
 async def _compress(body: bytes) -> bytes:
-    if len(body) < OFF_LOOP_SIZE_BYTES:
-        return gzip.compress(body, compresslevel=COMPRESS_LEVEL)
+    # Always off the event loop: the compression cost follows how well the
+    # body compresses, not just its size - an 824 KB base64 embeddings body
+    # takes ~165 ms at level 6 (vs the ~5 ms at the 1 MiB edge the threshold
+    # assumed), stalling every other request on the worker. The thread hop
+    # is tens of microseconds, far below even the ~1.6 ms a 30 KB body
+    # costs, so there is no size at which compressing inline wins (#46339).
     return await anyio.to_thread.run_sync(gzip.compress, body, COMPRESS_LEVEL)
 
 
