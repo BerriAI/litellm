@@ -1523,6 +1523,72 @@ async def test_health_services_endpoint_otel_instance_does_not_claim_arize_dedic
 
 
 @pytest.mark.asyncio
+async def test_health_services_endpoint_matches_otel_v2_instance_loaded_from_callbacks():
+    """The proxy swaps "otel" for an OpenTelemetryV2 instance, which has no registry entry, it still counts."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    with (
+        patch("litellm.success_callback", []),
+        patch("litellm.failure_callback", []),
+        patch("litellm.callbacks", []),
+        patch("litellm.service_callback", []),
+        patch("litellm.input_callback", []),
+        patch("litellm._async_success_callback", []),
+        patch("litellm._async_failure_callback", []),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()),
+        patch("litellm.acompletion", acompletion),
+    ):
+        otel_v2_logger: Final = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporter="in_memory"),
+            tracer_provider=TracerProvider(),
+        )
+        litellm.callbacks.append(otel_v2_logger)
+        result = await health_services_endpoint(service="otel")
+
+    assert result == {"status": "success", "message": "Mock LLM request made - check otel."}
+    acompletion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_rejects_otel_when_only_a_named_otel_v2_preset_is_configured():
+    """An arize-named OpenTelemetryV2 preset is not the plain otel callback, service=otel stays a 400."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+    from litellm.proxy._types import ProxyException
+
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    with (
+        patch("litellm.success_callback", []),
+        patch("litellm.failure_callback", []),
+        patch("litellm.callbacks", []),
+        patch("litellm.service_callback", []),
+        patch("litellm.input_callback", []),
+        patch("litellm._async_success_callback", []),
+        patch("litellm._async_failure_callback", []),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()),
+        patch("litellm.acompletion", acompletion),
+    ):
+        arize_v2_logger: Final = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporter="in_memory"),
+            callback_name="arize",
+            tracer_provider=TracerProvider(),
+        )
+        litellm.callbacks.append(arize_v2_logger)
+        with pytest.raises(ProxyException) as exc:
+            await health_services_endpoint(service="otel")
+
+    assert exc.value.code == "400"
+    assert "not configured as a callback" in str(exc.value.message)
+    acompletion.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("service", ["sqs", "aws_sqs"])
 async def test_health_services_endpoint_keeps_dedicated_check_for_logger_configured_via_callbacks(service: str):
     """callbacks: [aws_sqs] becomes a nameless SQSLogger at startup, Test on sqs or aws_sqs still runs its check."""
