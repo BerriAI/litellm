@@ -12830,11 +12830,10 @@ async def moderations(
 async def _audio_speech_chunk_generator(
     _response: HttpxBinaryResponseContent,
 ) -> AsyncGenerator[bytes, None]:
-    # chunk_size has a big impact on latency, it can't be too small or too large
-    # too small: latency is high
-    # too large: latency is low, but memory usage is high
-    # 8192 is a good compromise
-    _generator: Final = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
+    upstream_still_streaming: Final = not _response.response.is_stream_consumed
+    _generator: Final = await _response.aiter_bytes(
+        chunk_size=None if upstream_still_streaming else AUDIO_SPEECH_CHUNK_SIZE
+    )
     try:
         async for chunk in _generator:
             yield chunk

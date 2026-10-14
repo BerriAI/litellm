@@ -286,9 +286,10 @@ class _RecordingAudioStream(httpx.AsyncByteStream):
 
 @pytest.mark.asyncio
 async def test_audio_speech_chunk_generator_forwards_an_unread_upstream_stream():
-    """A streaming upstream response reaches the client chunk by chunk, not buffered whole."""
+    """A streaming upstream response reaches the client piece by piece as it arrives, with no
+    wait for a full AUDIO_SPEECH_CHUNK_SIZE before the first audio goes out."""
     produced: list[bytes] = []
-    first, second = b"a" * AUDIO_SPEECH_CHUNK_SIZE, b"b" * AUDIO_SPEECH_CHUNK_SIZE
+    first, second = b"a" * (AUDIO_SPEECH_CHUNK_SIZE // 8), b"b" * AUDIO_SPEECH_CHUNK_SIZE
     stream = _RecordingAudioStream([first, second], produced)
     response = HttpxBinaryResponseContent(
         httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
