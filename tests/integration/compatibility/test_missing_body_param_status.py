@@ -2114,3 +2114,59 @@ def test_json_video_create_decodes_character_ids_into_text_parts(gateway: Gatewa
             for prompt in (b"p-v1", b"p-alias")
         ], [request.body for request in seen]
         assert len(wire.drain()) == 2
+
+
+def test_multipart_video_create_decodes_character_ids_into_text_parts(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: multipart characters[][id]=<encoded id> to /v1/videos (client.videos.create with extra_body "
+        "characters, or curl -F) reaches the upstream still LiteLLM-encoded instead of the provider id"
+    )
+    seen: Final[list[Request]] = []
+    with wire_server(_video_upstream(seen)) as wire, gateway.scenario() as scenario:
+        model: Final = _video_model(scenario, wire)
+        client: Final = _routable_video_client(gateway, model)
+        character: Final = encode_character_id_with_provider("char_source", "openai", None)
+        sdk_video: Final = client.videos.create(
+            prompt="p-sdk",
+            model=model,
+            seconds="8",
+            size="1280x720",
+            input_reference=("r.png", _PNG, "image/png"),
+            extra_body={"characters": [{"id": character}]},
+        )
+        form_response: Final = gateway.client.post(
+            "/v1/videos",
+            files={
+                "model": (None, model),
+                "prompt": (None, "p-form"),
+                "characters[][id]": (None, character),
+            },
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        )
+        assert form_response.status_code == 200, form_response.text
+        form_video: Final = Video.model_validate_json(form_response.text)
+        for video in (sdk_video, form_video):
+            assert video == _client_video(video.id, model, created=True), video
+            assert _upstream_video_id(video) == ("openai", _VIDEO_UPSTREAM_ID), video.id
+        assert [_video_target(request) for request in seen] == [
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+            ("POST", "/v1/videos", f"Bearer {_VIDEO_PROVIDER_KEY}"),
+        ]
+        assert sorted(_multipart_parts(seen[0])) == sorted(
+            (
+                ("model", None, "text/plain", b"sora-2"),
+                ("prompt", None, "text/plain", b"p-sdk"),
+                ("seconds", None, "text/plain", b"8"),
+                ("size", None, "text/plain", b"1280x720"),
+                ("characters[][id]", None, "text/plain", b"char_source"),
+                ("input_reference", "input_reference.png", "image/png", _PNG),
+            )
+        ), seen[0].body
+        assert sorted(_multipart_parts(seen[1])) == sorted(
+            (
+                ("model", None, "text/plain", b"sora-2"),
+                ("prompt", None, "text/plain", b"p-form"),
+                ("characters[][id]", None, "text/plain", b"char_source"),
+            )
+        ), seen[1].body
+        assert len(wire.drain()) == 2
