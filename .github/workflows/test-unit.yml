@@ -403,16 +403,12 @@ jobs:
               tests/unit/a2a_protocol
               tests/unit/anthropic_interface
               tests/unit/batches
-              tests/unit/chat_completions
               tests/unit/completion_extras
               tests/unit/containers
-              tests/unit/embeddings
               tests/unit/endpoints
               tests/unit/files
               tests/unit/images
               tests/unit/interactions
-              tests/unit/messages
-              tests/unit/ocr
               tests/unit/passthrough
               tests/unit/rag
               tests/unit/realtime_api

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.responses.dispatch import ARESPONSES, RESPONSES
@@ -8,7 +9,7 @@ from tests.test_litellm_rust.support.routing import call_natively
 
 RESPONSES_MODEL: Final = "openai/gpt-6.1-sol"
 RESPONSES_TEXT: Final = "Hello from native Responses"
-RESPONSES_RESPONSE: Final = {
+RESPONSES_RESPONSE: Final[Mapping[str, object]] = {
     "id": "resp_native",
     "object": "response",
     "created_at": 1,
