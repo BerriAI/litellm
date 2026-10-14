@@ -10,7 +10,13 @@ from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
-from structured_output import SENTIMENT_OUTPUT_FORMAT, SENTIMENT_PROMPT, assert_sentiment_json
+from structured_output import (
+    CONSTRAINED_SENTIMENT_OUTPUT_FORMAT,
+    SENTIMENT_OUTPUT_FORMAT,
+    SENTIMENT_PROMPT,
+    assert_constrained_sentiment_json,
+    assert_sentiment_json,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -135,6 +141,32 @@ class TestBedrockMessages:
         texts = tuple(block.text for block in message.content if isinstance(block, TextBlock))
         assert len(texts) == len(message.content), f"structured output came back as non-text blocks: {message!r}"
         assert_sentiment_json("".join(texts))
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(CONVERSE_CLAUDE_BACKEND,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_converse_output_format_accepts_constraint_keywords(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register(proxy, resources, CONVERSE_CLAUDE_BACKEND)
+        client = sdk.anthropic(resources.key())
+
+        message = client.messages.create(
+            model=model,
+            max_tokens=256,
+            messages=[{"role": "user", "content": SENTIMENT_PROMPT}],
+            extra_body={**NO_PROXY_CACHE, "output_format": CONSTRAINED_SENTIMENT_OUTPUT_FORMAT},
+        )
+        texts = tuple(block.text for block in message.content if isinstance(block, TextBlock))
+        assert len(texts) == len(message.content), f"structured output came back as non-text blocks: {message!r}"
+        assert_constrained_sentiment_json("".join(texts))
 
     @pytest.mark.covers("llm.messages.bedrock_converse.basic.stream.works")
     @meta(
