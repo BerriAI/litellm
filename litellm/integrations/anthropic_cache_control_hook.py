@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -57,11 +58,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-
-# Anthropic (and Bedrock Claude) reject requests with more than 4 cache_control
-# breakpoints: "A maximum of 4 blocks with cache_control may be provided."
-MAX_CACHE_CONTROL_BLOCKS: Final = 4
 
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
@@ -228,7 +224,7 @@ def _as_object_list(value: object | None) -> list[object] | None:
 
 
 def _tool_call_carries_cache_breakpoint(tool_call: object, message: object) -> bool:
-    if _attribute_or_key(tool_call, "cache_control") is None:
+    if not _carries_cache_breakpoint(tool_call):
         return False
 
     return not tool_call_is_rebuilt_as_server_tool_use(

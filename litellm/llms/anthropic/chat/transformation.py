@@ -25,6 +25,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     sanitize_input_schema_for_anthropic,
+    tools_with_prompt_cache_breakpoints_as_cache_control,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
@@ -109,6 +110,13 @@ from ..common_utils import (
     process_anthropic_headers,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
+)
+from .prompt_cache_breakpoints import (
+    PROMPT_CACHE_BREAKPOINT_ON_TOOLS,
+    claude_cache_marks,
+    reject_prompt_cache_options,
+    resolved_claude_cache_marks,
+    tools_carry_prompt_cache_breakpoint,
 )
 
 if TYPE_CHECKING:
@@ -1568,12 +1576,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
             elif param == "tools":
-                anthropic_tools, mcp_servers = self._map_tools(value)
+                requested_tools = cast(object, value)  # cast-ok: the loop yields untyped values
+                anthropic_tools, mcp_servers = self._map_tools(
+                    list(tools_with_prompt_cache_breakpoints_as_cache_control(requested_tools))
+                )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
                 )
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
+                if tools_carry_prompt_cache_breakpoint(requested_tools):
+                    optional_params[PROMPT_CACHE_BREAKPOINT_ON_TOOLS] = True  # rebind-ok: out-param store
             elif param == "tool_choice" or param == "parallel_tool_calls":
                 _tool_choice: AnthropicMessagesToolChoice | None = self._map_tool_choice(
                     tool_choice=non_default_params.get("tool_choice"),
@@ -2010,10 +2023,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
+        drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
             optional_params=optional_params,
-            drop_params=litellm.drop_params or litellm_params.get("drop_params") is True,
+            drop_params=drop_params,
             custom_llm_provider=self.custom_llm_provider,
         )
 
@@ -2022,6 +2036,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params=optional_params,
             custom_llm_provider=self._resolved_provider,
         )
+
+        body: Final = cast(dict[str, object], optional_params)  # cast-ok: BaseConfig passes an untyped dict
+        reject_prompt_cache_options(
+            model=model, options=body.pop("prompt_cache_options", None), drop_params=drop_params
+        )
+        cache_marks: Final = resolved_claude_cache_marks(
+            claude_cache_marks(
+                messages=messages,
+                tools=body.get("tools"),
+                automatic_breakpoint=body.get("cache_control") is not None,
+                drop_params=drop_params,
+                tools_carried_breakpoint=bool(body.pop(PROMPT_CACHE_BREAKPOINT_ON_TOOLS, False)),
+            ),
+            model=model,
+            llm_provider=self._resolved_provider,
+        )
+        if "tools" in body:
+            optional_params["tools"] = list(cache_marks.tools)  # rebind-ok: out-param store
 
         # === Tool-name sanitization (single chokepoint) ===
         # Anthropic enforces ^[a-zA-Z0-9_-]{1,128}$ on every tool name. We
@@ -2046,15 +2078,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _name_forward_map, _name_reverse_map = self._sanitize_tool_names_in_request(
             optional_params=optional_params,
         )
-        if _name_forward_map:
-            messages = self._rewrite_tool_names_in_messages(messages, _name_forward_map)
+        marked_messages: Final = (
+            self._rewrite_tool_names_in_messages(list(cache_marks.messages), _name_forward_map)
+            if _name_forward_map
+            else list(cache_marks.messages)
+        )
         if _name_reverse_map and isinstance(litellm_params, dict):
             litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
 
         # Only the leading system run becomes the top-level system prompt. A later
         # system message stays in the conversation: hoisting it rewrites the cached
         # prefix and re-bills the whole history at cache-write pricing (#36559).
-        leading_system_run, later_messages = split_leading_system_run(messages)
+        leading_system_run, later_messages = split_leading_system_run(marked_messages)
         anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
@@ -2075,7 +2110,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except Exception as e:
             raise AnthropicError(
                 status_code=400,
-                message=f"{e}\nReceived Messages={messages}",
+                message=f"{e}\nReceived Messages={marked_messages}",
             )  # don't use verbose_logger.exception, if exception is raised
 
         self.update_headers_with_optional_anthropic_beta(

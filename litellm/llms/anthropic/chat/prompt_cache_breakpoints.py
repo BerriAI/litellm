@@ -1,0 +1,189 @@
+"""OpenAI's ``prompt_cache_breakpoint`` on a request bound for Claude.
+
+The marks become Anthropic's ``cache_control`` on the same blocks, and a request that carried at least one is held
+to Claude's cap of four breakpoints, which a client writing the OpenAI dialect cannot see. ``prompt_cache_options``
+has no Claude equivalent and is rejected or dropped like any other unsupported param."""
+
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import chain
+from typing import Final, Literal, TypeAlias, assert_never
+
+from litellm._logging import verbose_logger
+from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    message_without_cache_control_marks,
+    messages_with_prompt_cache_breakpoints_as_cache_control,
+    tools_with_prompt_cache_breakpoints_as_cache_control,
+)
+from litellm.types.llms.openai import AllMessageValues
+
+PROMPT_CACHE_BREAKPOINT_ON_TOOLS: Final = "_litellm_prompt_cache_breakpoint_on_tools"
+_Site: TypeAlias = tuple[Literal["tool", "message", "part", "tool_call"], int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class ClaudeCacheMarks:
+    messages: tuple[AllMessageValues, ...]
+    tools: tuple[object, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CacheBreakpointCapExceeded:
+    found: int
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # keys are read one by one
+
+
+def _as_blocks(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None  # pyright: ignore[reportUnknownVariableType]  # blocks are parsed one by one
+
+
+def _carries(block: object, key: str) -> bool:
+    fields: Final = _as_mapping(block)
+    return fields is not None and fields.get(key) is not None
+
+
+def _tool_carries(tool: object, key: str) -> bool:
+    fields: Final = _as_mapping(tool)
+    return fields is not None and (fields.get(key) is not None or _carries(fields.get("function"), key))
+
+
+def tools_carry_prompt_cache_breakpoint(tools: object) -> bool:
+    return any(_tool_carries(tool, "prompt_cache_breakpoint") for tool in _as_blocks(tools) or ())
+
+
+def _message_sites(index: int, message: object, key: str) -> Iterator[_Site]:
+    fields: Final = _as_mapping(message)
+    if fields is None:
+        return
+    if fields.get(key) is not None:
+        yield ("message", index, -1)
+    for position, part in enumerate(_as_blocks(fields.get("content")) or ()):
+        if _carries(part, key):
+            yield ("part", index, position)
+    for position, call in enumerate(_as_blocks(fields.get("tool_calls")) or ()):
+        if _carries(call, key):
+            yield ("tool_call", index, position)
+
+
+def _sites(messages: Sequence[object], tools: Sequence[object], key: str) -> tuple[_Site, ...]:
+    """Every block carrying ``key`` in wire order: tool definitions first, then the messages as listed."""
+    return (
+        *(("tool", index, -1) for index, tool in enumerate(tools) if _tool_carries(tool, key)),
+        *chain.from_iterable(_message_sites(index, message, key) for index, message in enumerate(messages)),
+    )
+
+
+def _without_cache_control(block: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in block.items() if key != "cache_control"}
+
+
+def _tool_without_cache_control(tool: object) -> object:
+    fields: Final = _as_mapping(tool)
+    if fields is None:
+        return tool
+    function: Final = _as_mapping(fields.get("function"))
+    return {
+        **_without_cache_control(fields),
+        **({"function": _without_cache_control(function)} if function is not None else {}),
+    }
+
+
+def _dropped_positions(dropped: frozenset[_Site], kind: str, index: int) -> frozenset[int]:
+    return frozenset(
+        position for site_kind, site_index, position in dropped if (site_kind, site_index) == (kind, index)
+    )
+
+
+def _message_without(index: int, message: AllMessageValues, dropped: frozenset[_Site]) -> AllMessageValues:
+    return message_without_cache_control_marks(
+        message,
+        message_mark=("message", index, -1) in dropped,
+        parts=_dropped_positions(dropped, "part", index),
+        tool_calls=_dropped_positions(dropped, "tool_call", index),
+    )
+
+
+def claude_cache_marks(
+    messages: Sequence[AllMessageValues],
+    tools: object,
+    *,
+    automatic_breakpoint: bool,
+    drop_params: bool,
+    tools_carried_breakpoint: bool = False,
+) -> ClaudeCacheMarks | CacheBreakpointCapExceeded:
+    """The request's ``prompt_cache_breakpoint`` marks renamed to ``cache_control`` and, when it carried any, held to
+    Claude's cap: ``drop_params`` keeps the latest four in wire order, otherwise the excess is reported. A request
+    that carried none is forwarded as written so the provider's own answer reaches the client.
+
+    ``automatic_breakpoint`` is the request-level ``cache_control`` (Anthropic's automatic caching), which takes one
+    slot of its own and is never dropped. ``tools_carried_breakpoint`` covers tools already mapped to Anthropic's
+    shape, where the mark was renamed before this census ran."""
+    listed_tools: Final = _as_blocks(tools) or ()
+    if not tools_carried_breakpoint and not _sites(messages, listed_tools, "prompt_cache_breakpoint"):
+        return ClaudeCacheMarks(tuple(messages), tuple(listed_tools))
+    renamed_messages: Final = messages_with_prompt_cache_breakpoints_as_cache_control(messages)
+    renamed_tools: Final = tools_with_prompt_cache_breakpoints_as_cache_control(listed_tools)
+    sites: Final = _sites(renamed_messages, renamed_tools, "cache_control")
+    found: Final = len(sites) + int(automatic_breakpoint)
+    if found <= MAX_CACHE_CONTROL_BLOCKS:
+        return ClaudeCacheMarks(renamed_messages, renamed_tools)
+    if not drop_params:
+        return CacheBreakpointCapExceeded(found)
+    dropped: Final = frozenset(sites[: found - MAX_CACHE_CONTROL_BLOCKS])
+    verbose_logger.debug(
+        "Dropping the earliest %d of %d cache breakpoints: Claude accepts at most %d.",
+        len(dropped),
+        found,
+        MAX_CACHE_CONTROL_BLOCKS,
+    )
+    return ClaudeCacheMarks(
+        messages=tuple(_message_without(index, message, dropped) for index, message in enumerate(renamed_messages)),
+        tools=tuple(
+            _tool_without_cache_control(tool) if ("tool", index, -1) in dropped else tool
+            for index, tool in enumerate(renamed_tools)
+        ),
+    )
+
+
+def resolved_claude_cache_marks(
+    outcome: ClaudeCacheMarks | CacheBreakpointCapExceeded, model: str, llm_provider: str
+) -> ClaudeCacheMarks:
+    match outcome:
+        case ClaudeCacheMarks():
+            return outcome
+        case CacheBreakpointCapExceeded(found=found):
+            raise BadRequestError(
+                message=(
+                    f"Claude accepts at most {MAX_CACHE_CONTROL_BLOCKS} cache breakpoints, found {found}. "
+                    "Set drop_params=True (proxy: litellm_settings: drop_params: true) to keep the latest four."
+                ),
+                model=model,
+                llm_provider=llm_provider,
+            )
+        case _:
+            assert_never(outcome)
+
+
+def reject_prompt_cache_options(model: str, options: object, drop_params: bool) -> None:
+    """``prompt_cache_options`` has already been popped from the request; this decides whether that was allowed."""
+    if options is None:
+        return
+    if drop_params:
+        verbose_logger.debug(
+            "Dropping prompt_cache_options=%r for %s: Claude caches through cache_control.", options, model
+        )
+        return
+    raise UnsupportedParamsError(
+        message=(
+            f"{model} does not support prompt_cache_options={options!r}. Claude caches through cache_control "
+            "marks (or prompt_cache_breakpoint on the OpenAI dialect). To drop unsupported params, set "
+            "`litellm.drop_params = True`."
+        ),
+        model=model,
+        status_code=400,
+    )

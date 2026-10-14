@@ -7,6 +7,7 @@ import json
 import mimetypes
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from itertools import groupby, islice
 from os import PathLike
 from pathlib import Path
@@ -19,6 +20,7 @@ from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionCachedContent,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
     ChatCompletionReasoningItem,
@@ -1803,6 +1805,133 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     return cast(  # cast-ok: same block shape as the input with the marker key renamed
         _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
     )
+
+
+def prompt_cache_breakpoint_as_cache_control(block: _MarkedT) -> _MarkedT:
+    """OpenAI's ``prompt_cache_breakpoint`` rewritten as Anthropic's ``cache_control`` on the same block.
+
+    A ``cache_control`` the client already wrote wins. OpenAI's 30m TTL has no Anthropic equivalent and is dropped."""
+    if block.get("prompt_cache_breakpoint") is None:
+        return block
+    unmarked: Final = {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
+    marked: Final = (
+        unmarked
+        if unmarked.get("cache_control") is not None
+        else {**unmarked, "cache_control": ChatCompletionCachedContent(type="ephemeral")}
+    )
+    return cast(_MarkedT, marked)  # cast-ok: same block shape as the input with the marker key renamed
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # keys are read one by one
+
+
+def _as_list(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None  # pyright: ignore[reportUnknownVariableType]  # items are parsed one by one
+
+
+def message_fields(message: AllMessageValues) -> Mapping[str, object]:
+    """The message as a plain mapping, for code that reads keys the role-specific TypedDicts do not all declare."""
+    return message
+
+
+def _without_key(block: Mapping[str, object], key: str) -> Mapping[str, object]:
+    return {name: value for name, value in block.items() if name != key}
+
+
+def _block_with_prompt_cache_breakpoint_as_cache_control(block: object) -> object:
+    fields: Final = _as_mapping(block)
+    return prompt_cache_breakpoint_as_cache_control(fields) if fields is not None else block
+
+
+def message_with_prompt_cache_breakpoints_as_cache_control(message: AllMessageValues) -> AllMessageValues:
+    """The message-level mark, every content part's mark and every tool call's mark renamed to ``cache_control``."""
+    renamed: Final = prompt_cache_breakpoint_as_cache_control(message)
+    fields: Final = message_fields(renamed)
+    content: Final = _as_list(fields.get("content"))
+    tool_calls: Final = _as_list(fields.get("tool_calls"))
+    if content is None and tool_calls is None:
+        return renamed
+    return cast(  # cast-ok: same message shape as the input with the marker key renamed on its blocks
+        AllMessageValues,
+        {
+            **fields,
+            **(
+                {"content": [_block_with_prompt_cache_breakpoint_as_cache_control(block) for block in content]}
+                if content is not None
+                else {}
+            ),
+            **(
+                {"tool_calls": [_block_with_prompt_cache_breakpoint_as_cache_control(call) for call in tool_calls]}
+                if tool_calls is not None
+                else {}
+            ),
+        },
+    )
+
+
+def messages_with_prompt_cache_breakpoints_as_cache_control(
+    messages: Sequence[AllMessageValues],
+) -> tuple[AllMessageValues, ...]:
+    return tuple(message_with_prompt_cache_breakpoints_as_cache_control(message) for message in messages)
+
+
+def tool_with_prompt_cache_breakpoint_as_cache_control(tool: Mapping[str, object]) -> Mapping[str, object]:
+    """A tool definition's mark, written at the top level (Anthropic shape) or under ``function`` (OpenAI shape),
+    renamed to a top-level ``cache_control``, which every Claude transform reads."""
+    function: Final = _as_mapping(tool.get("function"))
+    function_marked: Final = function is not None and function.get("prompt_cache_breakpoint") is not None
+    if tool.get("prompt_cache_breakpoint") is None and not function_marked:
+        return tool
+    unmarked_function: Final = _without_key(function, "prompt_cache_breakpoint") if function is not None else None
+    unmarked: Final = {
+        **_without_key(tool, "prompt_cache_breakpoint"),
+        **({"function": unmarked_function} if unmarked_function is not None else {}),
+    }
+    already_marked: Final = unmarked.get("cache_control") is not None or (
+        unmarked_function is not None and unmarked_function.get("cache_control") is not None
+    )
+    return unmarked if already_marked else {**unmarked, "cache_control": ChatCompletionCachedContent(type="ephemeral")}
+
+
+def _block_without_cache_control(block: object) -> object:
+    fields: Final = _as_mapping(block)
+    return _without_key(fields, "cache_control") if fields is not None else block
+
+
+def _blocks_without_cache_control(blocks: Sequence[object], dropped: AbstractSet[int]) -> Sequence[object]:
+    return [
+        _block_without_cache_control(block) if position in dropped else block for position, block in enumerate(blocks)
+    ]
+
+
+def message_without_cache_control_marks(
+    message: AllMessageValues, *, message_mark: bool, parts: AbstractSet[int], tool_calls: AbstractSet[int]
+) -> AllMessageValues:
+    """``message`` minus its message-level ``cache_control`` (when ``message_mark``) and the marks on the content
+    parts and tool calls at the given positions."""
+    fields: Final = message_fields(message)
+    kept: Final = _without_key(fields, "cache_control") if message_mark else fields
+    content: Final = _as_list(kept.get("content"))
+    calls: Final = _as_list(kept.get("tool_calls"))
+    return cast(  # cast-ok: same message shape as the input minus the dropped marks
+        AllMessageValues,
+        {
+            **kept,
+            **({"content": _blocks_without_cache_control(content, parts)} if content is not None else {}),
+            **({"tool_calls": _blocks_without_cache_control(calls, tool_calls)} if calls is not None else {}),
+        },
+    )
+
+
+def _tool_block_with_prompt_cache_breakpoint_as_cache_control(tool: object) -> object:
+    fields: Final = _as_mapping(tool)
+    return tool_with_prompt_cache_breakpoint_as_cache_control(fields) if fields is not None else tool
+
+
+def tools_with_prompt_cache_breakpoints_as_cache_control(tools: object) -> tuple[object, ...]:
+    """Every tool definition in ``tools`` (anything but a list is treated as none) with its mark renamed."""
+    return tuple(_tool_block_with_prompt_cache_breakpoint_as_cache_control(tool) for tool in _as_list(tools) or ())
 
 
 LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})

@@ -44,6 +44,11 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
+from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
+    claude_cache_marks,
+    reject_prompt_cache_options,
+    resolved_claude_cache_marks,
+)
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -2012,6 +2017,36 @@ class AmazonConverseConfig(BaseConfig):
 
         return data
 
+    def _messages_with_claude_cache_marks(
+        self,
+        model: str,
+        messages: Sequence[AllMessageValues],
+        optional_params: dict[str, object],  # mutable-ok: the request body is built from this out-param
+        litellm_params: Mapping[str, object],
+    ) -> tuple[AllMessageValues, ...]:
+        """OpenAI ``prompt_cache_breakpoint`` marks as ``cache_control`` so the factory emits ``cachePoint`` blocks,
+        held to the provider's cap, with ``prompt_cache_options`` rejected or dropped. Models that never emit
+        ``cachePoint`` blocks are left as written."""
+        if not bedrock_model_accepts_cache_points(model):
+            return tuple(messages)
+        drop_params: Final = litellm.drop_params or litellm_params.get("drop_params") is True
+        reject_prompt_cache_options(
+            model=model, options=optional_params.pop("prompt_cache_options", None), drop_params=drop_params
+        )
+        cache_marks: Final = resolved_claude_cache_marks(
+            claude_cache_marks(
+                messages=messages,
+                tools=optional_params.get("tools"),
+                automatic_breakpoint=optional_params.get("cache_control") is not None,
+                drop_params=drop_params,
+            ),
+            model=model,
+            llm_provider=self.custom_llm_provider or "bedrock",
+        )
+        if "tools" in optional_params:
+            optional_params["tools"] = list(cache_marks.tools)  # rebind-ok: out-param store
+        return cache_marks.messages
+
     async def _async_transform_request(
         self,
         model: str,
@@ -2020,7 +2055,11 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: dict | None = None,
     ) -> RequestObject:
-        messages, system_content_blocks = self._transform_system_message(messages, model=model)
+        body: Final = cast(dict[str, object], optional_params)  # cast-ok: BaseConfig passes an untyped dict
+        params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: BaseConfig passes an untyped dict
+        messages, system_content_blocks = self._transform_system_message(
+            list(self._messages_with_claude_cache_marks(model, messages, body, params)), model=model
+        )
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
@@ -2088,7 +2127,11 @@ class AmazonConverseConfig(BaseConfig):
         litellm_params: dict,
         headers: dict | None = None,
     ) -> RequestObject:
-        messages, system_content_blocks = self._transform_system_message(messages, model=model)
+        body: Final = cast(dict[str, object], optional_params)  # cast-ok: BaseConfig passes an untyped dict
+        params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: BaseConfig passes an untyped dict
+        messages, system_content_blocks = self._transform_system_message(
+            list(self._messages_with_claude_cache_marks(model, messages, body, params)), model=model
+        )
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
