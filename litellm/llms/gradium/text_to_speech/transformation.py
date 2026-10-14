@@ -18,7 +18,6 @@ from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
 )
-from litellm.secret_managers.main import get_secret_str
 
 from ..common_utils import GradiumException
 
@@ -37,7 +36,6 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
     Reference: https://docs.gradium.ai/api-reference/endpoint/tts-post
     """
 
-    TTS_BASE_URL = "https://api.gradium.ai"
     TTS_ENDPOINT_PATH = "/api/post/speech/tts"
     DEFAULT_OUTPUT_FORMAT = "wav"
 
@@ -128,14 +126,12 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, str]:  # mutable-ok: signature fixed by BaseTextToSpeechConfig
-        resolved_key: Final = api_key or litellm.api_key or get_secret_str("GRADIUM_API_KEY")
-
-        if resolved_key is None:
-            raise ValueError("Gradium API key is required. Set GRADIUM_API_KEY environment variable.")
+        if not api_key:
+            raise ValueError("Gradium API key is required. Set `api_key` on the model.")
 
         return {
             **headers,
-            "x-api-key": resolved_key,
+            "x-api-key": api_key,
             "Content-Type": "application/json",
         }
 
@@ -153,7 +149,12 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         api_base: str | None,
         litellm_params: dict[str, object],  # mutable-ok: signature fixed by BaseTextToSpeechConfig
     ) -> str:
-        base_url: Final = (api_base or get_secret_str("GRADIUM_API_BASE") or self.TTS_BASE_URL).rstrip("/")
+        if not api_base:
+            raise ValueError(
+                "Gradium API base is required. Set `api_base` on the model, e.g. https://eu.api.gradium.ai."
+            )
+
+        base_url: Final = api_base.rstrip("/")
         # Gradium documents its regional bases with the /api suffix already on
         # them (https://eu.api.gradium.ai/api), so appending the full endpoint
         # path to one would request /api/api/post/speech/tts.
