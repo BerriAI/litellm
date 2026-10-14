@@ -479,6 +479,11 @@ def _reasoning_item_to_response_input(
     }
 
 
+def _defer_loading_field(tool: Mapping[str, object], function_tool: Mapping[str, object]) -> Mapping[str, bool]:
+    defer_loading: Final = tool.get("defer_loading", function_tool.get("defer_loading"))
+    return {"defer_loading": defer_loading} if isinstance(defer_loading, bool) else {}
+
+
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     """
     Handler for transforming /chat/completions api requests to litellm.responses requests
@@ -1376,21 +1381,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         for tool in tools:
             # convert function tool from chat completion to responses API format
             if tool.get("type") == "function" and isinstance(function_payload := tool.get("function"), dict):
-                function_tool = cast(  # cast-ok: client tool payload
-                    ChatCompletionToolParamFunctionChunk, function_payload
+                function_tool = cast(ChatCompletionToolParamFunctionChunk, function_payload)  # cast-ok: client tool
+                responses_tools.append(
+                    FunctionToolParam(
+                        name=function_tool["name"],
+                        parameters=function_tool.get("parameters"),
+                        strict=function_tool.get("strict"),
+                        type="function",
+                        description=function_tool.get("description"),
+                        **_defer_loading_field(tool, function_tool),
+                    )
                 )
-                converted_function: Final = FunctionToolParam(
-                    name=function_tool["name"],
-                    parameters=function_tool.get("parameters"),
-                    strict=function_tool.get("strict"),
-                    type="function",
-                    description=function_tool.get("description"),
-                )
-                payload_fields: Final = cast(dict[str, object], function_payload)  # cast-ok: key not in TypedDict
-                defer_loading: Final = tool.get("defer_loading", payload_fields.get("defer_loading"))
-                if isinstance(defer_loading, bool):
-                    converted_function["defer_loading"] = defer_loading
-                responses_tools.append(converted_function)
             elif tool.get("type") == "custom" and isinstance(custom_payload := tool.get("custom"), dict):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     convert_custom_tool_format_to_responses_shape,
