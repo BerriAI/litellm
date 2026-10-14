@@ -210,6 +210,7 @@ from litellm.router_utils.cooldown_handlers import (
     get_cooldown_deployments,
     is_advisor_orchestration_failure,
     is_background_response_cost_poll_not_found,
+    is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     set_cooldown_deployments,
 )
@@ -2232,6 +2233,11 @@ class Router:
         self.adecisions = self.factory_function(adecisions, call_type="adecisions")
         self.decisions = self.factory_function(decisions, call_type="decisions")
 
+        from litellm.systemone import asystemone, systemone
+
+        self.asystemone = self.factory_function(asystemone, call_type="asystemone")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
+        self.systemone = self.factory_function(systemone, call_type="systemone")  # pyright: ignore[reportUnknownMemberType]  # factory_function takes a bare Callable
+
     def _initialize_video_endpoints(self):
         """Initialize video endpoints."""
         from litellm.videos import (
@@ -3378,7 +3384,7 @@ class Router:
     async def _aresponses_streaming_iterator(
         self,
         response: "BaseResponsesAPIStreamingIterator",
-        initial_kwargs: dict[str, Any],
+        initial_kwargs: dict[str, object],
     ) -> "BaseResponsesAPIStreamingIterator":
         """
         Wrap a Responses-API streaming iterator so MidStreamFallbackError
@@ -4223,6 +4229,29 @@ class Router:
             if credential_tag not in existing_tags:
                 existing_tags.append(credential_tag)
             kwargs[metadata_variable_name]["tags"] = existing_tags
+
+        from litellm.llms.github_copilot.per_user_auth import (
+            github_copilot_per_user_credential_name,
+        )
+
+        configured_per_user_name: Final = github_copilot_per_user_credential_name(
+            cast(  # cast-ok: deployment litellm_params is a str-keyed dict
+                "Mapping[str, object]", deployment.get("litellm_params")
+            )
+        )
+        caller_credential_name: Final[object] = cast(  # cast-ok: kwargs is the untyped request dict
+            "object", kwargs.get("litellm_credential_name")
+        )
+        if (
+            configured_per_user_name is not None
+            and isinstance(caller_credential_name, str)
+            and caller_credential_name != configured_per_user_name
+        ):
+            raise litellm.BadRequestError(
+                message="litellm_credential_name cannot be overridden on a deployment that uses per-user GitHub OAuth",
+                model=deployment_model_name,
+                llm_provider="",
+            )
 
         kwargs["model_info"] = model_info
 
@@ -5567,7 +5596,7 @@ class Router:
     async def _aanthropic_messages_streaming_iterator(
         self,
         response: AsyncIterator[bytes],
-        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        initial_kwargs: dict[str, object],  # mutable-ok: mutated in-place before re-entering the fallback chain
     ) -> AsyncIterator[bytes]:
         """
         Wrap an anthropic_messages (/v1/messages) streaming response so a
@@ -6972,6 +7001,8 @@ class Router:
             "search",
             "adecisions",
             "decisions",
+            "asystemone",
+            "systemone",
             "aadapter_generate_content",
             "avideo_generation",
             "video_generation",
@@ -7046,6 +7077,7 @@ class Router:
             "ocr",
             "search",
             "decisions",
+            "systemone",
             "video_generation",
             "video_list",
             "video_status",
@@ -7214,6 +7246,7 @@ class Router:
                 "aocr",
                 "ocr",
                 "adecisions",
+                "asystemone",
                 "avideo_generation",
                 "avideo_list",
                 "avideo_status",
@@ -8603,6 +8636,24 @@ class Router:
                 )
                 return False
 
+            caller_failure_model_info: Final = (
+                _MODEL_INFO_ADAPTER.validate_python(_model_info) if isinstance(_model_info, dict) else None
+            )
+            caller_failure_model_id: Final = (
+                caller_failure_model_info.get("id") if caller_failure_model_info is not None else None
+            )
+            caller_failure_deployment: Final = (
+                self.get_deployment(model_id=caller_failure_model_id)
+                if isinstance(caller_failure_model_id, str)
+                else None
+            )
+            if is_caller_scoped_auth_failure(caller_failure_deployment, exception_status):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Caller-scoped OAuth authentication failed, not the deployment."
+                )
+                return False
+
             exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
                 original_exception=exception
             )
@@ -8644,7 +8695,13 @@ class Router:
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
-                    requested_model_group=(get_litellm_metadata_from_kwargs(kwargs) or {}).get("model_group"),
+                    requested_model_group=(
+                        get_litellm_metadata_from_kwargs(
+                            cast("dict[str, object]", kwargs)  # cast-ok: untyped kwargs dict
+                        )
+                        or {}
+                    ).get("model_group"),
+                    request_kwargs=cast("dict[str, object]", kwargs),  # cast-ok: kwargs is the untyped request dict
                 )  # setting deployment_id in cooldown deployments
 
                 return result
@@ -9986,6 +10043,7 @@ class Router:
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
                 api_base=deployment.litellm_params.api_base,
+                litellm_params=deployment.litellm_params,
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
@@ -10097,10 +10155,21 @@ class Router:
         credential_values: Final = (
             CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
         )
-        vertex_project: Final = credential_values.get("vertex_project") or deployment.litellm_params.vertex_project
-        vertex_location: Final = credential_values.get("vertex_location") or deployment.litellm_params.vertex_location
+        from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+
+        vertex_project: Final = (
+            cast("str | None", credential_values.get("vertex_project"))  # cast-ok: vertex credential values are str
+            or deployment.litellm_params.vertex_project
+        )
+        vertex_location: Final = (
+            cast("str | None", credential_values.get("vertex_location"))  # cast-ok: vertex credential values are str
+            or deployment.litellm_params.vertex_location
+        )
         vertex_credentials: Final = (
-            credential_values.get("vertex_credentials") or deployment.litellm_params.vertex_credentials
+            cast(  # cast-ok: vertex_credentials holds the typed credential union
+                "VERTEX_CREDENTIALS_TYPES | None", credential_values.get("vertex_credentials")
+            )
+            or deployment.litellm_params.vertex_credentials
         )
 
         if vertex_project is None or vertex_location is None:
@@ -11327,6 +11396,10 @@ class Router:
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
         model_list: Final = self.get_model_list_of_routed_group(model_group)
+        model_group_description: Final[str | None] = next(
+            (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
+            None,
+        )
         for model in model_list:
             is_match = False
             if (
@@ -11396,6 +11469,7 @@ class Router:
                 litellm_model, llm_provider, _, _ = litellm.get_llm_provider(
                     model=litellm_params.model,
                     custom_llm_provider=litellm_params.custom_llm_provider,
+                    litellm_params=litellm_params,
                 )
             except litellm.exceptions.BadRequestError as e:
                 verbose_router_logger.error("litellm.router.py::get_model_group_info() - %s", e)
@@ -11431,6 +11505,7 @@ class Router:
                     **{
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
+                        "description": model_group_description,
                         **model_info,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
@@ -12371,6 +12446,7 @@ class Router:
             model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=deployment_params.get("model") or group,
                 custom_llm_provider=deployment_params.get("custom_llm_provider"),
+                litellm_params=LiteLLM_Params.model_validate(deployment_params),
             )
             supported: Final = litellm.get_supported_openai_params(
                 model=model,

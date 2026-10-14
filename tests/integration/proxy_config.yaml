@@ -116,6 +116,12 @@ model_list:
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
+  - model_name: bedrock/global.openai.gpt-6.1-sol
+    litellm_params:
+      model: bedrock/global.openai.gpt-6.1-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
   - model_name: openai/gpt-5.4
     litellm_params:
       model: openai/gpt-5.4
@@ -343,6 +349,21 @@ model_list:
       model: openrouter/typesafe/jev-1.13
       api_base: http://127.0.0.1:8191
       api_key: synthetic-openrouter-key
+  - model_name: fireworks_ai/accounts/fireworks/routers/rune
+    litellm_params:
+      model: fireworks_ai/accounts/fireworks/routers/rune
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-fireworks-key
+  - model_name: openrouter/anthropic/claude-sonnet-4
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openrouter-key
+  - model_name: openrouter/google/gemini-3.1-flash-image
+    litellm_params:
+      model: openrouter/google/gemini-3.1-flash-image
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openrouter-key
   - model_name: cloudflare/@cf/cloudflare/clef
     litellm_params:
       model: cloudflare/@cf/cloudflare/clef
@@ -356,6 +377,13 @@ model_list:
     litellm_params:
       model: hosted_vllm/Qwen/Qwen3-0.6B
       api_base: http://127.0.0.1:8191
+  - model_name: azure_ai/decision-1
+    litellm_params:
+      model: azure_ai/decision-1
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+    model_info:
+      base_model: azure_ai/Microsoft-Decision-1
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
