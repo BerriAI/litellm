@@ -7649,6 +7649,26 @@ def test_jwks_keys_for_filters_by_declared_or_inferred_algorithm(key, algorithms
     assert list(jwks_keys_for([key], algorithms)) == ([key] if expected else [])
 
 
+def test_jwks_keys_for_warns_when_dropping_key_with_unapproved_algorithm(caplog):
+    import logging
+
+    from litellm.proxy.auth.jwt_algorithms import jwks_keys_for
+
+    rsa_key: Final = {"kty": "RSA", "alg": "RS256", "kid": "rsa-key"}
+    eddsa_key: Final = {"kty": "OKP", "alg": "EdDSA", "kid": "legacy-ed-key"}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        usable: Final = list(jwks_keys_for([rsa_key, eddsa_key], ("RS256", "ES256")))
+
+    assert usable == [rsa_key]
+    assert "EdDSA" in caplog.text and "legacy-ed-key" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        assert list(jwks_keys_for([rsa_key], ("RS256", "ES256"))) == [rsa_key]
+    assert "dropped" not in caplog.text
+
+
 def test_fips_mode_rejects_eddsa_token_but_accepts_rs256():
     import jwt
 
@@ -7689,7 +7709,12 @@ def test_eddsa_token_accepted_with_deprecation_log_outside_fips(caplog):
             disable_audience_validation=True,
         )
     assert claims["sub"] == "test-subject"
-    assert "EdDSA" in caplog.text and "deprecated" in caplog.text and "LITELLM_FIPS_MODE" in caplog.text
+    assert (
+        "EdDSA" in caplog.text
+        and "deprecated" in caplog.text
+        and "LITELLM_FIPS_MODE" in caplog.text
+        and "next major release" in caplog.text
+    )
 
     _log_eddsa_deprecation.cache_clear()
     caplog.clear()
@@ -7703,6 +7728,49 @@ def test_eddsa_token_accepted_with_deprecation_log_outside_fips(caplog):
         )
     assert "deprecated" not in caplog.text
     _log_eddsa_deprecation.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_get_public_key_from_jwks_warns_on_eddsa_key_dropped_in_fips_mode(caplog):
+    """An operator whose JWKS mixes approved and EdDSA keys must see why the EdDSA key is unusable."""
+    import logging
+
+    _, ed_jwk = _okp_keypair_and_jwk()
+    ed_jwk = {**ed_jwk, "kid": "legacy-ed-key"}
+    _, rsa_jwk = _get_rsa_key_and_jwk(kid="rsa-key")
+    endpoint = _ScriptedJWKSEndpoint(({"keys": [rsa_jwk, ed_jwk]},))
+    jwt_handler = JWTHandler(fips_mode=lambda: True)
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+    jwt_handler.http_handler = endpoint
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        public_key = await jwt_handler._get_public_key_from_jwks_url(
+            jwks_url="https://issuer.example.com/keys",
+            kid="rsa-key",
+        )
+
+    assert public_key == rsa_jwk
+    assert "EdDSA" in caplog.text and "legacy-ed-key" in caplog.text
+
+    caplog.clear()
+    ed_only_handler = JWTHandler(fips_mode=lambda: True)
+    ed_only_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+    ed_only_handler.http_handler = _ScriptedJWKSEndpoint(({"keys": [ed_jwk]},))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        with pytest.raises(NoMatchingJWTPublicKeyError):
+            await ed_only_handler._get_public_key_from_jwks_url(
+                jwks_url="https://issuer.example.com/keys",
+                kid="legacy-ed-key",
+            )
+    assert "EdDSA" in caplog.text and "legacy-ed-key" in caplog.text
 
 
 def _rsa_keypair_and_jwk() -> "tuple[object, dict]":

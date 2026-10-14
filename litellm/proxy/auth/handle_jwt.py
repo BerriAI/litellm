@@ -119,7 +119,8 @@ _CachedValueT = TypeVar("_CachedValueT", bound=JWKKeyValue | str)
 def _log_eddsa_deprecation() -> None:
     verbose_proxy_logger.warning(
         "JWT Auth: accepted a token signed with EdDSA, which is deprecated and not FIPS 140-3 approved; "
-        "it is rejected when LITELLM_FIPS_MODE=true. Move the IdP signing key to RS256, PS256 or ES256"
+        "it is rejected when LITELLM_FIPS_MODE=true. Move the IdP signing key to RS256, PS256 or ES256; "
+        "EdDSA support will be removed in the next major release"
     )
 
 
@@ -233,6 +234,9 @@ class JWTHandler:
     # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
     # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
     #   the key in different ways (e.g. HS* and RS*)."
+    # EdDSA (LEGACY_JWT_ALGORITHMS) is retained here only for unverified-claims decoding;
+    # the acceptance path uses allowed_algorithms(), which excludes it (refused in FIPS
+    # mode, accepted with a deprecation warning elsewhere).
     SUPPORTED_JWT_ALGORITHMS = [
         *APPROVED_JWT_ALGORITHMS,
         *LEGACY_JWT_ALGORITHMS,
