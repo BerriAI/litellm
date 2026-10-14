@@ -29,6 +29,7 @@ from fastapi import Request, Response
 
 from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 
 
@@ -452,9 +453,10 @@ async def test_audio_speech_bills_a_clip_whose_upstream_breaks_mid_stream(monkey
     assert isinstance(streaming, StreamingResponse)
     body: Final = aiter(streaming.body_iterator)
     assert await anext(body) == b"a" * AUDIO_SPEECH_CHUNK_SIZE
-    with pytest.raises(httpx.ReadError):
+    with pytest.raises(proxy_server.AudioSpeechStreamCutOff) as cut_off:
         await anext(body)
 
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(cut_off.value) is False
     failure_hook.assert_awaited_once()
     assert failure_hook.await_args is not None
     assert isinstance(failure_hook.await_args.kwargs["original_exception"], httpx.ReadError)

@@ -3773,6 +3773,11 @@ async def test_aspeech_stream_is_logged_when_the_audio_ends(
 
     assert logged["response"] == _audio_summary(len(b"firstrest"))
     assert _logged_seconds(logged) >= 0.3
+    assert logged["error_information"] != {
+        "error_code": "499",
+        "error_message": "Client disconnected the request",
+        "error_class": "ClientDisconnected",
+    }
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
@@ -3830,6 +3835,25 @@ async def test_aspeech_stream_closed_mid_clip_is_logged_with_the_audio_sent(
 
     assert logged["status"] == "success"
     assert logged["response"] == _audio_summary(len(b"first"))
+    assert logged["error_information"] == {
+        "error_code": "499",
+        "error_message": "Client disconnected the request",
+        "error_class": "ClientDisconnected",
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("stream", [1, "true"])
+async def test_aspeech_stream_other_than_true_buffers_the_audio(
+    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger, stream: object
+) -> None:
+    _mock_elevenlabs_audio(respx_mock, _PausedAsyncAudio(b"first", b"rest", pause_seconds=0))
+
+    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=stream)
+    logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+
+    assert response.content == b"firstrest"
+    assert logged["response"] == _audio_summary(len(b"firstrest"))
 
 
 @pytest.mark.usefixtures("local_model_cost_map")

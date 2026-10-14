@@ -90,7 +90,14 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
-from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream, OnEndSyncByteStream
+from litellm.litellm_core_utils.on_end_byte_stream import (
+    OnEndAsyncByteStream,
+    OnEndSyncByteStream,
+    StreamClosedEarly,
+    StreamCompleted,
+    StreamEnd,
+    StreamFailed,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
@@ -1399,32 +1406,48 @@ def _speech_stream_error_mapper(
     return map_error
 
 
+def _mark_speech_stream_closed_early(logging_obj: LiteLLMLoggingObject) -> None:
+    litellm_params: Final = logging_obj.model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return
+    metadata: Final = litellm_params.get("metadata")
+    if isinstance(metadata, dict):
+        metadata["client_disconnected"] = True
+        return
+    litellm_params["metadata"] = {"client_disconnected": True}
+
+
 def _async_speech_end_logger(
     logging_obj: LiteLLMLoggingObject,
     result: object,
     start_time: datetime.datetime,
     is_completion_with_fallbacks: bool,
     is_litellm_internal_call: bool,
-) -> Callable[[Exception | None], Awaitable[None]]:
-    async def log_speech_end(error: Exception | None) -> None:
+) -> Callable[[StreamEnd], Awaitable[None]]:
+    async def log_speech_end(end: StreamEnd) -> None:
         end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # matches the naive start_time the wrapper took
-        if error is None:
-            _dispatch_success_logging(
-                logging_obj=logging_obj,
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-                is_completion_with_fallbacks=is_completion_with_fallbacks,
-                is_litellm_internal_call=is_litellm_internal_call,
-            )
-            return
-        if is_litellm_internal_call:
-            return
-        traceback_exception: Final = "".join(traceback.format_exception(error))
-        _bill_failed_speech_stream(logging_obj, result)
-        unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
-        logging_obj.failure_handler(error, traceback_exception, start_time, end_time)
-        await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
+        match end:
+            case StreamFailed(error=error):
+                if is_litellm_internal_call:
+                    return
+                traceback_exception: Final = "".join(traceback.format_exception(error))
+                _bill_failed_speech_stream(logging_obj, result)
+                unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
+                logging_obj.failure_handler(error, traceback_exception, start_time, end_time)
+                await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
+                return
+            case StreamClosedEarly():
+                _mark_speech_stream_closed_early(logging_obj)
+            case StreamCompleted():
+                pass
+        _dispatch_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            is_completion_with_fallbacks=is_completion_with_fallbacks,
+            is_litellm_internal_call=is_litellm_internal_call,
+        )
 
     return log_speech_end
 
@@ -1435,15 +1458,20 @@ def _sync_speech_end_logger(
     start_time: datetime.datetime,
     is_litellm_internal_call: bool,
     executor: BoundedLoggingThreadPoolExecutor,
-) -> Callable[[Exception | None], None]:
+) -> Callable[[StreamEnd], None]:
     ctx: Final = contextvars.copy_context()
 
-    def log_speech_end(error: Exception | None) -> None:
+    def log_speech_end(end: StreamEnd) -> None:
         end_time: Final = datetime.datetime.now()  # noqa: DTZ005  # matches the naive start_time the wrapper took
-        if error is not None:
-            _bill_failed_speech_stream(logging_obj, result)
-            logging_obj.failure_handler(error, "".join(traceback.format_exception(error)), start_time, end_time)
-            return
+        match end:
+            case StreamFailed(error=error):
+                _bill_failed_speech_stream(logging_obj, result)
+                logging_obj.failure_handler(error, "".join(traceback.format_exception(error)), start_time, end_time)
+                return
+            case StreamClosedEarly():
+                _mark_speech_stream_closed_early(logging_obj)
+            case StreamCompleted():
+                pass
         if is_litellm_internal_call:
             return
         executor.submit(ctx.run, logging_obj.success_handler, result, start_time, end_time)

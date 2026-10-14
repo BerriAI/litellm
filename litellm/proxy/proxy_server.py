@@ -12827,6 +12827,18 @@ async def moderations(
             )
 
 
+class AudioSpeechStreamCutOff(Exception):
+    status_code: Final = status.HTTP_502_BAD_GATEWAY
+
+
+async def _audio_chunks_or_error(chunks: AsyncIterator[bytes]) -> AsyncGenerator[bytes | Exception, None]:
+    try:
+        async for chunk in chunks:
+            yield chunk
+    except Exception as error:  # noqa: BLE001  # handed to the caller, which logs it and cuts the response off
+        yield error
+
+
 async def _audio_speech_chunk_generator(
     _response: HttpxBinaryResponseContent,
     on_upstream_error: Callable[[Exception], Awaitable[None]],
@@ -12836,11 +12848,12 @@ async def _audio_speech_chunk_generator(
         chunk_size=None if upstream_still_streaming else AUDIO_SPEECH_CHUNK_SIZE
     )
     try:
-        async for chunk in _generator:
-            yield chunk
-    except Exception as error:
-        await on_upstream_error(error)
-        raise
+        async with contextlib.aclosing(_audio_chunks_or_error(_generator)) as chunks:
+            async for chunk in chunks:
+                if isinstance(chunk, Exception):
+                    await on_upstream_error(chunk)
+                    raise AudioSpeechStreamCutOff(f"The provider stopped sending audio mid-clip: {chunk}")
+                yield chunk
     finally:
         await _close_audio_speech_response(_response)
 
