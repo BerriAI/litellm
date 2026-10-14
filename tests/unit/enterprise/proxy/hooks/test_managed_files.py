@@ -21,7 +21,7 @@ from litellm_enterprise.proxy.hooks.managed_files import (
     _provider_file_retrieve_credentials,
 )
 from litellm.caching import DualCache
-from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable
+from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     is_base64_encoded_unified_file_id,
@@ -5374,3 +5374,84 @@ async def test_create_from_raw_provider_file_id_skips_managed_ownership_lookup(c
 
     assert isinstance(result, dict) and result[file_field] == "file-raw-provider-id", result
     assert not any("unified_file_id" in where for where in table.find_first_calls), table.find_first_calls
+
+
+def _owned_managed_file(unified_uuid: str, model_mappings: Mapping[str, str]) -> tuple[str, LiteLLM_ManagedFileTable]:
+    raw: Final = f"litellm_proxy:application/jsonl;unified_id,{unified_uuid};target_model_names,gpt-4o-mini"
+    unified_file_id: Final = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+    return unified_file_id, LiteLLM_ManagedFileTable(
+        unified_file_id=unified_file_id,
+        file_object=None,
+        model_mappings=dict(model_mappings),
+        flat_model_file_ids=list(model_mappings.values()),
+        created_by="user_a",
+        team_id="team_a",
+    )
+
+
+async def _provider_kwargs(
+    managed_files: PROXY_LiteLLMManagedFiles, call_type: str, request: Mapping[str, str], deployment_id: str
+) -> Mapping[str, object]:
+    prepared: Final = await managed_files.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()),
+        cache=MagicMock(),
+        data=dict(request),
+        call_type=call_type,
+    )
+    assert isinstance(prepared, dict), prepared
+    sent: Final = await managed_files.async_pre_call_deployment_hook(
+        kwargs={**prepared, "litellm_metadata": {"model_info": {"id": deployment_id}}}, call_type=CallTypes(call_type)
+    )
+    assert sent is not None
+    return sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "file_field"), _INPUT_FILE_CREATE_CALLS)
+@pytest.mark.parametrize(("deployment_id", "provider_file_id"), [("model-a", "file-a"), ("model-b", "file-b")])
+async def test_create_from_managed_file_sends_the_routed_deployments_provider_file_id(
+    call_type: str, file_field: str, deployment_id: str, provider_file_id: str
+) -> None:
+    unified_file_id, row = _owned_managed_file(
+        "0b6f2c1e-9a4d-4c3e-8f71-2d5a6b7c8d90", {"model-a": "file-a", "model-b": "file-b"}
+    )
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+
+    sent: Final = await _provider_kwargs(
+        managed_files, call_type, {"model": "gpt-4o-mini", file_field: unified_file_id}, deployment_id
+    )
+
+    assert sent[file_field] == provider_file_id, sent
+
+
+@pytest.mark.asyncio
+async def test_fine_tuning_create_swaps_managed_training_and_validation_files_independently() -> None:
+    training_file, training_row = _owned_managed_file("5c1d9e0a-3b7f-4e2a-9c6d-1f8e7a6b5c40", {"model-a": "file-train"})
+    validation_file, validation_row = _owned_managed_file(
+        "8e2f4a6c-1d3b-4f5e-a7c9-0b2d4f6a8c10", {"model-a": "file-validate"}
+    )
+    managed_files, _ = _managed_files_with_fake_prisma(training_row, validation_row)
+
+    sent: Final = await _provider_kwargs(
+        managed_files,
+        "acreate_fine_tuning_job",
+        {"model": "gpt-4o-mini", "training_file": training_file, "validation_file": validation_file},
+        "model-a",
+    )
+
+    assert (sent["training_file"], sent["validation_file"]) == ("file-train", "file-validate"), sent
+
+
+@pytest.mark.asyncio
+async def test_fine_tuning_create_keeps_a_raw_validation_file_next_to_a_managed_training_file() -> None:
+    training_file, training_row = _owned_managed_file("5c1d9e0a-3b7f-4e2a-9c6d-1f8e7a6b5c40", {"model-a": "file-train"})
+    managed_files, _ = _managed_files_with_fake_prisma(training_row)
+
+    sent: Final = await _provider_kwargs(
+        managed_files,
+        "acreate_fine_tuning_job",
+        {"model": "gpt-4o-mini", "training_file": training_file, "validation_file": "file-raw-validate"},
+        "model-a",
+    )
+
+    assert (sent["training_file"], sent["validation_file"]) == ("file-train", "file-raw-validate"), sent
