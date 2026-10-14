@@ -35,7 +35,7 @@ from typing import Annotated, Final, Literal
 
 import httpx
 import httpx2
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -54,9 +54,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     HeaderCarrier,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class TokenEndpointSuccess(BaseModel):
+class TokenEndpointSuccess(LiteLLMBaseModel):
     """The endpoint returned a JSON object; field validation is the caller's job."""
 
     model_config = ConfigDict(frozen=True)
@@ -64,7 +65,7 @@ class TokenEndpointSuccess(BaseModel):
     body: dict[str, object]
 
 
-class TokenEndpointDenied(BaseModel):
+class TokenEndpointDenied(LiteLLMBaseModel):
     """The endpoint answered but did not grant a token (an HTTP error or a non-JSON body)."""
 
     model_config = ConfigDict(frozen=True)
@@ -73,7 +74,7 @@ class TokenEndpointDenied(BaseModel):
     detail: str
 
 
-class TokenEndpointUnreachable(BaseModel):
+class TokenEndpointUnreachable(LiteLLMBaseModel):
     """The endpoint could not be reached (DNS, TLS, connect/read failure)."""
 
     model_config = ConfigDict(frozen=True)

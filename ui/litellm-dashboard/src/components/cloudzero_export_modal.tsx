@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { CircleCheck, FileDown } from "lucide-react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { getGlobalLitellmHeaderName } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
