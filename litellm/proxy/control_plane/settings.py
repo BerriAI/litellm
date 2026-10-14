@@ -109,6 +109,9 @@ class ControlPlaneSettings(BaseSettings):
     fanout_concurrency: int = 16
     audit_capacity: int = 10_000
     api_prefix: str = "/api/v1"
+    otel_enabled: bool | None = None
+    otel_service_name: str = "litellm-control-plane"
+    otel_identity_attributes: bool = True
 
     @property
     def oidc(self) -> OidcSettings | None:
