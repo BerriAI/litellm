@@ -191,7 +191,15 @@ class PrismaWrapper:
     ):
         # Set before `_original_prisma` so the `iam_token_db_auth` property below can
         # never send `__getattr__` looking for a half-built strategy on the raw client.
-        self._token_auth = token_auth if token_auth is not None else (RdsIamTokenAuth() if iam_token_db_auth else None)
+        self._token_auth = (
+            token_auth
+            if token_auth is not None
+            else (
+                RdsIamTokenAuth.from_env(read_replica=db_url_env_var == "DATABASE_URL_READ_REPLICA")
+                if iam_token_db_auth
+                else None
+            )
+        )
         self._original_prisma = original_prisma
 
         # Per-connection knobs so the same wrapper can be used for the writer

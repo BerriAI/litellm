@@ -164,7 +164,7 @@ async def test_proxy_call_tool_on_a_never_listed_tool_hands_the_pre_hook_no_list
         patch.dict(manager.registry, {server.server_id: server}),
         patch.dict(manager.tool_name_to_mcp_server_name_mapping),
         patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
         patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
         patch.object(manager, "pre_call_tool_check", pre_call_tool_check),
         patch.object(manager, "_call_regular_mcp_tool", call_regular_mcp_tool),

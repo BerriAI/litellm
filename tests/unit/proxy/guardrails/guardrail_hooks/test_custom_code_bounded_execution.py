@@ -17,6 +17,12 @@ def _worker_threads() -> list[str]:
     return [t.name for t in threading.enumerate() if t.name.startswith("guardrail-code:")]
 
 
+def _join_worker_threads() -> None:
+    for thread in threading.enumerate():
+        if thread.name.startswith("guardrail-code:"):
+            thread.join(timeout=5)
+
+
 def _spin_forever() -> None:
     n = 0
     while True:
@@ -82,7 +88,7 @@ def test_call_with_timeout_interrupts_a_busy_loop_and_reclaims_the_thread(fn):
 
     assert exc_info.value.timeout == 0.2
     assert time.monotonic() - started < 1.5
-    time.sleep(0.2)
+    _join_worker_threads()
     assert _worker_threads() == []
 
 
@@ -105,7 +111,7 @@ async def test_call_off_loop_with_timeout_keeps_the_loop_running_and_stops_the_w
         ticker.cancel()
 
     assert ticks >= 5
-    await asyncio.sleep(0.2)
+    await asyncio.to_thread(_join_worker_threads)
     assert _worker_threads() == []
 
 
@@ -142,22 +148,30 @@ async def test_await_with_timeout_abandons_a_coroutine_that_never_stops_swallowi
 
 @pytest.mark.asyncio
 async def test_call_off_loop_with_timeout_stops_the_worker_when_the_caller_is_cancelled():
-    waiting = asyncio.create_task(call_off_loop_with_timeout(_spin_forever, 30.0, label="spin"))
-    await asyncio.sleep(0.1)
+    spinning = threading.Event()
+
+    def signal_then_spin() -> None:
+        spinning.set()
+        _spin_forever()
+
+    waiting = asyncio.create_task(call_off_loop_with_timeout(signal_then_spin, 30.0, label="spin"))
+    assert await asyncio.to_thread(spinning.wait, 5)
 
     waiting.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiting
 
-    await asyncio.sleep(0.3)
+    await asyncio.to_thread(_join_worker_threads)
     assert _worker_threads() == []
 
 
 @pytest.mark.asyncio
 async def test_await_with_timeout_cancels_the_code_when_the_caller_is_cancelled():
+    started = asyncio.Event()
     interrupted = asyncio.Event()
 
     async def sleep_until_cancelled() -> None:
+        started.set()
         try:
             await asyncio.sleep(30)
         except asyncio.CancelledError:
@@ -165,10 +179,10 @@ async def test_await_with_timeout_cancels_the_code_when_the_caller_is_cancelled(
             raise
 
     waiting = asyncio.create_task(await_with_timeout(sleep_until_cancelled(), 30.0, label="sleep"))
-    await asyncio.sleep(0.1)
+    assert await asyncio.wait_for(started.wait(), timeout=5)
 
     waiting.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiting
 
-    await asyncio.wait_for(interrupted.wait(), timeout=1.0)
+    assert await asyncio.wait_for(interrupted.wait(), timeout=5)
