@@ -126,6 +126,7 @@ def test_azure_ai_agents_build_model_response_without_annotations():
 
     assert result.choices[0].message.content == "Hello"
     assert getattr(result.choices[0].message, "annotations", None) is None
+    assert result._hidden_params["thread_id"] == "thread_abc"
 
 
 def test_azure_ai_agents_config_get_agent_id():
@@ -510,6 +511,7 @@ async def test_azure_ai_agents_streaming_annotations_from_completed_message():
 
     assert len(chunks) >= 1
     final_chunk = chunks[-1]
+    assert any(chunk.choices[0].delta.content == "According to [1], the answer is 42." for chunk in chunks)
     assert final_chunk.choices[0].finish_reason == "stop"
     assert final_chunk.choices[0].delta.annotations is not None
     assert len(final_chunk.choices[0].delta.annotations) == 1

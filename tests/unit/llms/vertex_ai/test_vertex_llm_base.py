@@ -1,7 +1,10 @@
 import asyncio
 import json
+import logging
+from typing import Final
 from unittest.mock import MagicMock, call, patch
 
+import google.auth.exceptions
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -1871,8 +1874,8 @@ class TestVertexBase:
             # Should return the current (still usable) token immediately
             assert token == "near-expiry-token"
 
-            # Let the background refresh task run
-            await asyncio.sleep(0.05)
+            background_refreshes = tuple(vertex_base._background_refresh_tasks.values())
+            await asyncio.wait_for(asyncio.gather(*background_refreshes), timeout=5)
 
             assert mock_refresh.called, "Background refresh should have been triggered"
 
@@ -1979,8 +1982,8 @@ class TestVertexBase:
                 custom_llm_provider="vertex_ai",
             )
 
-            # Allow the background task to complete.
-            await asyncio.sleep(0.1)
+            background_refreshes = tuple(vertex_base._background_refresh_tasks.values())
+            await asyncio.wait_for(asyncio.gather(*background_refreshes), timeout=5)
 
             # After completion the entry should have been removed by the done-callback.
             assert len(vertex_base._background_refresh_tasks) == 0, (
@@ -1999,6 +2002,7 @@ class TestVertexBase:
         vertex_base = VertexBase()
 
         num_keys = 20
+        background_refreshes: list[asyncio.Task] = []
 
         for i in range(num_keys):
             mock_creds = MagicMock()
@@ -2029,9 +2033,9 @@ class TestVertexBase:
                     project_id=f"project-{i}",
                     custom_llm_provider="vertex_ai",
                 )
+                background_refreshes.extend(vertex_base._background_refresh_tasks.values())
 
-        # Let all background tasks finish.
-        await asyncio.sleep(0.1)
+        await asyncio.wait_for(asyncio.gather(*set(background_refreshes)), timeout=5)
 
         assert len(vertex_base._background_refresh_tasks) == 0, (
             f"Expected 0 tasks after all refreshes completed, "
@@ -2180,3 +2184,19 @@ class TestVertexBase:
 
             assert token == "cached-token"
             assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+
+def test_get_access_token_reraises_malformed_service_account_credentials_without_caching(caplog):
+    vertex_base: Final = VertexBase()
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        with pytest.raises(google.auth.exceptions.MalformedError):
+            vertex_base.get_access_token(
+                credentials=json.dumps({"type": "service_account", "project_id": "project-1"}),
+                project_id="project-1",
+            )
+
+    assert vertex_base._credentials_project_mapping == {}
+    assert [record.getMessage().split(". Error: ")[0] for record in caplog.records] == [
+        "Failed to load vertex credentials. Check to see if credentials containing partial/invalid information"
+    ]

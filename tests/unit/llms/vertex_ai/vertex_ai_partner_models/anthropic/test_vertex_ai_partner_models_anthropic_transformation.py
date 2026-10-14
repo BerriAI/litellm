@@ -3,8 +3,12 @@ import copy
 import json
 from typing import Final
 
+import httpx
 import pytest
+import respx
+from google.oauth2.credentials import Credentials
 
+import litellm
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
@@ -12,6 +16,8 @@ from litellm.anthropic_beta_headers_manager import (
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
 
 @pytest.mark.parametrize(
@@ -29,6 +35,44 @@ def test_vertex_ai_anthropic_thinking_param(model, expected_thinking):
         assert "thinking" in supported_openai_params
     else:
         assert "thinking" not in supported_openai_params
+
+
+@pytest.mark.parametrize(
+    ("stream", "operation"),
+    [(False, "rawPredict"), (True, "streamRawPredict")],
+)
+def test_vertex_anthropic_request_body_and_endpoint(stream: bool, operation: str) -> None:
+    headers: Final[dict[str, str]] = {}
+    body: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-sonnet-4",
+        messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+        optional_params={"max_tokens": 100, "anthropic_version": "vertex-2023-10-16"},
+        litellm_params={},
+        headers=headers,
+    )
+    url: Final = VertexBase.create_vertex_url(
+        vertex_location="us-east5",
+        vertex_project="scripted-project",
+        partner=VertexPartnerProvider.claude,
+        stream=stream,
+        model="claude-sonnet-4",
+    )
+
+    assert body == {
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello, can you tell me a short joke?"}],
+            }
+        ],
+        "max_tokens": 100,
+        "anthropic_version": "vertex-2023-10-16",
+    }
+    assert headers == {}
+    assert url == (
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/scripted-project/locations/us-east5/"
+        f"publishers/anthropic/models/claude-sonnet-4:{operation}"
+    )
 
 
 def test_get_supported_params_thinking():
@@ -208,9 +252,8 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
     This test verifies that:
     1. Claude Sonnet 4.5 uses tool-based structured outputs when ``response_format``
        is given to the OpenAI-compat path (the path that triggered #18625).
-    2. ``output_format`` is forwarded to Vertex AI when present — Vertex now
-       accepts the field; the prior blanket-strip behavior was the silent drop
-       of Anthropic Structured Outputs that this PR fixes.
+    2. ``output_format`` reaches Vertex AI as ``output_config.format``, since
+       Vertex rejects the top-level field as deprecated.
     """
     config = VertexAIAnthropicConfig()
 
@@ -296,12 +339,8 @@ def test_vertex_ai_claude_sonnet_4_5_structured_output_fix():
             headers={},
         )
 
-        # output_format is now forwarded to Vertex (Vertex parity has shifted —
-        # it accepts the field and uses it to enforce the JSON schema). The
-        # prior behavior silently stripped it, hiding Structured Outputs from
-        # callers who explicitly requested them.
-        assert "output_format" in final_data
-        assert final_data["output_format"]["type"] == "json_schema"
+        assert "output_format" not in final_data
+        assert final_data["output_config"]["format"]["type"] == "json_schema"
         assert (
             "model" not in final_data
         ), "model is still stripped (Vertex routes by URL)"
@@ -489,6 +528,64 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
     assert "anthropic-beta" not in headers
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+) -> None:
+    from litellm.main import vertex_partner_models_chat_completion
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        vertex_partner_models_chat_completion._credentials_project_mapping,
+        ("test-vertex-credentials", "test-project"),
+        (Credentials(token="test-vertex-token"), "test-project"),
+    )
+    route: Final = respx_mock.post(
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/test-project/locations/us-east5/"
+        "publishers/anthropic/models/claude-3-5-sonnet-v2@20241022:rawPredict"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg-cache",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-sonnet-v2-20241022",
+                "content": [{"type": "text", "text": "cached"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 4, "output_tokens": 1},
+            },
+        )
+    )
+    cached_block: Final = {
+        "type": "text",
+        "text": "Cache this request",
+        "cache_control": {"type": "ephemeral"},
+    }
+    call_params: Final = {
+        "model": "vertex_ai/claude-3-5-sonnet-v2@20241022",
+        "messages": [{"role": "user", "content": [cached_block]}],
+        "vertex_project": "test-project",
+        "vertex_location": "us-east5",
+        "vertex_credentials": "test-vertex-credentials",
+        "max_retries": 0,
+    }
+
+    if sync_mode:
+        litellm.completion(**call_params)
+    else:
+        await litellm.acompletion(**call_params)
+
+    assert route.call_count == 1
+    request: Final = route.calls[0].request
+    assert json.loads(request.content)["messages"] == [{"role": "user", "content": [cached_block]}]
+    assert "anthropic-beta" not in request.headers
+    assert "anthropic_beta" not in json.loads(request.content)
+
+
 def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
     """
     Test that remove_unsupported_beta correctly filters out prompt-caching-scope-2026-01-05
@@ -633,7 +730,7 @@ def test_vertex_ai_anthropic_output_config_non_dict_dropped():
 
 
 def test_vertex_ai_anthropic_output_format_and_output_config_effort_preserved():
-    """Both ``output_format`` and ``output_config.effort`` are forwarded on Vertex 4.6/4.7."""
+    """``output_format`` is folded into ``output_config`` next to ``effort`` on Vertex 4.6/4.7."""
     config = VertexAIAnthropicConfig()
     messages = [{"role": "user", "content": "Extract structured data"}]
 
@@ -680,10 +777,8 @@ def test_vertex_ai_anthropic_output_format_and_output_config_effort_preserved():
             headers={},
         )
 
-        # output_format flows through unchanged — Vertex AI Claude accepts it.
-        assert result["output_format"] == output_format
-        # output_config.effort now flows through (Vertex accepts it on 4.6/4.7).
-        assert result["output_config"] == {"effort": "high"}
+        assert "output_format" not in result
+        assert result["output_config"] == {"effort": "high", "format": output_format}
         assert result["max_tokens"] == 2048
         assert "model" not in result, "model is still stripped (Vertex routes by URL)"
     finally:
@@ -755,6 +850,97 @@ def test_sanitize_strips_effort_for_haiku_45():
     data = {"output_config": {"effort": "high"}}
     sanitize_vertex_anthropic_output_params(data, "vertex_ai/claude-opus-4-6")
     assert data["output_config"] == {"effort": "high"}
+
+
+_STRUCTURED_FORMAT: Final = {
+    "type": "json_schema",
+    "schema": {"type": "object", "properties": {"result": {"type": "string"}}, "required": ["result"]},
+}
+_CALLER_FORMAT: Final = {
+    "type": "json_schema",
+    "schema": {"type": "object", "properties": {"answer": {"type": "integer"}}},
+}
+
+
+@pytest.mark.parametrize(
+    "model, data, expected_output_config",
+    [
+        pytest.param(
+            "claude-opus-4-6",
+            {"output_format": _STRUCTURED_FORMAT},
+            {"format": _STRUCTURED_FORMAT},
+            id="output_format_alone",
+        ),
+        pytest.param(
+            "claude-opus-4-6",
+            {"output_format": _STRUCTURED_FORMAT, "output_config": {"effort": "high"}},
+            {"effort": "high", "format": _STRUCTURED_FORMAT},
+            id="merged_with_effort",
+        ),
+        pytest.param(
+            "claude-haiku-4-5@20251001",
+            {"output_format": _STRUCTURED_FORMAT, "output_config": {"effort": "high"}},
+            {"format": _STRUCTURED_FORMAT},
+            id="effort_still_dropped_for_haiku_45",
+        ),
+        pytest.param(
+            "claude-opus-4-6",
+            {"output_format": _STRUCTURED_FORMAT, "output_config": {"format": _CALLER_FORMAT}},
+            {"format": _STRUCTURED_FORMAT},
+            id="output_format_wins_over_output_config_format",
+        ),
+        pytest.param(
+            "claude-opus-4-6",
+            {"output_format": _STRUCTURED_FORMAT, "output_config": {"format": None}},
+            {"format": _STRUCTURED_FORMAT},
+            id="null_output_config_format_counts_as_absent",
+        ),
+        pytest.param(
+            "claude-opus-4-6",
+            {"output_format": _STRUCTURED_FORMAT, "output_config": "not-a-dict"},
+            {"format": _STRUCTURED_FORMAT},
+            id="malformed_output_config_replaced",
+        ),
+    ],
+)
+def test_sanitize_folds_output_format_into_output_config(model: str, data: dict, expected_output_config: dict):
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.output_params_utils import (
+        sanitize_vertex_anthropic_output_params,
+    )
+
+    request: Final = copy.deepcopy(data)
+    sanitize_vertex_anthropic_output_params(request, model)
+
+    assert "output_format" not in request
+    assert request["output_config"] == expected_output_config
+
+
+def test_vertex_ai_native_response_format_reaches_vertex_as_output_config_format(local_model_cost_map):
+    config = VertexAIAnthropicConfig()
+    schema: Final = {"type": "object", "properties": {"result": {"type": "string"}}, "required": ["result"]}
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "response_format": {"type": "json_schema", "json_schema": {"name": "result", "schema": schema}},
+            "reasoning_effort": "high",
+        },
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=False,
+    )
+
+    request: Final = config.transform_request(
+        model="claude-fable-5-1",
+        messages=[{"role": "user", "content": "Return the result"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "output_format" not in request
+    assert request["output_config"]["format"] == optional_params["output_format"]
+    assert request["output_config"]["format"]["schema"]["properties"] == schema["properties"]
+    assert request["output_config"]["effort"] == optional_params["output_config"]["effort"]
+    assert "tool_choice" not in request
 
 
 def test_vertex_ai_fable_5_1_response_format_uses_native_output_format(local_model_cost_map):

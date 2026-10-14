@@ -9,7 +9,9 @@ from datetime import timedelta
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import acompletion, aembedding, completion, embedding
@@ -1027,6 +1029,47 @@ def test_completion_past_max_messages_is_neither_served_from_nor_written_to_the_
     assert answer(five, "five second") == "five second", "a 5-message repeat was served from the cache"
 
 
+@respx.mock
+def test_enable_cache_serves_a_repeated_bedrock_titan_embedding_from_the_local_cache(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_provider_credentials: None
+) -> None:
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    route: Final = respx.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
+    ).mock(return_value=httpx.Response(200, json={"embedding": [0.25, -0.5, 0.75], "inputTextTokenCount": 6}))
+    request: Final = {
+        "model": "bedrock/amazon.titan-embed-text-v2:0",
+        "input": "good morning from litellm, attempting to embed data",
+        "aws_region_name": "us-west-2",
+    }
+
+    litellm.enable_cache()
+    enabled_cache: Final = litellm.cache
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    litellm.enable_cache()
+
+    first: Final = embedding(**request)
+    second: Final = embedding(**request)
+
+    assert isinstance(enabled_cache, Cache)
+    assert enabled_cache.type == LiteLLMCacheType.LOCAL
+    assert litellm.cache is enabled_cache
+    assert litellm.input_callback == ["cache"]
+    assert litellm.success_callback == ["cache"]
+    assert litellm._async_success_callback == ["cache"]
+    assert "LiteLLM: Enabling Cache" in capsys.readouterr().out
+    assert route.call_count == 1
+    assert first.data[0]["embedding"] == [0.25, -0.5, 0.75]
+    assert second.data[0]["embedding"] == [0.25, -0.5, 0.75]
+    assert second._hidden_params["cache_hit"] is True
+
+
 def test_basic_caching_import() -> None:
     from litellm.caching import Cache as PublicCache
 
@@ -1505,3 +1548,23 @@ async def test_redis_caching_ttl_sadd(
     )
 
     redis_client.expire.assert_awaited_once_with("cache-key", timedelta(seconds=120))
+
+
+def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    variants: Final[tuple[dict[str, object], ...]] = (
+        {"model_id": "component-a"},
+        {"model_id": "component-b"},
+        {},
+        {"model_id": "component-a"},
+        {"model_id": "component-a", "metadata": {"model_group": "embed"}},
+        {"model_id": "component-b", "metadata": {"model_group": "embed"}},
+    )
+    key_a, key_b, bare, key_a_again, grouped_a, grouped_b = (
+        cache.get_cache_key(model="sagemaker/openai/embed", input=["hello"], **extra) for extra in variants
+    )
+
+    assert key_a != key_b
+    assert key_a != bare
+    assert key_a == key_a_again
+    assert grouped_a == grouped_b

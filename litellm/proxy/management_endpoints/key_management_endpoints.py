@@ -21,7 +21,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
 import yaml
@@ -126,6 +126,7 @@ from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_update_access_group_membership,
 )
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
+from litellm.proxy.management_helpers.managed_resource_owner_sync import repoint_key_owned_managed_resources
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     ObjectPermissionUpsert,
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -6011,6 +6012,13 @@ async def _execute_virtual_key_regeneration(
 
     await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
+    await repoint_key_owned_managed_resources(
+        prisma_client=prisma_client,
+        existing_key_row=key_in_db,
+        previous_key_token=hashed_api_key,
+        new_key_token=new_token_hash,
+    )
+
     # After credential invalidation, so a failure here can never keep the old key alive.
     await sync_key_regeneration_access_group_membership(
         prisma_client=prisma_client,
@@ -6524,7 +6532,7 @@ async def reset_key_spend_fn(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     try:
         from litellm.proxy.proxy_server import (
             hash_token,
@@ -7068,7 +7076,7 @@ async def key_aliases(
     size: int = Query(50, ge=1, le=100, description="Page size"),
     search: str | None = Query(None, description="Search key aliases (case-insensitive partial match)"),
     team_id: str | None = Query(None, description="Filter aliases to keys belonging to this team"),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Lists key aliases with pagination and optional search.
 
