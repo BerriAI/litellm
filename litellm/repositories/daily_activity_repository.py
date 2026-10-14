@@ -138,16 +138,23 @@ def _daily_rows_table(
 
 def _next_export_cursor(batch: tuple[ExportRow, ...], export_type: ExportType) -> ExportCursor:
     last: Final = batch[-1]
-    cursor_key: Final = (
-        last.api_key
-        if export_type is ExportType.DAILY_WITH_KEYS
-        else last.model
-        if export_type is ExportType.DAILY_WITH_MODELS
-        else last.user_id
-        if export_type is ExportType.DAILY_WITH_USERS
-        else ""
-    )
-    return ExportCursor(date=last.date, entity_id=last.entity_id, group_key=cursor_key or "")
+    match export_type:
+        case ExportType.DAILY:
+            return ExportCursor(date=last.date, entity_id=last.entity_id, group_key=())
+        case ExportType.DAILY_WITH_KEYS:
+            return ExportCursor(date=last.date, entity_id=last.entity_id, group_key=(last.api_key or "",))
+        case ExportType.DAILY_WITH_MODELS:
+            return ExportCursor(date=last.date, entity_id=last.entity_id, group_key=(last.model or "",))
+        case ExportType.DAILY_WITH_KEYS_AND_MODELS:
+            return ExportCursor(
+                date=last.date,
+                entity_id=last.entity_id,
+                group_key=(last.api_key or "", last.model or ""),
+            )
+        case ExportType.DAILY_WITH_USERS:
+            return ExportCursor(date=last.date, entity_id=last.entity_id, group_key=(last.user_id or "",))
+        case _:
+            assert_never(export_type)
 
 
 class DailyActivityRepository:

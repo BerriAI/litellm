@@ -398,52 +398,88 @@ def test_query_builders_reject_nonpositive_limits(builder) -> None:
 
 
 @pytest.mark.parametrize(
-    ("export_type", "group_key", "key_filter", "joins"),
+    ("export_type", "group_keys", "group_key_values", "key_filter", "joins"),
     [
-        (ExportType.DAILY, "''", "", ""),
-        (ExportType.DAILY_WITH_KEYS, "scoped.api_key", "api_key <> $3", 'LEFT JOIN "LiteLLM_VerificationToken"'),
-        (ExportType.DAILY_WITH_MODELS, "COALESCE(scoped.model, '')", "api_key <> $3", ""),
+        (ExportType.DAILY, (), (), "", ""),
+        (
+            ExportType.DAILY_WITH_KEYS,
+            ("scoped.api_key",),
+            ("group-3",),
+            "api_key <> $3",
+            'LEFT JOIN "LiteLLM_VerificationToken"',
+        ),
+        (
+            ExportType.DAILY_WITH_MODELS,
+            ("COALESCE(scoped.model, '')",),
+            ("group-3",),
+            "api_key <> $3",
+            "",
+        ),
+        (
+            ExportType.DAILY_WITH_KEYS_AND_MODELS,
+            ("scoped.api_key", "COALESCE(scoped.model, '')"),
+            ("group-3", "group-4"),
+            "api_key <> $3",
+            'LEFT JOIN "LiteLLM_VerificationToken"',
+        ),
         (
             ExportType.DAILY_WITH_USERS,
-            "COALESCE(vt.user_id, dvt.user_id, '')",
+            ("COALESCE(vt.user_id, dvt.user_id, '')",),
+            ("group-3",),
             "api_key <> $3",
             'LEFT JOIN "LiteLLM_VerificationToken"',
         ),
     ],
 )
 def test_export_groups_by_requested_key_and_binds_cursor_after_scope(
-    export_type: ExportType, group_key: str, key_filter: str, joins: str
+    export_type: ExportType,
+    group_keys: tuple[str, ...],
+    group_key_values: tuple[str, ...],
+    key_filter: str,
+    joins: str,
 ) -> None:
     query = build_export_sql(
         _scope(entity_ids=None),
         export_type=export_type,
-        after=ExportCursor(date="2026-01-12", entity_id="user-2", group_key="group-3"),
+        after=ExportCursor(date="2026-01-12", entity_id="user-2", group_key=group_key_values),
         batch_size=2,
     )
 
-    assert group_key in query.sql
+    assert all(group_key in query.sql for group_key in group_keys)
     assert key_filter in query.sql
     assert joins in query.sql
-    assert "(scoped.date, COALESCE(scoped.\"user_id\", '')," in query.sql
-    order_keys: Final = (
-        "scoped.date, COALESCE(scoped.\"user_id\", '')",
-        *((group_key,) if export_type is not ExportType.DAILY else ()),
+    cursor_columns: Final = (
+        "scoped.date",
+        """COALESCE(scoped."user_id", '')""",
+        *group_keys,
     )
-    assert f"ORDER BY {', '.join(order_keys)}" in query.sql
-    expected_limit_index: Final = "$6" if export_type is ExportType.DAILY else "$7"
+    assert f"GROUP BY {', '.join(cursor_columns)}" in query.sql
+    assert f"ORDER BY {', '.join(cursor_columns)}" in query.sql
+    cursor_start_index: Final = 3 + int(export_type is not ExportType.DAILY)
+    cursor_placeholders: Final = tuple(
+        f"${index}" for index in range(cursor_start_index, cursor_start_index + len(cursor_columns))
+    )
+    assert f"AND ({', '.join(cursor_columns)}) > ({', '.join(cursor_placeholders)})" in query.sql
+    expected_limit_index: Final = f"${5 + int(export_type is not ExportType.DAILY) + len(group_keys)}"
     assert f"LIMIT {expected_limit_index}" in query.sql
+    assert ("NULLIF(COALESCE(scoped.model, ''), '') AS model" in query.sql) is (
+        export_type in (ExportType.DAILY_WITH_MODELS, ExportType.DAILY_WITH_KEYS_AND_MODELS)
+    )
     assert query.params == (
         "2026-01-01",
         "2026-01-31",
         *((PTU_SENTINEL_API_KEY,) if export_type is not ExportType.DAILY else ()),
         "2026-01-12",
         "user-2",
-        "group-3",
+        *group_key_values,
         2,
     )
 
 
-@pytest.mark.parametrize("export_type", [ExportType.DAILY_WITH_KEYS, ExportType.DAILY_WITH_USERS])
+@pytest.mark.parametrize(
+    "export_type",
+    [ExportType.DAILY_WITH_KEYS, ExportType.DAILY_WITH_KEYS_AND_MODELS, ExportType.DAILY_WITH_USERS],
+)
 def test_export_uses_latest_deleted_key_metadata(export_type: ExportType) -> None:
     query = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
 

@@ -32015,7 +32015,7 @@ export interface components {
          * ExportType
          * @enum {string}
          */
-        ExportType: "daily" | "daily_with_keys" | "daily_with_models" | "daily_with_users";
+        ExportType: "daily" | "daily_with_keys" | "daily_with_models" | "daily_with_keys_and_models" | "daily_with_users";
         /**
          * FacetListResponse
          * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.

@@ -13,6 +13,21 @@ from litellm.types.repositories.daily_activity import DailyActivityScope, DailyA
 
 _API_KEY_ROLLED_UP_BIT: Final = 32
 _MODEL_GROUP_EXPR: Final = "COALESCE(NULLIF(model_group, ''), model)"
+_EXPORT_KEY_USER_FIELDS: Final = (
+    "MAX(COALESCE(vt.key_alias, dvt.key_alias)) AS key_alias, "
+    "MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email"
+)
+_EXPORT_KEY_METADATA_JOINS: Final[tuple[str, ...]] = (
+    'LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = scoped.api_key',
+    """LEFT JOIN LATERAL (
+        SELECT key_alias, user_id
+        FROM "LiteLLM_DeletedVerificationToken"
+        WHERE token = scoped.api_key
+        ORDER BY deleted_at DESC
+        LIMIT 1
+    ) dvt ON vt.token IS NULL""",
+    'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = COALESCE(vt.user_id, dvt.user_id)',
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +40,7 @@ class SqlQuery:
 class ExportCursor:
     date: str
     entity_id: str
-    group_key: str
+    group_key: tuple[str, ...]
 
 
 PRISMA_TO_PG_TABLE: Final[Mapping[DailyActivityTable, str]] = MappingProxyType(
@@ -423,10 +438,10 @@ def build_export_sql(
 ) -> SqlQuery:
     _bounded_limit(batch_size)
     where_clause, where_params = build_where_clause(scope)
-    group_key, output_key, user_fields, type_joins = _export_grouping(export_type)
+    group_keys, output_key, user_fields, type_joins = _export_grouping(export_type)
     grouping_keys: Final = (
         f"scoped.date, COALESCE(scoped.\"{scope.entity_id_field}\", '')",
-        *((group_key,) if export_type is not ExportType.DAILY else ()),
+        *group_keys,
     )
     entity_joins: Final = (
         ('LEFT JOIN "LiteLLM_TeamTable" tt ON tt.team_id = scoped.team_id',)
@@ -445,14 +460,19 @@ def build_export_sql(
     )
     parameter_indexes: Final = count(len(where_params) + 1)
     sentinel_param: Final = next(parameter_indexes) if export_type is not ExportType.DAILY else None
-    cursor_indexes: Final = tuple(islice(parameter_indexes, 3)) if after is not None else ()
+    cursor_indexes: Final = tuple(islice(parameter_indexes, 2 + len(group_keys))) if after is not None else ()
     limit_param: Final = next(parameter_indexes)
     cursor_clause, cursor_params = _export_cursor_clause(
-        scope, after=after, cursor_indexes=cursor_indexes, group_key=group_key
+        scope, after=after, cursor_indexes=cursor_indexes, group_keys=group_keys
     )
     sentinel_clause: Final = f" AND api_key <> ${sentinel_param}" if sentinel_param is not None else ""
     table: Final = PRISMA_TO_PG_TABLE[scope.table]
     flat_cost: Final = _ptu_flat_cost_select(scope.table, aggregate=False)
+    model_expression: Final = (
+        "NULLIF(COALESCE(scoped.model, ''), '')"
+        if export_type in (ExportType.DAILY_WITH_MODELS, ExportType.DAILY_WITH_KEYS_AND_MODELS)
+        else "NULL::text"
+    )
     sql: Final = f"""
         WITH scoped AS (
             SELECT * FROM "{table}"
@@ -464,7 +484,7 @@ def build_export_sql(
             {alias_expression} AS entity_alias,
             {output_key} AS api_key,
             {user_fields},
-            {"NULLIF(COALESCE(scoped.model, ''), '')" if export_type is ExportType.DAILY_WITH_MODELS else "NULL::text"} AS model,
+            {model_expression} AS model,
             COALESCE(SUM(scoped.spend), 0)::float AS spend,
             {flat_cost} AS flat_cost,
             COALESCE(SUM(scoped.prompt_tokens), 0)::bigint AS prompt_tokens,
@@ -492,56 +512,40 @@ def build_export_sql(
     )
 
 
-def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str, ...]]:
+def _export_grouping(export_type: ExportType) -> tuple[tuple[str, ...], str, str, tuple[str, ...]]:
     if export_type is ExportType.DAILY:
         return (
-            "''",
+            (),
             "NULL::text",
             "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email",
             (),
         )
-    if export_type is ExportType.DAILY_WITH_KEYS:
+    if export_type in (ExportType.DAILY_WITH_KEYS, ExportType.DAILY_WITH_KEYS_AND_MODELS):
+        group_keys: Final = (
+            ("scoped.api_key",)
+            if export_type is ExportType.DAILY_WITH_KEYS
+            else ("scoped.api_key", "COALESCE(scoped.model, '')")
+        )
         return (
-            "scoped.api_key",
+            group_keys,
             "NULLIF(scoped.api_key, '')",
-            "MAX(COALESCE(vt.key_alias, dvt.key_alias)) AS key_alias, "
-            "MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email",
-            (
-                'LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = scoped.api_key',
-                """LEFT JOIN LATERAL (
-                    SELECT key_alias, user_id
-                    FROM "LiteLLM_DeletedVerificationToken"
-                    WHERE token = scoped.api_key
-                    ORDER BY deleted_at DESC
-                    LIMIT 1
-                ) dvt ON vt.token IS NULL""",
-                'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = COALESCE(vt.user_id, dvt.user_id)',
-            ),
+            _EXPORT_KEY_USER_FIELDS,
+            _EXPORT_KEY_METADATA_JOINS,
         )
     if export_type is ExportType.DAILY_WITH_MODELS:
         return (
-            "COALESCE(scoped.model, '')",
+            ("COALESCE(scoped.model, '')",),
             "NULL::text",
             "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email",
             (),
         )
     if export_type is ExportType.DAILY_WITH_USERS:
         return (
-            "COALESCE(vt.user_id, dvt.user_id, '')",
+            ("COALESCE(vt.user_id, dvt.user_id, '')",),
             "NULL::text",
             "NULL::text AS key_alias, MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, "
             "MAX(u.user_email) AS user_email",
-            (
-                'LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = scoped.api_key',
-                """LEFT JOIN LATERAL (
-                    SELECT key_alias, user_id
-                    FROM "LiteLLM_DeletedVerificationToken"
-                    WHERE token = scoped.api_key
-                    ORDER BY deleted_at DESC
-                    LIMIT 1
-                ) dvt ON vt.token IS NULL""",
-                'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = COALESCE(vt.user_id, dvt.user_id)',
-            ),
+            _EXPORT_KEY_METADATA_JOINS,
         )
     assert_never(export_type)
     raise AssertionError("unreachable")
@@ -552,13 +556,15 @@ def _export_cursor_clause(
     *,
     after: ExportCursor | None,
     cursor_indexes: tuple[int, ...],
-    group_key: str,
+    group_keys: tuple[str, ...],
 ) -> tuple[str, tuple[object, ...]]:
     if after is None:
         return "", ()
-    first_cursor_index: Final = cursor_indexes[0]
-    clause: Final = (
-        f""" AND (scoped.date, COALESCE(scoped."{scope.entity_id_field}", ''), {group_key}) """
-        f"> (${first_cursor_index}, ${cursor_indexes[1]}, ${cursor_indexes[2]})"
+    cursor_expressions: Final = (
+        "scoped.date",
+        f"""COALESCE(scoped."{scope.entity_id_field}", '')""",
+        *group_keys,
     )
-    return clause, (after.date, after.entity_id, after.group_key)
+    cursor_placeholders: Final = tuple(f"${index}" for index in cursor_indexes)
+    clause: Final = f" AND ({', '.join(cursor_expressions)}) > ({', '.join(cursor_placeholders)})"
+    return clause, (after.date, after.entity_id, *after.group_key)

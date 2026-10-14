@@ -26,6 +26,11 @@ const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange
       description: "Daily metrics split by model",
     },
     {
+      value: "daily_with_keys_and_models",
+      title: `Day-by-day by ${entityType}, key and model`,
+      description: `Daily metrics for each ${entityType}, split by API key and model`,
+    },
+    {
       value: "daily_with_users",
       title: `Day-by-day breakdown by ${entityType} and user`,
       description: `Daily metrics for each ${entityType}, split by key owner`,

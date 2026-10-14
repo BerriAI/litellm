@@ -263,6 +263,102 @@ async def test_repository_queries_and_exports_seeded_daily_activity(monkeypatch:
 
 
 @pytest.mark.asyncio
+async def test_key_and_model_export_keeps_group_metrics_and_pages_by_both_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _daily_activity_database() as database:
+        await database.execute_raw(
+            """
+            INSERT INTO "LiteLLM_DailyTeamSpend" (
+                id, team_id, date, api_key, model, model_group, custom_llm_provider,
+                mcp_namespaced_tool_name, endpoint, prompt_tokens, completion_tokens,
+                cache_read_input_tokens, cache_creation_input_tokens, spend, api_requests,
+                successful_requests, failed_requests, ptu_flat_cost, updated_at
+            ) VALUES
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::timestamp),
+                ($20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38::timestamp),
+                ($39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57::timestamp)
+            """,
+            "key-model-a",
+            "team-composite",
+            "2026-06-01",
+            "key-1",
+            "model-a",
+            "",
+            "provider-a",
+            None,
+            "/v1/chat/completions",
+            10,
+            1,
+            0,
+            0,
+            2.0,
+            2,
+            2,
+            0,
+            0.0,
+            "2026-06-01 12:00:00",
+            "key-model-b",
+            "team-composite",
+            "2026-06-01",
+            "key-1",
+            "model-b",
+            "",
+            "provider-a",
+            None,
+            "/v1/chat/completions",
+            20,
+            2,
+            0,
+            0,
+            3.0,
+            3,
+            3,
+            0,
+            0.0,
+            "2026-06-01 12:00:00",
+            "key-model-c",
+            "team-composite",
+            "2026-06-01",
+            "key-2",
+            "model-a",
+            "",
+            "provider-a",
+            None,
+            "/v1/chat/completions",
+            30,
+            3,
+            0,
+            0,
+            5.0,
+            5,
+            5,
+            0,
+            0.0,
+            "2026-06-01 12:00:00",
+        )
+        repository: Final = _repository(database)
+        team_scope: Final = _scope(DailyActivityTable.TEAM, "team_id", "team-composite")
+        monkeypatch.setattr(constants, "USAGE_EXPORT_BATCH_SIZE", 1)
+
+        daily_rows: Final = tuple(
+            [row async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY)]
+        )
+        key_model_rows: Final = tuple(
+            [row async for row in repository.export_rows(team_scope, export_type=ExportType.DAILY_WITH_KEYS_AND_MODELS)]
+        )
+
+        assert len(daily_rows) == 1
+        assert tuple((row.api_key, row.model, row.spend, row.api_requests) for row in key_model_rows) == (
+            ("key-1", "model-a", 2.0, 2),
+            ("key-1", "model-b", 3.0, 3),
+            ("key-2", "model-a", 5.0, 5),
+        )
+        assert sum(row.spend for row in key_model_rows) == daily_rows[0].spend == 10.0
+        assert sum(row.api_requests for row in key_model_rows) == daily_rows[0].api_requests == 10
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("search", "api_keys", "expected_keys"),
     (
@@ -684,9 +780,7 @@ async def test_user_page_ranks_users_and_folds_null_ids() -> None:
         repository: Final = _repository(database)
         full_page: Final = await repository.user_page(scope, offset=0, limit=50)
         empty_page: Final = await repository.user_page(scope, offset=full_page.total_users + 1, limit=50)
-        scoped_page: Final = await repository.user_page(
-            replace(scope, entity_ids=("user-alpha",)), offset=0, limit=50
-        )
+        scoped_page: Final = await repository.user_page(replace(scope, entity_ids=("user-alpha",)), offset=0, limit=50)
 
         assert tuple((row.user_id, row.spend) for row in full_page.rows) == (
             (None, 45.0),
