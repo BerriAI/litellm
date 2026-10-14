@@ -2,6 +2,8 @@ import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
+import litellm
+from litellm.exceptions import BadRequestError
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.rust_bridge.catalog import Route, RouteContext
@@ -59,12 +61,34 @@ def _public_request(
     return native_call(legacy, args, kwargs)
 
 
+def _resolved_provider(request: NativeCall) -> str | None:
+    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
+    if provider is not None:
+        return provider
+    try:
+        return litellm.get_llm_provider(
+            model=str(request.resolved["model"]),
+            api_base=optional_str(request.resolved.get("base_url")),
+        )[1]
+    except BadRequestError:
+        return None
+
+
 def _context(request: NativeCall) -> RouteContext:
-    return RouteContext(
-        Route.RESPONSES,
-        provider=optional_str(request.resolved.get("custom_llm_provider")),
-        model=str(request.resolved["model"]),
+    model: Final = str(request.resolved["model"])
+    provider: Final = _resolved_provider(request)
+    target: Final = (
+        Route.CHAT_COMPLETIONS
+        if main.will_bridge_to_chat_completions(
+            model,
+            provider,
+            bool(request.kwargs.get("use_chat_completions_api")),
+            request.kwargs.get("model_info"),
+            optional_str(request.kwargs.get("api_base")),
+        )
+        else Route.RESPONSES
     )
+    return RouteContext(Route.RESPONSES, target=target, provider=provider, model=model)
 
 
 _DISPATCH: Final = PublicDispatch(

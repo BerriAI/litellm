@@ -61,9 +61,12 @@ def _public_request(
     return native_call(legacy, args, kwargs)
 
 
+# TODO: the chat-to-Responses bridge decision needs optional_params from main.completion,
+# compute it here before chat completions goes to opt-in
 def _context(request: NativeCall) -> RouteContext:
     return RouteContext(
         Route.CHAT_COMPLETIONS,
+        target=Route.CHAT_COMPLETIONS,
         provider=optional_str(request.resolved.get("custom_llm_provider")),
         model=str(request.resolved["model"]),
     )

@@ -52,7 +52,7 @@ def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, ob
 def _context(request: NativeCall) -> RouteContext:
     prefix, separator, _ = str(request.resolved["model"]).partition("/")
     provider: Final = optional_str(request.resolved.get("custom_llm_provider")) or (prefix if separator else None)
-    return RouteContext(Route.OCR, provider=provider, model=str(request.resolved["model"]))
+    return RouteContext(Route.OCR, target=Route.OCR, provider=provider, model=str(request.resolved["model"]))
 
 
 _DISPATCH: Final = PublicDispatch(

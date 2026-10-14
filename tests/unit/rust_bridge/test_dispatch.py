@@ -31,7 +31,7 @@ def test_route_without_rules_forwards_before_request_projection(rules: Rules) ->
         pytest.fail("Python-only routes must not project the request")
 
     dispatch: Final = PublicDispatch(
-        route=Route.CHAT_COMPLETIONS, request=reject_request, context=lambda _: RouteContext(Route.CHAT_COMPLETIONS)
+        route=Route.CHAT_COMPLETIONS, request=reject_request, context=lambda _: RouteContext(Route.CHAT_COMPLETIONS, target=Route.CHAT_COMPLETIONS)
     )
     result: Final = dispatch.run(
         ("model",),
@@ -56,7 +56,7 @@ def test_unconditional_python_rule_prevents_later_rust_rule_projection() -> None
     dispatch: Final = PublicDispatch(
         route=Route.CHAT_COMPLETIONS,
         request=reject_request,
-        context=lambda _: RouteContext(Route.CHAT_COMPLETIONS),
+        context=lambda _: RouteContext(Route.CHAT_COMPLETIONS, target=Route.CHAT_COMPLETIONS),
     )
     expected: Final = object()
     result: Final = dispatch.run(
@@ -76,7 +76,7 @@ def test_disabled_optional_rust_rule_forwards_before_projection() -> None:
     def reject_request(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request:
         pytest.fail("Disabled optional Rust must not project the request")
 
-    dispatch: Final = PublicDispatch(route=Route.OCR, request=reject_request, context=lambda _: RouteContext(Route.OCR))
+    dispatch: Final = PublicDispatch(route=Route.OCR, request=reject_request, context=lambda _: RouteContext(Route.OCR, target=Route.OCR))
     expected: Final = object()
     configuration.rust(False)
     try:
@@ -103,7 +103,7 @@ def test_native_stream_result_is_not_consumed_or_wrapped() -> None:
     dispatch: Final = PublicDispatch(
         route=Route.CHAT_COMPLETIONS,
         request=lambda args, kwargs: request,
-        context=lambda value: RouteContext(Route.CHAT_COMPLETIONS, model=value.model),
+        context=lambda value: RouteContext(Route.CHAT_COMPLETIONS, target=Route.CHAT_COMPLETIONS, model=value.model),
     )
 
     def native(request: Request, args: tuple[object, ...], kwargs: Mapping[str, object]) -> Iterator[int]:
@@ -139,7 +139,7 @@ async def test_async_route_without_rules_preserves_async_iterator_result(rules: 
         return stream
 
     dispatch: Final = PublicDispatch(
-        route=Route.RESPONSES, request=reject_request, context=lambda _: RouteContext(Route.RESPONSES)
+        route=Route.RESPONSES, request=reject_request, context=lambda _: RouteContext(Route.RESPONSES, target=Route.RESPONSES)
     )
     result: Final = await dispatch.arun(
         ("model",),
@@ -160,7 +160,7 @@ async def test_async_dispatch_accepts_websocket_style_none_result() -> None:
     dispatch: Final = PublicDispatch(
         route=Route.RESPONSES,
         request=lambda args, kwargs: request,
-        context=lambda value: RouteContext(Route.RESPONSES, model=value.model),
+        context=lambda value: RouteContext(Route.RESPONSES, target=Route.RESPONSES, model=value.model),
     )
 
     async def python(*args: object, **kwargs: object) -> None:  # kwargs-ok: public pass-through shape
@@ -194,7 +194,7 @@ def test_rules_for_other_routes_and_constrained_python_rules_skip_projection() -
     def reject_request(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request:
         pytest.fail("Rules that cannot select Rust must not project the request")
 
-    dispatch: Final = PublicDispatch(route=Route.OCR, request=reject_request, context=lambda _: RouteContext(Route.OCR))
+    dispatch: Final = PublicDispatch(route=Route.OCR, request=reject_request, context=lambda _: RouteContext(Route.OCR, target=Route.OCR))
     expected: Final = object()
     result: Final = dispatch.run(
         ("model",),
@@ -214,7 +214,7 @@ async def test_async_bypass_forwards_to_python_without_native() -> None:
     dispatch: Final = PublicDispatch(
         route=Route.RESPONSES,
         request=lambda args, kwargs: request,
-        context=lambda value: RouteContext(Route.RESPONSES, model=value.model),
+        context=lambda value: RouteContext(Route.RESPONSES, target=Route.RESPONSES, model=value.model),
         bypass=lambda value: value.model == "bypassed-model",
     )
     expected: Final = object()
@@ -267,7 +267,7 @@ def ocr_dispatch(request: Request | None, *, bypass: bool = False) -> PublicDisp
     return PublicDispatch(
         route=Route.OCR,
         request=lambda args, kwargs: request,
-        context=lambda value: RouteContext(Route.OCR, model=value.model),
+        context=lambda value: RouteContext(Route.OCR, target=Route.OCR, model=value.model),
         bypass=lambda _: bypass,
     )
 

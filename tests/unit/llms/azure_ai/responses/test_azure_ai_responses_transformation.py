@@ -6,7 +6,7 @@ import respx
 
 import litellm
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
-from litellm.responses.main import _will_bridge_to_chat_completions
+from litellm.responses.main import will_bridge_to_chat_completions
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager
 
@@ -109,8 +109,8 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
 
 
 @pytest.mark.parametrize("api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (SERVERLESS_BASE, True)])
-def test_will_bridge_to_chat_completions_follows_host(api_base, bridged):
-    assert _will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
+def testwill_bridge_to_chat_completions_follows_host(api_base, bridged):
+    assert will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
 
 
 @pytest.mark.parametrize(

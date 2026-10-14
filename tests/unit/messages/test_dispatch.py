@@ -11,6 +11,9 @@ from litellm.messages import dispatch
 from litellm.messages.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
+    _MESSAGES,  # pyright: ignore[reportPrivateUsage]  # builds the NativeCall the dispatch sees
+    _context,  # pyright: ignore[reportPrivateUsage]  # asserts the route target the catalog matches on
+    _public_request,  # pyright: ignore[reportPrivateUsage]  # builds the NativeCall the dispatch sees
 )
 from litellm.proxy import proxy_server
 from litellm.rust_bridge import catalog
@@ -490,3 +493,33 @@ def test_internal_is_async_marker_bypasses_native() -> None:
     )
 
     assert response is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    (
+        ("anthropic/claude-sonnet-5-5", Route.MESSAGES),
+        ("vertex_ai/claude-sonnet-5-5@20250929", Route.MESSAGES),
+        ("vertex_ai/gemini-3.8-flash", Route.CHAT_COMPLETIONS),
+        ("openai/gpt-5.6", Route.RESPONSES),
+    ),
+)
+def test_context_target_is_the_api_the_call_reaches(model: str, expected: Route) -> None:
+    request: Final = _public_request(_MESSAGES, (16, MESSAGES, model), {})
+
+    assert request is not None
+    assert _context(request).target is expected
+
+
+def test_context_target_for_deepseek_follows_the_messages_config() -> None:
+    model: Final = "deepseek/deepseek-v4-pro"
+    resolved_model, provider, _, _ = litellm.get_llm_provider(model)
+    expected: Final = (
+        Route.MESSAGES
+        if python_messages.native_messages_config(resolved_model, provider, None) is not None
+        else Route.CHAT_COMPLETIONS
+    )
+    request: Final = _public_request(_MESSAGES, (16, MESSAGES, model), {})
+
+    assert request is not None
+    assert _context(request).target is expected
