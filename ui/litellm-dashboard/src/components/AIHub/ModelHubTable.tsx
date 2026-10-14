@@ -73,7 +73,7 @@ function modelTableEmptyState(
 ): { title: string; body: string } {
   if (showsDecisionGarden && selectedMode === DECISIONS_MODE && !models.some((model) => isDecisionMode(model.mode))) {
     return {
-      title: "No decision models on this proxy yet",
+      title: "No model on this proxy uses the decisions mode",
       body: "The decision models LiteLLM supports are listed below.",
     };
   }

@@ -494,7 +494,7 @@ describe("ModelHubTable", () => {
       expect(screen.getByTestId("decision-model-garden")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "claude-opus-4-8" })).not.toBeInTheDocument();
       expect(screen.getByText("Showing 0 of 1 models")).toBeInTheDocument();
-      expect(screen.getByText("No decision models on this proxy yet")).toBeInTheDocument();
+      expect(screen.getByText("No model on this proxy uses the decisions mode")).toBeInTheDocument();
       expect(screen.queryByText("Adjust the filters to see more models.")).not.toBeInTheDocument();
     });
 
