@@ -1180,7 +1180,7 @@ class LLMCachingHandler:
                         )
                     )
                 else:
-                    result_json: Final = result.model_dump_json()
+                    result_json: Final = result.model_dump_json(exclude_unset=True)
                     create_cache_write_task(
                         lambda: cache.async_add_cache(
                             result_json,

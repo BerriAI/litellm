@@ -27,6 +27,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -464,6 +465,7 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
+_OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -1000,11 +1002,14 @@ class BaseLLMHTTPHandler:
 
             completion_stream: object = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         else:
-            completion_stream = provider_config.get_model_response_iterator(
+            completion_stream = provider_config.get_model_response_iterator_for_request(
                 streaming_response=response.iter_lines(),
                 sync_stream=True,
                 json_mode=json_mode,
+                optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
             )
+            if isinstance(completion_stream, BaseModelResponseIterator):
+                completion_stream.http_response = response
 
         # LOGGING
         logging_obj.post_call(
@@ -1139,8 +1144,11 @@ class BaseLLMHTTPHandler:
 
             completion_stream: object = MockResponseIterator(model_response=model_response, json_mode=json_mode)
         else:
-            completion_stream = provider_config.get_model_response_iterator(
-                streaming_response=response.aiter_lines(), sync_stream=False
+            completion_stream = provider_config.get_model_response_iterator_for_request(
+                streaming_response=response.aiter_lines(),
+                sync_stream=False,
+                json_mode=json_mode,
+                optional_params=_OPTIONAL_PARAMS.validate_python(optional_params),
             )
             if isinstance(completion_stream, BaseModelResponseIterator):
                 completion_stream.http_response = response
@@ -1489,6 +1497,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj | None,
         provider_config: BaseDecisionsConfig,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1498,7 +1507,7 @@ class BaseLLMHTTPHandler:
         data: Final = dict(body)
         if logging_obj is not None:
             logging_obj.pre_call(
-                input=data,
+                input=dict(logged_body),
                 api_key=api_key,
                 model=model,
                 additional_args={"api_base": url, "complete_input_dict": data, "headers": outbound_headers},
@@ -1513,6 +1522,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseDecisionsConfig,
         request: DecisionsIRRequest,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1525,6 +1535,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             provider_config=provider_config,
             body=body,
+            logged_body=logged_body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,
@@ -1561,6 +1572,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseDecisionsConfig,
         request: DecisionsIRRequest,
         body: Mapping[str, object],
+        logged_body: Mapping[str, object],
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
@@ -1573,6 +1585,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             provider_config=provider_config,
             body=body,
+            logged_body=logged_body,
             api_base=api_base,
             api_key=api_key,
             headers=headers,
@@ -2458,7 +2471,7 @@ class BaseLLMHTTPHandler:
         api_base: str | None = None,
         stream: bool | None = False,
         kwargs: dict[str, object] | None = None,
-    ) -> AnthropicMessagesResponse | Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator]:
+    ) -> AnthropicMessagesResponse | Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]:
         """
         LLM HTTP Handler for Anthropic Messages
         """
@@ -7719,6 +7732,7 @@ class BaseLLMHTTPHandler:
             return video_content_provider_config.transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                client=sync_httpx_client,
             )
 
         except Exception as e:
@@ -7798,6 +7812,7 @@ class BaseLLMHTTPHandler:
             return await video_content_provider_config.async_transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                client=async_httpx_client,
             )
 
         except Exception as e:
